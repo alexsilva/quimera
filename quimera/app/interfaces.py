@@ -85,6 +85,9 @@ class ProfileResolverAdapter:
             return list(self._registry.all_profiles())
         return list(_global_profiles.all_profiles())
 
+    def get_profiles_list(self) -> list:
+        return list(self._registry.all_profiles()) if self._registry is not None else list(_global_profiles.all_profiles())
+
     def active_profiles(self, agent_pool) -> list:
         """Retorna os perfis válidos dos agentes ativos no pool."""
         result = []

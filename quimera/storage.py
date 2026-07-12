@@ -33,6 +33,10 @@ class SessionStorage:
         """Retorna history file."""
         return self.history_file
 
+    def get_session_id(self) -> str:
+        """Getter callable que retorna o session_id."""
+        return self.session_id
+
     def append_log(self, role, content):
         """Acrescenta log."""
         timestamp = datetime.now().strftime("%H:%M:%S")

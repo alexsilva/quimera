@@ -16,7 +16,6 @@ from quimera.profiles.base import CliConnection, OpenAIConnection
 from quimera import process_factory as subprocess
 from quimera.sandbox.bwrap import build_bwrap_cmd
 from quimera.spy_output_presenter import SpyOutputPresenter
-from quimera.runtime.drivers.openai_compat import OpenAICompatDriver
 from quimera.runtime.tool_preview import ToolPreview
 from quimera.prompt_templates import PromptText
 
@@ -33,6 +32,8 @@ from quimera.agents.text_filters import (
 )
 
 _logger = logging.getLogger(__name__)
+
+OpenAICompatDriver = None
 
 
 class _FrozenSession:
@@ -263,6 +264,10 @@ class AgentClient:
 
     def _terminate_process_group(self, proc) -> None:
         terminate_process_group(proc)
+
+    def is_cancelled(self) -> bool:
+        """Retorna True se o trabalho ativo foi cancelado."""
+        return self._cancel_event.is_set() or self._user_cancelled
 
     def cancel_active_work(self) -> None:
         """Cancela o trabalho atual e encerra subprocessos ainda vivos."""
@@ -945,6 +950,12 @@ class AgentClient:
             self.invalidate_api_driver(agent)
         is_first_call = agent not in self._api_drivers
         if is_first_call:
+            global OpenAICompatDriver
+            if OpenAICompatDriver is None:
+                from quimera.runtime.drivers.openai_compat import OpenAICompatDriver as _OpenAICompatDriver
+
+                OpenAICompatDriver = _OpenAICompatDriver
+
             api_key_env = connection.api_key_env
             api_key = os.environ.get(api_key_env, "ollama") if api_key_env else "ollama"
             self._api_drivers[agent] = OpenAICompatDriver(

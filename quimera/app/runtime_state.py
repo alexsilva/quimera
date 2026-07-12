@@ -63,6 +63,20 @@ class AppRuntimeState:
         _run(refresh_callback)
         return current
 
+    # ── setters for use as bound-method callbacks ──────────────────────
+
+    def set_input_status(self, v: str) -> None:
+        self.nonblocking_input_status = v
+
+    def set_prompt_text(self, v: str) -> None:
+        self.nonblocking_prompt_text = v
+
+    def set_prompt_owner(self, v: int | None) -> None:
+        self.prompt_owning_thread_id = v
+
+    def set_prompt_visible(self, v: bool) -> None:
+        self.nonblocking_prompt_visible = v
+
     def release_chat_slot(self) -> None:
         slot = getattr(self, "chat_slot_semaphore", None)
         if slot is not None:

@@ -6,10 +6,12 @@ from contextlib import nullcontext
 from pathlib import Path
 
 from .agent_pool import AgentPoolView
-from .chat_processor import run_chat_loop
 from .bootstrap import AppAssembler, AppOptions
 from .bootstrap.wiring import normalize_agent_name
+from .chat_processor import run_chat_loop
 from .prompt_formatter import PromptFormatter
+from .runtime_state import AppRuntimeState
+from .state import ExecutionModeState
 from ..tasks.classifiers import (
     classify_task_execution_result,
     parse_task_command,
@@ -34,6 +36,52 @@ from ..runtime.workspace_policy import WorkspacePolicy
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
     _SESSION_LOG_DISPLAY_MAX_CHARS = 96
+
+    # ── bound-method helpers used by wiring (replace lambdas) ──────────
+
+    def get_selected_agents(self) -> list[str]:
+        return list(self.selected_agents or [])
+
+    def set_selected_agents(self, agents: list[str]) -> None:
+        self.selected_agents = list(agents)
+
+    def get_approval_handler(self):
+        return getattr(self, "_approval_handler", None)
+
+    def resolve_input_gate(self):
+        return self.input_gate
+
+    def is_debug_prompt_enabled(self) -> bool:
+        return bool(self.debug_prompt_metrics)
+
+    def get_tool_executor(self):
+        return getattr(self, "tool_executor", None)
+
+    def get_dispatch_services(self):
+        return getattr(self, "dispatch_services", None)
+
+    def get_dispatch_tool_executor(self):
+        return getattr(self, "tool_executor", None)
+
+    def set_approval_handler(self, handler):
+        self._approval_handler = handler
+
+    def get_workspace_policy_ref(self):
+        return getattr(self, "workspace_policy", None)
+
+    def get_session_services_ref(self):
+        return getattr(self, "session_services", None)
+
+    def get_agent_client_ref(self):
+        return getattr(self, "agent_client", None)
+
+    def get_history_ref(self):
+        return getattr(self, "history", [])
+
+    def get_session_started_at_ref(self):
+        return getattr(self, "_session_started_at", 0.0)
+
+    # ──────────────────────────────────────────────────────────────────
 
     def __init__(self,
                  cwd: Path,
@@ -66,6 +114,10 @@ class QuimeraApp:
             renderer_override=renderer_override,
             input_gate_factory=input_gate_factory,
         )
+        self._execution_mode_state = self._create_execution_mode_state()
+        # runtime_state precisa existir antes do assembler: builders de sessão
+        # (AppInputServices) capturam seus setters durante a montagem.
+        self.runtime_state = AppRuntimeState()
         AppAssembler().assemble(opts, self)
 
     @property
@@ -372,18 +424,19 @@ class QuimeraApp:
         """Conecta eventos de domínio à renderização UI."""
         self._ui_subscriptions = self._ui_event_handler.wire_event_ui()
 
+    def _claim_gate(self) -> bool:
+        """Gate de reivindicação de tasks em modo single-thread.
+
+        Só retorna True se o turn_manager não existe ou se é turno do humano.
+        """
+        tm = getattr(self, "turn_manager", None)
+        return not (tm is not None and not tm.is_human_turn)
+
     def _setup_task_executors(self):
         """Set up task executors for explicit human-created task execution."""
         claim_gate = None
         if int(getattr(self, "threads", 1) or 1) <= 1:
-            # Em modo single-thread, tasks só podem ser reivindicadas quando o loop
-            # de chat não está processando uma mensagem (turno do humano).
-            app_ref = self
-            claim_gate = lambda: not (
-                hasattr(app_ref, "turn_manager")
-                and app_ref.turn_manager is not None
-                and not app_ref.turn_manager.is_human_turn
-            )
+            claim_gate = self._claim_gate
         self.task_services.setup_task_executors(claim_gate=claim_gate)
 
     def _stop_task_executors(self):
@@ -536,14 +589,46 @@ class QuimeraApp:
         if approval_config is not None:
             approval_config.workspace_policy = self.workspace_policy
 
+    @property
+    def execution_mode(self) -> object | None:
+        return self.execution_mode_state.get()
+
+    @execution_mode.setter
+    def execution_mode(self, mode: object | None) -> None:
+        self.execution_mode_state.set(mode)
+
+    @property
+    def execution_mode_state(self) -> ExecutionModeState:
+        # Lazy: testes instanciam QuimeraApp via __new__ (sem __init__) e
+        # acessam execution_mode diretamente.
+        state = self.__dict__.get("_execution_mode_state")
+        if state is None:
+            state = self._create_execution_mode_state()
+            self._execution_mode_state = state
+        return state
+
+    def _create_execution_mode_state(self) -> ExecutionModeState:
+        # A propagação para agent_client/policy é comportamento do app, não
+        # de montagem: o listener nasce junto com o estado para valer também
+        # em construções parciais (testes via __new__).
+        state = ExecutionModeState()
+        state.on_change(self._on_execution_mode_changed)
+        return state
+
+    def _on_execution_mode_changed(self, old: object | None, new: object | None) -> None:
+        _ = old  # unused but part of listener protocol
+        agent_client = getattr(self, "agent_client", None)
+        if agent_client is not None:
+            agent_client.execution_mode = new
+        tool_executor = getattr(self, "tool_executor", None)
+        if tool_executor is not None and new is not None:
+            tool_executor.policy.blocked_tools = list(new.blocked_tools)
+        elif tool_executor is not None:
+            tool_executor.policy.blocked_tools = []
+
     def _set_execution_mode(self, mode):
-        """Define o modo de execução ativo e propaga para policy e agent_client."""
+        """Define o modo de execução ativo (delega ao state)."""
         self.execution_mode = mode
-        self.agent_client.execution_mode = mode
-        if mode is not None:
-            self.tool_executor.policy.blocked_tools = list(mode.blocked_tools)
-        else:
-            self.tool_executor.policy.blocked_tools = []
 
     def parse_routing(self, user_input: str):
         """Analisa o input do usuário e identifica o agente destino e modo de roteamento."""

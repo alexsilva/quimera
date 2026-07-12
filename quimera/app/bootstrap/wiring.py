@@ -37,7 +37,6 @@ from ..handlers import PromptAwareStderrHandler
 from ..inputs import AppInputServices
 from ..interfaces import ProfileResolverAdapter
 from ..protocol import AppProtocol
-from ..runtime_state import AppRuntimeState
 from ..session import AppSessionServices, compute_history_hard_limit, trim_history_messages
 from ..session_bootstrap import (
     resolve_app_log_path,
@@ -89,6 +88,52 @@ def normalize_agent_name(agent):
     return agent
 
 
+def _make_record_agent_metric(session_metrics, app):
+    def _fn(agent, metric, elapsed):
+        session_metrics.record_agent_metric(app, agent, metric, elapsed)
+    return _fn
+
+
+def _make_record_tool_event(session_metrics, app):
+    def _fn(agent, **kw):
+        session_metrics.record_tool_event(app, agent, **kw)
+    return _fn
+
+
+def _make_background_delegate_fn(task_services, dispatch_services):
+    def _fn(agent, **opts):
+        bg = task_services._get_background_dispatch_services()
+        (bg or dispatch_services).delegate(agent, **opts)
+    return _fn
+
+
+def _make_active_profiles_fn(profile_resolver, agent_pool):
+    def _fn():
+        return profile_resolver.active_profiles(agent_pool)
+    return _fn
+
+
+def _make_record_metric(session_metrics, app):
+    def _fn(name):
+        session_metrics.record_agent_metric(app, name, "failed", 0)
+    return _fn
+
+
+def _make_get_session_id(storage):
+    # getattr tardio: storages de teste são duck-typed e podem não expor
+    # get_session_id(); preserva a semântica do lambda original.
+    def _fn():
+        return getattr(storage, "session_id", "")
+    return _fn
+
+
+def _release_tasks_fn(tasks_db_path):
+    def _fn(name):
+        from ...tasks import api as _runtime_tasks
+        _runtime_tasks.release_agent_tasks(name, db_path=tasks_db_path)
+    return _fn
+
+
 class AppAssembler:
     """Constrói os colaboradores de `QuimeraApp` em seis fases fixas."""
 
@@ -106,7 +151,7 @@ class AppAssembler:
         self._apply_tasks(app, tasks)
         chat = self._build_chat(app, plat, ui, sess, rt, tasks)
         self._apply_chat(app, chat)
-        self._wire(app, ui, sess, rt, tasks, chat)
+        self._wire(app, plat, ui, sess, rt, tasks, chat)
         return AppBundles(plat, ui, sess, rt, tasks, chat)
 
     # ------------------------------------------------------------------
@@ -325,16 +370,16 @@ class AppAssembler:
             prompt_builder=None,
             history_getter=session_state_mgr.history_snapshot,
             shared_state_getter=session_state_mgr.shared_state_snapshot,
-            execution_mode_getter=lambda: getattr(app, "execution_mode", None),
+            execution_mode_getter=app.execution_mode_state.get,
             agent_pool=plat.agent_pool,
-            get_selected_agents=lambda: list(getattr(app, "selected_agents", []) or []),
-            set_selected_agents=lambda agents: setattr(app, "selected_agents", list(agents)),
+            get_selected_agents=app.get_selected_agents,
+            set_selected_agents=app.set_selected_agents,
             clear_screen=app.clear_terminal_screen,
             read_user_input=app.read_user_input,
             task_command_handler=None,
             bugs_command_handler=app._handle_bugs_command,
             session_state_manager=session_state_mgr,
-            approval_handler_getter=lambda: getattr(app, "_approval_handler", None),
+            approval_handler_getter=app.get_approval_handler,
             context_manager=context_manager,
             profile_registry=plat.profile_registry,
             workspace_policy_getter=app.get_workspace_policy_name,
@@ -342,12 +387,12 @@ class AppAssembler:
         )
         input_services = AppInputServices(
             ui.renderer,
-            input_resolver=lambda: app.input_gate,
+            input_resolver=app.resolve_input_gate,
             get_input_status=ui.input_gate.is_active,
-            set_input_status=lambda v: setattr(app.runtime_state, 'nonblocking_input_status', v),
-            set_prompt_text=lambda v: setattr(app.runtime_state, 'nonblocking_prompt_text', v),
-            set_prompt_owner=lambda v: setattr(app.runtime_state, 'prompt_owning_thread_id', v),
-            set_prompt_visible=lambda v: setattr(app.runtime_state, 'nonblocking_prompt_visible', v),
+            set_input_status=app.runtime_state.set_input_status,
+            set_prompt_text=app.runtime_state.set_prompt_text,
+            set_prompt_owner=app.runtime_state.set_prompt_owner,
+            set_prompt_visible=app.runtime_state.set_prompt_visible,
             flush_deferred_messages=system_layer.flush_deferred_messages,
             output_lock=plat.output_lock,
         )
@@ -429,7 +474,7 @@ class AppAssembler:
             ui.renderer,
             summarizer_call=build_chain_summarizer(
                 agent_client,
-                lambda: list(dict.fromkeys(plat.agent_pool.agents)),
+                plat.agent_pool.list_agents,
             ),
         )
         session_context = sess.context_manager.load_session()
@@ -468,7 +513,7 @@ class AppAssembler:
             decisions_log_path=plat.workspace.decisions_log,
             turn_stamps=sess.turn_stamps,
         )
-        runtime_state = AppRuntimeState()
+        runtime_state = app.runtime_state
         deferred_system_messages: list = []
         max_deferred_system_messages = 20
         turn_manager = TurnManager()
@@ -482,7 +527,7 @@ class AppAssembler:
                     show_system=sess.system_layer.show_system_message,
                     show_muted=sess.system_layer.show_muted_message,
                     is_reading=ui.input_gate.is_active,
-                    debug_enabled=lambda: bool(app.debug_prompt_metrics),
+                    debug_enabled=app.is_debug_prompt_enabled,
                 )
         is_new_session = not sess.history_restored and not summary_loaded
 
@@ -519,8 +564,8 @@ class AppAssembler:
             session_state=prompt_session_state,
             user_name=ui.user_name,
             active_agents=plat.agent_pool.agents,
-            active_agents_provider=lambda: plat.agent_pool.agents,
-            orchestrator_provider=lambda: plat.agent_pool.orchestrator_agent,
+            active_agents_provider=plat.agent_pool.list_agents,
+            orchestrator_provider=plat.agent_pool.get_orchestrator,
             metrics_tracker=behavior_metrics,
         )
         sess.system_layer._prompt_builder = prompt_builder
@@ -590,11 +635,11 @@ class AppAssembler:
             agent_run_sink=ui.agent_run_sink,
             agent_client=rt.agent_client,
             workspace=plat.workspace,
-            get_dispatch_tool_executor=lambda: app.tool_executor,
-            get_dispatch_services=lambda: app.dispatch_services,
+            get_dispatch_tool_executor=app.get_dispatch_tool_executor,
+            get_dispatch_services=app.get_dispatch_services,
             auto_approve_mutations=plat.auto_approve_mutations,
             approval_handler=app._approval_handler,
-            set_approval_handler=lambda h: setattr(app, "_approval_handler", h),
+            set_approval_handler=app.set_approval_handler,
             get_agent_profile=sess.profile_resolver.get,
             available_profiles=sess.profile_resolver.profiles,
             session_state=rt.chat_state,
@@ -605,16 +650,16 @@ class AppAssembler:
             visibility=ui.visibility,
             show_error_message=sess.system_layer.show_error_message,
             show_muted_message=sess.system_layer.show_muted_message,
-            get_execution_mode=lambda: app.execution_mode,
+            get_execution_mode=app.execution_mode_state.get,
             record_tool_event=app._record_tool_event,
             record_failure=app.record_failure,
             session_metrics=ui.session_metrics,
-            get_debug_prompt_metrics=lambda: app.debug_prompt_metrics,
-            get_workspace_policy=lambda: app.workspace_policy,
+            get_debug_prompt_metrics=app.is_debug_prompt_enabled,
+            get_workspace_policy=app.get_workspace_policy_ref,
             redisplay_prompt=app._redisplay_user_prompt_if_needed,
             output_lock=plat.output_lock,
             counter_lock=plat.counter_lock,
-            get_session_services=lambda: app.session_services,
+            get_session_services=app.get_session_services_ref,
             max_retries=app.MAX_RETRIES,
             retry_backoff_seconds=app.RETRY_BACKOFF_SECONDS,
             rate_limit_backoff_seconds=getattr(app, 'RATE_LIMIT_BACKOFF_SECONDS', 30),
@@ -640,18 +685,16 @@ class AppAssembler:
             renderer=ui.renderer,
             get_agent_profile=sess.profile_resolver.get,
             session_state=rt.chat_state,
-            get_execution_mode=lambda: app.execution_mode,
+            get_execution_mode=app.execution_mode_state.get,
             refresh_task_state=task_services.refresh_task_shared_state,
             debug_prompt_metrics=rt.debug_prompt_metrics,
             redisplay_prompt=app._redisplay_user_prompt_if_needed,
             output_lock=plat.output_lock,
             counter_lock=plat.counter_lock,
             print_response_fn=app.print_response,
-            persist_message_fn=lambda agent, text: app.session_services.persist_message(agent, text),
-            record_session_metric=lambda agent, metric, elapsed: ui.session_metrics.record_agent_metric(
-                app, agent, metric, elapsed
-            ),
-            record_tool_event_fn=lambda agent, **kw: ui.session_metrics.record_tool_event(app, agent, **kw),
+            persist_message_fn=session_services.persist_message,
+            record_session_metric=_make_record_agent_metric(ui.session_metrics, app),
+            record_tool_event_fn=_make_record_tool_event(ui.session_metrics, app),
             notify_warning=sess.system_layer.show_warning_message,
             notify_retry=sess.system_layer.notify_agent_retry,
             notify_error=sess.system_layer.show_error_message,
@@ -660,8 +703,8 @@ class AppAssembler:
             rate_limit_backoff=getattr(app, 'RATE_LIMIT_BACKOFF_SECONDS', 30),
             record_failure=app.record_failure,
             record_success=app.record_success,
-            get_agent_client=lambda: app.agent_client,
-            get_tool_executor=lambda: app.tool_executor,
+            get_agent_client=app.get_agent_client_ref,
+            get_tool_executor=app.get_tool_executor,
             agent_run_sink=ui.agent_run_sink,
         )
         tool_executor = task_services.build_tool_executor(
@@ -728,15 +771,15 @@ class AppAssembler:
             agent_pool=plat.agent_pool,
             get_agent_profile=sess.profile_resolver.get,
             workspace=plat.workspace,
-            get_history=lambda: app.history,
+            get_history=app.get_history_ref,
             storage=plat.storage,
             bug_store=plat.bug_store,
-            get_session_started_at=lambda: app._session_started_at,
+            get_session_started_at=app.get_session_started_at_ref,
             renderer=ui.renderer,
             config=plat.config,
             runtime_state=rt.runtime_state,
             input_gate=ui.input_gate,
-            get_execution_mode=lambda: app.execution_mode,
+            get_execution_mode=app.execution_mode_state.get,
             threads=plat.threads,
         )
         chat_lifecycle = ChatLifecycle(
@@ -771,24 +814,20 @@ class AppAssembler:
         failure_tracker = AgentFailureTracker(
             normalize_agent_name=normalize_agent_name,
             agent_pool=plat.agent_pool,
-            release_agent_tasks=lambda name: runtime_tasks.release_agent_tasks(
-                name, db_path=rt.tasks_db_path
-            ),
-            record_metric=lambda name: ui.session_metrics.record_agent_metric(
-                app, name, "failed", 0
-            ),
+            release_agent_tasks=_release_tasks_fn(rt.tasks_db_path),
+            record_metric=_make_record_metric(ui.session_metrics, app),
             file_bug=app._file_bug,
-            get_session_id=lambda: getattr(plat.storage, "session_id", ""),
+            get_session_id=_make_get_session_id(plat.storage),
             notify_warning=sess.system_layer.show_warning_message,
         )
         command_router = CommandRouter(
             agent_pool=plat.agent_pool,
             renderer=ui.renderer,
-            get_active_agent_profiles=lambda: sess.profile_resolver.active_profiles(plat.agent_pool),
+            get_active_agent_profiles=_make_active_profiles_fn(sess.profile_resolver, plat.agent_pool),
             set_execution_mode=app._set_execution_mode,
             normalize_agent_name=normalize_agent_name,
             selected_agents=plat.selected_agents,
-            get_available_profiles=lambda: sess.profile_resolver.profiles,
+            get_available_profiles=sess.profile_resolver.get_profiles_list,
         )
         return ChatBundle(
             chat_round_orchestrator=chat_round_orchestrator,
@@ -816,6 +855,7 @@ class AppAssembler:
     def _wire(
         self,
         app,
+        plat: PlatformBundle,
         ui: UiBundle,
         sess: SessionBundle,
         rt: RuntimeBundle,
@@ -841,22 +881,13 @@ class AppAssembler:
         # impedindo que Ctrl+C no fluxo do chat cancele delegates assíncronos
         # e que o delegate assíncrono afete o fluxo principal.
         tasks.tool_executor.set_background_delegate_fn(
-            lambda agent, **opts: (
-                tasks.task_services._get_background_dispatch_services() or tasks.dispatch_services
-            ).delegate(agent, **opts)
+            _make_background_delegate_fn(tasks.task_services, tasks.dispatch_services)
         )
-        tasks.tool_executor.set_active_agents_provider(lambda: list(app.agent_pool.agents))
-        tasks.tool_executor.set_orchestrator_provider(lambda: app.agent_pool.orchestrator_agent)
-        tasks.tool_executor.set_cancel_checker(
-            lambda: bool(
-                getattr(rt.agent_client, "_cancel_event", None) and rt.agent_client._cancel_event.is_set()
-            )
-        )
+        tasks.tool_executor.set_active_agents_provider(plat.agent_pool.list_agents)
+        tasks.tool_executor.set_orchestrator_provider(plat.agent_pool.get_orchestrator)
+        tasks.tool_executor.set_cancel_checker(rt.agent_client.is_cancelled)
         tasks.tool_executor.set_agent_cleanup_callback(app._cleanup_sub_agent_stream)
-        _broker = ui.input_broker
-        tasks.tool_executor.set_ask_user_fn(
-            lambda q, opts: _broker.request_ask_user(q, opts)
-        )
+        tasks.tool_executor.set_ask_user_fn(ui.input_broker.request_ask_user)
         tasks.tool_executor.set_update_state_fn(rt.protocol.apply_state_update)
         # Set up task executors for autonomous task execution
         app._setup_task_executors()

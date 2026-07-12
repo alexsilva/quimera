@@ -86,7 +86,8 @@ EXPECTED_PUBLIC_ATTRS = [
     ("debug_prompt_metrics", "bool"),
     ("dispatch_services", "AppDispatchServices"),
     ("event_sink", "EventSink"),
-    ("execution_mode", "NoneType"),
+    # execution_mode virou property (Fase 3): o estado vive em
+    # app._execution_mode_state (ExecutionModeState) e sai de vars(app).
     ("failure_tracker", "AgentFailureTracker"),
     ("history", "list"),
     ("history_file", "PosixPath"),

@@ -31,9 +31,10 @@ from .app.simple_input_gate import SimpleInputGate
 from .runtime.mcp import start_embedded_mcp
 from .runtime.mcp.client import start_mcp_clients
 from .config import ConfigManager
-from .runtime.drivers.repl import DriverRepl
 from .workspace import Workspace
 from .prompt_templates import PromptText
+
+DriverRepl = None
 
 try:
     from .ui import TerminalRenderer
@@ -491,6 +492,12 @@ def main():
 
     if args.driver_repl:
         _ensure_required_runtime_dependencies()
+        global DriverRepl
+        if DriverRepl is None:
+            from .runtime.drivers.repl import DriverRepl as _DriverRepl
+
+            DriverRepl = _DriverRepl
+
         if args.driver_repl in _test_profile_names() and not args.test:
             parser.error(f"Profile de teste '{args.driver_repl}' exige --test")
         fake_openai_backend = None

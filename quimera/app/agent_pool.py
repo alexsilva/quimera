@@ -63,6 +63,14 @@ class AgentPool:
         with self._lock:
             return self._orchestrator_agent
 
+    def list_agents(self) -> list[str]:
+        with self._lock:
+            return list(dict.fromkeys(self._agents))
+
+    def get_orchestrator(self) -> str | None:
+        with self._lock:
+            return self._orchestrator_agent
+
     def set_orchestrator(self, agent_name: str) -> None:
         """Define um agente como orquestrador e congela a rotação para ele."""
         with self._lock:
