@@ -95,6 +95,7 @@ EXPECTED_PUBLIC_ATTRS = [
     ("input_broker", "InputBroker"),
     ("input_gate", "FakeInputGate"),
     ("input_services", "AppInputServices"),
+    ("lifecycle", "AppLifecycle"),
     ("process_supervisor", "ProcessSupervisor"),
     ("prompt_builder", "PromptBuilder"),
     ("protocol", "AppProtocol"),
@@ -138,8 +139,7 @@ def app(tmp_path):
     try:
         yield instance
     finally:
-        instance._stop_task_executors()
-        instance._restore_current_job_env()
+        instance.close()
         if previous_job_id is None:
             os.environ.pop("QUIMERA_CURRENT_JOB_ID", None)
         else:

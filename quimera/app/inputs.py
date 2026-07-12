@@ -6,6 +6,7 @@ import select
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -269,7 +270,64 @@ class AppInputServices:
             self._suspended = False
 
 
+class AskUserPrompter:
+    """Prompt interativo para ferramentas que precisam escolher uma opção."""
+
+    def __init__(self, input_gate, renderer) -> None:
+        self._input_gate = input_gate
+        self._renderer = renderer
+
+    def ask(self, question: str, options: list) -> tuple:
+        opts = [str(o) for o in options]
+        input_gate = self._input_gate
+        renderer = self._renderer
+        gate_is_active = (
+            input_gate is not None
+            and callable(getattr(input_gate, "is_active", None))
+            and input_gate.is_active()
+        )
+        if gate_is_active:
+            get_controller = getattr(renderer, "_agent_window_controller", None)
+            if callable(get_controller):
+                controller = get_controller("agente")
+                result = controller.ask_selection(renderer, input_gate, question, opts)
+            else:
+                result = input_gate.read_selection_in_terminal(question, opts)
+            if result is not None:
+                return result
+            raise EOFError("sem resposta do terminal")
+        selection_context = (
+            renderer.selection_window(metadata={"question": question, "options": opts})
+            if renderer is not None
+            else nullcontext()
+        )
+        with selection_context:
+            error_msg: str | None = None
+            while True:
+                parts: list[str] = []
+                if error_msg:
+                    parts.append(f"  ! {error_msg}")
+                parts.append(f"\n{question}")
+                for i, opt in enumerate(opts, 1):
+                    parts.append(f"  {i}. {opt}")
+                parts.append(f"  (número 1-{len(opts)} ou texto exato)")
+                sys.stdout.write("\n".join(parts) + "\n> ")
+                sys.stdout.flush()
+                raw = sys.stdin.readline().rstrip("\n\r").strip()
+                try:
+                    idx = int(raw) - 1
+                    if 0 <= idx < len(opts):
+                        return idx, opts[idx]
+                except ValueError:
+                    pass
+                for i, opt in enumerate(opts):
+                    if opt.lower() == raw.lower():
+                        return i, opt
+                error_msg = f"'{raw}' não é uma opção válida."
+
+
 __all__ = [
+    "AskUserPrompter",
     "AppInputServices",
     "read_user_input",
     "read_user_input_with_timeout",

@@ -36,6 +36,7 @@ from ..event_sink import EventSink
 from ..handlers import PromptAwareStderrHandler
 from ..inputs import AppInputServices
 from ..interfaces import ProfileResolverAdapter
+from ..lifecycle import AppLifecycle
 from ..protocol import AppProtocol
 from ..session import AppSessionServices, compute_history_hard_limit, trim_history_messages
 from ..session_bootstrap import (
@@ -121,7 +122,7 @@ def _make_record_metric(session_metrics, app):
 
 def _make_get_session_id(storage):
     # getattr tardio: storages de teste são duck-typed e podem não expor
-    # get_session_id(); preserva a semântica do lambda original.
+    # get_session_id(); preserva a semântica do getter original.
     def _fn():
         return getattr(storage, "session_id", "")
     return _fn
@@ -260,7 +261,7 @@ class AppAssembler:
         user_name = plat.config.user_name
         visibility = Visibility(opts.visibility)
         session_metrics = SessionMetricsService()
-        # Placeholders lidos diretamente (não via lambda) por AppTaskServices em
+        # Placeholders lidos diretamente por AppTaskServices em
         # _build_tasks; precisam existir em `app` antes disso, tal como no
         # __init__ monolítico original — a morte desse padrão é a Fase 3.
         app.task_services = None
@@ -889,8 +890,8 @@ class AppAssembler:
         tasks.tool_executor.set_agent_cleanup_callback(app._cleanup_sub_agent_stream)
         tasks.tool_executor.set_ask_user_fn(ui.input_broker.request_ask_user)
         tasks.tool_executor.set_update_state_fn(rt.protocol.apply_state_update)
-        # Set up task executors for autonomous task execution
-        app._setup_task_executors()
+        app.lifecycle = AppLifecycle(app)
+        app.lifecycle.start()
         ui.input_gate.set_toolbar_context_resolver(chat.toolbar_coordinator.build_input_toolbar_context)
         ui.input_gate.set_theme_cycle_handler(chat.toolbar_coordinator.cycle_renderer_theme)
         app._ui_subscriptions = chat.ui_event_handler.wire_event_ui()

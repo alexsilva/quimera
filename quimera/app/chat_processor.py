@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .config import logger
 from .welcome_presenter import WelcomePresenter
-from ..runtime.tools.todo import TodoRegistry
+from .lifecycle import AppLifecycle
 from .tty_control import TtyController
 from .session_bootstrap import (
     resolve_render_debug_log_path,
@@ -354,31 +354,12 @@ def run_chat_loop(
         app.runtime_state.chat_queue = None
         app._refresh_parallel_toolbar()
         try:
-            process_supervisor = getattr(app, "process_supervisor", None)
-            try:
-                app.session_services.shutdown(interrupted=interrupted_shutdown)
-            finally:
-                if process_supervisor is not None and not interrupted_shutdown:
-                    process_supervisor.shutdown()
-            if hasattr(app, "current_job_id") and app.current_job_id is not None:
-                TodoRegistry.cleanup(app.current_job_id)
-            app.agent_client.close()
-            renderer = getattr(app, "renderer", None)
-            if renderer is not None and hasattr(renderer, "close"):
-                renderer.close()
-            app._run_render_bug_detector()
-            if hasattr(app, "behavior_metrics"):
-                app.behavior_metrics._flush_if_dirty()
+            lifecycle = getattr(app, "lifecycle", None)
+            if lifecycle is None:
+                lifecycle = AppLifecycle(app)
+                app.lifecycle = lifecycle
+            lifecycle.close(interrupted=interrupted_shutdown)
         finally:
-            restore_job_env = getattr(app, "_restore_current_job_env", None)
-            if callable(restore_job_env):
-                restore_job_env()
-            bug_store = getattr(app, "bug_store", None)
-            if bug_store is not None and hasattr(bug_store, "close"):
-                try:
-                    bug_store.close()
-                except Exception:
-                    pass
             _tty.restore_control_echo()
 
 

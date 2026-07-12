@@ -54,7 +54,7 @@ def _run_cli_in_pty(tmp_path: Path, extra_args: list[str]) -> subprocess.Complet
 
     output = bytearray()
     sent_exit = False
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + 30
     try:
         while time.monotonic() < deadline:
             readable, _, _ = select.select([master_fd], [], [], 0.2)

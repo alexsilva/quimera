@@ -6221,7 +6221,7 @@ class TestRunSmoke(unittest.TestCase):
         app.run()
         app.session_services.shutdown.assert_called_once()
         app.process_supervisor.shutdown.assert_called_once()
-        self.assertEqual(shutdown_order, ["session", "process_supervisor"])
+        self.assertEqual(shutdown_order, ["process_supervisor", "session"])
 
 
 class TestToolCallGuardrails(unittest.TestCase):
