@@ -279,7 +279,9 @@ def run_chat_loop(
                     chat_queue.put(user)
                     _pending_async_slot = False
                     app._refresh_parallel_toolbar()
-                    time.sleep(0.001)
+                    deadline = time.monotonic() + 0.05
+                    while not chat_queue.empty() and time.monotonic() < deadline:
+                        time.sleep(0.001)
                 else:
                     if hasattr(app, "turn_manager") and app.turn_manager.is_human_turn:
                         app.turn_manager.next_turn()

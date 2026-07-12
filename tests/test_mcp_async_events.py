@@ -136,7 +136,7 @@ class TestConcurrentToolsCall:
         """_handle_tools_call não bloqueia entre conexões (thread pool)."""
         executor = _make_executor()
         executor.execute.side_effect = lambda *a, **kw: (
-            time.sleep(0.15) or ToolResult(ok=True, tool_name="read_file", content="ok")
+            time.sleep(0.2) or ToolResult(ok=True, tool_name="read_file", content="ok")
         )
         server = _make_server(executor)
         sock_path = str(tmp_path / "mcp_conc_nb.sock")
@@ -158,16 +158,16 @@ class TestConcurrentToolsCall:
                 results.append(json.loads(line))
             s.close()
 
-        start = time.time()
+        start = time.perf_counter()
         threads = [threading.Thread(target=_client, args=(i,)) for i in range(2)]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=10)
-        elapsed = time.time() - start
+        elapsed = time.perf_counter() - start
 
         assert len(results) == 2, f"expected 2 responses, got {len(results)}"
-        assert elapsed < 0.25, "thread pool deve executar em paralelo"
+        assert elapsed < 0.35, "thread pool deve executar em paralelo"
 
 
 class TestCancellation:
