@@ -94,6 +94,7 @@ from ..modes import MODES
 from ..runtime.workspace_policy import WorkspacePolicy
 from ..shared_state import bootstrap_state_key_stamps, clear_agent_state_for_session_start
 from .session_state import SessionStateManager
+from .state.session_state import SessionRuntimeState
 from .agent_failure_tracker import AgentFailureTracker
 from .bug_services import BugServices
 from .command_router import CommandRouter
@@ -217,10 +218,13 @@ class QuimeraApp:
             self.renderer.show_system(
                 f"[memória] histórico restaurado truncado para {len(self.history)} mensagens recentes\n"
             )
+        self._session_runtime_state = SessionRuntimeState.from_legacy(
+            history=self.history,
+            shared_state=last_session["shared_state"],
+        )
         self.session_state_mgr = SessionStateManager(
             storage=self.storage,
-            shared_state=last_session["shared_state"],
-            history=self.history,
+            runtime_state=self._session_runtime_state,
         )
         self.shared_state = self.session_state_mgr.shared_state
         self._turn_stamps = self.session_state_mgr.turn_stamps
@@ -318,7 +322,8 @@ class QuimeraApp:
         )
         session_context = self.context_manager.load_session()
         summary_loaded = self.context_manager.SUMMARY_MARKER in session_context
-        self.session_state = {
+        self.session_state = self._session_runtime_state.session_state
+        self.session_state.update({
             "session_id": session_id,
             "history_count": len(self.history),
             "history_restored": history_restored,
@@ -334,17 +339,14 @@ class QuimeraApp:
             "delegation_invalid_count": 0,
             "responses_with_clear_next_step": 0,
             "total_responses": 0,
-        }
+        })
         # Persist metrics state to workspace so agents can resume with previous metrics
         metrics_state_path = self.workspace.state_dir / "metrics_state.json"
         self.behavior_metrics = BehaviorMetricsTracker(storage_path=metrics_state_path)
         self.agent_client.tool_event_callback = self._record_tool_event
         self.debug_prompt_metrics = debug
         self._chat_state = SessionState(
-            history=self.history,
-            shared_state=self.shared_state,
-            session_meta=self.session_state,
-            shared_state_lock=self._shared_state_lock,
+            runtime_state=self._session_runtime_state,
         )
         self._chat_state.summary_agent_preference = self.agent_pool.primary
         self.protocol = AppProtocol(

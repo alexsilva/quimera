@@ -102,7 +102,7 @@ EXPECTED_PUBLIC_ATTRS = [
     ("selected_agents", "list"),
     ("session_metrics", "SessionMetricsService"),
     ("session_services", "AppSessionServices"),
-    ("session_state", "dict"),
+    ("session_state", "SessionStateDict"),
     ("session_state_mgr", "SessionStateManager"),
     ("session_summarizer", "SessionSummarizer"),
     ("shared_state", "dict"),
@@ -160,15 +160,23 @@ def test_quimera_app_public_attribute_graph_is_stable(app):
 def test_quimera_app_state_aliases_are_documented(app):
     assert app._chat_state.history is app.history
     assert app._chat_state.history is app.session_state_mgr.history
+    assert app._session_runtime_state.history is app.history
     assert app.session_state_mgr.history is app.history
 
     assert app._chat_state.shared_state is app.shared_state
     assert app._chat_state.shared_state is app.session_state_mgr.shared_state
+    assert app._session_runtime_state.shared_state is app.shared_state
     assert app.session_state_mgr.shared_state is app.shared_state
 
     assert app._chat_state.session_meta is app.session_state
-    assert app._chat_state.shared_state_lock is app._shared_state_lock
-    assert app._turn_stamps is app.session_state_mgr.turn_stamps
+    assert app._session_runtime_state.session_state is app.session_state
 
-    # Current compatibility shape: chat state owns a distinct history lock.
-    assert app._chat_state.history_lock is not app._history_lock
+    assert app._chat_state.history_lock is app._history_lock
+    assert app._chat_state.history_lock is app.session_state_mgr.history_lock
+    assert app.session_state_mgr._history_lock is app._history_lock
+    assert app._chat_state.shared_state_lock is app._shared_state_lock
+    assert app._chat_state.shared_state_lock is app.session_state_mgr.shared_state_lock
+    assert app.session_state_mgr._lock is app._shared_state_lock
+    assert app._turn_stamps is app.session_state_mgr.turn_stamps
+    assert app.session_state_mgr._turn_stamps is app._turn_stamps
+    assert app._turn_stamps is app._session_runtime_state.turn_stamps

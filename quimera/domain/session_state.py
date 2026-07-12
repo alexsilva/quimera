@@ -1,7 +1,8 @@
 """Contentor de estado mutável compartilhado entre main thread e workers."""
 from __future__ import annotations
-import threading
 from typing import Any
+
+from ..app.state.session_state import SessionRuntimeState
 
 
 class SessionState:
@@ -21,18 +22,15 @@ class SessionState:
         history: list | None = None,
         shared_state: dict | None = None,
         session_meta: dict | None = None,
-        shared_state_lock: threading.Lock | None = None,
+        shared_state_lock=None,
+        runtime_state: SessionRuntimeState | None = None,
     ) -> None:
-        self._lock = threading.RLock()
-        # Referências mutáveis — mantidas por referência para compatibilidade
-        self._history: list = history if history is not None else []
-        self._shared_state: dict = shared_state if shared_state is not None else {}
-        self._shared_state_lock: threading.Lock = shared_state_lock or threading.Lock()
-        self._session_meta: dict = session_meta if session_meta is not None else {}
-        # Contadores e preferências
-        self._round_index: int = 0
-        self._call_index: int = 0
-        self._summary_agent_preference: str | None = None
+        self._runtime_state = runtime_state or SessionRuntimeState.from_legacy(
+            history=history,
+            shared_state=shared_state,
+            session_meta=session_meta,
+            shared_state_lock=shared_state_lock,
+        )
 
     # ------------------------------------------------------------------
     # history
@@ -40,41 +38,40 @@ class SessionState:
 
     @property
     def history(self) -> list:
-        return self._history
+        return self._runtime_state.history
 
     def history_snapshot(self) -> list:
         """Cópia rasa thread-safe do histórico."""
-        with self._lock:
-            return list(self._history)
+        return self._runtime_state.history_snapshot()
 
     def append_history(self, msg: dict) -> None:
-        with self._lock:
-            self._history.append(msg)
+        with self.history_lock:
+            self.history.append(msg)
 
     def replace_history(self, messages: list) -> None:
         """Substitui o histórico mantendo a referência da lista original."""
-        with self._lock:
-            self._history[:] = list(messages)
+        with self.history_lock:
+            self.history[:] = list(messages)
 
     def trim_history(self, limit: int) -> tuple[int, list]:
         """Aplica limite ao histórico e retorna quantidade de itens removidos."""
-        with self._lock:
-            if not isinstance(limit, int) or limit <= 0 or len(self._history) <= limit:
-                return 0, list(self._history)
-            dropped = len(self._history) - limit
-            self._history[:] = self._history[-limit:]
-            return dropped, list(self._history)
+        with self.history_lock:
+            if not isinstance(limit, int) or limit <= 0 or len(self.history) <= limit:
+                return 0, list(self.history)
+            dropped = len(self.history) - limit
+            self.history[:] = self.history[-limit:]
+            return dropped, list(self.history)
 
     def append_history_trimmed_and_snapshot(self, msg: dict, limit: int) -> tuple[int, list]:
         """Adiciona mensagem, aplica limite e retorna snapshot numa única transação."""
-        with self._lock:
-            self._history.append(msg)
-            if isinstance(limit, int) and limit > 0 and len(self._history) > limit:
-                dropped = len(self._history) - limit
-                self._history[:] = self._history[-limit:]
+        with self.history_lock:
+            self.history.append(msg)
+            if isinstance(limit, int) and limit > 0 and len(self.history) > limit:
+                dropped = len(self.history) - limit
+                self.history[:] = self.history[-limit:]
             else:
                 dropped = 0
-            return dropped, list(self._history)
+            return dropped, list(self.history)
 
     def replace_history_if_prefix_matches(
         self,
@@ -83,18 +80,18 @@ class SessionState:
         replacement_prefix: list,
     ) -> tuple[bool, list]:
         """Substitui o histórico apenas se o prefixo esperado ainda estiver intacto."""
-        with self._lock:
-            current_snapshot = list(self._history)
+        with self.history_lock:
+            current_snapshot = list(self.history)
             if current_snapshot[:prefix_length] != expected_prefix:
                 return False, current_snapshot
             appended = current_snapshot[prefix_length:]
-            self._history[:] = list(replacement_prefix) + appended
-            return True, list(self._history)
+            self.history[:] = list(replacement_prefix) + appended
+            return True, list(self.history)
 
     @property
-    def history_lock(self) -> threading.RLock:
+    def history_lock(self):
         """Lock reentrante que protege operações transacionais no histórico."""
-        return self._lock
+        return self._runtime_state.history_lock
 
     # ------------------------------------------------------------------
     # shared_state  (lock separado — mais granular)
@@ -102,16 +99,15 @@ class SessionState:
 
     @property
     def shared_state(self) -> dict:
-        return self._shared_state
+        return self._runtime_state.shared_state
 
     def shared_state_snapshot(self) -> dict:
         """Cópia rasa thread-safe do shared_state."""
-        with self._shared_state_lock:
-            return dict(self._shared_state)
+        return self._runtime_state.shared_state_snapshot()
 
     @property
-    def shared_state_lock(self) -> threading.Lock:
-        return self._shared_state_lock
+    def shared_state_lock(self):
+        return self._runtime_state.shared_state_lock
 
     # ------------------------------------------------------------------
     # session_meta  (session_id, summary_loaded, …)
@@ -119,10 +115,10 @@ class SessionState:
 
     @property
     def session_meta(self) -> dict:
-        return self._session_meta
+        return self._runtime_state.session_state
 
     def get_meta(self, key: str, default: Any = None) -> Any:
-        return self._session_meta.get(key, default)
+        return self.session_meta.get(key, default)
 
     # ------------------------------------------------------------------
     # Contadores
@@ -130,24 +126,26 @@ class SessionState:
 
     @property
     def round_index(self) -> int:
-        with self._lock:
-            return self._round_index
+        with self.history_lock:
+            return self._runtime_state.round_index
 
     @round_index.setter
     def round_index(self, value: int) -> None:
-        with self._lock:
-            self._round_index = value
+        with self.history_lock:
+            self._runtime_state.round_index = value
 
     @property
     def call_index(self) -> int:
-        with self._lock:
-            return self._call_index
+        with self.history_lock:
+            return self._runtime_state.call_index
 
     def increment_call_index(self) -> int:
         """Incrementa o contador de chamadas e retorna o novo valor."""
-        with self._lock:
-            self._call_index += 1
-            return self._call_index
+        return self._runtime_state.increment_call_index()
+
+    def record_delegation(self, ok: bool) -> None:
+        """Registra uma delegação enviada e seu resultado."""
+        self._runtime_state.record_delegation(ok)
 
     # ------------------------------------------------------------------
     # Preferências de rodada
@@ -155,36 +153,34 @@ class SessionState:
 
     @property
     def summary_agent_preference(self) -> str | None:
-        with self._lock:
-            return self._summary_agent_preference
+        with self.history_lock:
+            return self._runtime_state.summary_agent_preference
 
     @summary_agent_preference.setter
     def summary_agent_preference(self, value: str | None) -> None:
-        with self._lock:
-            self._summary_agent_preference = value
+        with self.history_lock:
+            self._runtime_state.summary_agent_preference = value
 
     # ------------------------------------------------------------------
     # Compat genérico (usado por código legado que acessa session_state["key"])
     # ------------------------------------------------------------------
 
     def get(self, key: str, default: Any = None) -> Any:
-        return self._session_meta.get(key, default)
+        return self.session_meta.get(key, default)
 
-    def update(self, **kwargs) -> None:
-        with self._lock:
-            self._session_meta.update(kwargs)
+    def update(self, *args, **kwargs) -> None:
+        self.session_meta.update(*args, **kwargs)
 
     def snapshot(self) -> dict:
         """Cópia thread-safe da session_meta."""
-        with self._lock:
-            return dict(self._session_meta)
+        with self.history_lock:
+            return self.session_meta.copy()
 
     def __getitem__(self, key: str) -> Any:
-        return self._session_meta[key]
+        return self.session_meta[key]
 
     def __setitem__(self, key: str, value: Any) -> None:
-        with self._lock:
-            self._session_meta[key] = value
+        self.session_meta[key] = value
 
     def __contains__(self, key: str) -> bool:
-        return key in self._session_meta
+        return key in self.session_meta

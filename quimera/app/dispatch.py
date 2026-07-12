@@ -266,6 +266,12 @@ class AppDispatchServices:
             ss = self._session_meta()
             if not ss:
                 return
+            if session_state is not None and hasattr(session_state, "record_delegation"):
+                session_state.record_delegation(success)
+                ss["total_latency"] = ss.get("total_latency", 0.0) + elapsed
+                if self._record_session_metric:
+                    self._record_session_metric(agent, "succeeded" if success else "failed", elapsed)
+                return
             try:
                 ss["delegations_sent"] += 1
                 ss["total_latency"] += elapsed
