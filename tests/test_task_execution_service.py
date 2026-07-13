@@ -5,7 +5,6 @@ from quimera.tasks.execution import TaskExecutionService
 from quimera.tasks.services import (
     AppTaskServices,
     _BACKGROUND_AGENT_TIMEOUT_SECONDS,
-    _BackgroundDispatchAppProxy,
 )
 from quimera.tasks.classifiers import classify_task_execution_result, classify_task_review_result
 from quimera.runtime.models import TaskRecord
@@ -213,33 +212,37 @@ class FailoverPolicyStub:
         return self.can_failover_value
 
 
-def test_background_dispatch_proxy_exposes_agent_run_sink():
+def test_background_dispatch_exposes_agent_run_sink(tmp_path, monkeypatch):
     """Background dispatch deve usar o mesmo contrato de eventos do app."""
-    app = type("App", (), {})()
     class Sink:
         def emit(self, event):
             del event
 
     sink = Sink()
+    app = type("App", (), {})()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
+    app.visibility = "summary"
+    app.auto_approve_mutations = False
     app.agent_run_sink = sink
-    task_services = build_task_services(app)
+    services = build_task_services(app)
 
-    proxy = _BackgroundDispatchAppProxy(
-        task_services=task_services,
-        get_session_metrics=lambda: None,
-        get_round_index=lambda: 0,
-        get_debug_prompt_metrics=lambda: False,
-        get_redisplay_prompt=lambda: None,
-        get_output_lock=lambda: None,
-        get_counter_lock=lambda: None,
-        get_shared_state_lock=lambda: None,
-        get_session_services=lambda: None,
-        get_rate_limit_backoff_seconds=lambda: 30,
-    )
-    dispatch = AppDispatchServices.from_app(proxy)
+    class AgentClientStub:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.execution_mode = None
+            self.tool_event_callback = None
+            self.tool_executor = None
 
-    assert proxy.agent_run_sink is sink
-    assert dispatch._agent_run_sink is sink
+    monkeypatch.setattr("quimera.tasks.executor_pool.AgentClient", AgentClientStub)
+    dispatch = services._create_background_dispatch_services()
+
+    assert dispatch._call(dispatch._agent_run_sink) is sink
 
 
 def test_background_task_tool_executor_disables_ask_user(tmp_path):

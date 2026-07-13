@@ -104,61 +104,6 @@ class AppDispatchServices:
         self._gateway = None
         self._agent_call_service = None
 
-    @classmethod
-    def from_app(cls, app, **kwargs):
-        """Constrói AppDispatchServices a partir de um objeto app-like (compatibilidade)."""
-        _system_layer = getattr(app, 'system_layer', None)
-        return cls(
-            prompt_builder=lambda: getattr(app, 'prompt_builder', None),
-            renderer=lambda: getattr(app, 'renderer', None),
-            get_agent_profile=lambda agent_name: (
-                getattr(app, 'get_agent_profile', lambda n: None)(agent_name)
-            ),
-            get_history=lambda: getattr(app, 'history', []),
-            get_shared_state=lambda: getattr(app, 'shared_state', {}),
-            get_session_state=lambda: getattr(app, 'session_state', {}),
-            get_execution_mode=lambda: getattr(app, 'execution_mode', None),
-            refresh_task_state=lambda: getattr(
-                getattr(app, 'task_services', None), 'refresh_task_shared_state', lambda: None
-            )(),
-            agent_run_sink=getattr(app, 'agent_run_sink', None),
-            get_round_index=lambda: getattr(app, 'round_index', 0),
-            debug_prompt_metrics=lambda: getattr(app, 'debug_prompt_metrics', False),
-            redisplay_prompt=lambda **kw: getattr(app, '_redisplay_user_prompt_if_needed', lambda **kw_: None)(**kw),
-            output_lock=lambda: getattr(app, '_output_lock', None),
-            counter_lock=lambda: getattr(app, '_counter_lock', None),
-            get_session_call_index=lambda: getattr(app, 'session_call_index', 0),
-            set_session_call_index=lambda v: setattr(app, 'session_call_index', v),
-            session_metrics=lambda: getattr(app, 'session_metrics', None),
-            print_response_fn=lambda agent, text: getattr(app, 'print_response', lambda a, t: None)(agent, text),
-            persist_message_fn=lambda agent, text: getattr(
-                getattr(app, 'session_services', None), 'persist_message', lambda a, t: None
-            )(agent, text),
-            record_session_metric=lambda agent, metric, elapsed: (
-                getattr(getattr(app, 'session_metrics', None), 'record_agent_metric', lambda *a: None)(
-                    app, agent, metric, elapsed
-                )
-            ),
-            record_tool_event_fn=lambda agent, **kw: (
-                getattr(getattr(app, 'session_metrics', None), 'record_tool_event', lambda *a, **kw_: None)(
-                    app, agent, **kw
-                )
-            ),
-            notify_warning=getattr(_system_layer, 'show_warning_message', lambda m: None),
-            notify_retry=getattr(_system_layer, 'notify_agent_retry', None),
-            notify_error=getattr(_system_layer, 'show_error_message', lambda m: None),
-            max_retries=lambda: getattr(app, 'MAX_RETRIES', 2),
-            retry_backoff=lambda: getattr(app, 'RETRY_BACKOFF_SECONDS', 1),
-            rate_limit_backoff=lambda: getattr(app, 'RATE_LIMIT_BACKOFF_SECONDS', 1),
-            record_failure=getattr(app, 'record_failure', None),
-            record_success=getattr(app, 'record_success', None),
-            get_shared_state_lock=lambda: getattr(app, '_shared_state_lock', None),
-            get_agent_client=lambda: getattr(app, 'agent_client', None),
-            get_tool_executor=lambda: getattr(app, 'tool_executor', None),
-            get_delegate_fn_override=lambda: getattr(app, '_delegate', None),
-            **kwargs,
-        )
-
     @staticmethod
     def _call(val, *args, **kwargs):
         return val(*args, **kwargs) if callable(val) else val

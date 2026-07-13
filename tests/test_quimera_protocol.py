@@ -21,6 +21,7 @@ from quimera.app.agent_pool import AgentPool
 from quimera.app.core import TurnManager, normalize_agent_name
 from quimera.app.staging import merge_staging_to_workspace
 from quimera.app.dispatch import AppDispatchServices
+from tests.legacy_app_adapters import dispatch_services_from_app
 from quimera.app.inputs import AppInputServices, read_from_editor, read_user_input_with_timeout
 from quimera.app.session import AppSessionServices
 from quimera.app.system_layer import AppSystemLayer
@@ -462,7 +463,7 @@ def materialize_internal_services(app):
     if getattr(app, "task_services", None) is None:
         app.task_services = build_task_services(app)
     if getattr(app, "dispatch_services", None) is None:
-        app.dispatch_services = AppDispatchServices.from_app(app)
+        app.dispatch_services = dispatch_services_from_app(app)
     if getattr(app, "input_services", None) is None:
         app.input_services = AppInputServices(
             app.renderer,
@@ -3880,7 +3881,7 @@ class ProfileTests(unittest.TestCase):
                 return None
             return "sucesso no retry"
 
-        dispatch = AppDispatchServices.from_app(app)
+        dispatch = dispatch_services_from_app(app)
         dispatch.delegate_low_level = fake_delegate
         dispatch.resolve_agent_response = lambda agent, response, silent=False, persist_history=True, show_output=True: response
 
@@ -3914,7 +3915,7 @@ class ProfileTests(unittest.TestCase):
             has_builtin_tools=True,
         ))
 
-        dispatch = AppDispatchServices.from_app(app)
+        dispatch = dispatch_services_from_app(app)
         result = dispatch.delegate_low_level("codex-cli")
 
         self.assertEqual(result, "resposta")
@@ -3948,7 +3949,7 @@ class ProfileTests(unittest.TestCase):
             has_builtin_tools=True,
         ))
 
-        dispatch = AppDispatchServices.from_app(app)
+        dispatch = dispatch_services_from_app(app)
         result = dispatch.delegate_low_level("chatgpt-api")
 
         self.assertEqual(result, "resposta")
@@ -3983,7 +3984,7 @@ class ProfileTests(unittest.TestCase):
             has_builtin_tools=True,
         ))
 
-        dispatch = AppDispatchServices.from_app(app)
+        dispatch = dispatch_services_from_app(app)
         result = dispatch.delegate_low_level(
             "codex",
             delegation={"task": "Continue a investigação"},
@@ -4030,7 +4031,7 @@ class ProfileTests(unittest.TestCase):
         app.agent_client = Mock()
         app.agent_client.call.side_effect = fake_call
 
-        dispatch = AppDispatchServices.from_app(app)
+        dispatch = dispatch_services_from_app(app)
         result = dispatch.delegate_low_level("chatgpt-api", show_output=False)
 
         self.assertEqual(result, "resposta final")
@@ -4079,7 +4080,7 @@ class ProfileTests(unittest.TestCase):
             ],
         }
 
-        dispatch = AppDispatchServices.from_app(app)
+        dispatch = dispatch_services_from_app(app)
         result = dispatch.delegate_low_level("codex-cli")
 
         self.assertEqual(result, "resposta final")
@@ -4988,7 +4989,7 @@ class ProfileTests(unittest.TestCase):
 
         app = Mock()
         app.tool_executor.execute = Mock(side_effect=AssertionError("text must not execute tools"))
-        dispatch = AppDispatchServices.from_app(app)
+        dispatch = dispatch_services_from_app(app)
 
         response = 'Resposta <tool function="read_file" path="secret.txt" /> final'
         result = dispatch.resolve_agent_response("codex", response, show_output=False)

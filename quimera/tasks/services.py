@@ -31,7 +31,7 @@ from ..domain.session_state import SessionState
 from ..runtime.tools.todo import TodoRegistry
 from .classifiers import classify_task_execution_result, classify_task_review_result, parse_task_command
 from .execution import TaskExecutionService
-from .executor_pool import TaskExecutorPool, _BackgroundDispatchAppProxy, _BACKGROUND_AGENT_TIMEOUT_SECONDS, delegate_for_parallel_with_client
+from .executor_pool import TaskExecutorPool, _BACKGROUND_AGENT_TIMEOUT_SECONDS, delegate_for_parallel_with_client
 from .failover import TaskFailoverPolicy
 from .prompt import TaskPromptFactory
 from .protocol import TaskProtocolService

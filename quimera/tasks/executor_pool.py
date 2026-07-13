@@ -28,138 +28,15 @@ from ..runtime.tools.todo import TodoRegistry
 _BACKGROUND_AGENT_TIMEOUT_SECONDS = 120
 
 
-class _BackgroundDispatchAppProxy:
-    """Proxy que expõe serviços de dispatch para execução em background isolada."""
+class _BackgroundMetricsView:
+    """Contrato mínimo exigido por SessionMetricsService: expõe ``session_state``."""
 
-    def __init__(
-        self,
-        *,
-        task_executor_pool: Any | None = None,
-        task_services: Any | None = None,
-        get_session_metrics: Callable[[], Any],
-        get_round_index: Callable[[], int],
-        get_debug_prompt_metrics: Callable[[], bool],
-        get_redisplay_prompt: Callable[[], Callable[[], None] | None],
-        get_output_lock: Callable[[], Any],
-        get_counter_lock: Callable[[], Any],
-        get_shared_state_lock: Callable[[], Any],
-        get_session_services: Callable[[], Any],
-        max_retries: int = 2,
-        retry_backoff_seconds: int = 1,
-        get_rate_limit_backoff_seconds: Callable[[], int],
-    ) -> None:
-        self.task_executor_pool = task_executor_pool
-        self.task_services = task_services
-        self._get_session_metrics = get_session_metrics
-        self._get_round_index = get_round_index
-        self._get_debug_prompt_metrics = get_debug_prompt_metrics
-        self._get_redisplay_prompt = get_redisplay_prompt
-        self._get_output_lock = get_output_lock
-        self._get_counter_lock = get_counter_lock
-        self._get_shared_state_lock = get_shared_state_lock
-        self._get_session_services = get_session_services
-        self._max_retries = max_retries
-        self._retry_backoff_seconds = retry_backoff_seconds
-        self._get_rate_limit_backoff_seconds = get_rate_limit_backoff_seconds
-
-    @property
-    def prompt_builder(self):
-        return self._call("get_prompt_builder", "_get_prompt_builder")
-
-    @property
-    def renderer(self):
-        return self._call("get_renderer", "_get_renderer")
-
-    @property
-    def agent_run_sink(self):
-        return self._call("get_agent_run_sink", "_get_agent_run_sink")
-
-    def get_agent_profile(self, agent_name: str):
-        return self._call("get_agent_profile", "_get_agent_profile", agent_name)
-
-    @property
-    def history(self):
-        return self._call("get_history", "_get_history")
-
-    @property
-    def shared_state(self):
-        return self._call("get_shared_state", "_get_shared_state")
-
-    @property
-    def execution_mode(self):
-        return self._call("get_execution_mode", "_get_execution_mode")
+    def __init__(self, get_session_state: Callable[[], Any]) -> None:
+        self._get_session_state = get_session_state
 
     @property
     def session_state(self):
-        return self._call("get_session_state", "_get_session_state")
-
-    @property
-    def round_index(self):
-        return self._get_round_index()
-
-    @property
-    def debug_prompt_metrics(self):
-        return self._get_debug_prompt_metrics()
-
-    def _redisplay_user_prompt_if_needed(self, **kw):
-        callback = self._get_redisplay_prompt()
-        if callable(callback):
-            callback(**kw)
-
-    @property
-    def _output_lock(self):
-        return self._get_output_lock()
-
-    @property
-    def _counter_lock(self):
-        return self._get_counter_lock()
-
-    @property
-    def _shared_state_lock(self):
-        return self._get_shared_state_lock()
-
-    @property
-    def session_metrics(self):
-        return self._get_session_metrics()
-
-    @property
-    def session_services(self):
-        return self._get_session_services()
-
-    @property
-    def MAX_RETRIES(self):
-        return self._max_retries
-
-    @property
-    def RETRY_BACKOFF_SECONDS(self):
-        return self._retry_backoff_seconds
-
-    @property
-    def RATE_LIMIT_BACKOFF_SECONDS(self):
-        return self._get_rate_limit_backoff_seconds()
-
-    @property
-    def record_failure(self):
-        return self._call("get_record_failure", "_get_record_failure")
-
-    def print_response(self, agent, response):
-        """Renderiza a resposta do agente no terminal."""
-        dispatch_services = self._call("get_dispatch_services", "_get_dispatch_services")
-        if dispatch_services is not None:
-            return dispatch_services.print_response(agent, response)
-        renderer = self.renderer
-        if renderer is not None and response is not None and hasattr(renderer, "show_message"):
-            renderer.show_message(agent, response)
-        return None
-
-    def _call(self, pool_name: str, service_name: str, *args):
-        source = self.task_executor_pool
-        if source is not None and hasattr(source, pool_name):
-            return getattr(source, pool_name)(*args)
-        source = self.task_services
-        if source is not None and hasattr(source, service_name):
-            return getattr(source, service_name)(*args)
-        return None
+        return self._get_session_state()
 
 
 class TaskExecutorPool:
@@ -673,26 +550,79 @@ class TaskExecutorPool:
         background_agent_client.tool_executor = self._get_background_tool_executor()
         if cancel_event is not None:
             background_agent_client._cancel_event = cancel_event
-        proxy = _BackgroundDispatchAppProxy(
-            task_executor_pool=self,
-            get_session_metrics=self.get_session_metrics,
-            get_round_index=lambda: 0,
-            get_debug_prompt_metrics=self._get_debug_prompt_metrics or (lambda: False),
-            get_redisplay_prompt=self.get_redisplay_prompt,
-            get_output_lock=self.get_output_lock,
-            get_counter_lock=self.get_counter_lock,
-            get_shared_state_lock=self.get_shared_state_lock,
-            get_session_services=self._get_session_services or (lambda: None),
-            max_retries=self._max_retries,
-            retry_backoff_seconds=self._retry_backoff_seconds,
-            get_rate_limit_backoff_seconds=self._get_rate_limit_backoff_seconds or (lambda: 30),
-        )
-        return AppDispatchServices.from_app(
-            proxy,
+
+        call_index = {"value": 0}
+
+        def _set_call_index(value):
+            call_index["value"] = value
+
+        def _redisplay_prompt(**kw):
+            callback = self.get_redisplay_prompt()
+            if callable(callback):
+                callback(**kw)
+
+        get_session_services = self._get_session_services or (lambda: None)
+
+        def _persist_message(agent, text):
+            persist = getattr(get_session_services(), "persist_message", None)
+            if callable(persist):
+                persist(agent, text)
+
+        metrics_view = _BackgroundMetricsView(self.get_session_state)
+
+        def _record_session_metric(agent, metric, elapsed):
+            record = getattr(self.get_session_metrics(), "record_agent_metric", None)
+            if callable(record):
+                record(metrics_view, agent, metric, elapsed)
+
+        def _record_tool_event(agent, **kw):
+            record = getattr(self.get_session_metrics(), "record_tool_event", None)
+            if callable(record):
+                record(metrics_view, agent, **kw)
+
+        return AppDispatchServices(
             agent_client_override=background_agent_client,
             tool_executor_override=background_agent_client.tool_executor,
             cancel_checker_override=cancel_checker_override or self._background_was_user_cancelled,
+            prompt_builder=self.get_prompt_builder,
+            renderer=self.get_renderer,
+            get_agent_profile=self.get_agent_profile,
+            get_history=self.get_history,
+            get_shared_state=self.get_shared_state,
+            get_session_state=self.get_session_state,
+            get_execution_mode=self.get_execution_mode,
+            refresh_task_state=lambda: None,
+            agent_run_sink=self.get_agent_run_sink,
+            get_round_index=lambda: 0,
+            debug_prompt_metrics=self._get_debug_prompt_metrics or (lambda: False),
+            redisplay_prompt=_redisplay_prompt,
+            output_lock=self.get_output_lock,
+            counter_lock=self.get_counter_lock,
+            get_session_call_index=lambda: call_index["value"],
+            set_session_call_index=_set_call_index,
+            session_metrics=self.get_session_metrics,
+            print_response_fn=self._background_print_response,
+            persist_message_fn=_persist_message,
+            record_session_metric=_record_session_metric,
+            record_tool_event_fn=_record_tool_event,
+            notify_warning=lambda message: None,
+            notify_error=lambda message: None,
+            max_retries=self._max_retries,
+            retry_backoff=self._retry_backoff_seconds,
+            rate_limit_backoff=self._get_rate_limit_backoff_seconds or (lambda: 30),
+            record_failure=self.get_record_failure(),
+            get_shared_state_lock=self.get_shared_state_lock,
         )
+
+    def _background_print_response(self, agent, response):
+        """Renderiza resposta de agente em background via dispatch da sessão."""
+        dispatch_services = self.get_dispatch_services()
+        if dispatch_services is not None:
+            return dispatch_services.print_response(agent, response)
+        renderer = self.get_renderer()
+        if renderer is not None and response is not None and hasattr(renderer, "show_message"):
+            renderer.show_message(agent, response)
+        return None
 
     def _get_background_dispatch_services(self):
         if self._background_dispatch_services is not None:
