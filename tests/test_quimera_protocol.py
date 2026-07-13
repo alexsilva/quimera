@@ -21,7 +21,7 @@ from quimera.app.agent_pool import AgentPool
 from quimera.app.core import TurnManager, normalize_agent_name
 from quimera.app.staging import merge_staging_to_workspace
 from quimera.app.dispatch import AppDispatchServices
-from tests.legacy_app_adapters import dispatch_services_from_app
+from tests.legacy_app_adapters import dispatch_services_from_app, system_layer_from_app
 from quimera.app.inputs import AppInputServices, read_from_editor, read_user_input_with_timeout
 from quimera.app.session import AppSessionServices
 from quimera.app.system_layer import AppSystemLayer
@@ -477,7 +477,7 @@ def materialize_internal_services(app):
             output_lock=getattr(app, "_output_lock", None),
         )
     if getattr(app, "system_layer", None) is None:
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
     if getattr(app, "chat_round_orchestrator", None) is None:
         _agent_pool = getattr(app, "agent_pool", None)
         if _agent_pool is None:
@@ -760,7 +760,7 @@ class ProtocolTests(unittest.TestCase):
         from quimera.app.agent_pool import AgentPool
         app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
 
         materialize_internal_services(app)
         handled = app.system_layer.handle_command(CMD_HELP)
@@ -776,7 +776,7 @@ class ProtocolTests(unittest.TestCase):
         from quimera.app.agent_pool import AgentPool
         app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
 
         materialize_internal_services(app)
         handled = app.system_layer.handle_command(CMD_AGENTS)
@@ -790,7 +790,7 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.clear_terminal_screen = Mock()
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
 
         materialize_internal_services(app)
         handled = app.system_layer.handle_command(CMD_CLEAR)
@@ -831,7 +831,7 @@ class ProtocolTests(unittest.TestCase):
             },
         )
 
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
         handled = app.system_layer.handle_command(CMD_PROMPT)
 
         self.assertTrue(handled)
@@ -886,7 +886,7 @@ class ProtocolTests(unittest.TestCase):
             },
         )
 
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
         materialize_internal_services(app)
         handled = app.system_layer.handle_command("/prompt /codex")
 
@@ -926,7 +926,7 @@ class ProtocolTests(unittest.TestCase):
             has_builtin_tools=False,
         ))
 
-        message = AppSystemLayer(app)._build_prompt_preview_message("opencode")
+        message = system_layer_from_app(app)._build_prompt_preview_message("opencode")
 
         self.assertIn("TOOLS NO TEXTO: não", message)
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
@@ -960,7 +960,7 @@ class ProtocolTests(unittest.TestCase):
             has_builtin_tools=True,
         ))
 
-        message = AppSystemLayer(app)._build_prompt_preview_message("codex-cli")
+        message = system_layer_from_app(app)._build_prompt_preview_message("codex-cli")
 
         self.assertIn("TOOLS NO TEXTO: não", message)
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
@@ -996,7 +996,7 @@ class ProtocolTests(unittest.TestCase):
             has_builtin_tools=True,
         ))
 
-        message = AppSystemLayer(app)._build_prompt_preview_message("chatgpt-api")
+        message = system_layer_from_app(app)._build_prompt_preview_message("chatgpt-api")
 
         self.assertIn("DRIVER: openai_compat", message)
         self.assertIn("TOOLS NO TEXTO: não", message)
@@ -1009,7 +1009,7 @@ class ProtocolTests(unittest.TestCase):
         from quimera.app.agent_pool import AgentPool
         app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
 
         materialize_internal_services(app)
         handled = app.system_layer.handle_command("/prompt inexistente")
@@ -1044,7 +1044,7 @@ class ProtocolTests(unittest.TestCase):
     def test_list_connected_agents_returns_sorted_names(self):
         """Verifica que list connected agents returns sorted names."""
         app = QuimeraApp.__new__(QuimeraApp)
-        layer = AppSystemLayer(app)
+        layer = system_layer_from_app(app)
 
         with patch("quimera.app.system_layer.get_connections", return_value={"codex": {}, "chatgpt": {}}) as get_overrides:
             result = layer.list_connected_agents()
@@ -1056,7 +1056,7 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que handle command warns when connect target is missing."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
 
         materialize_internal_services(app)
         handled = app.system_layer.handle_command(CMD_CONNECT)
@@ -1091,7 +1091,7 @@ class ProtocolTests(unittest.TestCase):
         app.get_agent_profile = Mock(return_value=profile)
         answers = iter(["", "openai", "", "gpt-5.1", "http://localhost:1234/v1", "LM_STUDIO_KEY", "", "", ""])
         app.read_user_input = Mock(side_effect=lambda prompt, timeout=-1: next(answers))
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
 
         with patch("quimera.app.system_layer.set_connection") as set_override:
             materialize_internal_services(app)
@@ -1112,7 +1112,7 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que handle command warns when disconnect target is missing."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
 
         materialize_internal_services(app)
         handled = app.system_layer.handle_command(CMD_DISCONNECT)
@@ -1124,7 +1124,7 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que handle command disconnects persisted connection."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
 
         with patch("quimera.app.system_layer.remove_connection", return_value=True) as remove_conn:
             materialize_internal_services(app)
@@ -1138,7 +1138,7 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que handle command disconnect warns when not found."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
 
         with patch("quimera.app.system_layer.remove_connection", return_value=False) as remove_conn:
             materialize_internal_services(app)
@@ -1167,7 +1167,7 @@ class ProtocolTests(unittest.TestCase):
         )
         answers = iter(["", "openai", "", "qwen2.5:14b-instruct-q4_K_M", "http://localhost:11434/v1", "", "", "", ""])
         app.read_user_input = Mock(side_effect=lambda prompt, timeout=-1: next(answers))
-        layer = AppSystemLayer(app)
+        layer = system_layer_from_app(app)
 
         connection, base_name = layer._configure_connection_interactively(profile)
 
@@ -1213,7 +1213,7 @@ class ProtocolTests(unittest.TestCase):
         add_job("Session", db_path=str(db_path), job_id=1)
         app.tasks_db_path = str(db_path)
         app.task_services = build_task_services(app)
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
         materialize_internal_services(app)
         handled = app.system_layer.handle_command('/task "execute os testes"')
 
@@ -1249,7 +1249,7 @@ class ProtocolTests(unittest.TestCase):
         add_job("Session", db_path=str(db_path), job_id=1)
         app.tasks_db_path = str(db_path)
         app.task_services = build_task_services(app)
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
         materialize_internal_services(app)
         handled = app.system_layer.handle_command('/task "revise o arquivo quimera/app.py"')
 
@@ -1288,7 +1288,7 @@ class ProtocolTests(unittest.TestCase):
 
         app.task_classifier = CustomClassifier()
         app.task_services = build_task_services(app)
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
 
         handled = app.system_layer.handle_command('/task "corrija o bug"')
 
@@ -1315,7 +1315,7 @@ class ProtocolTests(unittest.TestCase):
         app.tasks_db_path = str(db_path)
         app.task_classifier = object()
         app.task_services = build_task_services(app)
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
 
         with patch("quimera.tasks.services.logger.debug") as debug:
             materialize_internal_services(app)
@@ -1379,7 +1379,7 @@ class ProtocolTests(unittest.TestCase):
         add_job("Session", db_path=str(db_path), job_id=1)
         app.tasks_db_path = str(db_path)
         app.task_services = build_task_services(app)
-        app.system_layer = AppSystemLayer(app)
+        app.system_layer = system_layer_from_app(app)
 
         materialize_internal_services(app)
         handled = app.system_layer.handle_command('/task ""')

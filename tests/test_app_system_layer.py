@@ -6,6 +6,7 @@ import pytest
 
 from quimera.app.agent_pool import AgentPool
 from quimera.app.system_layer import AppSystemLayer
+from tests.legacy_app_adapters import system_layer_from_app
 from quimera.prompt_templates import PromptText
 from quimera.constants import (
     CMD_APPROVE,
@@ -99,7 +100,7 @@ def test_flush_deferred_messages_clears_when_renderer_missing():
     app.renderer = None
     app._deferred_system_messages = ["a", "b"]
 
-    AppSystemLayer(app).flush_deferred_messages()
+    system_layer_from_app(app).flush_deferred_messages()
 
     assert app._deferred_system_messages == []
 
@@ -109,7 +110,7 @@ def test_flush_deferred_messages_shows_and_flushes():
     app = make_app()
     app._deferred_system_messages = [("system", "a"), ("neutral", "b"), ("warning", "c"), ("error", "d")]
 
-    AppSystemLayer(app).flush_deferred_messages()
+    system_layer_from_app(app).flush_deferred_messages()
 
     assert app.renderer.system_messages == ["a"]
     assert app.renderer.neutral_messages == ["b"]
@@ -124,7 +125,7 @@ def test_show_system_message_returns_when_renderer_missing():
     app = make_app()
     app.renderer = None
 
-    AppSystemLayer(app).show_system_message("ignored")
+    system_layer_from_app(app).show_system_message("ignored")
 
 
 def test_show_system_message_defer_queue_none_is_noop():
@@ -133,7 +134,7 @@ def test_show_system_message_defer_queue_none_is_noop():
     app._nonblocking_input_status = "reading"
     app._deferred_system_messages = None
 
-    AppSystemLayer(app).show_system_message("[task 1] codex:\nresultado")
+    system_layer_from_app(app).show_system_message("[task 1] codex:\nresultado")
 
 
 def test_show_system_message_defer_overflow_drops_oldest():
@@ -143,7 +144,7 @@ def test_show_system_message_defer_overflow_drops_oldest():
     app._MAX_DEFERRED_SYSTEM_MESSAGES = 2
     app._deferred_system_messages = [("system", "old-1"), ("system", "old-2")]
 
-    AppSystemLayer(app).show_system_message("[task 1] codex: novo resultado sem newline")
+    system_layer_from_app(app).show_system_message("[task 1] codex: novo resultado sem newline")
 
     assert app._deferred_system_messages == [
         ("system", "old-2"),
@@ -155,7 +156,7 @@ def test_show_system_message_standard_path_flushes_and_redraws():
     """Verifica que Test show system message standard path flushes and redraws."""
     app = make_app()
 
-    AppSystemLayer(app).show_system_message("mensagem")
+    system_layer_from_app(app).show_system_message("mensagem")
 
     assert app.renderer.system_messages == ["mensagem"]
     assert app.renderer.flush_calls == 1
@@ -179,7 +180,7 @@ def test_show_system_message_prefers_quick_flush_on_prompt_owner_thread():
     renderer = QuickFlushRenderer()
     app = make_app(renderer=renderer)
 
-    AppSystemLayer(app).show_system_message("mensagem")
+    system_layer_from_app(app).show_system_message("mensagem")
 
     assert renderer.system_messages == ["mensagem"]
     assert renderer.flush_quick_calls == 1
@@ -191,14 +192,14 @@ def test_show_muted_message_returns_when_renderer_missing():
     app = make_app()
     app.renderer = None
 
-    AppSystemLayer(app).show_muted_message("ignored")
+    system_layer_from_app(app).show_muted_message("ignored")
 
 
 def test_show_muted_message_prefers_neutral_and_flushes():
     """Verifica que Test show muted message prefers neutral and flushes."""
     app = make_app()
 
-    AppSystemLayer(app).show_muted_message("neutro")
+    system_layer_from_app(app).show_muted_message("neutro")
 
     assert app.renderer.neutral_messages == ["neutro"]
     assert app.renderer.system_messages == []
@@ -211,7 +212,7 @@ def test_show_muted_message_defers_from_background_thread_while_prompt_active():
     app._nonblocking_input_status = "reading"
     app._prompt_owning_thread_id = object()
 
-    AppSystemLayer(app).show_muted_message("neutro")
+    system_layer_from_app(app).show_muted_message("neutro")
 
     assert app._deferred_system_messages == [("neutral", "neutro")]
     assert app.renderer.neutral_messages == []
@@ -224,7 +225,7 @@ def test_show_muted_message_defers_task_completion_from_background_thread():
     app._nonblocking_input_status = "reading"
     app._prompt_owning_thread_id = object()
 
-    AppSystemLayer(app).show_muted_message("[task 252] concluída: Commit criado")
+    system_layer_from_app(app).show_muted_message("[task 252] concluída: Commit criado")
 
     assert app._deferred_system_messages == [("neutral", "[task 252] concluída: Commit criado")]
     assert app.renderer.neutral_messages == []
@@ -245,7 +246,7 @@ def test_show_system_message_shows_above_prompt_when_input_gate_supports_it():
 
     app.input_gate = SimpleNamespace(run_in_terminal_message=run_in_terminal_message)
 
-    AppSystemLayer(app).show_system_message("sys msg")
+    system_layer_from_app(app).show_system_message("sys msg")
 
     assert app._deferred_system_messages == []
     assert app.renderer.system_messages == ["sys msg"]
@@ -267,7 +268,7 @@ def test_show_muted_message_shows_task_completion_above_prompt_when_input_gate_s
 
     app.input_gate = SimpleNamespace(run_in_terminal_message=run_in_terminal_message)
 
-    AppSystemLayer(app).show_muted_message("[task 252] concluída: Commit criado")
+    system_layer_from_app(app).show_muted_message("[task 252] concluída: Commit criado")
 
     assert app._deferred_system_messages == []
     assert app.renderer.neutral_messages == ["[task 252] concluída: Commit criado"]
@@ -281,7 +282,7 @@ def test_show_warning_message_defers_from_background_thread_while_prompt_active(
     app._nonblocking_input_status = "reading"
     app._prompt_owning_thread_id = object()
 
-    AppSystemLayer(app).show_warning_message("atenção")
+    system_layer_from_app(app).show_warning_message("atenção")
 
     assert app._deferred_system_messages == [("warning", "atenção")]
     assert app.renderer.warning_messages == []
@@ -302,7 +303,7 @@ def test_show_warning_message_shows_above_prompt_when_input_gate_supports_it():
 
     app.input_gate = SimpleNamespace(run_in_terminal_message=run_in_terminal_message)
 
-    AppSystemLayer(app).show_warning_message("atenção")
+    system_layer_from_app(app).show_warning_message("atenção")
 
     assert app._deferred_system_messages == []
     assert app.renderer.warning_messages == ["atenção"]
@@ -316,7 +317,7 @@ def test_show_error_message_defers_from_background_thread_while_prompt_active():
     app._nonblocking_input_status = "reading"
     app._prompt_owning_thread_id = object()
 
-    AppSystemLayer(app).show_error_message("erro")
+    system_layer_from_app(app).show_error_message("erro")
 
     assert app._deferred_system_messages == [("error", "erro")]
     assert app.renderer.error_messages == []
@@ -337,7 +338,7 @@ def test_show_error_message_shows_above_prompt_when_input_gate_supports_it():
 
     app.input_gate = SimpleNamespace(run_in_terminal_message=run_in_terminal_message)
 
-    AppSystemLayer(app).show_error_message("erro")
+    system_layer_from_app(app).show_error_message("erro")
 
     assert app._deferred_system_messages == []
     assert app.renderer.error_messages == ["erro"]
@@ -348,7 +349,7 @@ def test_show_error_message_shows_above_prompt_when_input_gate_supports_it():
 def test_show_task_response_uses_strip_and_emits_only_non_empty():
     """Verifica que Test show task response uses strip and emits only non empty."""
     app = make_app()
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     layer.show_task_response(7, "codex", "   resultado final   ")
     layer.show_task_response(8, "codex", "   ")
@@ -366,7 +367,7 @@ def test_resolve_prompt_target_covers_default_exact_and_alias_paths():
         return profile if name == "Alpha" else None
 
     app.get_agent_profile = Mock(side_effect=get_profile)
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     app.active_agents = ["codex"]
     assert layer._resolve_prompt_target("/prompt") == "codex"
@@ -387,7 +388,7 @@ def test_resolve_prompt_target_prompts_when_ambiguous():
     """Verifica que Test resolve prompt target prompts when ambiguous."""
     app = make_app()
     app.active_agents = ["codex", "claude"]
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     with patch.object(layer, "_prompt_text", return_value="claude") as mock_prompt:
         assert layer._resolve_prompt_target("/prompt") == "claude"
@@ -400,7 +401,7 @@ def test_resolve_connect_target_variants_and_validation_fallback():
     app = make_app()
     profile = make_profile(name="chatgpt", prefix="/chatgpt", aliases=["/gpt"])
     app.get_available_profiles = Mock(return_value=[profile])
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     assert layer._resolve_connect_target(CMD_CONNECT) is None
     assert layer._resolve_connect_target("/connect /gpt") == "chatgpt"
@@ -417,7 +418,7 @@ def test_read_command_input_uses_app_reader_when_available():
     app = make_app()
     app.read_user_input = Mock(return_value="ok")
 
-    value = AppSystemLayer(app)._read_command_input("prompt: ")
+    value = system_layer_from_app(app)._read_command_input("prompt: ")
 
     assert value == "ok"
     app.read_user_input.assert_called_once_with("prompt: ", timeout=-1)
@@ -429,7 +430,7 @@ def test_read_command_input_falls_back_to_builtin_input():
     app.read_user_input = None
 
     with patch("builtins.input", return_value="fallback") as patched_input:
-        value = AppSystemLayer(app)._read_command_input("prompt: ")
+        value = system_layer_from_app(app)._read_command_input("prompt: ")
 
     assert value == "fallback"
     patched_input.assert_called_once_with("prompt: ")
@@ -439,7 +440,7 @@ def test_prompt_bool_reprompts_on_invalid_value():
     """Verifica que Test prompt bool reprompts on invalid value."""
     app = make_app()
     app.read_user_input = Mock(side_effect=["talvez", "s"])
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     assert layer._prompt_bool("Confirma", default=False) is True
     assert app.renderer.warning_messages == ["Valor inválido. Use 's' ou 'n'."]
@@ -449,7 +450,7 @@ def test_prompt_bool_supports_default_and_negative_answer():
     """Verifica que Test prompt bool supports default and negative answer."""
     app = make_app()
     app.read_user_input = Mock(side_effect=["", "n"])
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     assert layer._prompt_bool("Confirma", default=True) is True
     assert layer._prompt_bool("Confirma", default=True) is False
@@ -459,7 +460,7 @@ def test_configure_connection_interactively_raises_for_unknown_profile():
     """Verifica que Test configure connection interactively raises for unknown profile."""
     app = make_app()
     app.read_user_input = Mock(side_effect=["desconhecido"])
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
     profile = make_profile()
 
     with patch("quimera.app.system_layer._profiles.get", return_value=None):
@@ -471,7 +472,7 @@ def test_configure_connection_interactively_raises_for_empty_model_in_profile_mo
     """Verifica que Test configure connection interactively raises for empty model in profile mode."""
     app = make_app()
     app.read_user_input = Mock(side_effect=["base", ""])
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
     profile = make_profile()
     profile = make_profile(name="base")
 
@@ -484,7 +485,7 @@ def test_configure_connection_interactively_returns_profile_connection_when_vali
     """Verifica que Test configure connection interactively returns profile connection when valid."""
     app = make_app()
     app.read_user_input = Mock(side_effect=["base", "gpt-5"])
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
     profile = make_profile()
     profile = make_profile(name="base")
     profile.cmd = ["base", "--model=default"]
@@ -502,7 +503,7 @@ def test_configure_connection_interactively_cli_reprompts_invalid_driver_and_rej
     app = make_app()
     # profile_base, driver(invalid), driver(valid), output_format, cmd(empty→ValueError)
     app.read_user_input = Mock(side_effect=["", "invalido", "cli", "", ""])
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
     profile = make_profile()
     profile.cmd = []
 
@@ -517,7 +518,7 @@ def test_configure_connection_interactively_cli_returns_connection_when_valid():
     app = make_app()
     # profile_base, driver, output_format, cmd, prompt_as_arg
     app.read_user_input = Mock(side_effect=["", "cli", "", "codex run", "s"])
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
     profile = make_profile()
     profile.cmd = []
 
@@ -534,7 +535,7 @@ def test_configure_connection_interactively_openai_empty_object_clears_extra_bod
     app = make_app()
     # profile_base, driver, provider, model, base_url, api_key_env, extra_body("{}"=clear), supports_tools, max_connections
     app.read_user_input = Mock(side_effect=["", "openai", "", "", "", "", "{}", "", ""])
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
     profile = make_profile()
     object.__setattr__(
         profile,
@@ -554,7 +555,7 @@ def test_configure_connection_interactively_openai_invalid_json_keeps_previous_e
     app = make_app()
     # profile_base, driver, provider, model, base_url, api_key_env, extra_body("{"=invalid), supports_tools, max_connections
     app.read_user_input = Mock(side_effect=["", "openai", "", "", "", "", "{", "", ""])
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
     profile = make_profile()
     object.__setattr__(
         profile,
@@ -574,7 +575,7 @@ def test_configure_connection_interactively_openai_blank_input_preserves_extra_b
     app = make_app()
     # profile_base, driver, provider, model, base_url, api_key_env, extra_body(empty=preserve), supports_tools, max_connections
     app.read_user_input = Mock(side_effect=["", "openai", "", "", "", "", "", "", ""])
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
     profile = make_profile()
     object.__setattr__(
         profile,
@@ -590,7 +591,7 @@ def test_configure_connection_interactively_openai_blank_input_preserves_extra_b
 def test_build_prompt_preview_message_raises_without_prompt_builder():
     """Verifica que Test build prompt preview message raises without prompt builder."""
     app = make_app()
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     with pytest.raises(RuntimeError, match="prompt_builder indisponível"):
         layer._build_prompt_preview_message("codex")
@@ -622,7 +623,7 @@ def test_build_prompt_preview_message_omits_raw_history():
     mock_builder.build.return_value = (PromptText("PROMPT", strict=False), _make_dummy_metrics())
     mock_builder.history_window = 10
     app.prompt_builder = mock_builder
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     result = layer._build_prompt_preview_message("codex")
 
@@ -641,7 +642,7 @@ def test_build_prompt_preview_message_empty_history_omits_placeholder():
     mock_builder.build.return_value = (PromptText("PROMPT", strict=False), _make_dummy_metrics())
     mock_builder.history_window = 10
     app.prompt_builder = mock_builder
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     result = layer._build_prompt_preview_message("codex")
 
@@ -658,7 +659,7 @@ def test_build_prompt_preview_message_follower_mode_passes_is_first_speaker_fals
     mock_builder.build.return_value = (PromptText("PROMPT", strict=False), _make_dummy_metrics())
     mock_builder.history_window = 10
     app.prompt_builder = mock_builder
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     layer._build_prompt_preview_message("codex", is_first_speaker=False)
 
@@ -674,7 +675,7 @@ def test_build_prompt_preview_message_first_speaker_mode_label():
     mock_builder.build.return_value = (PromptText("PROMPT", strict=False), _make_dummy_metrics())
     mock_builder.history_window = 10
     app.prompt_builder = mock_builder
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     result = layer._build_prompt_preview_message("codex", is_first_speaker=True)
     assert "primeiro-falante" in result
@@ -687,7 +688,7 @@ def test_handle_command_connect_dynamic_profile_and_configure_error():
     """Verifica que Test handle command connect dynamic profile and configure error."""
     app = make_app()
     app.get_agent_profile = Mock(return_value=None)
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
     dynamic_profile = make_profile(name="dinamico")
 
     with patch("quimera.app.system_layer.register_connection_profile", return_value=dynamic_profile), patch.object(
@@ -705,7 +706,7 @@ def test_handle_command_connect_dynamic_profile_and_configure_error():
 def test_handle_command_connect_applies_profile_and_updates_active_lists():
     """Verifica que Test handle command connect applies profile and updates active lists."""
     app = make_app()
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
     target_profile = make_profile(name="target")
     inherited_profile = make_profile(name="target")
     inherited_profile.dynamic = True
@@ -734,7 +735,7 @@ def test_handle_command_connect_passes_injected_registry_to_set_override():
     """Verifica que Test handle command connect passes injected registry to set override."""
     app = make_app()
     app._profile_registry = object()
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
     profile = make_profile(name="target")
     app.get_agent_profile = Mock(return_value=profile)
 
@@ -755,7 +756,7 @@ def test_handle_command_reload_preserves_session_agents():
     app = make_app()
     app.active_agents = ["existing_agent"]
     app.selected_agents = ["existing_agent", "ghost"]
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     with patch("quimera.app.system_layer.reload_profiles", return_value=["existing_agent", "new_agent"]):
         assert layer.handle_command(CMD_RELOAD) is True
@@ -770,7 +771,7 @@ def test_handle_command_reload_and_reset_state_paths():
     app = make_app()
     app.active_agents = ["a", "stale"]
     app.selected_agents = ["a", "ghost"]
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     with patch("quimera.app.system_layer.reload_profiles", return_value=["a", "b"]):
         assert layer.handle_command(CMD_RELOAD) is True
@@ -790,7 +791,7 @@ def test_handle_command_reload_passes_injected_registry():
     """Verifica que Test handle command reload passes injected registry."""
     app = make_app()
     app._profile_registry = object()
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     with patch("quimera.app.system_layer.reload_profiles", return_value=["a"]) as reload_mock:
         assert layer.handle_command(CMD_RELOAD) is True
@@ -802,7 +803,7 @@ def test_handle_command_disconnect_passes_injected_registry():
     """Verifica que Test handle command disconnect passes injected registry."""
     app = make_app()
     app._profile_registry = object()
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     with patch("quimera.app.system_layer.remove_connection", return_value=True) as remove_mock:
         assert layer.handle_command("/disconnect target") is True
@@ -813,7 +814,7 @@ def test_handle_command_disconnect_passes_injected_registry():
 def test_handle_command_approve_all_and_approve_available_and_unavailable():
     """Verifica que Test handle command approve all and approve available and unavailable."""
     app = make_app()
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     approve_all = Mock()
     pre_approve = Mock()
@@ -839,7 +840,7 @@ def test_handle_command_policy_status_and_setter():
     policy_name = {"value": "strict"}
     app.get_workspace_policy_name = Mock(side_effect=lambda: policy_name["value"])
     app.set_workspace_policy_name = Mock(side_effect=lambda value: policy_name.update(value=value))
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     assert layer.handle_command(CMD_POLICY) is True
     assert "atual: strict" in app.renderer.system_messages[-1]
@@ -854,7 +855,7 @@ def test_handle_command_policy_rejects_unknown_preset():
     app = make_app()
     app.get_workspace_policy_name = Mock(return_value="strict")
     app.set_workspace_policy_name = Mock()
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     assert layer.handle_command("/policy unsafe") is True
     app.set_workspace_policy_name.assert_not_called()
@@ -864,7 +865,7 @@ def test_handle_command_policy_rejects_unknown_preset():
 def test_handle_command_context_variants():
     """Verifica que Test handle command context variants."""
     app = make_app()
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     assert layer.handle_command(CMD_CONTEXT) is True
     assert layer.handle_command(f"{CMD_CONTEXT} edit") is True
@@ -878,7 +879,7 @@ def test_handle_command_context_variants():
 def test_handle_command_context_backward_compat():
     """Hífenes ainda funcionam: /context-edit e /context-branch."""
     app = make_app()
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     assert layer.handle_command(CMD_CONTEXT_EDIT) is True
     assert layer.handle_command(f"{CMD_CONTEXT_BRANCH} main") is True
@@ -891,7 +892,7 @@ def test_handle_command_prompt_preview():
     """/prompt [agente] exibe preview do prompt."""
     app = make_app()
     app.renderer.show_prompt_preview = Mock()
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     with patch.object(layer, "_resolve_prompt_target", return_value="codex"):
         with patch.object(layer, "_build_prompt_preview_message", return_value="preview"):
@@ -902,7 +903,7 @@ def test_handle_command_prompt_preview():
 def test_handle_command_returns_false_for_unknown_command():
     """Verifica que Test handle command returns false for unknown command."""
     app = make_app()
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     assert layer.handle_command("/nao-existe") is False
 
@@ -911,7 +912,7 @@ def test_handle_command_bugs_dispatches_to_handler():
     """Verifica que Test handle command bugs dispatches to handler."""
     app = make_app()
     handler = Mock(return_value=True)
-    layer = AppSystemLayer(app, bugs_command_handler=handler)
+    layer = system_layer_from_app(app, bugs_command_handler=handler)
 
     assert layer.handle_command(CMD_BUGS) is True
 
@@ -921,7 +922,7 @@ def test_handle_command_bugs_dispatches_to_handler():
 def test_handle_command_bugs_without_handler_warns():
     """Verifica que Test handle command bugs without handler warns."""
     app = make_app()
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     assert layer.handle_command(CMD_BUGS) is True
     assert app.renderer.warning_messages[-1] == "Comando /bugs indisponível nesta sessão."
@@ -938,7 +939,7 @@ def test_enqueue_logs_audit_event():
     renderer = DummyRenderer()
     renderer._audit_logger = audit_logger
     app = make_app(renderer)
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     layer._enqueue_deferred_message("[task 1] codex: testando", level="system")
 
@@ -956,7 +957,7 @@ def test_enqueue_logs_audit_event_without_task_id():
     renderer = DummyRenderer()
     renderer._audit_logger = audit_logger
     app = make_app(renderer)
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     layer._enqueue_deferred_message("mensagem livre", level="warning")
 
@@ -977,7 +978,7 @@ def test_flush_logs_audit_event():
         ("system", "[task 1] codex: concluída"),
         ("neutral", "outra msg"),
     ]
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     layer.flush_deferred_messages()
 
@@ -991,7 +992,7 @@ def test_flush_logs_audit_event():
 def test_deferred_audit_no_logger_does_not_crash():
     """Enqueue e flush não quebram quando não há _audit_logger."""
     app = make_app()  # DummyRenderer não tem _audit_logger
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
 
     layer._enqueue_deferred_message("teste", level="system")
 
@@ -1115,7 +1116,7 @@ def test_flush_deferred_compactacao_integration():
         ("system", "[task 1] codex: concluída"),
     ]
 
-    AppSystemLayer(app).flush_deferred_messages()
+    system_layer_from_app(app).flush_deferred_messages()
 
     assert app.renderer.system_messages == ["⚙ [task 1] codex: concluída"]
     assert app._deferred_system_messages == []
@@ -1263,7 +1264,7 @@ def test_flush_deferred_t2_retry_annotation_integration():
         ("system", "[task 1] codex: concluída"),
     ]
 
-    AppSystemLayer(app).flush_deferred_messages()
+    system_layer_from_app(app).flush_deferred_messages()
 
     assert app.renderer.system_messages == [
         "⚙ [task 1] codex: concluída (após 1 tentativas)",
@@ -1281,7 +1282,7 @@ def _make_layer_with_pool(agents=None):
     pool = AgentPool(agents)
     app = make_app()
     app.agent_pool = pool
-    layer = AppSystemLayer(app)
+    layer = system_layer_from_app(app)
     return layer, pool, app
 
 
@@ -1474,7 +1475,7 @@ def test_notify_agent_retry_uses_structured_channel_when_available():
     renderer = StructuredRenderer()
     app = make_app(renderer=renderer)
 
-    AppSystemLayer(app).notify_agent_retry("codex", "no_response", 1, 2)
+    system_layer_from_app(app).notify_agent_retry("codex", "no_response", 1, 2)
 
     assert renderer.retries == [("codex", "no_response", 1, 2, "")]
     assert renderer.warning_messages == []
@@ -1485,7 +1486,7 @@ def test_notify_agent_failover_uses_structured_channel_when_available():
     renderer = StructuredRenderer()
     app = make_app(renderer=renderer)
 
-    AppSystemLayer(app).notify_agent_failover("codex", "claude")
+    system_layer_from_app(app).notify_agent_failover("codex", "claude")
 
     assert renderer.failovers == [("codex", "claude", "não respondeu")]
     assert renderer.system_messages == []
@@ -1496,7 +1497,7 @@ def test_notify_agent_retry_falls_back_to_warning_text_for_legacy_renderer():
     renderer = DummyRenderer()
     app = make_app(renderer=renderer)
 
-    AppSystemLayer(app).notify_agent_retry("codex", "no_response", 1, 2)
+    system_layer_from_app(app).notify_agent_retry("codex", "no_response", 1, 2)
 
     assert renderer.warning_messages == ["sem resposta · tentativa 1/2"]
 
@@ -1506,6 +1507,6 @@ def test_notify_agent_failover_falls_back_to_system_text_for_legacy_renderer():
     renderer = DummyRenderer()
     app = make_app(renderer=renderer)
 
-    AppSystemLayer(app).notify_agent_failover("codex", "claude")
+    system_layer_from_app(app).notify_agent_failover("codex", "claude")
 
     assert renderer.system_messages == ["codex não respondeu, continuando com claude"]

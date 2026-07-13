@@ -1,10 +1,5 @@
 """Componentes de `quimera.app.system_layer`."""
 from __future__ import annotations
-import json
-import re
-import shlex
-import threading
-from contextlib import nullcontext
 
 from .display_service import DisplayService
 from .interfaces import IAgentPool
@@ -55,115 +50,6 @@ class _NullProfileResolver:
         return []
 
 
-class _LegacyProfileResolver:
-    def __init__(self, app):
-        self._app = app
-
-    def get(self, name: str):
-        getter = getattr(self._app, "get_agent_profile", None)
-        if callable(getter):
-            return getter(name)
-        return None
-
-    @property
-    def profiles(self) -> list:
-        getter = getattr(self._app, "get_available_profiles", None)
-        if callable(getter):
-            return list(getter())
-        return []
-
-
-class _LegacyAgentPoolAdapter:
-    """Adapter mínimo para o contrato de agent pool em call sites legados.
-
-    Mantém leitura dinâmica de ``app.active_agents`` para preservar o
-    comportamento esperado pelos testes e por inicializações antigas
-    de ``AppSystemLayer(app)``.
-    """
-
-    def __init__(self, app):
-        self._app = app
-
-    @property
-    def agents(self) -> list[str]:
-        return list(getattr(self._app, "active_agents", []) or [])
-
-    def add(self, name: str) -> None:
-        agents = self.agents
-        if name not in agents:
-            agents.append(name)
-            setattr(self._app, "active_agents", agents)
-
-    def set(self, agents: list[str]) -> None:
-        setattr(self._app, "active_agents", list(agents))
-
-    def __contains__(self, name: str) -> bool:
-        return name in self.agents
-
-
-def _get_runtime_or_legacy_attr(app, runtime_name: str, legacy_name: str, default=None):
-    runtime_state = getattr(app, "runtime_state", None)
-    if runtime_state is not None:
-        return getattr(runtime_state, runtime_name, default)
-    return getattr(app, legacy_name, default)
-
-
-def _get_input_gate_status(app) -> bool | None:
-    input_gate = getattr(app, "input_gate", None)
-    if input_gate is None:
-        return None
-    is_active = getattr(input_gate, "is_active", None)
-    if not callable(is_active):
-        return None
-    try:
-        status = is_active()
-    except Exception:
-        return None
-    if isinstance(status, bool):
-        return status
-    return None
-
-
-def _get_input_gate_owner_thread_id(app):
-    input_gate = getattr(app, "input_gate", None)
-    if input_gate is None:
-        return None
-    getter = getattr(input_gate, "get_owner_thread_id", None)
-    if not callable(getter):
-        return None
-    try:
-        owner = getter()
-    except Exception:
-        return None
-    if isinstance(owner, int):
-        return owner
-    return None
-
-
-def _resolve_input_status_from_app(app):
-    gate_status = _get_input_gate_status(app)
-    if gate_status is not None:
-        return gate_status
-    return _get_runtime_or_legacy_attr(
-        app,
-        runtime_name="nonblocking_input_status",
-        legacy_name="_nonblocking_input_status",
-        default="idle",
-    )
-
-
-def _resolve_prompt_owner_thread_id_from_app(app):
-    gate_owner_thread_id = _get_input_gate_owner_thread_id(app)
-    if gate_owner_thread_id is not None:
-        return gate_owner_thread_id
-    return _get_runtime_or_legacy_attr(
-        app,
-        runtime_name="prompt_owning_thread_id",
-        legacy_name="_prompt_owning_thread_id",
-        default=None,
-    )
-
-
 class AppSystemLayer:
     """Encapsula comandos de sistema e delega display para ``DisplayService``."""
 
@@ -201,64 +87,6 @@ class AppSystemLayer:
         if display_service is not None:
             self._display = display_service
         else:
-            if renderer is None and not hasattr(agent_pool, "agents"):
-                renderer = agent_pool
-            looks_like_renderer = hasattr(renderer, "show_system")
-            if renderer is not None and not looks_like_renderer:
-                app = renderer
-                renderer = lambda: getattr(app, "renderer", None)
-                agent_pool = getattr(app, "agent_pool", None)
-                if agent_pool is None or not hasattr(agent_pool, "agents"):
-                    agent_pool = _LegacyAgentPoolAdapter(app)
-                profile_resolver = profile_resolver or _LegacyProfileResolver(app)
-                prompt_builder = prompt_builder or getattr(app, "prompt_builder", None)
-                history_getter = history_getter or (lambda: list(getattr(app, "history", []) or []))
-                shared_state_getter = shared_state_getter or (lambda: getattr(app, "shared_state", None))
-                execution_mode_getter = execution_mode_getter or (lambda: getattr(app, "execution_mode", None))
-                get_selected_agents = get_selected_agents or (
-                    lambda: list(getattr(app, "selected_agents", []) or [])
-                )
-                set_selected_agents = set_selected_agents or (
-                    lambda agents: setattr(app, "selected_agents", list(agents))
-                )
-                clear_screen = clear_screen or (lambda: getattr(app, "clear_terminal_screen", lambda: None)())
-                input_status_getter = input_status_getter or (
-                    lambda: _resolve_input_status_from_app(app)
-                )
-                redisplay_prompt = redisplay_prompt or getattr(
-                    app, "_redisplay_user_prompt_if_needed", None
-                )
-                output_lock = output_lock or (lambda: getattr(app, "_output_lock", nullcontext()))
-                prompt_owner_thread_id_getter = prompt_owner_thread_id_getter or (
-                    lambda: _resolve_prompt_owner_thread_id_from_app(app)
-                )
-                if run_above_active_prompt is None:
-                    input_gate = getattr(app, "input_gate", None)
-                    run_above_active_prompt = getattr(input_gate, "run_in_terminal_message", None)
-                read_user_input = read_user_input or getattr(app, "read_user_input", None)
-                if task_command_handler is None:
-                    task_services = getattr(app, "task_services", None)
-                    task_command_handler = getattr(task_services, "handle_task_command", None)
-                bugs_command_handler = bugs_command_handler or getattr(app, "_handle_bugs_command", None)
-                session_state_manager = session_state_manager or getattr(app, "session_state_mgr", None)
-                approval_handler_getter = approval_handler_getter or (
-                    lambda: getattr(app, "_approval_handler", None)
-                )
-                context_manager = context_manager or getattr(app, "context_manager", None)
-                profile_registry = profile_registry or getattr(app, "_profile_registry", None)
-                deferred_messages_getter = deferred_messages_getter or (
-                    lambda: getattr(app, "_deferred_system_messages", [])
-                )
-                max_deferred_messages_getter = max_deferred_messages_getter or (
-                    lambda: getattr(app, "_MAX_DEFERRED_SYSTEM_MESSAGES", 20)
-                )
-                workspace_policy_getter = workspace_policy_getter or getattr(
-                    app, "get_workspace_policy_name", None
-                )
-                workspace_policy_setter = workspace_policy_setter or getattr(
-                    app, "set_workspace_policy_name", None
-                )
-
             self._display = DisplayService(
                 renderer=renderer,
                 input_status_getter=input_status_getter,
