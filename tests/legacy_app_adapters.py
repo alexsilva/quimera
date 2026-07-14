@@ -256,3 +256,45 @@ def system_layer_from_app(app, **overrides):
     )
     kwargs.update(overrides)
     return AppSystemLayer(**kwargs)
+
+
+def chat_round_orchestrator_from_app(app, **overrides):
+    """Constrói ChatRoundOrchestrator a partir de um objeto app-like."""
+    from quimera.app.agent_pool import AgentPool
+    from quimera.app.chat_round import ChatRoundOrchestrator
+    from quimera.domain.session_state import SessionState
+
+    agent_pool = getattr(app, "agent_pool", None)
+    if agent_pool is None:
+        agent_pool = AgentPool(getattr(app, "active_agents", []) or [])
+    session_state = getattr(app, "_chat_state", getattr(app, "session_state", None))
+    kwargs = dict(
+        dispatch_services=getattr(app, "dispatch_services", None),
+        parse_routing=lambda user: app.parse_routing(user),
+        agent_pool=agent_pool,
+        session_services=getattr(app, "session_services", None),
+        parse_response=lambda response: app.parse_response(response),
+        agent_client=getattr(app, "agent_client", None),
+        turn_manager=getattr(app, "turn_manager", None),
+        task_services=getattr(app, "task_services", None),
+        get_agent_profile=getattr(app, "get_agent_profile", None),
+        behavior_metrics=getattr(app, "behavior_metrics", None),
+        threads=getattr(app, "threads", 1),
+        session_state=session_state,
+        show_system_message=getattr(
+            getattr(app, "system_layer", None), "show_system_message", None
+        ),
+        renderer=getattr(app, "renderer", None),
+        ui_queue=getattr(app, "_ui_event_queue", None),
+    )
+    if not isinstance(session_state, SessionState):
+        kwargs.update(
+            get_round_index=lambda: getattr(app, "round_index", 0),
+            set_round_index=lambda value: setattr(app, "round_index", value),
+            set_summary_agent_preference=lambda value: setattr(
+                app, "summary_agent_preference", value
+            ),
+            set_parallel_toolbar_state=getattr(app, "_set_parallel_toolbar_state", None),
+        )
+    kwargs.update(overrides)
+    return ChatRoundOrchestrator(**kwargs)

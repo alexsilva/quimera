@@ -57,36 +57,6 @@ class ChatRoundOrchestrator:
         set_round_index=None,
         set_summary_agent_preference=None,
     ):
-        if parse_routing is None and hasattr(dispatch_services, "parse_routing"):
-            app = dispatch_services
-            dispatch_services = getattr(app, "dispatch_services", None)
-            parse_routing = lambda user: app.parse_routing(user)
-            agent_pool = getattr(app, "agent_pool", None)
-            if agent_pool is None:
-                from .agent_pool import AgentPool
-                agent_pool = AgentPool(getattr(app, "active_agents", []) or [])
-            session_services = getattr(app, "session_services", None)
-            parse_response = lambda response: app.parse_response(response)
-            agent_client = getattr(app, "agent_client", agent_client)
-            turn_manager = getattr(app, "turn_manager", turn_manager)
-            task_services = getattr(app, "task_services", task_services)
-            get_agent_profile = getattr(app, "get_agent_profile", get_agent_profile)
-            behavior_metrics = getattr(app, "behavior_metrics", behavior_metrics)
-            threads = getattr(app, "threads", threads)
-            session_state = getattr(app, "_chat_state", getattr(app, "session_state", session_state))
-            show_system_message = getattr(getattr(app, "system_layer", None), "show_system_message", show_system_message)
-            renderer = getattr(app, "renderer", renderer)
-            ui_queue = getattr(app, "_ui_event_queue", ui_queue)
-            if not isinstance(session_state, SessionState):
-                get_round_index = get_round_index or (lambda: getattr(app, "round_index", 0))
-                set_round_index = set_round_index or (lambda value: setattr(app, "round_index", value))
-                set_summary_agent_preference = set_summary_agent_preference or (
-                    lambda value: setattr(app, "summary_agent_preference", value)
-                )
-                set_parallel_toolbar_state = set_parallel_toolbar_state or getattr(
-                    app, "_set_parallel_toolbar_state", None
-                )
-
         self._dispatch_services = dispatch_services
         self._parse_routing = parse_routing
         self._agent_pool = agent_pool

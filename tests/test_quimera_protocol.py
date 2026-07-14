@@ -21,7 +21,12 @@ from quimera.app.agent_pool import AgentPool
 from quimera.app.core import TurnManager, normalize_agent_name
 from quimera.app.staging import merge_staging_to_workspace
 from quimera.app.dispatch import AppDispatchServices
-from tests.legacy_app_adapters import dispatch_services_from_app, system_layer_from_app, bind_handler_app
+from tests.legacy_app_adapters import (
+    bind_handler_app,
+    chat_round_orchestrator_from_app,
+    dispatch_services_from_app,
+    system_layer_from_app,
+)
 from quimera.app.inputs import AppInputServices, read_from_editor, read_user_input_with_timeout
 from quimera.app.session import AppSessionServices
 from quimera.app.system_layer import AppSystemLayer
@@ -2074,7 +2079,7 @@ class ProtocolTests(unittest.TestCase):
         app.input_services = Mock()
         app.input_services.read_user_input = Mock(side_effect=["mensagem", "/exit"])
         app.turn_manager = TurnManager()
-        app.chat_round_orchestrator = ChatRoundOrchestrator(app)
+        app.chat_round_orchestrator = chat_round_orchestrator_from_app(app)
         _materialize_chat_lifecycle(app)
 
         app.run()
