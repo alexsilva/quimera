@@ -551,11 +551,6 @@ class TaskExecutorPool:
         if cancel_event is not None:
             background_agent_client._cancel_event = cancel_event
 
-        call_index = {"value": 0}
-
-        def _set_call_index(value):
-            call_index["value"] = value
-
         def _redisplay_prompt(**kw):
             callback = self.get_redisplay_prompt()
             if callable(callback):
@@ -587,19 +582,13 @@ class TaskExecutorPool:
             prompt_builder=self.get_prompt_builder,
             renderer=self.get_renderer,
             get_agent_profile=self.get_agent_profile,
-            get_history=self.get_history,
-            get_shared_state=self.get_shared_state,
-            get_session_state=self.get_session_state,
             get_execution_mode=self.get_execution_mode,
             refresh_task_state=lambda: None,
             agent_run_sink=self.get_agent_run_sink,
-            get_round_index=lambda: 0,
             debug_prompt_metrics=self._get_debug_prompt_metrics or (lambda: False),
             redisplay_prompt=_redisplay_prompt,
             output_lock=self.get_output_lock,
             counter_lock=self.get_counter_lock,
-            get_session_call_index=lambda: call_index["value"],
-            set_session_call_index=_set_call_index,
             session_metrics=self.get_session_metrics,
             print_response_fn=self._background_print_response,
             persist_message_fn=_persist_message,
@@ -611,7 +600,6 @@ class TaskExecutorPool:
             retry_backoff=self._retry_backoff_seconds,
             rate_limit_backoff=self._get_rate_limit_backoff_seconds or (lambda: 30),
             record_failure=self.get_record_failure(),
-            get_shared_state_lock=self.get_shared_state_lock,
         )
 
     def _background_print_response(self, agent, response):

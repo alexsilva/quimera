@@ -15,28 +15,45 @@ from quimera.app.system_layer import AppSystemLayer
 
 def dispatch_services_from_app(app, **kwargs):
     """Constrói AppDispatchServices a partir de um objeto app-like."""
+    from quimera.domain.session_state import SessionRuntimeState
+
     _system_layer = getattr(app, 'system_layer', None)
+    if 'session_state' not in kwargs:
+        existing = getattr(app, '_chat_state', None) or getattr(app, 'session_state', None)
+        if isinstance(existing, SessionRuntimeState):
+            kwargs['session_state'] = existing
+        elif isinstance(existing, dict):
+            rt = SessionRuntimeState(
+                history=getattr(app, 'history', []),
+                shared_state=getattr(app, 'shared_state', {}),
+            )
+            rt.session_state.update(existing)
+            app._chat_state = rt
+            app.session_state = rt.session_state
+            kwargs['session_state'] = rt
+        elif existing is None:
+            rt = SessionRuntimeState(
+                history=getattr(app, 'history', []),
+                shared_state=getattr(app, 'shared_state', {}),
+            )
+            app._chat_state = rt
+            app.session_state = rt.session_state
+            kwargs['session_state'] = rt
     return AppDispatchServices(
         prompt_builder=lambda: getattr(app, 'prompt_builder', None),
         renderer=lambda: getattr(app, 'renderer', None),
         get_agent_profile=lambda agent_name: (
             getattr(app, 'get_agent_profile', lambda n: None)(agent_name)
         ),
-        get_history=lambda: getattr(app, 'history', []),
-        get_shared_state=lambda: getattr(app, 'shared_state', {}),
-        get_session_state=lambda: getattr(app, 'session_state', {}),
         get_execution_mode=lambda: getattr(app, 'execution_mode', None),
         refresh_task_state=lambda: getattr(
             getattr(app, 'task_services', None), 'refresh_task_shared_state', lambda: None
         )(),
         agent_run_sink=getattr(app, 'agent_run_sink', None),
-        get_round_index=lambda: getattr(app, 'round_index', 0),
         debug_prompt_metrics=lambda: getattr(app, 'debug_prompt_metrics', False),
         redisplay_prompt=lambda **kw: getattr(app, '_redisplay_user_prompt_if_needed', lambda **kw_: None)(**kw),
         output_lock=lambda: getattr(app, '_output_lock', None),
         counter_lock=lambda: getattr(app, '_counter_lock', None),
-        get_session_call_index=lambda: getattr(app, 'session_call_index', 0),
-        set_session_call_index=lambda v: setattr(app, 'session_call_index', v),
         session_metrics=lambda: getattr(app, 'session_metrics', None),
         print_response_fn=lambda agent, text: getattr(app, 'print_response', lambda a, t: None)(agent, text),
         persist_message_fn=lambda agent, text: getattr(
@@ -60,7 +77,6 @@ def dispatch_services_from_app(app, **kwargs):
         rate_limit_backoff=lambda: getattr(app, 'RATE_LIMIT_BACKOFF_SECONDS', 1),
         record_failure=getattr(app, 'record_failure', None),
         record_success=getattr(app, 'record_success', None),
-        get_shared_state_lock=lambda: getattr(app, '_shared_state_lock', None),
         get_agent_client=lambda: getattr(app, 'agent_client', None),
         get_tool_executor=lambda: getattr(app, 'tool_executor', None),
         get_delegate_fn_override=lambda: getattr(app, '_delegate', None),
@@ -262,12 +278,22 @@ def chat_round_orchestrator_from_app(app, **overrides):
     """Constrói ChatRoundOrchestrator a partir de um objeto app-like."""
     from quimera.app.agent_pool import AgentPool
     from quimera.app.chat_round import ChatRoundOrchestrator
-    from quimera.domain.session_state import SessionState
+    from quimera.domain.session_state import SessionRuntimeState
 
     agent_pool = getattr(app, "agent_pool", None)
     if agent_pool is None:
         agent_pool = AgentPool(getattr(app, "active_agents", []) or [])
-    session_state = getattr(app, "_chat_state", getattr(app, "session_state", None))
+    session_state = getattr(app, "_chat_state", None)
+    if session_state is None:
+        app_session_state = getattr(app, "session_state", None)
+        if isinstance(app_session_state, dict):
+            session_state = SessionRuntimeState.from_legacy(
+                shared_state=getattr(app, "shared_state", None),
+                session_meta=app_session_state,
+                history=getattr(app, "history", None),
+            )
+        else:
+            session_state = app_session_state
     kwargs = dict(
         dispatch_services=getattr(app, "dispatch_services", None),
         parse_routing=lambda user: app.parse_routing(user),
@@ -285,16 +311,8 @@ def chat_round_orchestrator_from_app(app, **overrides):
             getattr(app, "system_layer", None), "show_system_message", None
         ),
         renderer=getattr(app, "renderer", None),
+        set_parallel_toolbar_state=getattr(app, "_set_parallel_toolbar_state", None),
         ui_queue=getattr(app, "_ui_event_queue", None),
     )
-    if not isinstance(session_state, SessionState):
-        kwargs.update(
-            get_round_index=lambda: getattr(app, "round_index", 0),
-            set_round_index=lambda value: setattr(app, "round_index", value),
-            set_summary_agent_preference=lambda value: setattr(
-                app, "summary_agent_preference", value
-            ),
-            set_parallel_toolbar_state=getattr(app, "_set_parallel_toolbar_state", None),
-        )
     kwargs.update(overrides)
     return ChatRoundOrchestrator(**kwargs)

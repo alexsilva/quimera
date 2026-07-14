@@ -47,7 +47,7 @@ from quimera.profiles import ExecutionProfile
 from quimera.prompt_templates import PromptText
 from quimera.profiles.base import ProfileRegistry
 from quimera.runtime.models import TaskRecord, ToolCall
-from quimera.domain.session_state import SessionState
+from quimera.domain.session_state import SessionRuntimeState
 from quimera.profiles.base import OpenAIConnection
 from quimera.delegate_presenter import DelegatePresenter
 from quimera.prompt import PromptBuilder
@@ -221,8 +221,15 @@ def build_task_services(app):
         app.get_agent_profile = lambda _agent_name: None
     if not hasattr(app, "get_available_profiles"):
         app.get_available_profiles = lambda: []
-    if not hasattr(app, "session_state"):
+    if hasattr(app, "session_state") and isinstance(app.session_state, dict):
+        app._chat_state = SessionRuntimeState.from_legacy(
+            shared_state=getattr(app, "shared_state", None),
+            session_meta=app.session_state,
+            history=getattr(app, "history", None),
+        )
+    elif not hasattr(app, "session_state"):
         app.session_state = None
+        app._chat_state = SessionRuntimeState()
     if not hasattr(app, "history"):
         app.history = None
     if not hasattr(app, "shared_state"):
@@ -340,7 +347,7 @@ def _make_session_services(app):
 
     session_state = getattr(app, "_chat_state", None)
     if session_state is None:
-        session_state = SessionState(
+        session_state = SessionRuntimeState.from_legacy(
             history=app.history,
             shared_state=getattr(app, "shared_state", {}),
             session_meta=getattr(app, "session_state", {}),
@@ -490,6 +497,7 @@ def materialize_internal_services(app):
             from quimera.app.agent_pool import AgentPool
             _agent_pool = AgentPool(getattr(app, "active_agents", []) or [])
             app.agent_pool = _agent_pool
+        _session_state = getattr(app, "_chat_state", None) or SessionRuntimeState()
         app.chat_round_orchestrator = ChatRoundOrchestrator(
             dispatch_services=getattr(app, "dispatch_services", None),
             parse_routing=lambda u: app.parse_routing(u),
@@ -502,12 +510,9 @@ def materialize_internal_services(app):
             get_agent_profile=getattr(app, "get_agent_profile", None),
             behavior_metrics=getattr(app, "behavior_metrics", None),
             threads=getattr(app, "threads", 1),
-            session_state=getattr(app, "session_state", {}),
+            session_state=_session_state,
             renderer=getattr(app, "renderer", None),
             show_system_message=getattr(getattr(app, "system_layer", None), "show_system_message", None),
-            get_round_index=lambda: getattr(app, "round_index", 0),
-            set_round_index=lambda v: setattr(app, "round_index", v),
-            set_summary_agent_preference=lambda v: setattr(app, "summary_agent_preference", v),
             merge_staging_to_workspace=merge_staging_to_workspace,
         )
     if not hasattr(app, "execution_mode"):

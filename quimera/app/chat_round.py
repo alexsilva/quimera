@@ -10,7 +10,7 @@ from ..constants import MSG_EMPTY_INPUT, USER_ROLE
 from .command_router import RoutingDecision
 from .config import logger
 from .render_event import RenderEvent
-from ..domain.session_state import SessionState
+from ..domain.session_state import SessionRuntimeState
 from ..ui.messages import format_failover_message
 
 
@@ -21,7 +21,7 @@ class ChatRoundContext:
     session_services: Any | None = None
     task_services: Any | None = None
     renderer: Any | None = None
-    session_state: SessionState | dict | None = None
+    session_state: SessionRuntimeState | None = None
     parse_routing: Any | None = None
     parse_response: Any | None = None
     dispatch_services: Any | None = None
@@ -52,10 +52,6 @@ class ChatRoundOrchestrator:
         ui_queue=None,
         merge_staging_to_workspace=None,
         set_parallel_toolbar_state=None,
-        # compat: aceita lambdas individuais quando session_state não é SessionState
-        get_round_index=None,
-        set_round_index=None,
-        set_summary_agent_preference=None,
     ):
         self._dispatch_services = dispatch_services
         self._parse_routing = parse_routing
@@ -68,13 +64,7 @@ class ChatRoundOrchestrator:
         self._get_agent_profile = get_agent_profile
         self._behavior_metrics = behavior_metrics
         self._threads = threads
-        # session_state pode ser SessionState ou dict legado
-        self._session_state = session_state if isinstance(session_state, SessionState) else None
-        self._session_state_dict = session_state if not isinstance(session_state, SessionState) else None
-        # compat: lambdas individuais (usadas quando _session_state é None)
-        self._get_round_index_fn = get_round_index or (lambda: 0)
-        self._set_round_index_fn = set_round_index
-        self._set_summary_agent_preference_fn = set_summary_agent_preference
+        self._session_state = session_state
         self._set_parallel_toolbar_state_fn = set_parallel_toolbar_state
         self._show_system_message = show_system_message
         self._renderer = renderer
@@ -84,40 +74,26 @@ class ChatRoundOrchestrator:
         self._cancel_notice_tls = threading.local()
 
     # ------------------------------------------------------------------
-    # Accessors de estado — preferem SessionState, caem nos lambdas legados
+    # Accessors de estado — SessionRuntimeState único
     # ------------------------------------------------------------------
 
     def _get_round_index(self) -> int:
         if self._session_state is not None:
             return self._session_state.round_index
-        return self._get_round_index_fn()
+        return 0
 
     def _set_round_index(self, value: int) -> None:
         if self._session_state is not None:
             self._session_state.round_index = value
-        elif self._set_round_index_fn is not None:
-            self._set_round_index_fn(value)
 
     def _set_summary_agent_preference(self, value: str | None) -> None:
         if self._session_state is not None:
             self._session_state.summary_agent_preference = value
-        elif self._set_summary_agent_preference_fn is not None:
-            self._set_summary_agent_preference_fn(value)
 
     def _snapshot_history(self) -> list:
-        history = None
         if self._session_state is not None:
-            history = self._session_state.history
-        elif isinstance(self._session_state_dict, dict):
-            history = self._session_state_dict.get("history")
-        if history is None:
-            return []
-        if isinstance(history, list):
-            return list(history)
-        try:
-            return list(history)
-        except Exception:
-            return []
+            return list(self._session_state.history)
+        return []
 
     def _can_request_history_snapshot(self) -> bool:
         if self._persist_message_supports_snapshot is not None:
@@ -294,12 +270,7 @@ class ChatRoundOrchestrator:
         if ctx.renderer is not None:
             self._renderer = ctx.renderer
         if ctx.session_state is not None:
-            if isinstance(ctx.session_state, SessionState):
-                self._session_state = ctx.session_state
-                self._session_state_dict = None
-            else:
-                self._session_state = None
-                self._session_state_dict = ctx.session_state
+            self._session_state = ctx.session_state
         if ctx.parse_routing is not None:
             self._parse_routing = ctx.parse_routing
         if ctx.parse_response is not None:

@@ -11,7 +11,7 @@ from quimera.app import QuimeraApp
 from quimera.app.staging import merge_staging_to_workspace
 from quimera.app.protocol import AppProtocol
 from quimera.app.session import AppSessionServices, compute_history_hard_limit
-from quimera.domain.session_state import SessionState
+from quimera.domain.session_state import SessionRuntimeState
 from quimera.shared_state import clear_agent_state_for_session_start
 from quimera.ui.base import RendererBase
 
@@ -165,7 +165,7 @@ def test_session_state_history_transactions_preserve_reference_and_return_snapsh
     """Verifica que session state history transactions preserve reference and return snapshots."""
     history = [{"role": "human", "content": f"m{i}"} for i in range(4)]
     original_ref = history
-    state = SessionState(history=history, shared_state={})
+    state = SessionRuntimeState.from_legacy(history=history, shared_state={})
 
     dropped, trimmed_snapshot = state.trim_history(2)
 
@@ -208,7 +208,7 @@ def test_session_state_history_transactions_preserve_reference_and_return_snapsh
 def test_persist_message_returned_snapshot_is_atomic_with_append_and_trim():
     """Verifica que persist message returned snapshot is atomic with append and trim."""
     history = []
-    state = SessionState(history=history, shared_state={"goal": "atomic"})
+    state = SessionRuntimeState.from_legacy(history=history, shared_state={"goal": "atomic"})
 
     class InterleavingStorage(_Storage):
         def append_log(self, role, content):
@@ -253,7 +253,7 @@ def test_compute_history_hard_limit_never_undercuts_summarize_threshold():
 def test_persist_message_trims_history_to_history_window_times_two():
     """Verifica que, sem resumo automático, o histórico não cresce além de 2x a janela."""
     history = [{"role": "human", "content": f"m{i}"} for i in range(12)]
-    state = SessionState(history=history, shared_state={})
+    state = SessionRuntimeState.from_legacy(history=history, shared_state={})
     storage = _Storage()
     service = AppSessionServices(
         session_state=state,
@@ -294,7 +294,7 @@ def test_session_summarize_preserves_concurrent_persisted_message():
 
     summarizer = Summarizer()
     service = AppSessionServices(
-        session_state=SessionState(history=history, shared_state={}, shared_state_lock=lock),
+        session_state=SessionRuntimeState.from_legacy(history=history, shared_state={}, shared_state_lock=lock),
         storage=storage,
         renderer=renderer,
         agent_pool=SimpleNamespace(primary="codex"),
@@ -343,7 +343,7 @@ def test_session_summarize_does_not_save_summary_when_snapshot_changes():
 
     summarizer = Summarizer()
     service = AppSessionServices(
-        session_state=SessionState(history=history, shared_state={}, shared_state_lock=lock),
+        session_state=SessionRuntimeState.from_legacy(history=history, shared_state={}, shared_state_lock=lock),
         storage=storage,
         renderer=renderer,
         agent_pool=SimpleNamespace(primary="codex"),
@@ -389,7 +389,7 @@ def test_session_shutdown_summarizes_stable_history_snapshot_after_pending_save(
 
     summarizer = Summarizer()
     service = AppSessionServices(
-        session_state=SessionState(history=history, shared_state=shared_state),
+        session_state=SessionRuntimeState.from_legacy(history=history, shared_state=shared_state),
         storage=storage,
         renderer=renderer,
         agent_pool=SimpleNamespace(primary="codex"),
@@ -482,7 +482,7 @@ def test_auto_summarize_calls_load_session_summary_inside_background_thread():
             return "resumo"
 
     service = AppSessionServices(
-        session_state=SessionState(history=history, shared_state={}, shared_state_lock=lock),
+        session_state=SessionRuntimeState.from_legacy(history=history, shared_state={}, shared_state_lock=lock),
         storage=storage,
         renderer=renderer,
         agent_pool=SimpleNamespace(primary="codex"),
@@ -517,7 +517,7 @@ def test_shutdown_waits_for_running_summarization_thread_when_not_interrupted():
     lock = threading.Lock()
 
     service = AppSessionServices(
-        session_state=SessionState(history=[], shared_state={}, shared_state_lock=lock),
+        session_state=SessionRuntimeState.from_legacy(history=[], shared_state={}, shared_state_lock=lock),
         storage=storage,
         renderer=renderer,
         agent_pool=SimpleNamespace(primary="codex"),
@@ -551,7 +551,7 @@ def test_shutdown_interrupted_does_not_wait_for_running_summarization_thread():
     lock = threading.Lock()
 
     service = AppSessionServices(
-        session_state=SessionState(history=[], shared_state={}, shared_state_lock=lock),
+        session_state=SessionRuntimeState.from_legacy(history=[], shared_state={}, shared_state_lock=lock),
         storage=storage,
         renderer=renderer,
         agent_pool=SimpleNamespace(primary="codex"),
@@ -581,7 +581,7 @@ def test_shutdown_flushes_pending_auto_summary_completion():
             return "resumo pronto"
 
     service = AppSessionServices(
-        session_state=SessionState(history=history, shared_state={}, shared_state_lock=lock),
+        session_state=SessionRuntimeState.from_legacy(history=history, shared_state={}, shared_state_lock=lock),
         storage=storage,
         renderer=renderer,
         agent_pool=SimpleNamespace(primary="codex"),
@@ -616,7 +616,7 @@ def test_auto_summarize_records_failure_when_worker_raises():
             raise RuntimeError("boom")
 
     service = AppSessionServices(
-        session_state=SessionState(history=history, shared_state={}, shared_state_lock=lock),
+        session_state=SessionRuntimeState.from_legacy(history=history, shared_state={}, shared_state_lock=lock),
         storage=storage,
         renderer=renderer,
         agent_pool=SimpleNamespace(primary="codex"),
@@ -642,7 +642,7 @@ def test_join_summarization_is_noop_when_no_thread_started():
     lock = threading.Lock()
 
     service = AppSessionServices(
-        session_state=SessionState(history=[], shared_state={}, shared_state_lock=lock),
+        session_state=SessionRuntimeState.from_legacy(history=[], shared_state={}, shared_state_lock=lock),
         storage=storage,
         renderer=renderer,
         agent_pool=SimpleNamespace(primary="codex"),

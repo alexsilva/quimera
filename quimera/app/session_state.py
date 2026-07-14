@@ -3,7 +3,7 @@
 import logging
 
 from ..shared_state import expire_stale_keys
-from .state.session_state import SessionRuntimeState
+from ..domain.session_state import SessionRuntimeState
 
 logger = logging.getLogger(__name__)
 

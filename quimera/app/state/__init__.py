@@ -5,7 +5,6 @@ from .session_state import (
     SessionMeta,
     SessionMetrics,
     SessionRuntimeState,
-    SessionStateDict,
 )
 
 __all__ = [
@@ -13,5 +12,4 @@ __all__ = [
     "SessionMeta",
     "SessionMetrics",
     "SessionRuntimeState",
-    "SessionStateDict",
 ]

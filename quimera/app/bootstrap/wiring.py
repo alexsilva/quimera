@@ -64,7 +64,6 @@ from ...bugs import (
 from ...config import ConfigManager
 from ...constants import MSG_MIGRATION, Visibility
 from ...context import ContextManager
-from ...domain.session_state import SessionState
 from ...env_config import EnvConfig
 from ...metrics import BehaviorMetricsTracker
 from ...prompt import PromptBuilder
@@ -501,9 +500,7 @@ class AppAssembler:
         behavior_metrics = BehaviorMetricsTracker(storage_path=metrics_state_path)
         agent_client.tool_event_callback = app._record_tool_event
         debug_prompt_metrics = opts.debug
-        chat_state = SessionState(
-            runtime_state=sess.session_runtime_state,
-        )
+        chat_state = sess.session_runtime_state
         chat_state.summary_agent_preference = plat.agent_pool.primary
         protocol = AppProtocol(
             lock=sess.shared_state_lock,

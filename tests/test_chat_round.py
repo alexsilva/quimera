@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, Mock, patch
 from quimera.app.agent_pool import AgentPool
 from quimera.app.chat_round import ChatRoundOrchestrator
 from quimera.app.staging import merge_staging_to_workspace
+from quimera.domain.session_state import SessionRuntimeState
 
 
 # ---------------------------------------------------------------------------
@@ -19,8 +20,10 @@ def _make_app(active_agents=None, threads=1):
     app.threads = threads
     app.round_index = 0
     app.summary_agent_preference = None
+    app.session_state = SessionRuntimeState()
+    app.session_state["session_id"] = "test-cr"
+    app.session_state["history_count"] = 0
     app.shared_state = {}
-    app.session_state = {"session_id": "test-cr", "history_count": 0, "summary_loaded": False}
     app.behavior_metrics = None
     app._parallel_toolbar_state = {
         "active": 0,
@@ -80,15 +83,12 @@ def _make_orchestrator(app):
         get_agent_profile=getattr(app, 'get_agent_profile', None),
         behavior_metrics=getattr(app, 'behavior_metrics', None),
         threads=getattr(app, 'threads', 1),
-        session_state=getattr(app, 'session_state', {"session_id": "test-cr"}),
+        session_state=app.session_state,
         renderer=getattr(app, 'renderer', None),
         show_system_message=(
             getattr(app, 'show_system_message', None)
             or getattr(getattr(app, 'system_layer', None), 'show_system_message', None)
         ),
-        get_round_index=lambda: app.round_index,
-        set_round_index=lambda v: setattr(app, 'round_index', v),
-        set_summary_agent_preference=lambda v: setattr(app, 'summary_agent_preference', v),
         set_parallel_toolbar_state=getattr(app, '_set_parallel_toolbar_state', None),
         merge_staging_to_workspace=merge_staging_to_workspace,
     )
@@ -234,7 +234,7 @@ class TestProcessMainFlow(unittest.TestCase):
     def test_extend_follow_up_does_not_reuse_stale_user_only_history_snapshot(self):
         """Após persistir resposta, chamadas seguintes não devem receber snapshot antigo."""
         app = _make_app(active_agents=["openai", "codex"], threads=1)
-        app.session_state["history"] = []
+        app.session_state.history.clear()
         app.parse_routing = Mock(return_value=("openai", "segunda mensagem", False))
         responses = iter([
             "resposta openai",
@@ -245,9 +245,9 @@ class TestProcessMainFlow(unittest.TestCase):
         app.dispatch_services.delegate = Mock(side_effect=lambda *a, **kw: next(responses))
 
         def persist_message(role, content, *, return_history_snapshot=False):
-            app.session_state["history"].append({"role": role, "content": content})
+            app.session_state.history.append({"role": role, "content": content})
             if return_history_snapshot:
-                return list(app.session_state["history"])
+                return list(app.session_state.history)
             return None
 
         app.session_services.persist_message = persist_message
@@ -272,7 +272,7 @@ class TestProcessMainFlow(unittest.TestCase):
         self.assertTrue(all("history_snapshot" not in kwargs for kwargs in follow_up_kwargs))
         self.assertIn(
             {"role": "openai", "content": "resposta openai"},
-            app.session_state["history"],
+            app.session_state.history,
         )
 
     def test_main_flow_fallback_cancelled_resets_turn_without_warning(self):

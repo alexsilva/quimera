@@ -107,7 +107,7 @@ EXPECTED_PUBLIC_ATTRS = [
     ("selected_agents", "list"),
     ("session_metrics", "SessionMetricsService"),
     ("session_services", "AppSessionServices"),
-    ("session_state", "SessionStateDict"),
+    ("session_state", "SessionRuntimeState"),
     ("session_state_mgr", "SessionStateManager"),
     ("session_summarizer", "SessionSummarizer"),
     ("shared_state", "dict"),

@@ -27,7 +27,7 @@ from .executor import create_executor
 from ..tasks.planning import classify_task
 from ..app.config import logger
 from ..app.dispatch import AppDispatchServices
-from ..domain.session_state import SessionState
+from ..domain.session_state import SessionRuntimeState
 from ..runtime.tools.todo import TodoRegistry
 from .classifiers import classify_task_execution_result, classify_task_review_result, parse_task_command
 from .execution import TaskExecutionService
@@ -87,7 +87,7 @@ class AppTaskServices:
         get_agent_profile: Callable[[str], Any],
         available_profiles: list[Any] | None = None,
         get_available_profiles: Callable[[], list[Any]] | None = None,
-        session_state: SessionState | None = None,
+        session_state: SessionRuntimeState | None = None,
         get_session_state: Callable[[], dict[str, Any] | None] | None = None,
         get_history: Callable[[], Any] | None = None,
         get_shared_state: Callable[[], dict[str, Any] | None] | None = None,
@@ -331,8 +331,8 @@ class AppTaskServices:
     # ── SessionState accessors ──────────────────────────────────────
 
     def _get_session_state(self) -> dict | None:
-        if self._session_state_obj is not None:
-            return self._session_state_obj.session_meta
+        if isinstance(self._session_state_obj, SessionRuntimeState):
+            return self._session_state_obj.session_state
         return self._get_session_state_fn() if self._get_session_state_fn else None
 
     def _current_job_id(self):
@@ -359,22 +359,22 @@ class AppTaskServices:
             self._task_executors_setter(executors)
 
     def _get_history(self) -> Any:
-        if self._session_state_obj is not None:
+        if isinstance(self._session_state_obj, SessionRuntimeState):
             return self._session_state_obj.history
         return self._get_history_fn() if self._get_history_fn else []
 
     def _get_shared_state(self) -> dict | None:
-        if self._session_state_obj is not None:
+        if isinstance(self._session_state_obj, SessionRuntimeState):
             return self._session_state_obj.shared_state
         return self._get_shared_state_fn() if self._get_shared_state_fn else None
 
     def _get_round_index(self) -> int:
-        if self._session_state_obj is not None:
+        if isinstance(self._session_state_obj, SessionRuntimeState):
             return self._session_state_obj.round_index
         return self._get_round_index_fn() if self._get_round_index_fn else 0
 
     def _get_shared_state_lock(self) -> Any:
-        if self._session_state_obj is not None:
+        if isinstance(self._session_state_obj, SessionRuntimeState):
             return self._session_state_obj.shared_state_lock
         return self._get_shared_state_lock_fn() if self._get_shared_state_lock_fn else None
 

@@ -8,7 +8,7 @@ import threading
 import time
 
 from ..constants import MSG_MEMORY_FAILED, MSG_MEMORY_SAVING
-from ..domain.session_state import SessionState
+from ..domain.session_state import SessionRuntimeState
 from .interfaces import IAgentPool, IRenderer, ISessionStorage
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ class AppSessionServices:
 
     def __init__(
         self,
-        session_state: SessionState,
+        session_state: SessionRuntimeState,
         storage: ISessionStorage,
         renderer: IRenderer,
         agent_pool: IAgentPool,

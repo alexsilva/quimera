@@ -1,72 +1,69 @@
-"""Componentes de `quimera.constants`."""
-import enum
+"""Componentes de `quimera.constants`.
+
+Fachada de re-export temporária — o código de domínio foi movido para:
+  - ``quimera.domain.task_states`` (Visibility, TaskStatus, TaskType, can_transition)
+  - ``quimera.runtime.tool_schema_defs`` (TOOL_SCHEMA, build_tools_prompt)
+  - ``quimera.ui.commands`` (CMD_*, MSG_*, build_help, build_agents_help, etc.)
+"""
+from __future__ import annotations
+
 import os
 
+# --- Domínio: re-exports de quimera.domain.task_states ---
+from quimera.domain.task_states import (  # noqa: F401
+    Visibility,
+    TaskStatus,
+    VALID_TRANSITIONS,
+    can_transition,
+    TaskType,
+)
 
-class Visibility(str, enum.Enum):
-    """Nível de visibilidade da execução do agente."""
-    QUIET = "quiet"
-    SUMMARY = "summary"
-    FULL = "full"
+# --- Runtime: re-exports de quimera.runtime.tool_schema_defs ---
+from quimera.runtime.tool_schema_defs import (  # noqa: F401
+    TOOL_SCHEMA,
+    build_tools_prompt,
+)
 
+# --- UI / Comandos: re-exports de quimera.ui.commands ---
+from quimera.ui.commands import (  # noqa: F401
+    DEFAULT_FIRST_AGENT,
+    INPUT_PROMPT,
+    EXTEND_MARKER,
+    CMD_EXIT,
+    CMD_CLEAR,
+    CMD_PROMPT,
+    CMD_HELP,
+    CMD_AGENTS,
+    CMD_CONNECT,
+    CMD_DISCONNECT,
+    CMD_RELOAD,
+    CMD_CONTEXT,
+    CMD_CONTEXT_EDIT,
+    CMD_CONTEXT_BRANCH,
+    CMD_EDIT,
+    CMD_FILE_PREFIX,
+    CMD_TASK,
+    CMD_BUGS,
+    CMD_RESET,
+    CMD_APPROVE,
+    CMD_APPROVE_ALL,
+    CMD_POLICY,
+    CMD_ALIASES,
+    USER_ROLE,
+    MSG_CHAT_STARTED,
+    MSG_SESSION_LOG,
+    MSG_SESSION_STATUS,
+    MSG_MIGRATION,
+    MSG_MEMORY_SAVING,
+    MSG_MEMORY_FAILED,
+    MSG_SHUTDOWN,
+    MSG_DOUBLE_PREFIX,
+    MSG_EMPTY_INPUT,
+    build_help,
+    build_agents_help,
+)
 
-class TaskStatus(str, enum.Enum):
-    """Status de uma tarefa no domínio do Quimera."""
-    PENDING = "pending"
-    PROPOSED = "proposed"
-    APPROVED = "approved"
-    IN_PROGRESS = "in_progress"
-    PENDING_REVIEW = "pending_review"
-    REVIEWING = "reviewing"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    REJECTED = "rejected"
-
-
-# Tabela de transições válidas entre estados de task
-VALID_TRANSITIONS: dict["TaskStatus", frozenset["TaskStatus"]] = {
-    TaskStatus.PROPOSED: frozenset({TaskStatus.APPROVED, TaskStatus.REJECTED}),
-    TaskStatus.APPROVED: frozenset({TaskStatus.IN_PROGRESS}),
-    TaskStatus.PENDING: frozenset({TaskStatus.IN_PROGRESS}),
-    TaskStatus.IN_PROGRESS: frozenset({
-        TaskStatus.PENDING_REVIEW,
-        TaskStatus.COMPLETED,
-        TaskStatus.FAILED,
-        TaskStatus.PENDING,
-    }),
-    TaskStatus.PENDING_REVIEW: frozenset({TaskStatus.REVIEWING}),
-    TaskStatus.REVIEWING: frozenset({
-        TaskStatus.COMPLETED,
-        TaskStatus.FAILED,
-        TaskStatus.PENDING,
-        TaskStatus.PENDING_REVIEW,
-    }),
-    TaskStatus.COMPLETED: frozenset(),
-    TaskStatus.FAILED: frozenset(),
-    TaskStatus.REJECTED: frozenset(),
-}
-
-
-def can_transition(from_status: "TaskStatus | str", to_status: "TaskStatus | str") -> bool:
-    """Retorna True se a transição de from_status para to_status é válida."""
-    try:
-        from_s = TaskStatus(from_status)
-        to_s = TaskStatus(to_status)
-    except ValueError:
-        return False
-    return to_s in VALID_TRANSITIONS.get(from_s, frozenset())
-
-
-class TaskType(str, enum.Enum):
-    """Tipos de tarefas suportados para classificação e roteamento."""
-    TEST_EXECUTION = "test_execution"
-    CODE_REVIEW = "code_review"
-    CODE_EDIT = "code_edit"
-    BUG_INVESTIGATION = "bug_investigation"
-    ARCHITECTURE = "architecture"
-    DOCUMENTATION = "documentation"
-    GENERAL = "general"
-
+# --- Constantes que permanecem aqui (sem domínio claro de movimentação) ---
 MAX_STDERR_LINES = 5
 _env_limit = os.getenv("QUIMERA_MAX_STDERR_LINES")
 if _env_limit is not None:
@@ -74,211 +71,6 @@ if _env_limit is not None:
         MAX_STDERR_LINES = int(_env_limit)
     except Exception:
         pass
-
-DEFAULT_FIRST_AGENT = "claude"
-INPUT_PROMPT = "Você: "
-
-# Protocol markers
-EXTEND_MARKER = "[DEBATE]"
-
-# Commands
-CMD_EXIT = "/exit"
-CMD_CLEAR = "/clear"
-CMD_PROMPT = "/prompt"
-CMD_HELP = "/help"
-CMD_AGENTS = "/agents"
-CMD_CONNECT = "/connect"
-CMD_DISCONNECT = "/disconnect"
-CMD_RELOAD = "/reload"
-CMD_CONTEXT = "/context"
-CMD_CONTEXT_EDIT = "/context-edit"
-CMD_CONTEXT_BRANCH = "/context-branch"
-CMD_EDIT = "/edit"
-CMD_FILE_PREFIX = "/file"
-CMD_TASK = "/task"
-CMD_BUGS = "/bugs"
-CMD_RESET = "/reset"
-CMD_APPROVE = "/approve"
-CMD_APPROVE_ALL = "/approve-all"
-CMD_POLICY = "/policy"
-CMD_ALIASES = {"/e": CMD_EDIT, "/r": CMD_CONTEXT, "/g": CMD_HELP, "/y": CMD_APPROVE, "/a": CMD_APPROVE, "/aa": CMD_APPROVE_ALL}
-USER_ROLE = "human"
-
-# Messages
-MSG_CHAT_STARTED = "Chat multi-agente iniciado (/exit para sair)\n"
-MSG_SESSION_LOG = "Log da sessão:\n  {}\n"
-MSG_SESSION_STATUS = "Sessão {session_id} | resumo carregado: {summary_loaded}\n"
-MSG_MIGRATION = "[migração] {}\n"
-MSG_MEMORY_SAVING = "[memória] histórico salvo. Gerando resumo da sessão..."
-MSG_MEMORY_FAILED = "[memória] não foi possível gerar o resumo."
-MSG_SHUTDOWN = "Encerrando chat."
-MSG_DOUBLE_PREFIX = "\nUse apenas um prefixo por vez: /claude ou /codex\n"
-MSG_EMPTY_INPUT = "\nUse /{} <mensagem>\n"
-
-## Tools Schema
-TOOL_SCHEMA = {
-    "list_files": {
-        "name": "list_files",
-        "description": "Lista arquivos e diretórios em um caminho específico",
-        "parameters": {
-            "path": {"type": "str", "description": "Caminho do diretório", "required": True}
-        },
-    },
-    "read_file": {
-        "name": "read_file",
-        "description": "Lê o conteúdo de um arquivo, opcionalmente com intervalo de linhas",
-        "parameters": {
-            "path": {"type": "str", "description": "Caminho absoluto do arquivo", "required": True},
-            "start_line": {"type": "int", "description": "Primeira linha (1-indexed, inclusiva)", "required": False},
-            "end_line": {"type": "int", "description": "Última linha (1-indexed, inclusiva)", "required": False}
-        },
-    },
-    "write_file": {
-        "name": "write_file",
-        "description": "Cria um arquivo novo ou reescreve um arquivo inteiro quando isso for realmente necessário",
-        "parameters": {
-            "path": {"type": "str", "description": "Caminho absoluto do arquivo", "required": True},
-            "content": {"type": "str", "description": "Conteúdo a escrever", "required": True},
-            "replace_existing": {"type": "bool",
-                                 "description": "Use true apenas para sobrescrever arquivo existente por completo",
-                                 "required": False},
-        },
-    },
-    "apply_patch": {
-        "name": "apply_patch",
-        "description": "Aplica um patch textual estruturado. Ferramenta preferida para alterações parciais em arquivos existentes",
-        "parameters": {
-            "patch": {"type": "str", "description": "Patch no formato *** Begin Patch ... *** End Patch",
-                      "required": True}
-        },
-    },
-    "grep_search": {
-        "name": "grep_search",
-        "description": "Busca um padrão em arquivos de um diretório",
-        "parameters": {
-            "pattern": {"type": "str", "description": "Substring literal a buscar (não suporta regex)", "required": True},
-            "path": {"type": "str", "description": "Diretório base", "required": False},
-            "include_glob": {"type": "str|list[str]", "description": "Filtro glob opcional para paths retornados", "required": False},
-            "exclude_dirs": {"type": "list[str]", "description": "Diretórios adicionais a ignorar", "required": False},
-            "max_results": {"type": "int", "description": "Limite opcional de resultados", "required": False},
-        },
-    },
-    "run_shell": {
-        "name": "run_shell",
-        "description": "Executa um comando no terminal",
-        "parameters": {
-            "command": {"type": "str", "description": "Comando shell", "required": True}
-        },
-    },
-    "exec_command": {
-        "name": "exec_command",
-        "description": "Executa um comando com sessão persistente, polling e stdin opcional",
-        "parameters": {
-            "cmd": {"type": "str", "description": "Comando shell", "required": True},
-            "workdir": {"type": "str", "description": "Diretório relativo ao workspace", "required": False},
-            "yield_time_ms": {"type": "int", "description": "Espera por saída parcial antes de retornar",
-                              "required": False},
-            "tty": {"type": "bool", "description": "Executa em PTY simplificado", "required": False},
-        },
-    },
-    "write_stdin": {
-        "name": "write_stdin",
-        "description": "Envia texto ao stdin de uma sessão aberta por exec_command ou faz polling",
-        "parameters": {
-            "session_id": {"type": "int", "description": "ID retornado por exec_command", "required": True},
-            "chars": {"type": "str", "description": "Texto a enviar; vazio faz apenas polling", "required": False},
-            "yield_time_ms": {"type": "int", "description": "Espera por nova saída", "required": False},
-        },
-    },
-    "close_command_session": {
-        "name": "close_command_session",
-        "description": "Fecha explicitamente uma sessão aberta por exec_command",
-        "parameters": {
-            "session_id": {"type": "int", "description": "ID da sessão", "required": True},
-        },
-    },
-    "list_tasks": {
-        "name": "list_tasks",
-        "description": "Lista tarefas de um job ou todas",
-        "parameters": {
-            "job_id": {"type": "int", "description": "Filtrar por job ID", "required": False},
-            "status": {"type": "str", "description": "pending|in_progress|completed|failed|proposed|approved|rejected",
-                       "required": False},
-        },
-    },
-    "list_jobs": {
-        "name": "list_jobs",
-        "description": "Lista todos os jobs ativos",
-        "parameters": {
-            "status": {"type": "str", "description": "planning|active|completed|failed", "required": False},
-            "created_by": {"type": "str", "description": "Filtrar por criador", "required": False},
-        },
-    },
-    "get_job": {
-        "name": "get_job",
-        "description": "Consulta detalhes de um job específico. O job_id pode ser omitido se a variável de ambiente QUIMERA_CURRENT_JOB_ID estiver definida.",
-        "parameters": {
-            "job_id": {"type": "int", "description": "ID do job (opcional se QUIMERA_CURRENT_JOB_ID definida)",
-                       "required": False}
-        },
-    },
-}
-
-
-def build_tools_prompt() -> str:
-    """Renderiza apenas dados dinâmicos das ferramentas disponíveis."""
-    lines = []
-    for tool in TOOL_SCHEMA.values():
-        params = ", ".join(f"{k}: {v['type']}" for k, v in tool["parameters"].items())
-        line = f"- {tool['name']}"
-        if params:
-            line += f": {params}"
-        if tool.get("description"):
-            line += f" — {tool['description']}"
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def build_help(agent_names):
-    """Monta help."""
-    help_text = (
-            "\nComandos:\n" +
-            "- /task <descrição>: cria uma task explícita do humano e roteia para o melhor agente\n"
-            "- /bugs [list|show|close|analyze|stats]: operações de diagnóstico com bugs detectados automaticamente\n"
-            "- /planning <mensagem>: modo planejamento — workspace somente leitura, sem edição de arquivos\n"
-            "- /analysis <mensagem>: modo análise — somente leitura, sem edição de arquivos\n"
-            "- /design <mensagem>: modo design — arquitetura e design sem execução\n"
-            "- /review <mensagem>: modo revisão — somente revisão de código, sem edições\n"
-            "- /execute <mensagem>: modo execução — acesso completo a ferramentas e remove restrições do modo anterior\n"
-            "- /agents: lista os agentes disponíveis\n"
-            "- /connect <agente>: configura interativamente a conexão de um agente e persiste no base_dir\n"
-            "- /disconnect <agente>: remove a conexão persistida de um agente\n"
-            "- /clear: limpa a tela do terminal\n"
-            "- /prompt [agente]: simula o prompt final e mostra análise dos blocos\n"
-            "- /context [show]: mostra o contexto atual\n"
-            "- /context edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"
-            "- /context branch [branch]: mostra ou define a branch de template de contexto persistente\n"
-            "- /edit: abre o editor ($EDITOR, ou nano/vim/vi como fallback) para compor uma mensagem longa\n"
-            "- /file <caminho>: usa o conteúdo de um arquivo como mensagem\n"
-            "- /reset state: limpa o shared_state (objetivo, passo, critérios)\n"
-            "- /reset history: limpa o histórico da conversa\n"
-            "- /reset all: limpa shared_state e histórico\n"
-            "- s/<agente> [mensagem]: congela o agente primário para este agente\n"
-            "- o/<agente> [mensagem]: ativa modo orquestrador — agente analisa o pedido e delega aos demais\n"
-            "- r/: desativa congelamento ou modo orquestrador, volta a rotacionar\n"
-            "- /approve: pré-aprova a próxima chamada de ferramenta\n"
-            "- /approve-all: aprova automaticamente todas as chamadas de ferramenta seguintes\n"
-            "- /help: mostra esta ajuda\n"
-            "- /exit: encerra a sessão\n"
-    )
-    return help_text
-
-
-def build_agents_help(agent_names):
-    """Monta a lista de agentes disponíveis."""
-    agents = "\n".join(f"- /{name} <mensagem>: {name.capitalize()} responde" for name in agent_names)
-    return "\nAgentes:\n" + (agents if agents else "- nenhum")
-
 
 # Shared state keys that should be trimmed when building prompts
 _SHARED_STATE_TRIM_KEYS = [

@@ -559,8 +559,11 @@ class TestCallAgentLowLevel:
 
     def test_failed_result_increments_failed_counter(self, ll_app):
         """Verifica que failed result increments failed counter."""
+        from quimera.domain.session_state import SessionRuntimeState
+
         ll_app.agent_client.call = MagicMock(return_value=None)
-        ll_app.session_state.update(
+        rt = SessionRuntimeState()
+        rt.session_state.update(
             {
                 "delegations_sent": 0,
                 "total_latency": 0.0,
@@ -568,15 +571,18 @@ class TestCallAgentLowLevel:
                 "delegations_failed": 0,
             }
         )
-        ds = dispatch_services_from_app(ll_app)
+        ds = dispatch_services_from_app(ll_app, session_state=rt)
         ds.delegate_low_level("agent1")
-        assert ll_app.session_state["delegations_failed"] == 1
-        assert ll_app.session_state["delegations_succeeded"] == 0
+        assert rt.metrics.delegations_failed == 1
+        assert rt.metrics.delegations_succeeded == 0
 
     def test_success_result_increments_succeeded_counter(self, ll_app):
         """Verifica que success result increments succeeded counter."""
+        from quimera.domain.session_state import SessionRuntimeState
+
         ll_app.agent_client.call = MagicMock(return_value="ok")
-        ll_app.session_state.update(
+        rt = SessionRuntimeState()
+        rt.session_state.update(
             {
                 "delegations_sent": 0,
                 "total_latency": 0.0,
@@ -584,10 +590,10 @@ class TestCallAgentLowLevel:
                 "delegations_failed": 0,
             }
         )
-        ds = dispatch_services_from_app(ll_app)
+        ds = dispatch_services_from_app(ll_app, session_state=rt)
         ds.delegate_low_level("agent1")
-        assert ll_app.session_state["delegations_succeeded"] == 1
-        assert ll_app.session_state["delegations_failed"] == 0
+        assert rt.metrics.delegations_succeeded == 1
+        assert rt.metrics.delegations_failed == 0
 
 
 class TestPrintResponse:
@@ -633,24 +639,38 @@ class TestUpdateSpyTelemetry:
 
     def test_sets_spy_in_shared_state(self, dispatch_app):
         """Verifica que sets spy in shared state."""
+        from quimera.domain.session_state import SessionRuntimeState
+
         dispatch_app.agent_client.last_spy_turn_detail = {
             "turn_id": "t1",
             "tools": [{"tool_call_id": "c1"}],
         }
-        ds = dispatch_services_from_app(dispatch_app)
+        rt = SessionRuntimeState(
+            history=dispatch_app.history,
+            shared_state=dispatch_app.shared_state,
+        )
+        rt.session_state.update(dispatch_app.session_state)
+        ds = dispatch_services_from_app(dispatch_app, session_state=rt)
         ds._update_spy_telemetry("agent1")
-        assert "spy_last_turn_detail" in dispatch_app.shared_state
-        assert dispatch_app.shared_state["spy_last_turn_detail"]["agent"] == "agent1"
+        assert "spy_last_turn_detail" in rt.shared_state
+        assert rt.shared_state["spy_last_turn_detail"]["agent"] == "agent1"
 
     def test_sets_spy_in_session_state(self, dispatch_app):
         """Verifica que sets spy in session state."""
+        from quimera.domain.session_state import SessionRuntimeState
+
         dispatch_app.agent_client.last_spy_turn_detail = {
             "turn_id": "t1",
             "tools": [],
         }
-        ds = dispatch_services_from_app(dispatch_app)
+        rt = SessionRuntimeState(
+            history=dispatch_app.history,
+            shared_state=dispatch_app.shared_state,
+        )
+        rt.session_state.update(dispatch_app.session_state)
+        ds = dispatch_services_from_app(dispatch_app, session_state=rt)
         ds._update_spy_telemetry("agent1")
-        assert "last_spy_turn_detail" in dispatch_app.session_state
+        assert "last_spy_turn_detail" in rt.session_state
 
     def test_shared_state_not_dict_skips(self, dispatch_app):
         """Verifica que shared state not dict skips."""

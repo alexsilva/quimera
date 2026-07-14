@@ -145,8 +145,8 @@ def _make_app(active_agents=None):
     app.threads = 1
     app.renderer = DummyRenderer()
     app.turn_manager = TurnManager()
-    from quimera.domain.session_state import SessionState
-    app._chat_state = SessionState(history=[], shared_state={}, session_meta={}, shared_state_lock=None)
+    from quimera.domain.session_state import SessionRuntimeState
+    app._chat_state = SessionRuntimeState.from_legacy(history=[], shared_state={}, session_meta={})
 
     # Comportamento padrão: primeira chamada retorna resposta simples (sem delegation, sem extend)
     app.parse_routing = Mock(return_value=("claude", "olá", False))
@@ -237,7 +237,7 @@ class TestChatRoundContextBridge(unittest.TestCase):
         self.assertIs(orchestrator._session_services, new_session_services)
         self.assertIs(orchestrator._task_services, new_task_services)
         self.assertIs(orchestrator._renderer, new_renderer)
-        self.assertIs(orchestrator._session_state_dict, new_state)
+        self.assertIs(orchestrator._session_state, new_state)
         self.assertIs(orchestrator._parse_routing, parse_routing)
         self.assertIs(orchestrator._parse_response, parse_response)
         self.assertIs(orchestrator._dispatch_services, new_dispatch)

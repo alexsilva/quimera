@@ -9,7 +9,7 @@ from .agent_call_service import AgentCallService
 from .agent_gateway import AgentGateway, _is_user_cancelled
 from .render_event import RenderEvent
 from .config import logger
-from ..domain.session_state import SessionState
+from ..domain.session_state import SessionRuntimeState
 
 
 class AppDispatchServices:
@@ -29,7 +29,7 @@ class AppDispatchServices:
         prompt_builder=None,
         renderer=None,
         get_agent_profile=None,
-        session_state: "SessionState | None" = None,
+        session_state: "SessionRuntimeState | None" = None,
         get_execution_mode=None,
         refresh_task_state=None,
         debug_prompt_metrics=False,
@@ -49,14 +49,6 @@ class AppDispatchServices:
         get_agent_client=None,
         get_tool_executor=None,
         get_delegate_fn_override=None,
-        # compat: aceita lambdas individuais quando session_state não é fornecido
-        get_history=None,
-        get_shared_state=None,
-        get_session_state=None,
-        get_round_index=None,
-        get_session_call_index=None,
-        set_session_call_index=None,
-        get_shared_state_lock=None,
         notify_warning=None,
         notify_retry=None,
         notify_error=None,
@@ -70,14 +62,6 @@ class AppDispatchServices:
         self._renderer = renderer
         self._get_agent_profile = get_agent_profile
         self._session_state = session_state
-        # compat: lambdas individuais (usadas quando session_state é None)
-        self._get_history = get_history
-        self._get_shared_state = get_shared_state
-        self._get_session_state = get_session_state
-        self._get_round_index = get_round_index
-        self._get_session_call_index = get_session_call_index
-        self._set_session_call_index = set_session_call_index
-        self._get_shared_state_lock = get_shared_state_lock
         self._get_execution_mode = get_execution_mode
         self._refresh_task_state = refresh_task_state
         self._debug_prompt_metrics = debug_prompt_metrics
@@ -114,39 +98,34 @@ class AppDispatchServices:
     def _get_tool_executor(self):
         return self._tool_executor_override or (self._call(self._get_tool_executor_fn) if self._get_tool_executor_fn else None)
 
-    # Accessors que preferem SessionState mas caem nos lambdas legados
     def _history(self):
         if self._session_state is not None:
             return self._session_state.history
-        return self._get_history() if self._get_history else []
+        return []
 
     def _shared_state(self):
         if self._session_state is not None:
             return self._session_state.shared_state
-        return self._get_shared_state() if self._get_shared_state else {}
+        return {}
 
     def _session_meta(self):
         if self._session_state is not None:
             return self._session_state.session_meta
-        return self._get_session_state() if self._get_session_state else {}
+        return {}
 
     def _round_index(self):
         if self._session_state is not None:
             return self._session_state.round_index
-        return self._get_round_index() if self._get_round_index else 0
+        return 0
 
     def _shared_state_lock(self):
         if self._session_state is not None:
             return self._session_state.shared_state_lock
-        return self._get_shared_state_lock() if self._get_shared_state_lock else None
+        return None
 
     def _increment_call_index(self):
         if self._session_state is not None:
             return self._session_state.increment_call_index()
-        if self._get_session_call_index and self._set_session_call_index:
-            current = self._get_session_call_index() + 1
-            self._set_session_call_index(current)
-            return current
         return 0
 
     def _show_delegation(
@@ -207,24 +186,11 @@ class AppDispatchServices:
         session_state = self._session_state
 
         def _update_session(agent: str, success: bool, elapsed: float):
-            ss = self._session_meta()
-            if not ss:
-                return
-            if session_state is not None and hasattr(session_state, "record_delegation"):
+            if session_state is not None:
                 session_state.record_delegation(success)
+            ss = self._session_meta()
+            if ss:
                 ss["total_latency"] = ss.get("total_latency", 0.0) + elapsed
-                if self._record_session_metric:
-                    self._record_session_metric(agent, "succeeded" if success else "failed", elapsed)
-                return
-            try:
-                ss["delegations_sent"] += 1
-                ss["total_latency"] += elapsed
-                if success:
-                    ss["delegations_succeeded"] += 1
-                else:
-                    ss["delegations_failed"] += 1
-            except KeyError:
-                pass
             if self._record_session_metric:
                 self._record_session_metric(agent, "succeeded" if success else "failed", elapsed)
 
