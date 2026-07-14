@@ -17,6 +17,7 @@ from quimera.runtime.approval import (
     _emit_approval_message,
     format_approval_question,
 )
+from quimera.ui.base import RendererBase
 
 
 # ── ApprovalHandler (abstract) ──────────────────────────────
@@ -295,7 +296,7 @@ def test_console_approval_handler_input_gate_spinner_callbacks_called():
 
 def test_console_approval_handler_with_renderer():
     """Quando um renderer é injetado, usa show_approval em vez de print."""
-    class FakeRenderer:
+    class FakeRenderer(RendererBase):
         def __init__(self):
             self.calls = []
 
@@ -321,7 +322,7 @@ def test_console_approval_handler_with_renderer():
 
 def test_console_approval_handler_renderer_flushes_before_input():
     """Com renderer, flush é chamado antes de solicitar input."""
-    class FakeRenderer:
+    class FakeRenderer(RendererBase):
         def __init__(self):
             self.calls = []
 
@@ -353,7 +354,7 @@ def test_console_approval_handler_renderer_flushes_before_input():
 
 def test_console_approval_handler_renderer_shows_eof_message():
     """Com renderer, mensagem de EOF também usa show_approval."""
-    class FakeRenderer:
+    class FakeRenderer(RendererBase):
         def __init__(self):
             self.calls = []
 
@@ -723,7 +724,7 @@ def test_pre_approval_handler_spinner_callbacks_on_base_eof():
 def test_console_approval_handler_renderer_with_spinner_callbacks():
     """Combinação de renderer + spinner callbacks: ordem correta e
     renderer é usado para exibir o prompt."""
-    class FakeRenderer:
+    class FakeRenderer(RendererBase):
         def __init__(self):
             self.calls = []
 
@@ -828,7 +829,7 @@ def test_console_approval_handler_textual_xthread_prefers_approval_gate_even_whe
 
 def test_console_approval_handler_renderer_window_receives_question_metadata():
     """Fallback com renderer deve abrir approval_window com pergunta completa."""
-    class FakeRenderer:
+    class FakeRenderer(RendererBase):
         def __init__(self):
             self.windows = []
             self.messages = []

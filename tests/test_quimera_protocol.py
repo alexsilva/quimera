@@ -60,6 +60,7 @@ from quimera.tasks.planning import TaskClassification
 from quimera.tasks.api import add_job, complete_task, create_task, init_db, list_tasks
 from quimera.session_summary import SessionSummarizer, build_chain_summarizer
 from quimera.ui import _agent_style
+from quimera.ui.base import RendererBase
 
 AGENT_CLAUDE = "claude"
 AGENT_CODEX = "codex"
@@ -82,7 +83,7 @@ def _make_protocol(app, **_kwargs):
     )
 
 
-class DummyRenderer:
+class DummyRenderer(RendererBase):
     def __init__(self):
         self.warnings = []
         self.system_messages = []
@@ -570,7 +571,7 @@ class ProtocolTests(unittest.TestCase):
     )
     def test_cli_runs_interactive_test_with_default_prompt(self):
         """Verifica que cli runs interactive test with default prompt."""
-        class FakeRenderer:
+        class FakeRenderer(RendererBase):
             instances = []
 
             def __init__(self):
@@ -616,7 +617,7 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que cli runs interactive test with custom prompt."""
         calls = []
 
-        class FakeRenderer:
+        class FakeRenderer(RendererBase):
             instances = []
 
             def __init__(self):

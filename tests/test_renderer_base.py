@@ -87,7 +87,7 @@ class TestRendererBaseContract(unittest.TestCase):
     def test_infra_methods_are_noop(self):
         renderer = _RecordingRenderer()
         self.assertIsNone(renderer.flush())
-        self.assertFalse(renderer.flush_quick())
+        self.assertTrue(renderer.flush_quick())
         self.assertIsNone(renderer.signal_restore_history())
         self.assertIsNone(renderer.set_summarizing(True))
         self.assertIsNone(renderer.set_prompt_integration(None, None))

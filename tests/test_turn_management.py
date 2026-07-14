@@ -13,13 +13,14 @@ from quimera.app.core import QuimeraApp, TurnManager
 from quimera.app.render_event import RenderEvent
 from quimera.app.worker import ChatWorker
 from quimera.constants import CMD_EXIT, MSG_SHUTDOWN
+from quimera.ui.base import RendererBase
 
 
 # ---------------------------------------------------------------------------
 # Helpers compartilhados
 # ---------------------------------------------------------------------------
 
-class DummyRenderer:
+class DummyRenderer(RendererBase):
     def __init__(self):
         self.warnings = []
         self.system_messages = []
@@ -577,7 +578,7 @@ class TestTurnCycle(unittest.TestCase):
         rendered_messages = []
         scheduled_callbacks = []
 
-        class Renderer:
+        class Renderer(RendererBase):
             def show_message(self, agent, payload):
                 rendered_messages.append((agent, payload))
 
@@ -621,7 +622,7 @@ class TestTurnCycle(unittest.TestCase):
         no_response_calls = []
         scheduled_callbacks = []
 
-        class Renderer:
+        class Renderer(RendererBase):
             def show_message(self, agent, payload):
                 rendered_messages.append((agent, payload))
 
@@ -679,7 +680,7 @@ class TestTurnCycle(unittest.TestCase):
         delegation_calls = []
         scheduled_callbacks = []
 
-        class Renderer:
+        class Renderer(RendererBase):
             def show_delegation(self, from_agent, to_agent, task=None, **_kwargs):
                 delegation_calls.append((from_agent, to_agent, task))
 

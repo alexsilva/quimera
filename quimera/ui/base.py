@@ -92,7 +92,10 @@ class RendererBase:
         return None
 
     def flush_quick(self, timeout=0.15):
-        return False
+        # Renderer sem flush rápido dedicado faz o flush normal (mesma
+        # semântica do fallback getattr histórico dos chamadores).
+        self.flush()
+        return True
 
     def signal_restore_history(self):
         return None

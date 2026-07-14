@@ -2,6 +2,7 @@ from quimera.app.agent_gateway import AgentGateway
 from quimera.app.agent_run_events import AgentRunController, AgentRunEvent, NullAgentRunSink
 from quimera.prompt_kinds import PromptKind
 from quimera.runtime.input_broker import InputBroker, _InputRequest
+from quimera.ui.base import RendererBase
 
 
 class RecordingSink:
@@ -141,7 +142,7 @@ def test_input_broker_emits_human_action_events_without_changing_default_flow():
 
 
 def test_agent_run_controller_commits_stream_on_human_action_request():
-    class Renderer:
+    class Renderer(RendererBase):
         def __init__(self):
             self.committed = []
 
@@ -161,7 +162,7 @@ def test_agent_run_controller_commits_stream_on_human_action_request():
 def test_input_broker_human_action_request_commits_agent_before_answer():
     order = []
 
-    class Renderer:
+    class Renderer(RendererBase):
         def commit_agent_stream(self, agent):
             order.append(("commit", agent))
             return True

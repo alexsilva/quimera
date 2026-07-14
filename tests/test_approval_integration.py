@@ -17,6 +17,7 @@ from quimera.app.core import QuimeraApp
 from quimera.constants import CMD_APPROVE, CMD_APPROVE_ALL
 from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.executor import ToolExecutor
+from quimera.ui.base import RendererBase
 
 
 # ─── Fiação (wiring) — QuimeraApp → _approval_handler ─────────────
@@ -254,7 +255,7 @@ def test_approve_command_por_getter_nao_quebra_sem_handler(tmp_path: Path):
     assert result is True
 
 
-class DummyRenderer:
+class DummyRenderer(RendererBase):
     """Renderer mínimo para testes de AppSystemLayer."""
     def show_system(self, msg):
         pass

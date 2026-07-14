@@ -23,9 +23,10 @@ from quimera.constants import (
 )
 from quimera.profiles import ExecutionProfile
 from quimera.profiles.base import CliConnection, OpenAIConnection
+from quimera.ui.base import RendererBase
 
 
-class DummyRenderer:
+class DummyRenderer(RendererBase):
     def __init__(self):
         self.system_messages = []
         self.warning_messages = []

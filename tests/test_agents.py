@@ -26,6 +26,7 @@ from quimera.profiles.opencode import OpenCodeProfile, _format_opencode_spy_even
 from quimera.profiles.spy_utils import format_command_output_preview
 from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.evidence import EvidenceStore
+from quimera.ui.base import RendererBase
 
 
 @pytest.fixture
@@ -2035,7 +2036,7 @@ def test_agent_client_tool_preview_uses_agent_feed_when_supported():
     """Preview de tool sem approval deve aparecer no feed do agente na Textual."""
     from types import SimpleNamespace
 
-    class FeedRenderer:
+    class FeedRenderer(RendererBase):
         supports_agent_feed = True
 
         def __init__(self):
@@ -2065,7 +2066,7 @@ def test_agent_client_tool_preview_uses_global_feed_for_http_without_agent_metad
     """Preview MCP HTTP sem agent_name deve aparecer no feed global, não ficar deferred."""
     from types import SimpleNamespace
 
-    class FeedRenderer:
+    class FeedRenderer(RendererBase):
         supports_agent_feed = True
 
         def __init__(self):
@@ -2094,7 +2095,7 @@ def test_agent_client_tool_preview_uses_mcp_metadata_agent_when_available():
     """Preview de tool MCP sem approval deve usar agente vindo do trusted_context."""
     from types import SimpleNamespace
 
-    class FeedRenderer:
+    class FeedRenderer(RendererBase):
         supports_agent_feed = True
 
         def __init__(self):
@@ -2373,7 +2374,7 @@ def test_spy_output_presenter_summary_persists_fallback_raw_stdout(renderer):
 
 def test_spy_output_presenter_uses_muted_feed_for_summary_response_when_supported():
     """Verifica que summary response vai para o transient do agente (desaparece ao final)."""
-    class FeedRenderer:
+    class FeedRenderer(RendererBase):
         supports_agent_feed = True
 
         def __init__(self):
@@ -2393,7 +2394,7 @@ def test_spy_output_presenter_uses_muted_feed_for_summary_response_when_supporte
 
 def test_spy_output_presenter_persists_tool_preview_when_feed_is_supported():
     """Verifica que tool preview fica visível no feed Textual, não só como transient."""
-    class FeedRenderer:
+    class FeedRenderer(RendererBase):
         supports_agent_feed = True
 
         def __init__(self):
@@ -2413,7 +2414,7 @@ def test_spy_output_presenter_persists_tool_preview_when_feed_is_supported():
 
 def test_agent_client_uses_transient_for_live_stderr_when_renderer_supports_it():
     """Verifica que stderr ao vivo volta para a janela transient mesmo com feed disponível."""
-    class FeedRenderer:
+    class FeedRenderer(RendererBase):
         supports_agent_feed = True
 
         def __init__(self):

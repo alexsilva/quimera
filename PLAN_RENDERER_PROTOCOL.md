@@ -78,9 +78,11 @@ Suíte completa após cada fase; fases 3–4 também com smoke manual do chat
 (`python -m quimera`) verificando banner, mensagens neutras, failover e feed.
 
 ## Status
-- [ ] Fase 0
-- [ ] Fase 1
-- [ ] Fase 2
+- [x] Fase 0 — inventário em tests/test_renderer_base.py (CONTRACT)
+- [x] Fase 1 — quimera/ui/base.py; formatters movidos para ui/messages.py
+- [x] Fase 2 — 21 fakes herdam a base (exceto FakeRenderer com __getattr__
+      catch-all em test_app_core_characterization.py, que já cobre o contrato);
+      flush_quick da base delega a flush (semântica do fallback histórico)
 - [ ] Fase 3
 - [ ] Fase 4
 - [ ] Fase 5

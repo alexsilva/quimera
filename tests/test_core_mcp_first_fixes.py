@@ -13,6 +13,7 @@ from quimera.app.protocol import AppProtocol
 from quimera.app.session import AppSessionServices, compute_history_hard_limit
 from quimera.domain.session_state import SessionState
 from quimera.shared_state import clear_agent_state_for_session_start
+from quimera.ui.base import RendererBase
 
 
 class _Storage:
@@ -29,7 +30,7 @@ class _Storage:
         self.saved_shared_state = dict(shared_state or {})
 
 
-class _Renderer:
+class _Renderer(RendererBase):
     def __init__(self):
         self.system_messages = []
 

@@ -34,6 +34,7 @@ from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.input_broker import InputBroker
 from quimera.ui.textual.input_gate import TextualInputGate
 from quimera.ui.textual.bridge import TextualUiBridge
+from quimera.ui.base import RendererBase
 
 
 _cfg = ToolRuntimeConfig(workspace_root=Path("/tmp"))
@@ -242,7 +243,7 @@ def test_approval_show_calls_renderer_show_system_from_background_thread():
     show_calls = []
     flush_calls = []
 
-    class FakeRenderer:
+    class FakeRenderer(RendererBase):
         def show_system(self, msg):
             show_calls.append(msg)
 
