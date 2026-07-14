@@ -29,32 +29,6 @@ class PromptAwareStderrHandler(logging.StreamHandler):
         self._app = None
         self._early_buffer: list[logging.LogRecord] = []
 
-    def bind_app(self, app) -> None:
-        """Compat shim para testes e call sites legados.
-
-        Mantém o contrato antigo sem reintroduzir dependência forte no fluxo novo:
-        o handler continua operando sobre callbacks, apenas materializados a partir
-        de um objeto app-like.
-        """
-        self._app = app
-        if app is None:
-            self._callbacks = None
-            return
-
-        def _noop(*_args, **_kwargs):
-            return None
-
-        self.bind_callbacks(
-            output_lock=getattr(app, "_output_lock", None),
-            redisplay_prompt=getattr(app, "_redisplay_user_prompt_if_needed", _noop),
-            show_error=getattr(app.system_layer, "show_error_message", _noop),
-            show_warning=getattr(app.system_layer, "show_warning_message", _noop),
-            show_system=getattr(app.system_layer, "show_system_message", _noop),
-            show_muted=getattr(app.system_layer, "show_muted_message", _noop),
-            is_reading=lambda: _is_prompt_active_from_app(app),
-            debug_enabled=lambda: bool(getattr(app, "debug_prompt_metrics", False)),
-        )
-
     def bind_callbacks(
             self,
             *,
@@ -158,28 +132,3 @@ def _friendly_message(record: logging.LogRecord) -> str:
     return msg
 
 
-def _is_prompt_reading(value: bool | str | None) -> bool:
-    if isinstance(value, bool):
-        return value
-    return value == "reading"
-
-
-def _is_prompt_active_from_app(app) -> bool | str | None:
-    input_gate = getattr(app, "input_gate", None)
-    if input_gate is not None:
-        is_active = getattr(input_gate, "is_active", None)
-        if callable(is_active):
-            try:
-                status = is_active()
-                if isinstance(status, bool):
-                    return status
-            except Exception:
-                pass
-    return _get_runtime_or_legacy_input_status(app)
-
-
-def _get_runtime_or_legacy_input_status(app) -> str | None:
-    runtime_state = getattr(app, "runtime_state", None)
-    if runtime_state is not None:
-        return getattr(runtime_state, "nonblocking_input_status", None)
-    return getattr(app, "_nonblocking_input_status", None)

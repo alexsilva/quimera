@@ -21,7 +21,7 @@ from quimera.app.agent_pool import AgentPool
 from quimera.app.core import TurnManager, normalize_agent_name
 from quimera.app.staging import merge_staging_to_workspace
 from quimera.app.dispatch import AppDispatchServices
-from tests.legacy_app_adapters import dispatch_services_from_app, system_layer_from_app
+from tests.legacy_app_adapters import dispatch_services_from_app, system_layer_from_app, bind_handler_app
 from quimera.app.inputs import AppInputServices, read_from_editor, read_user_input_with_timeout
 from quimera.app.session import AppSessionServices
 from quimera.app.system_layer import AppSystemLayer
@@ -3664,7 +3664,7 @@ class ProfileTests(unittest.TestCase):
         prompt_handler = next(handler for handler in app_module.logger.handlers if
                               isinstance(handler, app_module.PromptAwareStderrHandler))
         previous_app = prompt_handler._app
-        prompt_handler.bind_app(app)
+        bind_handler_app(prompt_handler, app)
         try:
             with patch("sys.stdin", stdin), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
                 app_module.logger.info("[DISPATCH] sending to agent=%s", AGENT_CODEX)
@@ -3674,7 +3674,7 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(mock_flush.call_count, 0)
             app.input_gate.redisplay.assert_not_called()
         finally:
-            prompt_handler.bind_app(previous_app)
+            bind_handler_app(prompt_handler, previous_app)
 
     def test_staging_logger_still_shows_warning_logs_while_tty_reader_is_active(self):
         """Verifica que staging logger still shows warning logs while tty reader is active."""
@@ -3696,7 +3696,7 @@ class ProfileTests(unittest.TestCase):
         prompt_handler = next(handler for handler in app_module.logger.handlers if
                               isinstance(handler, app_module.PromptAwareStderrHandler))
         previous_app = prompt_handler._app
-        prompt_handler.bind_app(app)
+        bind_handler_app(prompt_handler, app)
         try:
             with patch("sys.stdin", stdin), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
                 app_module.logger.warning("[DISPATCH] retry for agent=%s", AGENT_CODEX)
@@ -3708,7 +3708,7 @@ class ProfileTests(unittest.TestCase):
             )
             app.input_gate.redisplay.assert_not_called()
         finally:
-            prompt_handler.bind_app(previous_app)
+            bind_handler_app(prompt_handler, previous_app)
 
     def test_show_system_message_uses_prompt_toolkit_redisplay_without_manual_clear(self):
         """Verifica que show system message uses prompt toolkit redisplay without manual clear."""

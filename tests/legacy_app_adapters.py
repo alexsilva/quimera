@@ -172,6 +172,45 @@ def resolve_prompt_owner_thread_id_from_app(app):
     )
 
 
+def _handler_prompt_active_from_app(app):
+    input_gate = getattr(app, "input_gate", None)
+    if input_gate is not None:
+        is_active = getattr(input_gate, "is_active", None)
+        if callable(is_active):
+            try:
+                status = is_active()
+                if isinstance(status, bool):
+                    return status
+            except Exception:
+                pass
+    runtime_state = getattr(app, "runtime_state", None)
+    if runtime_state is not None:
+        return getattr(runtime_state, "nonblocking_input_status", None)
+    return getattr(app, "_nonblocking_input_status", None)
+
+
+def bind_handler_app(handler, app):
+    """Materializa os AppCallbacks de um PromptAwareStderrHandler a partir de um app fake."""
+    handler._app = app
+    if app is None:
+        handler._callbacks = None
+        return
+
+    def _noop(*_args, **_kwargs):
+        return None
+
+    handler.bind_callbacks(
+        output_lock=getattr(app, "_output_lock", None),
+        redisplay_prompt=getattr(app, "_redisplay_user_prompt_if_needed", _noop),
+        show_error=getattr(app.system_layer, "show_error_message", _noop),
+        show_warning=getattr(app.system_layer, "show_warning_message", _noop),
+        show_system=getattr(app.system_layer, "show_system_message", _noop),
+        show_muted=getattr(app.system_layer, "show_muted_message", _noop),
+        is_reading=lambda: _handler_prompt_active_from_app(app),
+        debug_enabled=lambda: bool(getattr(app, "debug_prompt_metrics", False)),
+    )
+
+
 def system_layer_from_app(app, **overrides):
     """Constrói AppSystemLayer a partir de um objeto app-like."""
     input_gate = getattr(app, "input_gate", None)

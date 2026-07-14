@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import quimera.app.config as app_config
 from quimera.app.handlers import PromptAwareStderrHandler
+from tests.legacy_app_adapters import bind_handler_app
 
 
 def _app_with_system_layer(**extra):
@@ -20,7 +21,7 @@ def test_prompt_aware_stderr_handler_routes_warning_to_app_callback():
         _nonblocking_input_status="reading",
         system_layer=Mock(show_warning_message=Mock()),
     )
-    handler.bind_app(app)
+    bind_handler_app(handler, app)
 
     record = logging.LogRecord(
         name="quimera.staging",
@@ -47,7 +48,7 @@ def test_prompt_aware_stderr_handler_suppresses_mcp_info_while_prompt_reading_wi
         debug_prompt_metrics=False,
         system_layer=Mock(show_muted_message=Mock()),
     )
-    handler.bind_app(app)
+    bind_handler_app(handler, app)
 
     record = logging.LogRecord(
         name="quimera.runtime.mcp.server",
@@ -71,7 +72,7 @@ def test_prompt_aware_stderr_handler_shows_mcp_info_while_prompt_reading_in_debu
         debug_prompt_metrics=True,
         system_layer=Mock(show_muted_message=Mock()),
     )
-    handler.bind_app(app)
+    bind_handler_app(handler, app)
 
     record = logging.LogRecord(
         name="quimera.runtime.mcp.server",
@@ -95,7 +96,7 @@ def test_quimera_root_logger_does_not_route_internal_warnings_to_ui():
     )
     previous_app = app_config.handler._app
     previous_callbacks = app_config.handler._callbacks
-    app_config.handler.bind_app(app)
+    bind_handler_app(app_config.handler, app)
     try:
         logging.getLogger("quimera.runtime.process_supervisor").warning(
             "registrando processo durante shutdown"
