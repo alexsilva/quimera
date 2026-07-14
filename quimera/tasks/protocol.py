@@ -121,7 +121,7 @@ class TaskProtocolService:
         system_layer = self._get_system_layer()
         if system_layer is not None:
             system_layer.show_system_message(" | ".join(lines))
-        elif renderer is not None and hasattr(renderer, "show_system"):
+        elif renderer is not None:
             renderer.show_system(" | ".join(lines))
 
     # ── Task router delegates ──────────────────────────────────────────

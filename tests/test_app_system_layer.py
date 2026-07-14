@@ -935,16 +935,15 @@ def test_handle_command_bugs_without_handler_warns():
 
 
 def test_enqueue_logs_audit_event():
-    """_enqueue_deferred_message loga deferred_enqueue via audit logger."""
-    audit_logger = Mock()
+    """_enqueue_deferred_message loga deferred_enqueue via renderer."""
     renderer = DummyRenderer()
-    renderer._audit_logger = audit_logger
+    renderer.log_debug_event = Mock()
     app = make_app(renderer)
     layer = system_layer_from_app(app)
 
     layer._enqueue_deferred_message("[task 1] codex: testando", level="system")
 
-    audit_logger.log_event.assert_called_once_with(
+    renderer.log_debug_event.assert_called_once_with(
         "deferred_enqueue",
         message="[task 1] codex: testando",
         level="system",
@@ -954,15 +953,14 @@ def test_enqueue_logs_audit_event():
 
 def test_enqueue_logs_audit_event_without_task_id():
     """deferred_enqueue funciona com mensagem sem task_id."""
-    audit_logger = Mock()
     renderer = DummyRenderer()
-    renderer._audit_logger = audit_logger
+    renderer.log_debug_event = Mock()
     app = make_app(renderer)
     layer = system_layer_from_app(app)
 
     layer._enqueue_deferred_message("mensagem livre", level="warning")
 
-    audit_logger.log_event.assert_called_once_with(
+    renderer.log_debug_event.assert_called_once_with(
         "deferred_enqueue",
         message="mensagem livre",
         level="warning",
@@ -970,10 +968,9 @@ def test_enqueue_logs_audit_event_without_task_id():
 
 
 def test_flush_logs_audit_event():
-    """flush_deferred_messages loga deferred_flush via audit logger."""
-    audit_logger = Mock()
+    """flush_deferred_messages loga deferred_flush via renderer."""
     renderer = DummyRenderer()
-    renderer._audit_logger = audit_logger
+    renderer.log_debug_event = Mock()
     app = make_app(renderer)
     app._deferred_system_messages = [
         ("system", "[task 1] codex: concluída"),
@@ -983,7 +980,7 @@ def test_flush_logs_audit_event():
 
     layer.flush_deferred_messages()
 
-    audit_logger.log_event.assert_called_once_with(
+    renderer.log_debug_event.assert_called_once_with(
         "deferred_flush",
         count=2,
         previews=["[task 1] codex: concluída", "outra msg"],

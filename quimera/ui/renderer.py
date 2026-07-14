@@ -471,6 +471,11 @@ class TerminalRenderer(RendererBase):
         """Retorna o nome do tema ativo."""
         return self._theme.name
 
+    @property
+    def window_manager(self) -> WindowManager:
+        """Window manager usado pelo compositor terminal."""
+        return self._window_manager
+
     def cycle_theme(self) -> str:
         """Avança para o próximo tema; retorna o nome do novo tema."""
         import quimera.themes as _themes_mod
@@ -499,9 +504,16 @@ class TerminalRenderer(RendererBase):
                 self._deck.windows[agent] = container
             return container
 
-    def _agent_window_controller(self, agent) -> AgentWindowController:
+    def agent_window_controller(self, agent) -> AgentWindowController:
         """Cria controller efêmero para mutações do estado de janela do agente."""
         return AgentWindowController(self._container(agent))
+
+    def print_direct(self, message):
+        """Escreve texto imediato via console para manter o cursor tracking do Rich."""
+        if self._console:
+            self._console.print(message, markup=False, highlight=False)
+        else:
+            print(message, flush=True)
 
     def _combined_transient(self, term_lines: int) -> tuple[str, int]:
         """Empilha verticalmente o progresso transitório de todos os containers.
@@ -795,7 +807,7 @@ class TerminalRenderer(RendererBase):
         if not self._console:
             return
         with self._lock:
-            self._agent_window_controller(agent).start_stream(self, self._theme.name)
+            self.agent_window_controller(agent).start_stream(self, self._theme.name)
 
     def update_message_stream(self, agent, chunk):
         """Atualiza a resposta incremental com mais um chunk."""
@@ -808,7 +820,7 @@ class TerminalRenderer(RendererBase):
         if not self._console:
             return
         with self._lock:
-            self._agent_window_controller(agent).finish_stream(self, final_content, render_mode)
+            self.agent_window_controller(agent).finish_stream(self, final_content, render_mode)
 
     def commit_agent_stream(self, agent, render_mode: str = "auto") -> bool:
         """Materializa o stream ativo do agente no scrollback, se houver."""
@@ -824,7 +836,7 @@ class TerminalRenderer(RendererBase):
             container.streaming = False
             container.pending_kind = ""
             container.pending_question = ""
-            self._agent_window_controller(agent).finish_stream(self, content, render_mode)
+            self.agent_window_controller(agent).finish_stream(self, content, render_mode)
             return True
 
     def abort_message_stream(self, agent):
@@ -832,7 +844,7 @@ class TerminalRenderer(RendererBase):
         if not self._console:
             return
         with self._lock:
-            self._agent_window_controller(agent).abort_stream(self)
+            self.agent_window_controller(agent).abort_stream(self)
 
     def update_agent_transient(self, agent, message: str) -> None:
         """Atualiza progresso transitório do agente sem acumular linhas."""

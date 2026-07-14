@@ -381,9 +381,7 @@ class TerminalCompositor:
         def _get_anchored_windows_renderable():
             """Build agent stream content followed by child prompt windows."""
             _ui = _rich()
-            manager = getattr(_renderer, "_window_manager", None)
-            if manager is None:
-                return None
+            manager = _renderer.window_manager
             stream_windows = _renderer._deck.active_streams()
             if not stream_windows:
                 return None

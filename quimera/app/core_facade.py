@@ -441,9 +441,8 @@ class CoreFacadeMixin:
     def clear_terminal_screen(self) -> None:
         """Limpa a viewport e o scrollback do terminal, reposicionando o cursor."""
         renderer = self.__dict__.get("renderer")
-        clear_screen = getattr(renderer, "clear_screen", None)
-        if callable(clear_screen):
-            clear_screen()
+        if renderer is not None:
+            renderer.clear_screen()
             return
         stdout = _core_sys().stdout
         if stdout is None or not stdout.isatty():

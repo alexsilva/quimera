@@ -14,17 +14,11 @@ from .approval_broker import ApprovalBroker, TrustedToolExecutionContext
 def _emit_approval_message(renderer, message: str) -> None:
     """Emite mensagem de approval e força flush quando houver renderer."""
     if renderer is not None:
-        show_approval = getattr(renderer, "show_approval", None)
-        if callable(show_approval):
-            show_approval(message)
-        else:
-            renderer.show_system(message)
-        flush = getattr(renderer, "flush", None)
-        if callable(flush):
-            try:
-                flush()
-            except Exception:
-                pass
+        renderer.show_approval(message)
+        try:
+            renderer.flush()
+        except Exception:
+            pass
         return
     print(message)
 

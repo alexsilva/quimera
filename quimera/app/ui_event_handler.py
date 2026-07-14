@@ -116,7 +116,7 @@ class UiEventHandler:
         Renderers com canal estruturado (Textual) recebem os campos separados;
         os legados caem numa frase pt-BR de sistema/aviso equivalente.
         """
-        structured = getattr(self._renderer, "supports_structured_agent_activity", False)
+        structured = self._renderer.supports_structured_agent_activity
         if activity == "failover":
             target = str(meta.get("target") or "").strip()
             message = str(meta.get("message") or "não respondeu").strip()

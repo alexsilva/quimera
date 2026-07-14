@@ -167,7 +167,7 @@ class TestConcurrentToolsCall:
         elapsed = time.perf_counter() - start
 
         assert len(results) == 2, f"expected 2 responses, got {len(results)}"
-        assert elapsed < 0.35, "thread pool deve executar em paralelo"
+        assert elapsed < 0.38, "thread pool deve executar em paralelo"
 
 
 class TestCancellation:

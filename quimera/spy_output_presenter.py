@@ -304,14 +304,6 @@ class SpyOutputPresenter:
         return summary
 
     @staticmethod
-    def _format_duration(duration_ms: int | None) -> str:
-        if not isinstance(duration_ms, int) or duration_ms < 0:
-            return "n/a"
-        if duration_ms < 1000:
-            return f"{duration_ms}ms"
-        return f"{duration_ms / 1000:.1f}s"
-
-    @staticmethod
     def _format_input_summary(payload: dict | None) -> str:
         if not isinstance(payload, dict):
             return ""
@@ -330,31 +322,6 @@ class SpyOutputPresenter:
             if parts:
                 return ", ".join(parts)
         return ""
-
-    def _build_turn_summary_lines(self, detail: dict) -> list[str]:
-        tools = detail.get("tools") if isinstance(detail, dict) else None
-        if not isinstance(tools, list):
-            return []
-        if not tools:
-            return []
-        total = len([tool for tool in tools if isinstance(tool, dict)])
-        ok_count = 0
-        err_count = 0
-        total_ms = 0
-        for tool in tools:
-            if not isinstance(tool, dict):
-                continue
-            status = str(tool.get("status") or "").lower()
-            if status in {"ok", "success", "succeeded"}:
-                ok_count += 1
-            if status in {"error", "failed", "fail", "timeout"}:
-                err_count += 1
-            duration_ms = tool.get("duration_ms")
-            if isinstance(duration_ms, int) and duration_ms >= 0:
-                total_ms += duration_ms
-        total_duration = self._format_duration(total_ms)
-        summary = f"TOOLS: {total} chamadas · {ok_count} ok · {err_count} erro · {total_duration}"
-        return [summary]
 
     @staticmethod
     def _is_cli_agent(agent: str | None) -> bool:
@@ -379,12 +346,7 @@ class SpyOutputPresenter:
             return
         if not runtime and not self._is_cli_agent(agent):
             return
-        if hasattr(self.renderer, "show_turn_summary"):
-            self.renderer.show_turn_summary(agent, detail)
-            return
-        lines = self._build_turn_summary_lines(detail)
-        for line in lines:
-            self._show(agent, SpyEvent(kind="response", text=line, final=True))
+        self.renderer.show_turn_summary(agent, detail)
 
     def _close_open_tool_calls(self) -> None:
         """Fecha tools que tiveram apenas evento de start (sem end) — típico de agentes CLI."""
@@ -403,7 +365,7 @@ class SpyOutputPresenter:
         """Finaliza o turno atual e retorna o detalhe estruturado coletado."""
         self.flush(agent)
         self._close_open_tool_calls()
-        if agent and hasattr(self.renderer, "clear_agent_transient"):
+        if agent:
             self.renderer.clear_agent_transient(agent)
         detail = self.build_turn_detail()
         self._persist_evidences(agent)
@@ -446,13 +408,10 @@ class SpyOutputPresenter:
 
     def _audit_spy_event(self, agent: str | None, event: SpyEvent) -> None:
         """Registra evento estruturado do pipeline de spy para debug pós-execução."""
-        logger = getattr(self.renderer, "log_debug_event", None)
-        if not callable(logger):
-            return
         preview = event.text.strip().replace("\r", "\\r").replace("\n", "\\n")
         if len(preview) > 200:
             preview = preview[:197] + "..."
-        logger(
+        self.renderer.log_debug_event(
             "spy_event",
             agent=(agent or ""),
             visibility=str(getattr(self.visibility, "value", self.visibility)),
@@ -562,17 +521,17 @@ class SpyOutputPresenter:
         if _check_interrupt(rendered):
             return
         if event.kind == "clear":
-            if agent and hasattr(self.renderer, "clear_agent_transient"):
+            if agent:
                 self.renderer.clear_agent_transient(agent)
             self.last_message = "clear:"
             return
         dedupe_key = f"{event.kind}:{rendered}"
         if event.kind != "clear" and dedupe_key == self.last_message:
             return
-        if event.transient and agent and hasattr(self.renderer, "update_agent_transient"):
+        if event.transient and agent:
             self.renderer.update_agent_transient(agent, rendered)
             self.last_message = dedupe_key
-            if event.kind != "tool" or getattr(self.renderer, "supports_agent_feed", False) is not True:
+            if event.kind != "tool" or self.renderer.supports_agent_feed is not True:
                 return
         if event.kind == "tool":
             self._show_persistent_line(rendered, agent=agent, muted=True)
@@ -585,7 +544,7 @@ class SpyOutputPresenter:
 
     def _show_persistent_line(self, message: str, *, agent: str | None, muted: bool = False) -> None:
         """Escreve no feed persistente sem derrubar o overlay quando suportado."""
-        if getattr(self.renderer, "supports_agent_feed", False) is True:
+        if self.renderer.supports_agent_feed is True:
             self.renderer.show_feed(message, agent=agent, muted=muted)
             return
         self.renderer.show_plain(message, agent=agent, muted=muted)

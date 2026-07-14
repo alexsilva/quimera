@@ -66,6 +66,7 @@ class _DummyStatus:
 class AgentsCoverageTests(unittest.TestCase):
     def setUp(self):
         self.renderer = MagicMock()
+        self.renderer.supports_agent_feed = True
         self.renderer.running_status.return_value = _DummyStatus()
 
     def test_strip_spinner(self):

@@ -98,16 +98,9 @@ class InputBroker:
         chão ao prompt.
         """
         renderer = self._renderer
-        get_controller = getattr(renderer, "_agent_window_controller", None)
-        if callable(get_controller):
+        if renderer is not None:
             try:
-                return get_controller(agent), renderer
-            except Exception:
-                pass
-        get = getattr(renderer, "_container", None)
-        if callable(get):
-            try:
-                return get(agent), renderer
+                return renderer.agent_window_controller(agent), renderer
             except Exception:
                 pass
         return None, renderer
@@ -570,7 +563,7 @@ class InputBroker:
 
         Quando pt está ativo: usa run_in_terminal_message para exibir acima
         do prompt sem corromper o layout do prompt_toolkit.
-        Quando pt não está ativo: usa renderer._console.print() para que o Rich
+        Quando pt não está ativo: usa renderer.print_direct() para que o Rich
         rastreie a posição do cursor — evita que o Live reinicie sobrescrevendo
         o texto da pergunta quando o agente retoma.
         """
@@ -582,8 +575,7 @@ class InputBroker:
                 if callable(run_above) and run_above(lambda: print(message)):
                     return
         renderer = self._renderer
-        console = getattr(renderer, "_console", None) if renderer is not None else None
-        if console is not None:
-            console.print(message, markup=False, highlight=False)
+        if renderer is not None:
+            renderer.print_direct(message)
         else:
             print(message, flush=True)

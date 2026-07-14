@@ -287,9 +287,8 @@ class AskUserPrompter:
             and input_gate.is_active()
         )
         if gate_is_active:
-            get_controller = getattr(renderer, "_agent_window_controller", None)
-            if callable(get_controller):
-                controller = get_controller("agente")
+            controller = renderer.agent_window_controller("agente") if renderer is not None else None
+            if controller is not None:
                 result = controller.ask_selection(renderer, input_gate, question, opts)
             else:
                 result = input_gate.read_selection_in_terminal(question, opts)

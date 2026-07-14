@@ -620,7 +620,7 @@ class TaskExecutorPool:
         if dispatch_services is not None:
             return dispatch_services.print_response(agent, response)
         renderer = self.get_renderer()
-        if renderer is not None and response is not None and hasattr(renderer, "show_message"):
+        if renderer is not None and response is not None:
             renderer.show_message(agent, response)
         return None
 

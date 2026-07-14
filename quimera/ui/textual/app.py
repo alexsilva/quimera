@@ -179,7 +179,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._bridge_drain_timer = self.set_interval(0.05, self._drain_bridge_events)
             self._active_agent_timer = self.set_interval(0.2, self._poll_active_agent)
             renderer = getattr(quimera_app, "renderer", None)
-            if renderer is not None and hasattr(renderer, "set_orchestrator"):
+            if renderer is not None:
                 _orq = getattr(getattr(quimera_app, "agent_pool", None), "orchestrator_agent", None)
                 if _orq:
                     renderer.set_orchestrator(_orq)
@@ -627,7 +627,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
 
     bridge.attach_quimera_app(quimera_app)
     renderer = getattr(quimera_app, "renderer", None)
-    if renderer is not None and hasattr(renderer, "set_profile_resolver"):
+    if renderer is not None:
         renderer.set_profile_resolver(quimera_app._resolve_profile_style)
     try:
         QuimeraTextualApp().run(mouse=not _is_android())

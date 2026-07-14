@@ -221,13 +221,11 @@ class DisplayService:
         deferred_list.append((level, message))
         renderer = self._get_renderer()
         if renderer is not None:
-            audit_logger = getattr(renderer, "_audit_logger", None)
-            if audit_logger is not None:
-                payload: dict = dict(message=message[:120], level=level)
-                task_id = self._extract_task_id(message)
-                if task_id is not None:
-                    payload["task_id"] = task_id
-                audit_logger.log_event("deferred_enqueue", **payload)
+            payload: dict = dict(message=message[:120], level=level)
+            task_id = self._extract_task_id(message)
+            if task_id is not None:
+                payload["task_id"] = task_id
+            renderer.log_debug_event("deferred_enqueue", **payload)
         return True
 
     @staticmethod
@@ -341,7 +339,7 @@ class DisplayService:
         renderer = self._get_renderer()
         if renderer is None:
             return
-        if not getattr(renderer, "supports_structured_agent_activity", False):
+        if not renderer.supports_structured_agent_activity:
             self.show_warning_message(
                 format_retry_message(reason, attempt, limit, detail)
             )
@@ -369,7 +367,7 @@ class DisplayService:
         renderer = self._get_renderer()
         if renderer is None:
             return
-        if not getattr(renderer, "supports_structured_agent_activity", False):
+        if not renderer.supports_structured_agent_activity:
             self.show_system_message(
                 format_failover_message(agent, target, message)
             )
@@ -430,13 +428,14 @@ class DisplayService:
         if renderer is None:
             deferred.clear()
             return
-        audit_logger = getattr(renderer, "_audit_logger", None)
-        if audit_logger is not None:
-            audit_logger.log_event(
-                "deferred_flush",
-                count=len(deferred),
-                previews=[msg[:80] for _, msg in deferred],
-            )
+        renderer.log_debug_event(
+            "deferred_flush",
+            count=len(deferred),
+            previews=[
+                (item[1] if isinstance(item, tuple) and len(item) == 2 else str(item))[:80]
+                for item in deferred
+            ],
+        )
         compacted = self._compact_deferred(deferred)
         with self._get_output_lock():
             for item in compacted:

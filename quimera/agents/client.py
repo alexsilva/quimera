@@ -173,19 +173,13 @@ class AgentClient:
         if callable(reporter):
             reporter(message)
             return
-        show_system_neutral = getattr(self.renderer, "show_system_neutral", None)
-        if callable(show_system_neutral):
-            show_system_neutral(message)
-            return
-        self.renderer.show_system(message)
+        self.renderer.show_system_neutral(message)
 
     def _show_tool_preview(self, message: str, *, agent: str | None = None) -> None:
         """Exibe preview operacional de tool no feed quando possível."""
-        if getattr(self.renderer, "supports_agent_feed", False) is True:
-            show_feed = getattr(self.renderer, "show_feed", None)
-            if callable(show_feed):
-                show_feed(message, agent=agent, muted=True)
-                return
+        if self.renderer.supports_agent_feed is True:
+            self.renderer.show_feed(message, agent=agent, muted=True)
+            return
         self._show_muted(message)
 
     def bind_tool_preview_callback(self, tool_executor, *, agent: str | None = None) -> None:
@@ -295,7 +289,7 @@ class AgentClient:
 
     def _render_agent_transient(self, message: str, *, agent: str | None, muted: bool = False) -> None:
         """Renderiza linha ao vivo do agente priorizando a janela transient rolante."""
-        if agent and hasattr(self.renderer, "update_agent_transient"):
+        if agent and (muted or self.renderer.supports_agent_feed is True):
             self.renderer.update_agent_transient(agent, message)
             return
         if muted:

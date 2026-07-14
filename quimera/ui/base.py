@@ -9,16 +9,22 @@ eliminando a necessidade de capability-sniffing via ``getattr``. Regras:
 - Capacidades de infraestrutura (``flush``, ``set_summarizing``, ...) são
   no-op.
 - Capacidades booleanas são atributos de classe (``supports_agent_feed``).
-- ``clear_screen`` fica fora do contrato por ora: o fallback ANSI vive em
-  ``core_facade.clear_terminal_screen`` e será movido para cá na fase 4 do
-  PLAN_RENDERER_PROTOCOL.md.
+- Janelas interativas (``selection_window``, ``approval_window``) devolvem um
+  context manager nulo.
+- Internals (``_audit_logger``, ``_console``, ``_window_manager``) NÃO fazem
+  parte do contrato; as capacidades públicas equivalentes são
+  ``log_debug_event``, ``print_direct`` e ``agent_window_controller``.
 """
 from __future__ import annotations
+
+import sys
+from contextlib import nullcontext
 
 from quimera.ui.messages import (
     FAILOVER_DEFAULT_MESSAGE,
     format_failover_message,
     format_retry_message,
+    format_turn_summary_lines,
 )
 
 
@@ -60,6 +66,16 @@ class RendererBase:
     def show_feed(self, message, agent=None, muted=False):
         self.show_system(message)
 
+    def show_agent(self, agent, msg):
+        self.show_message(agent, msg)
+
+    def show_plain(self, message, agent=None, muted=False):
+        self.show_system(message)
+
+    def show_turn_summary(self, agent, detail):
+        for line in format_turn_summary_lines(detail):
+            self.show_plain(line, agent=agent, muted=True)
+
     def notify_agent_retry(self, agent, *, reason, attempt, limit, detail=""):
         self.show_warning(format_retry_message(reason, attempt, limit, detail))
 
@@ -83,6 +99,9 @@ class RendererBase:
         return None
 
     def update_agent_transient(self, agent, message):
+        return None
+
+    def clear_agent_transient(self, agent):
         return None
 
     def commit_agent_stream(self, agent, render_mode="auto"):
@@ -111,6 +130,49 @@ class RendererBase:
         return None
 
     def log_debug_event(self, event, **payload):
+        return None
+
+    def close(self, timeout=5.0):
+        return None
+
+    def running_status(self, initial="", agent=None):
+        return nullcontext(None)
+
+    def print_direct(self, message):
+        """Escreve texto imediatamente, fora de qualquer fila de composição.
+
+        Usado por fluxos de input (ask_user) que precisam do texto no terminal
+        antes de ceder o chão ao prompt; renderers com console próprio
+        sobrescrevem para manter o cursor tracking correto.
+        """
+        print(message, flush=True)
+
+    def clear_screen(self):
+        """Limpa viewport e scrollback do terminal, reposicionando o cursor."""
+        stdout = sys.stdout
+        if stdout is None or not stdout.isatty():
+            return
+        stdout.write("\x1b[3J\x1b[2J\x1b[H")
+        stdout.flush()
+
+    # ------------------------------------------------------------------
+    # Janelas interativas e input de agente
+    # ------------------------------------------------------------------
+
+    def selection_window(self, **kwargs):
+        return nullcontext()
+
+    def approval_window(self, **kwargs):
+        return nullcontext()
+
+    def agent_window_controller(self, agent):
+        """Controller de janela do agente; None quando não há janela dedicada."""
+        return None
+
+    def set_profile_resolver(self, resolver):
+        return None
+
+    def set_orchestrator(self, agent_name):
         return None
 
     # ------------------------------------------------------------------

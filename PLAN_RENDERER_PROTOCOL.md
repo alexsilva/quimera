@@ -87,5 +87,12 @@ Suíte completa após cada fase; fases 3–4 também com smoke manual do chat
       clear_screen, escopo da fase 4). notify_retry/failover agora decidem
       pelo flag declarado `supports_structured_agent_activity` (True no
       Textual), preservando o caminho prompt-aware dos renderers textuais.
-- [ ] Fase 4
-- [ ] Fase 5
+- [x] Fase 4 — consumidores fora de app/ migrados para o contrato:
+      AgentClient, InputBroker, Approval, SpyOutputPresenter e TaskProtocol;
+      vazamentos de `_audit_logger`, `_agent_window_controller`, `_console` e
+      `_window_manager` substituídos por capacidades públicas ou confinados ao
+      renderer/compositor terminal.
+- [x] Fase 5 — contrato documentado/expandido em RendererBase e IRenderer;
+      fallbacks de método removidos dos consumidores principais. Permanece só o
+      fallback de renderer callable em DisplayService para adaptadores legados
+      de teste, fora do capability-sniffing do renderer.

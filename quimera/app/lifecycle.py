@@ -49,7 +49,7 @@ class AppLifecycle:
             if agent_client is not None:
                 agent_client.close()
             renderer = getattr(app, "renderer", None)
-            if renderer is not None and hasattr(renderer, "close"):
+            if renderer is not None:
                 renderer.close()
             run_render_bug_detector = getattr(app, "_run_render_bug_detector", None)
             if callable(run_render_bug_detector):
