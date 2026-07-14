@@ -12,6 +12,7 @@ from quimera.ui.text import (
     _normalize_stream_diff,
     strip_ansi,
 )
+from quimera.ui.base import RendererBase
 from quimera.ui.textual.bridge import TextualUiBridge, _TextualConsoleShim
 from quimera.ui.textual.constants import (
     APPROVAL_OPTIONS as _APPROVAL_OPTIONS,
@@ -74,7 +75,7 @@ def _append_post_exit_failure_message(
     return True
 
 
-class TextualRenderer:
+class TextualRenderer(RendererBase):
     """Renderer compatível com a API usada pelo Quimera, emitindo para Textual."""
 
     supports_agent_feed = True

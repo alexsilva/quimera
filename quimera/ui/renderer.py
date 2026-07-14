@@ -13,6 +13,7 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
+from .base import RendererBase
 from .agent_window_controller import AgentWindowController
 from .compositor import TerminalCompositor
 from .audit import RenderAuditLogger
@@ -175,7 +176,7 @@ class _AuditConsoleFile:
 # TerminalRenderer
 # ---------------------------------------------------------------------------
 
-class TerminalRenderer:
+class TerminalRenderer(RendererBase):
     """Camada exclusiva de apresentação no terminal. Nunca toca em persistência."""
 
     supports_agent_feed = True
