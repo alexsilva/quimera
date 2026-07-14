@@ -79,6 +79,7 @@ class TextualRenderer(RendererBase):
     """Renderer compatível com a API usada pelo Quimera, emitindo para Textual."""
 
     supports_agent_feed = True
+    supports_structured_agent_activity = True
 
     def __init__(self, bridge: TextualUiBridge) -> None:
         self._bridge = bridge

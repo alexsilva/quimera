@@ -177,9 +177,8 @@ class AppDispatchServices:
             )
             return
         renderer = self._call(self._renderer)
-        show_delegation = getattr(renderer, "show_delegation", None) if renderer is not None else None
-        if callable(show_delegation):
-            show_delegation(
+        if renderer is not None:
+            renderer.show_delegation(
                 source_agent,
                 to_agent,
                 task=task,
@@ -271,12 +270,10 @@ class AppDispatchServices:
             del agent, attempt, reason
             if renderer is None:
                 return
-            flush_quick = getattr(renderer, "flush_quick", None)
-            if callable(flush_quick):
-                try:
-                    flush_quick(timeout=0.25)
-                except TypeError:
-                    flush_quick()
+            try:
+                renderer.flush_quick(timeout=0.25)
+            except TypeError:
+                renderer.flush_quick()
 
         return AgentCallService(
             max_retries=self._call(self._max_retries),
@@ -473,17 +470,12 @@ class AppDispatchServices:
         redisplay_prompt = self._redisplay_prompt
         renderer = self._call(self._renderer)
         with (output_lock if output_lock is not None else nullcontext()):
-            if response is not None:
-                show_message = getattr(renderer, "show_message", None) if renderer else None
-                if callable(show_message):
-                    show_message(agent, response)
-            else:
-                show_no_response = getattr(renderer, "show_no_response", None) if renderer else None
-                if callable(show_no_response):
-                    show_no_response(agent)
-            flush = getattr(renderer, "flush", None) if renderer else None
-            if callable(flush):
-                flush()
+            if renderer:
+                if response is not None:
+                    renderer.show_message(agent, response)
+                else:
+                    renderer.show_no_response(agent)
+                renderer.flush()
             if redisplay_prompt is not None:
                 redisplay_prompt(clear_first=False)
 

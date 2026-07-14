@@ -59,9 +59,8 @@ class _ThinkingStreamRelay:
         text = self._thinking_text.strip()
         if not text:
             return
-        update = getattr(self._renderer, "update_agent_transient", None)
-        if callable(update):
-            update(self._agent, f"[thinking] {text}")
+        if self._renderer is not None:
+            self._renderer.update_agent_transient(self._agent, f"[thinking] {text}")
 
 
 def _is_user_cancelled(agent_client) -> bool:
@@ -264,9 +263,8 @@ class AgentGateway:
             else:
                 renderer = self._renderer
                 with (output_lock if output_lock is not None else nullcontext()):
-                    flush = getattr(renderer, "flush", None)
-                    if callable(flush):
-                        flush()
+                    if renderer is not None:
+                        renderer.flush()
                     self._redisplay_prompt(clear_first=False)
 
         agent_client.flush_pending_summary()

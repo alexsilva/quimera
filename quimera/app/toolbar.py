@@ -167,11 +167,9 @@ class ToolbarManager:
         """Avança para o próximo tema do renderer e persiste na config."""
         if renderer is None:
             return
-        cycle = getattr(renderer, "cycle_theme", None)
-        if callable(cycle):
-            new_name = cycle()
-            if new_name and config is not None:
-                config.set_theme(new_name)
+        new_name = renderer.cycle_theme()
+        if new_name and config is not None:
+            config.set_theme(new_name)
 
     @staticmethod
     def _format_active_agents(active_agents: tuple[str, ...] | list[str]) -> str:

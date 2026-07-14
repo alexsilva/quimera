@@ -87,9 +87,8 @@ class AppSessionServices:
         if not pending:
             return
         logger.info(pending)
-        show_system = getattr(self._renderer, "show_system", None)
-        if callable(show_system):
-            show_system(pending)
+        if self._renderer is not None:
+            self._renderer.show_system(pending)
         self._pending_summary_completion = None
 
     def _history_hard_limit(self) -> int:
@@ -163,10 +162,10 @@ class AppSessionServices:
         summary_agent = preferred_agent or self._summary_agent_preference or self._agent_pool.primary
 
         def _run_summarize():
-            set_summarizing = getattr(self._renderer, "set_summarizing", None)
+            renderer = self._renderer
             try:
-                if callable(set_summarizing):
-                    set_summarizing(True)
+                if renderer is not None:
+                    renderer.set_summarizing(True)
                 existing_summary = self._context_manager.load_session_summary()
                 logger.info("[memória] %d mensagens — gerando resumo automático...", history_len)
                 summary = self._session_summarizer.summarize(
@@ -204,8 +203,8 @@ class AppSessionServices:
                 )
             finally:
                 self._summarization_running.clear()
-                if callable(set_summarizing):
-                    set_summarizing(False)
+                if renderer is not None:
+                    renderer.set_summarizing(False)
 
         # Seta o guard no thread principal para eliminar a janela de corrida
         # entre a verificação is_set() e o início real da thread.
@@ -249,10 +248,10 @@ class AppSessionServices:
         if not history_snapshot or interrupted:
             return
 
-        set_summarizing = getattr(self._renderer, "set_summarizing", None)
+        renderer = self._renderer
         logger.info(MSG_MEMORY_SAVING)
-        if callable(set_summarizing):
-            set_summarizing(True)
+        if renderer is not None:
+            renderer.set_summarizing(True)
 
         result = [None]
 
@@ -295,11 +294,11 @@ class AppSessionServices:
                 worker.join(timeout=1)
             except KeyboardInterrupt:
                 pass
-            if callable(set_summarizing):
-                set_summarizing(False)
+            if renderer is not None:
+                renderer.set_summarizing(False)
             return
-        if callable(set_summarizing):
-            set_summarizing(False)
+        if renderer is not None:
+            renderer.set_summarizing(False)
         summary = result[0]
         if summary:
             self._context_manager.update_with_summary(summary)

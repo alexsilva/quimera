@@ -397,12 +397,10 @@ class AppAssembler:
             flush_deferred_messages=system_layer.flush_deferred_messages,
             output_lock=plat.output_lock,
         )
-        set_prompt_integration = getattr(ui.renderer, "set_prompt_integration", None)
-        if callable(set_prompt_integration):
-            set_prompt_integration(
-                is_active_fn=ui.input_gate.is_active,
-                run_above_fn=ui.input_gate.run_in_terminal_message,
-            )
+        ui.renderer.set_prompt_integration(
+            is_active_fn=ui.input_gate.is_active,
+            run_above_fn=ui.input_gate.run_in_terminal_message,
+        )
         migrated = plat.workspace.migrate_from_legacy(opts.cwd)
         for item in migrated:
             ui.renderer.show_system(MSG_MIGRATION.format(item))

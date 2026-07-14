@@ -26,6 +26,10 @@ class RendererBase:
     """Base de renderers: no-ops e fallbacks textuais para o contrato opcional."""
 
     supports_agent_feed = False
+    #: True quando o renderer tem canal estruturado para atividade de agente
+    #: (retry/failover); False manda os chamadores usarem o caminho textual
+    #: prompt-aware (show_*_message) em vez de notify_*.
+    supports_structured_agent_activity = False
 
     # ------------------------------------------------------------------
     # Núcleo obrigatório

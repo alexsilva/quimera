@@ -1459,6 +1459,8 @@ def test_readd_apos_set_nao_reactiva_orquestrador():
 class StructuredRenderer(DummyRenderer):
     """Renderer com canal estruturado de atividade de agente."""
 
+    supports_structured_agent_activity = True
+
     def __init__(self):
         super().__init__()
         self.retries = []

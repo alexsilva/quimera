@@ -11,7 +11,7 @@ from .command_router import RoutingDecision
 from .config import logger
 from .render_event import RenderEvent
 from ..domain.session_state import SessionState
-from ..ui.textual.constants import format_failover_message
+from ..ui.messages import format_failover_message
 
 
 @dataclass(frozen=True)
@@ -223,9 +223,7 @@ class ChatRoundOrchestrator:
             except AttributeError:
                 pass
         if self._renderer is not None:
-            show_system = getattr(self._renderer, "show_system", None)
-            if callable(show_system):
-                show_system(message)
+            self._renderer.show_system(message)
 
     def _notify_failover(self, agent: str, target: str) -> None:
         """Sinaliza failover de agente como atividade estruturada.
@@ -242,19 +240,15 @@ class ChatRoundOrchestrator:
         ):
             return
         if self._renderer is not None:
-            notify = getattr(self._renderer, "notify_agent_failover", None)
-            if callable(notify):
-                notify(agent, target=target)
-                return
+            self._renderer.notify_agent_failover(agent, target=target)
+            return
         self._show_system(format_failover_message(agent, target))
 
     def _show_warning(self, message: str) -> None:
         if self._emit_event(RenderEvent.WARNING, message):
             return
         if self._renderer is not None:
-            show_warning = getattr(self._renderer, "show_warning", None)
-            if callable(show_warning):
-                show_warning(message)
+            self._renderer.show_warning(message)
 
     def _show_delegation(
             self,
@@ -278,9 +272,9 @@ class ChatRoundOrchestrator:
         ):
             return
         if self._renderer is not None:
-            show_delegation = getattr(self._renderer, "show_delegation", None)
-            if callable(show_delegation):
-                show_delegation(from_agent, to_agent, task=task, delegation_id=delegation_id, chain=chain)
+            self._renderer.show_delegation(
+                from_agent, to_agent, task=task, delegation_id=delegation_id, chain=chain
+            )
 
     def _is_cancelled(self) -> bool:
         return bool(self._agent_client and getattr(self._agent_client, '_user_cancelled', False))

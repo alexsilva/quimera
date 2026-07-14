@@ -116,25 +116,26 @@ class UiEventHandler:
         Renderers com canal estruturado (Textual) recebem os campos separados;
         os legados caem numa frase pt-BR de sistema/aviso equivalente.
         """
+        structured = getattr(self._renderer, "supports_structured_agent_activity", False)
         if activity == "failover":
             target = str(meta.get("target") or "").strip()
             message = str(meta.get("message") or "não respondeu").strip()
-            notify = getattr(self._renderer, "notify_agent_failover", None)
-            if callable(notify):
-                notify(agent, target=target, message=message)
+            if structured:
+                self._renderer.notify_agent_failover(agent, target=target, message=message)
                 return
             self._show_system_message(
                 format_failover_message(str(agent or ""), target, message)
             )
             return
         if activity == "retrying":
-            notify = getattr(self._renderer, "notify_agent_retry", None)
             reason = str(meta.get("reason") or "")
             attempt = int(meta.get("attempt") or 0)
             limit = int(meta.get("limit") or 0)
             detail = str(meta.get("detail") or "")
-            if callable(notify):
-                notify(agent, reason=reason, attempt=attempt, limit=limit, detail=detail)
+            if structured:
+                self._renderer.notify_agent_retry(
+                    agent, reason=reason, attempt=attempt, limit=limit, detail=detail
+                )
                 return
             self._show_warning_message(
                 format_retry_message(reason, attempt, limit, detail)
@@ -181,9 +182,7 @@ class UiEventHandler:
         def _render_callback() -> None:
             with output_lock:
                 callback()
-                flush = getattr(self._renderer, "flush", None)
-                if callable(flush):
-                    flush()
+                self._renderer.flush()
 
         try:
             return bool(run_in_terminal_message(_render_callback))
@@ -301,9 +300,7 @@ class UiEventHandler:
                         continue
                     _render_turn_summary_event()
                 elif event_type == RenderEvent.REDISPLAY:
-                    flush = getattr(self._renderer, "flush", None)
-                    if callable(flush):
-                        flush()
+                    self._renderer.flush()
                     self._redisplay_user_prompt(clear_first=False)
                 elif event_type == RenderEvent.EVENT:
                     meta = event.metadata or {}

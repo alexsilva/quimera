@@ -83,6 +83,9 @@ Suíte completa após cada fase; fases 3–4 também com smoke manual do chat
 - [x] Fase 2 — 21 fakes herdam a base (exceto FakeRenderer com __getattr__
       catch-all em test_app_core_characterization.py, que já cobre o contrato);
       flush_quick da base delega a flush (semântica do fallback histórico)
-- [ ] Fase 3
+- [x] Fase 3 — sniffing de método eliminado em app/ (restam internals e
+      clear_screen, escopo da fase 4). notify_retry/failover agora decidem
+      pelo flag declarado `supports_structured_agent_activity` (True no
+      Textual), preservando o caminho prompt-aware dos renderers textuais.
 - [ ] Fase 4
 - [ ] Fase 5

@@ -35,6 +35,7 @@ CONTRACT = [
     "set_prompt_integration",
     "log_debug_event",
     "supports_agent_feed",
+    "supports_structured_agent_activity",
     "theme_name",
     "cycle_theme",
 ]
@@ -101,6 +102,9 @@ class TestRendererBaseContract(unittest.TestCase):
 
     def test_capability_defaults(self):
         self.assertFalse(RendererBase.supports_agent_feed)
+        self.assertFalse(RendererBase.supports_structured_agent_activity)
+        self.assertTrue(TextualRenderer.supports_structured_agent_activity)
+        self.assertFalse(TerminalRenderer.supports_structured_agent_activity)
         self.assertEqual(_RecordingRenderer().theme_name, "")
         self.assertIsNone(_RecordingRenderer().cycle_theme())
 

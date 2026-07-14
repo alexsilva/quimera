@@ -48,10 +48,8 @@ class AgentRunController:
             self._commit_agent_output(event.agent)
 
     def _commit_agent_output(self, agent: str) -> None:
-        renderer = self._renderer
-        commit = getattr(renderer, "commit_agent_stream", None) if renderer is not None else None
-        if callable(commit):
-            commit(agent)
+        if self._renderer is not None:
+            self._renderer.commit_agent_stream(agent)
 
 
 def coerce_agent_run_sink(sink: AgentRunSink | None) -> AgentRunSink:

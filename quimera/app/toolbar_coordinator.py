@@ -101,7 +101,7 @@ class ToolbarCoordinator:
             responder=self.resolve_next_responder_label(),
             model=self.resolve_active_model_label(),
             branch=str(getattr(self._workspace, "branch", "") or ""),
-            theme=str(getattr(self._renderer, "theme_name", "") or ""),
+            theme=str((self._renderer.theme_name if self._renderer is not None else "") or ""),
             mode=str(getattr(self._get_execution_mode(), "name", "") or ""),
             threads=int(self._threads or 1),
             history_turns=len(history) if history is not None else None,

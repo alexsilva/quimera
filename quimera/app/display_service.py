@@ -4,7 +4,7 @@ import threading
 import re
 from contextlib import nullcontext
 
-from quimera.ui.textual.constants import (
+from quimera.ui.messages import (
     FAILOVER_DEFAULT_MESSAGE,
     format_failover_message,
     format_retry_message,
@@ -233,11 +233,11 @@ class DisplayService:
     @staticmethod
     def _render_message(renderer, level: str, message: str) -> None:
         """Renderiza uma mensagem sem mexer diretamente no prompt."""
-        if level == "neutral" and hasattr(renderer, "show_system_neutral"):
+        if level == "neutral":
             renderer.show_system_neutral(message)
-        elif level == "warning" and hasattr(renderer, "show_warning"):
+        elif level == "warning":
             renderer.show_warning(message)
-        elif level == "error" and hasattr(renderer, "show_error"):
+        elif level == "error":
             renderer.show_error(message)
         else:
             renderer.show_system(message)
@@ -246,13 +246,9 @@ class DisplayService:
     def _flush_renderer(renderer, *, prefer_quick: bool = False) -> None:
         """Realiza flush do renderer, com modo rápido opcional para evitar travar o prompt."""
         if prefer_quick:
-            flush_quick = getattr(renderer, "flush_quick", None)
-            if callable(flush_quick):
-                flush_quick()
-                return
-        flush = getattr(renderer, "flush", None)
-        if callable(flush):
-            flush()
+            renderer.flush_quick()
+            return
+        renderer.flush()
 
     def _show_above_active_prompt(self, message: str, *, level: str) -> bool:
         """Tenta publicar a mensagem acima do prompt ativo via InputGate."""
@@ -306,11 +302,7 @@ class DisplayService:
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
             is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
-            show_system_neutral = getattr(renderer, "show_system_neutral", None)
-            if callable(show_system_neutral):
-                show_system_neutral(message)
-            else:
-                renderer.show_system(message)
+            renderer.show_system_neutral(message)
             self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
                 self.redisplay_prompt(clear_first=False)
@@ -328,11 +320,7 @@ class DisplayService:
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
             is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
-            show_warning = getattr(renderer, "show_warning", None)
-            if callable(show_warning):
-                show_warning(message)
-            else:
-                renderer.show_system(message)
+            renderer.show_warning(message)
             self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
                 self.redisplay_prompt(clear_first=False)
@@ -353,8 +341,7 @@ class DisplayService:
         renderer = self._get_renderer()
         if renderer is None:
             return
-        notify = getattr(renderer, "notify_agent_retry", None)
-        if not callable(notify):
+        if not getattr(renderer, "supports_structured_agent_activity", False):
             self.show_warning_message(
                 format_retry_message(reason, attempt, limit, detail)
             )
@@ -362,7 +349,9 @@ class DisplayService:
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
             is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
-            notify(agent, reason=reason, attempt=attempt, limit=limit, detail=detail)
+            renderer.notify_agent_retry(
+                agent, reason=reason, attempt=attempt, limit=limit, detail=detail
+            )
             self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
                 self.redisplay_prompt(clear_first=False)
@@ -380,8 +369,7 @@ class DisplayService:
         renderer = self._get_renderer()
         if renderer is None:
             return
-        notify = getattr(renderer, "notify_agent_failover", None)
-        if not callable(notify):
+        if not getattr(renderer, "supports_structured_agent_activity", False):
             self.show_system_message(
                 format_failover_message(agent, target, message)
             )
@@ -389,7 +377,7 @@ class DisplayService:
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
             is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
-            notify(agent, target=target, message=message)
+            renderer.notify_agent_failover(agent, target=target, message=message)
             self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
                 self.redisplay_prompt(clear_first=False)
@@ -407,11 +395,7 @@ class DisplayService:
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
             is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
-            show_error = getattr(renderer, "show_error", None)
-            if callable(show_error):
-                show_error(message)
-            else:
-                renderer.show_system(message)
+            renderer.show_error(message)
             self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
                 self.redisplay_prompt(clear_first=False)
@@ -421,9 +405,7 @@ class DisplayService:
         renderer = self._get_renderer()
         if renderer is None:
             return
-        show = getattr(renderer, "show_prompt_preview", None)
-        if callable(show):
-            show(agent, preview)
+        renderer.show_prompt_preview(agent, preview)
 
     def show_system(self, message: str) -> None:
         """Exibe mensagem diretamente via renderer.show_system (sem thread-safety)."""

@@ -70,13 +70,11 @@ def run_chat_loop(
     if chat_lifecycle is None:
         raise RuntimeError("QuimeraApp.chat_lifecycle não foi inicializado")
     _tty.suppress_control_echo()
-    show_banner = getattr(app.renderer, "show_banner", app.renderer.show_system)
-    show_banner(WelcomePresenter.build_welcome_message())
+    app.renderer.show_banner(WelcomePresenter.build_welcome_message())
     workspace = getattr(app, "workspace", None)
     project_path = str(getattr(workspace, "cwd", Path.cwd()))
-    _show_neutral = getattr(app.renderer, "show_system_neutral", app.renderer.show_system)
+    _show_neutral = app.renderer.show_system_neutral
     _show_neutral(f"Projeto: {project_path}")
-    _show_neutral = getattr(app.renderer, "show_system_neutral", app.renderer.show_system)
     restore_notice = getattr(app.storage, "pop_restore_notice", lambda: None)()
     if restore_notice:
         _show_neutral(restore_notice)
@@ -112,12 +110,8 @@ def run_chat_loop(
         )
         if render_debug_log_path:
             _show_neutral(f"Audit de render:\n  {render_debug_log_path}\n")
-    flush = getattr(app.renderer, "flush", None)
-    if callable(flush):
-        flush()
-    signal_restore = getattr(app.renderer, "signal_restore_history", None)
-    if callable(signal_restore):
-        signal_restore()
+    app.renderer.flush()
+    app.renderer.signal_restore_history()
 
     _ui_wakeup = threading.Event()
     _ui_event_queue: queue.Queue = _WakeupQueue(_ui_wakeup)
