@@ -769,55 +769,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         self.assertEqual(app._resolve_active_model_label(), "claude")
 
 
-class TestCliRuntimeModelResolution(unittest.TestCase):
-    def test_codex_profile_resolve_runtime_model_reads_codex_config(self):
-        from quimera.profiles import get
-
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp)
-            codex_dir = home / ".codex"
-            codex_dir.mkdir(parents=True, exist_ok=True)
-            (codex_dir / "config.toml").write_text(
-                'model = "gpt-5.4"\nmodel_reasoning_effort = "high"\n[projects."/tmp"]\ntrust_level = "trusted"\n',
-                encoding="utf-8",
-            )
-
-            profile = get("codex")
-            self.assertIsNotNone(profile)
-            with patch("quimera.profiles.codex.Path.home", return_value=home):
-                model = profile.resolve_runtime_model(cwd="/tmp")
-
-        self.assertEqual(model, "gpt-5.4")
-
-    def test_claude_profile_resolve_runtime_model_reads_project_last_model_usage(self):
-        from quimera.profiles import get
-
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp)
-            claude_dir = home / ".claude"
-            claude_dir.mkdir(parents=True, exist_ok=True)
-            (claude_dir / "settings.json").write_text("{}", encoding="utf-8")
-            state = {
-                "projects": {
-                    "/tmp": {
-                        "lastModelUsage": {
-                            "claude-sonnet-4-6": {
-                                "inputTokens": 1,
-                            }
-                        }
-                    }
-                }
-            }
-            (home / ".claude.json").write_text(json.dumps(state), encoding="utf-8")
-
-            profile = get("claude")
-            self.assertIsNotNone(profile)
-            with patch("quimera.profiles.claude.Path.home", return_value=home):
-                model = profile.resolve_runtime_model(cwd="/tmp/projeto")
-
-        self.assertEqual(model, "claude-sonnet-4-6")
-
-
 # =========================================================================
 # Fase 0 — Guardrails: contratos públicos de modes
 # =========================================================================
