@@ -250,6 +250,19 @@ def test_codex_profile_configure_with_model_inserts_model_flag():
     assert conn.output_format == "codex-json"
 
 
+def test_antigravity_profile_configure_with_model_inserts_model_flag():
+    """Antigravity não usa placeholder --model=, mas deve aceitar modelo nomeado."""
+    profile = get_profile("antigravity")
+    assert profile is not None
+
+    conn = profile.configure_with_model("gemini-3.5-flash")
+
+    assert isinstance(conn, CliConnection)
+    assert conn.cmd == ["agy", "--model", "gemini-3.5-flash", "--dangerously-skip-permissions", "-p"]
+    assert conn.output_format is None
+
+
+
 def test_agent_client_cli_attrs_fall_back_to_profile_output_format():
     """Conexões antigas sem output_format ainda usam parser do perfil herdado."""
     profile = SimpleNamespace(
