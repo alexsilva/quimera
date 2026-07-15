@@ -1,7 +1,6 @@
 """Orquestra uma rodada de chat multiagente."""
 from __future__ import annotations
 
-import inspect
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -70,7 +69,6 @@ class ChatRoundOrchestrator:
         self._renderer = renderer
         self._ui_queue = ui_queue
         self._merge_staging_to_workspace_fn = merge_staging_to_workspace
-        self._persist_message_supports_snapshot: bool | None = None
         self._cancel_notice_tls = threading.local()
 
     # ------------------------------------------------------------------
@@ -95,64 +93,22 @@ class ChatRoundOrchestrator:
             return list(self._session_state.history)
         return []
 
-    def _can_request_history_snapshot(self) -> bool:
-        if self._persist_message_supports_snapshot is not None:
-            return self._persist_message_supports_snapshot
-        persist_message = getattr(self._session_services, "persist_message", None)
-        if not callable(persist_message):
-            self._persist_message_supports_snapshot = False
-            return False
-        try:
-            signature = inspect.signature(persist_message)
-        except (TypeError, ValueError):
-            self._persist_message_supports_snapshot = False
-            return False
-        self._persist_message_supports_snapshot = "return_history_snapshot" in signature.parameters
-        return self._persist_message_supports_snapshot
-
     def _persist_user_message(self, message: str) -> list:
-        if self._can_request_history_snapshot():
-            history_snapshot = self._session_services.persist_message(
-                USER_ROLE,
-                message,
-                return_history_snapshot=True,
-            )
-            if isinstance(history_snapshot, list):
-                return history_snapshot
-        else:
-            self._session_services.persist_message(USER_ROLE, message)
-        return self._snapshot_history()
-
-    @staticmethod
-    def _filter_supported_kwargs(func, kwargs: dict) -> dict:
-        try:
-            signature = inspect.signature(func)
-        except (TypeError, ValueError):
-            return kwargs
-        has_var_kwargs = any(
-            parameter.kind == inspect.Parameter.VAR_KEYWORD
-            for parameter in signature.parameters.values()
+        history_snapshot = self._session_services.persist_message(
+            USER_ROLE,
+            message,
+            return_history_snapshot=True,
         )
-        if has_var_kwargs:
-            return kwargs
-        allowed = {
-            name
-            for name, parameter in signature.parameters.items()
-            if parameter.kind in (
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                inspect.Parameter.KEYWORD_ONLY,
-            )
-        }
-        return {key: value for key, value in kwargs.items() if key in allowed}
+        if isinstance(history_snapshot, list):
+            return history_snapshot
+        return self._snapshot_history()
 
     def _delegate(self, agent: str, **kwargs):
         if self._threads > 1 and "max_retries" not in kwargs:
             # Em modo threaded cada prompt deve executar uma vez por agente;
             # retries automáticos causam efeito de loop/cascata no chat.
             kwargs["max_retries"] = 1
-        delegate_fn = self._dispatch_services.delegate
-        filtered_kwargs = self._filter_supported_kwargs(delegate_fn, kwargs)
-        return delegate_fn(agent, **filtered_kwargs)
+        return self._dispatch_services.delegate(agent, **kwargs)
 
     def _set_parallel_toolbar_state(
         self,

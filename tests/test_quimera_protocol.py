@@ -1328,7 +1328,7 @@ class ProtocolTests(unittest.TestCase):
         app.task_services = build_task_services(app)
         app.system_layer = system_layer_from_app(app)
 
-        with patch("quimera.tasks.services.logger.debug") as debug:
+        with patch("quimera.tasks.protocol.logger.debug") as debug:
             materialize_internal_services(app)
             handled = app.system_layer.handle_command('/task "execute os testes"')
 
@@ -2074,7 +2074,7 @@ class ProtocolTests(unittest.TestCase):
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.shared_state = {}
         app.session_services = Mock()
-        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
+        app.session_services.persist_message = lambda role, content, **kwargs: persisted.append((role, content))
         app.session_services.maybe_auto_summarize = Mock()
         app.system_layer = Mock()
         app.system_layer.handle_command = Mock(return_value=False)
@@ -2374,7 +2374,7 @@ class ProtocolTests(unittest.TestCase):
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
         app.session_services = Mock()
-        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
+        app.session_services.persist_message = lambda role, content, **kwargs: persisted.append((role, content))
 
         materialize_internal_services(app)
 
@@ -2388,7 +2388,7 @@ class ProtocolTests(unittest.TestCase):
                 "codex fecha",
             ]
         )
-        app.dispatch_services.delegate = lambda agent, is_first_speaker=False, delegation=None, primary=True, protocol_mode="standard": next(responses)
+        app.dispatch_services.delegate = lambda agent, is_first_speaker=False, delegation=None, primary=True, protocol_mode="standard", **kwargs: next(responses)
 
         app.run()
 
@@ -2477,7 +2477,7 @@ class ProtocolTests(unittest.TestCase):
         app.task_services.truncate_payload = lambda payload: payload
         app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         app.session_services = Mock()
-        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
+        app.session_services.persist_message = lambda role, content, **kwargs: persisted.append((role, content))
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
 
         responses = iter(
@@ -2580,7 +2580,7 @@ class ProtocolTests(unittest.TestCase):
             def __init__(self):
                 self.calls = []
 
-            def summarize(self, history, existing_summary=None, preferred_agent=None):
+            def summarize(self, history, existing_summary=None, preferred_agent=None, fallback=True):
                 self.calls.append((history, existing_summary, preferred_agent))
                 return "## Resumo da Conversa\n\n- Consolidado"
 
@@ -2706,7 +2706,7 @@ class ProtocolTests(unittest.TestCase):
             def __init__(self):
                 self.calls = []
 
-            def summarize(self, history, existing_summary=None, preferred_agent=None):
+            def summarize(self, history, existing_summary=None, preferred_agent=None, fallback=True):
                 self.calls.append((history, existing_summary, preferred_agent))
                 return "## Resumo da Conversa\n\n- Memória consolidada"
 
@@ -3280,7 +3280,7 @@ class ProfileTests(unittest.TestCase):
         persisted = []
         printed = []
         app.session_services = Mock()
-        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
+        app.session_services.persist_message = lambda role, content, **kwargs: persisted.append((role, content))
         app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
 
         call_started = threading.Event()
@@ -5055,7 +5055,7 @@ class FallbackChainTests(unittest.TestCase):
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.session_services = Mock()
-        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
+        app.session_services.persist_message = lambda role, content, **kwargs: persisted.append((role, content))
 
         materialize_internal_services(app)
 
@@ -5075,6 +5075,7 @@ class FallbackChainTests(unittest.TestCase):
                 delegation_only=False,
                 from_agent=None,
                 prompt_kind=None,
+                **kwargs,
         ):
             calls.append((agent, is_first_speaker, delegation, delegation_only, from_agent))
             return next(responses)

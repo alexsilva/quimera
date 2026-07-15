@@ -13,15 +13,17 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..agents import AgentClient
+from ..app.dispatch import AppDispatchServices
 from ..runtime.approval import ApprovalManager
 from ..runtime.config import ToolRuntimeConfig
 from ..runtime.executor import ToolExecutor
 from .approval_policy import TaskApprovalPolicy
 from .executor import create_executor
-from .execution import TaskExecutionService
+from .runner import TaskRunner
 from .failover import TaskFailoverPolicy
 from .repository import TaskRepository
-from .review import TaskReviewService
+from .reviewer import TaskReviewer
+from ..runtime.tools.files import set_staging_root
 from ..runtime.tools.todo import TodoRegistry
 
 
@@ -519,7 +521,6 @@ class TaskExecutorPool:
         cancel_checker_override=None,
         cancel_event: threading.Event | None = None,
     ):
-        from ..app.dispatch import AppDispatchServices
         renderer = self.get_renderer()
         workspace = self.get_workspace()
         if renderer is None or workspace is None:
@@ -626,8 +627,8 @@ class TaskExecutorPool:
             raise ValueError("Workspace is required to access task repository")
         return TaskRepository(workspace.tasks_db, event_sink=self.get_event_sink())
 
-    def _build_task_execution_service(self, failover_policy: TaskFailoverPolicy) -> TaskExecutionService:
-        return TaskExecutionService(
+    def _build_task_execution_service(self, failover_policy: TaskFailoverPolicy) -> TaskRunner:
+        return TaskRunner(
             dispatch_services=self._get_background_dispatch_services(),
             system_layer=self.get_system_layer(),
             repository=self._build_task_repository(),
@@ -645,8 +646,8 @@ class TaskExecutorPool:
             ),
         )
 
-    def _build_task_review_service(self, failover_policy: TaskFailoverPolicy) -> TaskReviewService:
-        return TaskReviewService(
+    def _build_task_review_service(self, failover_policy: TaskFailoverPolicy) -> TaskReviewer:
+        return TaskReviewer(
             dispatch_services=self._get_background_dispatch_services(),
             system_layer=self.get_system_layer(),
             repository=self._build_task_repository(),
@@ -685,8 +686,6 @@ def delegate_for_parallel_with_client(
     index: int,
 ):
     """Executa chamada paralela de agente com staging isolado por thread."""
-    from ..runtime.tools.files import set_staging_root
-
     set_staging_root(staging_root / str(index))
     try:
         raw = delegate(agent, delegation=delegation, primary=False, protocol_mode=protocol_mode, silent=True, show_output=False)

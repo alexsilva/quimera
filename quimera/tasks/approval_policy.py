@@ -82,7 +82,7 @@ class TaskApprovalPolicy:
         Callable[[str], None],
         Callable[[str], None],
     ]:
-        """Cria par (before_agent_call, after_agent_call) para ``TaskExecutionService``.
+        """Cria par (before_agent_call, after_agent_call) para ``TaskRunner``.
 
         ``tool_executor_getter`` é um callable que retorna o
         ``ToolExecutor`` de background atual, de onde se extrai o

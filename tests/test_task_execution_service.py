@@ -1,7 +1,7 @@
 import threading
 
 from quimera.app.dispatch import AppDispatchServices
-from quimera.tasks.execution import TaskExecutionService
+from quimera.tasks.runner import TaskRunner
 from quimera.tasks.services import (
     AppTaskServices,
     _BACKGROUND_AGENT_TIMEOUT_SECONDS,
@@ -301,7 +301,7 @@ def test_handler_completes_task_when_no_review_agent_available():
     system = SystemLayerSpy()
     repo = RepositorySpy()
     policy = FailoverPolicyStub(review_agents=[])
-    service = TaskExecutionService(
+    service = TaskRunner(
         dispatch_services=dispatch,
         system_layer=system,
         repository=repo,
@@ -328,7 +328,7 @@ def test_handler_submits_for_review_when_other_reviewer_exists():
     system = SystemLayerSpy()
     repo = RepositorySpy()
     policy = FailoverPolicyStub(review_agents=["pickle"])
-    service = TaskExecutionService(
+    service = TaskRunner(
         dispatch_services=dispatch,
         system_layer=system,
         repository=repo,
@@ -352,7 +352,7 @@ def test_handler_requeues_when_agent_returns_no_response_and_failover_is_possibl
     repo = RepositorySpy()
     policy = FailoverPolicyStub(review_agents=[], can_failover=True)
     failures = []
-    service = TaskExecutionService(
+    service = TaskRunner(
         dispatch_services=dispatch,
         system_layer=system,
         repository=repo,
@@ -376,7 +376,7 @@ def test_handler_fails_when_execution_is_blocked_and_no_failover_exists():
     system = SystemLayerSpy()
     repo = RepositorySpy()
     policy = FailoverPolicyStub(review_agents=[], can_failover=False)
-    service = TaskExecutionService(
+    service = TaskRunner(
         dispatch_services=dispatch,
         system_layer=system,
         repository=repo,
@@ -399,7 +399,7 @@ def test_handler_fails_when_user_cancels_execution():
     system = SystemLayerSpy()
     repo = RepositorySpy()
     policy = FailoverPolicyStub(review_agents=[])
-    service = TaskExecutionService(
+    service = TaskRunner(
         dispatch_services=dispatch,
         system_layer=system,
         repository=repo,
@@ -439,14 +439,15 @@ def test_app_task_services_execution_isolated_from_chat_cancel_state(monkeypatch
     app.get_agent_profile = lambda _agent_name: None
 
     services = build_task_services(app)
-    monkeypatch.setattr(services, "_build_task_repository", lambda: repo)
+    pool = services._executor_pool
+    monkeypatch.setattr(pool, "_build_task_repository", lambda: repo)
     monkeypatch.setattr(
-        services,
+        pool,
         "_create_background_dispatch_services",
         lambda **kwargs: dispatch,
     )
 
-    ok = services._build_task_execution_service(policy).handler_for("codex")(
+    ok = pool._build_task_execution_service(policy).handler_for("codex")(
         TaskRecord(id=6, job_id=0, description="executar tarefa", status="in_progress")
     )
 

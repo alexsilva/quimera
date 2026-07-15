@@ -288,7 +288,7 @@ def test_session_summarize_preserves_concurrent_persisted_message():
         def __init__(self):
             self.service = None
 
-        def summarize(self, messages, existing_summary=None, preferred_agent=None):
+        def summarize(self, messages, existing_summary=None, preferred_agent=None, fallback=True):
             self.service.persist_message("assistant", "append during summary")
             return "resumo"
 
@@ -336,7 +336,7 @@ def test_session_summarize_does_not_save_summary_when_snapshot_changes():
         def __init__(self):
             self.service = None
 
-        def summarize(self, messages, existing_summary=None, preferred_agent=None):
+        def summarize(self, messages, existing_summary=None, preferred_agent=None, fallback=True):
             with self.service._lock:
                 self.service._history[0] = {"role": "human", "content": "mutado durante resumo"}
             return "resumo inconsistente"
@@ -478,7 +478,7 @@ def test_auto_summarize_calls_load_session_summary_inside_background_thread():
             pass
 
     class Summarizer:
-        def summarize(self, messages, existing_summary=None, preferred_agent=None):
+        def summarize(self, messages, existing_summary=None, preferred_agent=None, fallback=True):
             return "resumo"
 
     service = AppSessionServices(
@@ -577,7 +577,7 @@ def test_shutdown_flushes_pending_auto_summary_completion():
     context = _ContextManager()
 
     class Summarizer:
-        def summarize(self, messages, existing_summary=None, preferred_agent=None):
+        def summarize(self, messages, existing_summary=None, preferred_agent=None, fallback=True):
             return "resumo pronto"
 
     service = AppSessionServices(
@@ -612,7 +612,7 @@ def test_auto_summarize_records_failure_when_worker_raises():
     lock = threading.Lock()
 
     class ExplodingSummarizer:
-        def summarize(self, messages, existing_summary=None, preferred_agent=None):
+        def summarize(self, messages, existing_summary=None, preferred_agent=None, fallback=True):
             raise RuntimeError("boom")
 
     service = AppSessionServices(

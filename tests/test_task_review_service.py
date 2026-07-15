@@ -1,6 +1,6 @@
 from quimera.constants import TaskStatus
 
-from quimera.tasks.review import TaskReviewService
+from quimera.tasks.reviewer import TaskReviewer
 from quimera.runtime.models import TaskRecord
 
 
@@ -70,7 +70,7 @@ def test_review_handler_rejects_self_review_and_returns_to_pending_review():
     dispatch = DispatchStub(response=None)
     system = SystemLayerSpy()
     repo = RepositorySpy()
-    service = TaskReviewService(
+    service = TaskReviewer(
         dispatch_services=dispatch,
         system_layer=system,
         repository=repo,
@@ -95,7 +95,7 @@ def test_review_handler_completes_task_when_verdict_is_aceite():
     dispatch = DispatchStub(response="ACEITE\nEvidência ok")
     system = SystemLayerSpy()
     repo = RepositorySpy()
-    service = TaskReviewService(
+    service = TaskReviewer(
         dispatch_services=dispatch,
         system_layer=system,
         repository=repo,
@@ -120,7 +120,7 @@ def test_review_handler_requeues_task_when_verdict_is_not_accepted():
     dispatch = DispatchStub(response="RETENTATIVA\nFaltou teste")
     system = SystemLayerSpy()
     repo = RepositorySpy()
-    service = TaskReviewService(
+    service = TaskReviewer(
         dispatch_services=dispatch,
         system_layer=system,
         repository=repo,
@@ -145,7 +145,7 @@ def test_review_handler_returns_to_pending_review_when_exception_has_fallback():
     dispatch = DispatchStub(error=RuntimeError("timeout"))
     system = SystemLayerSpy()
     repo = RepositorySpy()
-    service = TaskReviewService(
+    service = TaskReviewer(
         dispatch_services=dispatch,
         system_layer=system,
         repository=repo,
@@ -170,7 +170,7 @@ def test_review_handler_fails_when_exception_has_no_operational_fallback():
     dispatch = DispatchStub(error=RuntimeError("timeout"))
     system = SystemLayerSpy()
     repo = RepositorySpy()
-    service = TaskReviewService(
+    service = TaskReviewer(
         dispatch_services=dispatch,
         system_layer=system,
         repository=repo,

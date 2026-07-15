@@ -91,6 +91,10 @@ class TaskReviewer:
         self.was_user_cancelled = was_user_cancelled
         self.event_sink = event_sink
 
+    def handler_for(self, agent_name: str) -> Callable[[TaskRecord], bool]:
+        """Retorna handler de review compatível com TaskExecutor."""
+        return lambda task: self.review(task, agent_name)
+
     def review(self, task: TaskRecord, agent_name: str) -> bool:
         """Revisa a task com o agente informado. Retorna True se aprovada."""
         task_id = task.id

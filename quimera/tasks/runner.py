@@ -81,6 +81,10 @@ class TaskRunner:
         self.before_agent_call = before_agent_call or (lambda _agent_name: None)
         self.after_agent_call = after_agent_call or (lambda _agent_name: None)
 
+    def handler_for(self, agent_name: str) -> Callable[[TaskRecord], bool]:
+        """Retorna handler de execução compatível com TaskExecutor."""
+        return lambda task: self.run(task, agent_name)
+
     def run(self, task: TaskRecord, agent_name: str) -> bool:
         """Executa a task com o agente informado. Retorna True se bem-sucedida."""
         task_id = task.id

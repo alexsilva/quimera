@@ -18,26 +18,14 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from ..agents import AgentClient
-from ..constants import TaskStatus
-from ..runtime.approval import ApprovalManager
-from ..runtime.config import ToolRuntimeConfig
 from ..runtime.executor import ToolExecutor
 from .executor import create_executor
-from ..tasks.planning import classify_task
-from ..app.config import logger
 from ..app.dispatch import AppDispatchServices
 from ..domain.session_state import SessionRuntimeState
-from ..runtime.tools.todo import TodoRegistry
-from .classifiers import classify_task_execution_result, classify_task_review_result, parse_task_command
-from .execution import TaskExecutionService
+from .classifiers import classify_task_execution_result, classify_task_review_result
 from .executor_pool import TaskExecutorPool, _BACKGROUND_AGENT_TIMEOUT_SECONDS, delegate_for_parallel_with_client
-from .failover import TaskFailoverPolicy
-from .prompt import TaskPromptFactory
 from .protocol import TaskProtocolService
 from .repository import TaskRepository
-from .review import TaskReviewService
-from .router import TaskRouter
 from .utils import build_completed_task_results
 
 
@@ -215,8 +203,6 @@ class AppTaskServices:
         self._parse_response = parse_response
         self._classify_task_execution_result = classify_task_execution_result
         self._classify_task_review_result = classify_task_review_result
-        self._background_dispatch_services: AppDispatchServices | None = None
-        self._background_tool_executor: ToolExecutor | None = None
 
         # ── Create sub-services ─────────────────────────────────────
         self._protocol = TaskProtocolService(
@@ -674,10 +660,7 @@ class AppTaskServices:
     # ── Builders privados ──────────────────────────────────────────
 
     def _build_task_repository(self) -> TaskRepository:
-        workspace = self._get_workspace()
-        if workspace is None:
-            raise ValueError("Workspace is required to access task repository")
-        return TaskRepository(workspace.tasks_db, event_sink=self._get_event_sink())
+        return self._executor_pool._build_task_repository()
 
     def _get_background_tool_executor(self) -> ToolExecutor | None:
         return self._executor_pool._get_background_tool_executor()
@@ -694,37 +677,7 @@ class AppTaskServices:
         )
 
     def _get_background_dispatch_services(self) -> AppDispatchServices | None:
-        if self._background_dispatch_services is not None:
-            return self._background_dispatch_services
-        self._background_dispatch_services = self._create_background_dispatch_services()
-        return self._background_dispatch_services
-
-    def _build_task_prompt_factory(self) -> TaskPromptFactory:
-        return TaskPromptFactory(
-            history=self._get_history(),
-            user_name=self._get_user_name(),
-            shared_state=self._get_shared_state(),
-            prompt_builder=self._get_prompt_builder(),
-        )
-
-    def _build_task_execution_service(self, failover_policy: TaskFailoverPolicy) -> TaskExecutionService:
-        return TaskExecutionService(
-            dispatch_services=self._get_background_dispatch_services(),
-            system_layer=self._get_system_layer(),
-            repository=self._build_task_repository(),
-            failover_policy=failover_policy,
-            classify_task_execution_result=self._classify_task_execution_result,
-            was_user_cancelled=self._background_was_user_cancelled,
-            record_failure=self._get_record_failure(),
-            before_agent_call=lambda agent_name: self._enable_task_tool_auto_approval(
-                agent_name,
-                approval_handler=getattr(self._get_background_tool_executor(), "approval_handler", None),
-            ),
-            after_agent_call=lambda agent_name: self._disable_task_tool_auto_approval(
-                agent_name,
-                approval_handler=getattr(self._get_background_tool_executor(), "approval_handler", None),
-            ),
-        )
+        return self._executor_pool._get_background_dispatch_services()
 
     def _enable_task_tool_auto_approval(self, agent_name: str, approval_handler=None) -> None:
         return self._executor_pool._enable_task_tool_auto_approval(
@@ -740,34 +693,6 @@ class AppTaskServices:
 
     def _task_approval_handlers(self, approval_handler=None) -> list[Any]:
         return self._executor_pool._task_approval_handlers(approval_handler)
-
-    def _build_task_review_service(self, failover_policy: TaskFailoverPolicy) -> TaskReviewService:
-        return TaskReviewService(
-            dispatch_services=self._get_background_dispatch_services(),
-            system_layer=self._get_system_layer(),
-            repository=self._build_task_repository(),
-            failover_policy=failover_policy,
-            classify_task_review_result=self._classify_task_review_result,
-            was_user_cancelled=self._background_was_user_cancelled,
-            event_sink=self._get_event_sink(),
-        )
-
-    def _build_task_router(self) -> TaskRouter:
-        return TaskRouter(
-            active_agents=self._agent_pool_agents(),
-            get_agent_profile=self._get_agent_profile,
-            get_available_profiles=self._get_available_profiles,
-            repository=self._build_task_repository(),
-        )
-
-    def _build_task_failover_policy(self) -> TaskFailoverPolicy:
-        return self._executor_pool._build_task_failover_policy()
-
-    # ── Execution mode accessor (used by background dispatch proxy) ─
-
-    def _get_execution_mode_value(self):
-        getter = self._get_execution_mode
-        return getter() if callable(getter) else None
 
 
 def delegate_for_parallel(app, agent, delegation, protocol_mode, staging_root: Path, index: int):

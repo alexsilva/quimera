@@ -535,6 +535,7 @@ class CoreFacadeMixin:
 
     MAX_RETRIES = 2
     RETRY_BACKOFF_SECONDS = 1
+    RATE_LIMIT_BACKOFF_SECONDS = 30
 
     def _record_tool_event(self, agent, result=None, loop_abort=False, reason=None):
         """Registra métricas de uso de ferramentas atribuídas ao agente."""
