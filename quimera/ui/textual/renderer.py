@@ -108,6 +108,12 @@ class TextualRenderer(RendererBase):
         self._bridge.emit(TextualUiEvent("theme_changed", {"theme": next_name}))
         return next_name
 
+    def set_theme(self, name: str) -> str:
+        """Ativa o tema pelo nome e notifica a UI."""
+        self._theme = themes.get(name)
+        self._bridge.emit(TextualUiEvent("theme_changed", {"theme": self._theme.name}))
+        return self._theme.name
+
     def set_profile_resolver(self, resolver: Callable) -> None:
         """Define callback para resolver (color, label) por agente."""
         self._profile_resolver = resolver
@@ -286,6 +292,10 @@ class TextualRenderer(RendererBase):
         if options is not None:
             metadata_dict["options"] = list(options)
         return self._interactive_window("selection", title, owner=owner, metadata=metadata_dict)
+
+    def open_config(self) -> None:
+        """Abre a janela popup de configurações."""
+        self._bridge.emit(TextualUiEvent("open_config", None))
 
     def flush(self, timeout: float = 5.0) -> None:
         """Drena eventos visuais pendentes no app Textual."""

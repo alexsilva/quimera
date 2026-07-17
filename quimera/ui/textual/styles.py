@@ -6,6 +6,12 @@ TEXTUAL_APP_CSS = """
             layout: vertical;
             background: $surface;
         }
+        ToastRack {
+            dock: top;
+            align: right top;
+            margin-top: 1;
+            margin-bottom: 0;
+        }
         #main {
             height: 1fr;
             min-height: 14;
@@ -72,6 +78,17 @@ TEXTUAL_APP_CSS = """
             width: 3;
             color: $warning;
             content-align: center middle;
+        }
+        #header_config_btn {
+            dock: right;
+            width: auto;
+            color: $text-muted;
+            content-align: center middle;
+            margin-right: 1;
+        }
+        #header_config_btn:hover {
+            color: $accent;
+            text-style: bold;
         }
         HeaderClock {
             width: 10;

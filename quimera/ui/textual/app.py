@@ -87,10 +87,13 @@ def _clipboard_dir_for_app(quimera_app) -> Path | None:
 def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
     """Executa a interface Textual como UI principal do Quimera."""
     try:
-        from textual.app import App, ComposeResult
+        from collections.abc import Iterable
+        from textual.app import App, ComposeResult, SystemCommand
         from textual.containers import Horizontal, Vertical
+        from textual.screen import Screen
         from textual.widgets import Input, RichLog, Static
         from quimera.app.completion_dropdown import CompletionDropdown
+        from quimera.ui.textual.config_screen import ConfigScreen
         from quimera.ui.textual.widgets import _BreadcrumbWidget, _CompletionInput, _SummaryHeader, _SummarySpinner
     except ImportError as exc:
         raise SystemExit(
@@ -118,6 +121,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             ("ctrl+home", "scroll_to_top", "Ir ao topo"),
             ("pageup", "feed_page_up", "Rolar feed acima"),
             ("pagedown", "feed_page_down", "Rolar feed abaixo"),
+            ("f10", "open_config", "Configurações"),
+            ("ctrl+comma", "open_config", "Configurações"),
         ]
 
         def __init__(self) -> None:
@@ -197,6 +202,15 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._history_file_path = Path(history_file).expanduser() if history_file else None
             input_widget.load_history(self._history_file_path)
             input_widget.focus()
+
+        def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+            """Comandos da command palette do Textual."""
+            yield from super().get_system_commands(screen)
+            yield SystemCommand("Configurações", "Abrir tela de configurações", self.action_open_config)
+
+        def action_open_config(self) -> None:
+            """Abre a janela popup de configurações."""
+            self.push_screen(ConfigScreen(quimera_app, self))
 
         def on_unmount(self) -> None:
             gate = getattr(quimera_app, "input_gate", None)
@@ -377,8 +391,15 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
             event.stop()
-            self.query_one(CompletionDropdown).hide()
-            value = getattr(event.input, "submission_value", event.input.user_value)
+            # Só o input fixo do chat pode despachar mensagens; submissões de
+            # inputs de telas auxiliares (ex: configuração) nunca viram chat.
+            if not isinstance(event.input, _CompletionInput) or event.input.id != "input":
+                return
+            try:
+                self.query_one(CompletionDropdown).hide()
+            except Exception:
+                pass
+            value = event.input.submission_value
             event.input.reset_to_prefix()
             bridge.set_input_value("")
             if value:
@@ -390,7 +411,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             overlay = self.query_one("#question_overlay", Static)
             overlay.update(_build_question_overlay(payload))
             overlay.display = True
-            _restore_textual_input_focus(self)
+            if len(self.screen_stack) == 1:
+                _restore_textual_input_focus(self)
 
         def _clear_question_overlay(self) -> None:
             overlay = self.query_one("#question_overlay", Static)
@@ -580,6 +602,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 self._refresh_toolbar()
                 self._refresh_now()
                 return
+            if event.kind == "open_config":
+                self.action_open_config()
+                return
             if event.kind == "summarizing":
                 if event.payload:
                     self._start_spinner()
@@ -595,7 +620,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     self._refresh_toolbar()
                 else:
                     self.query_one("#toolbar", Static).update(toolbar)
-                self.query_one("#input", Input).focus()
+                if len(self.screen_stack) == 1:
+                    # Não rouba o foco de telas modais (ex: configuração).
+                    self.query_one("#input", Input).focus()
                 self._clear_status_bar()
                 self._refresh_now(layout=True)
                 return

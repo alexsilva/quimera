@@ -172,6 +172,10 @@ class RendererBase:
     def set_profile_resolver(self, resolver):
         return None
 
+    def open_config(self):
+        """Abre a janela popup de configurações."""
+        return None
+
     def set_orchestrator(self, agent_name):
         return None
 

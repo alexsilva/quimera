@@ -22,6 +22,7 @@ from ..constants import (
     CMD_RELOAD,
     CMD_RESET,
     CMD_TASK,
+    CMD_CONFIG,
     DEFAULT_FIRST_AGENT,
     build_agents_help,
     build_help,
@@ -378,6 +379,16 @@ class AppSystemLayer:
         """Processa command."""
         command = user_input.strip()
         command = CMD_ALIASES.get(command, command)
+
+        # CMD_CONFIG é tratado antes do guard de renderer para garantir que
+        # nunca seja repassado como mensagem ao agente (o renderer pode ser None
+        # momentaneamente durante a inicialização do Textual).
+        if command == CMD_CONFIG:
+            renderer = self._display._get_renderer()
+            if renderer is not None and hasattr(renderer, "open_config"):
+                renderer.open_config()
+            return True
+
         renderer = self._display._get_renderer()
         if renderer is None:
             return False

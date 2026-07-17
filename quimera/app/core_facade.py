@@ -21,7 +21,7 @@ from ..bugs import BugEvidenceRef, BugReport
 from ..constants import (
     CMD_AGENTS, CMD_ALIASES, CMD_BUGS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_CONTEXT, CMD_EDIT, CMD_EXIT,
     CMD_APPROVE, CMD_APPROVE_ALL, CMD_FILE_PREFIX, CMD_HELP,
-    CMD_POLICY, CMD_PROMPT, CMD_RELOAD, CMD_RESET, CMD_TASK,
+    CMD_POLICY, CMD_PROMPT, CMD_RELOAD, CMD_RESET, CMD_TASK, CMD_CONFIG,
     MSG_SESSION_LOG,
 )
 from ..modes import MODES
@@ -130,6 +130,7 @@ class CoreFacadeMixin:
             CMD_RELOAD,
             CMD_RESET,
             CMD_TASK,
+            CMD_CONFIG,
             *CMD_ALIASES,
             *MODES.keys(),
         }

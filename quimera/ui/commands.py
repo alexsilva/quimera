@@ -30,6 +30,7 @@ CMD_RESET = "/reset"
 CMD_APPROVE = "/approve"
 CMD_APPROVE_ALL = "/approve-all"
 CMD_POLICY = "/policy"
+CMD_CONFIG = "/config"
 CMD_ALIASES = {
     "/e": CMD_EDIT,
     "/r": CMD_CONTEXT,
@@ -67,6 +68,7 @@ def build_help(agent_names: Sequence[str]) -> str:
             "- /connect <agente>: configura interativamente a conexão de um agente e persiste no base_dir\n"
             "- /disconnect <agente>: remove a conexão persistida de um agente\n"
             "- /clear: limpa a tela do terminal\n"
+            "- /config: abre a janela popup de configurações\n"
             "- /prompt [agente]: simula o prompt final e mostra análise dos blocos\n"
             "- /context [show]: mostra o contexto atual\n"
             "- /context edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"

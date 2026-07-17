@@ -73,6 +73,9 @@ class TextualUiBridge:
             self.emit(TextualUiEvent("question_clear"))
             self.direct_input_queue.put(value)
             return
+        if not text.strip():
+            # Linha vazia não inicia rodada de chat com agente.
+            return
         if self._try_inject_active_agent(text):
             self._emit_user_message(text)
             return

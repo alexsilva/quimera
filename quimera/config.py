@@ -55,6 +55,15 @@ class ConfigManager:
             return value
         return self.history_window * 2
 
+    def set_auto_summarize_threshold(self, value: int | None):
+        """Define auto summarize threshold."""
+        data = self._load()
+        if isinstance(value, int) and value > 0:
+            data["auto_summarize_threshold"] = value
+        else:
+            data.pop("auto_summarize_threshold", None)
+        self._save(data)
+
     @property
     def idle_timeout_seconds(self) -> int:
         """Executa idle timeout seconds."""

@@ -508,6 +508,10 @@ class TerminalRenderer(RendererBase):
         """Cria controller efêmero para mutações do estado de janela do agente."""
         return AgentWindowController(self._container(agent))
 
+    def open_config(self) -> None:
+        """Abre a janela popup de configurações."""
+        self.show_warning("Janela de configuração disponível apenas na TUI. Use /connect para configurar conexões.")
+
     def print_direct(self, message):
         """Escreve texto imediato via console para manter o cursor tracking do Rich."""
         if self._console:
