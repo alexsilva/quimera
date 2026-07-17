@@ -1049,7 +1049,7 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         self.assertEqual(
             app._command_argument_resolver(CMD_POLICY, ""),
-            ["status", "strict", "autonomous"],
+            ["status", "strict", "developer", "autonomous"],
         )
 
     def test_list_connected_agents_returns_sorted_names(self):

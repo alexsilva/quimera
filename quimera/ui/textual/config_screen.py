@@ -99,7 +99,11 @@ class ConfigScreen(ModalScreen[None]):
 
                 yield Label("Política do Workspace:")
                 yield Select(
-                    [("strict", "strict"), ("autonomous", "autonomous")],
+                    [
+                        ("strict", "strict"),
+                        ("developer", "developer"),
+                        ("autonomous", "autonomous"),
+                    ],
                     value=self.config.workspace_policy,
                     id="cfg_workspace_policy",
                 )

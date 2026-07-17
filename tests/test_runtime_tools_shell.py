@@ -8,7 +8,7 @@ from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicyError
 from quimera.runtime.tools import shell as shell_module
-from quimera.runtime.tools.shell import CommandSession, ShellTool
+from quimera.runtime.tools.shell import CommandSession, ShellTool, ShellToolValidator
 
 
 @pytest.fixture
@@ -66,6 +66,60 @@ def test_rewrite_python3_falls_back_to_virtualenv_python(tmp_path):
     command = tool._rewrite_command_for_local_venv("python3 -m pytest -q", tmp_path)
 
     assert command == f"{python_bin} -m pytest -q"
+
+
+def test_rewrite_virtualenv_preserves_shell_chaining(tmp_path):
+    """A reescrita do executável não deve transformar operadores em argumentos."""
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    python_bin = venv_bin / "python"
+    python_bin.write_text("#!/bin/sh\n")
+    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+
+    command = tool._rewrite_command_for_local_venv("python script.py && echo ok", tmp_path)
+
+    assert command == f"{python_bin} script.py && echo ok"
+
+
+def test_run_shell_supports_workdir(tmp_path):
+    subdir = tmp_path / "pkg"
+    subdir.mkdir()
+    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    call = ToolCall(name="run_shell", arguments={"command": "pwd", "workdir": "pkg"})
+
+    result = tool.run_shell(call)
+
+    assert result.ok is True
+    assert result.data["cwd"] == str(subdir)
+    assert result.data["stdout"].strip() == str(subdir)
+
+
+def test_session_output_truncation_is_reported(tmp_path):
+    config = ToolRuntimeConfig(workspace_root=tmp_path, max_output_chars=32)
+    tool = ShellTool(config)
+    call = ToolCall(
+        name="exec_command",
+        arguments={"cmd": f'{sys.executable} -u -c "print(\'x\' * 200)"', "yield_time_ms": 500},
+    )
+
+    result = _poll_until_completed(tool, tool.exec_command(call))
+
+    assert result.truncated is True
+    assert len(result.data["stdout"]) == 32
+
+
+def test_developer_chaining_validates_every_command(tmp_path):
+    from quimera.runtime.workspace_policy import WorkspacePolicy
+
+    config = ToolRuntimeConfig(
+        workspace_root=tmp_path,
+        workspace_policy=WorkspacePolicy.developer(),
+    )
+    validator = ShellToolValidator(config)
+
+    validator.validate(ToolCall(name="run_shell", arguments={"command": "rg foo | head"}))
+    with pytest.raises(ToolPolicyError, match="fora da allowlist: nc"):
+        validator.validate(ToolCall(name="run_shell", arguments={"command": "rg foo | nc host 9"}))
 
 
 def _poll_until_completed(tool: ShellTool, result, *, yield_time_ms: int = 500):

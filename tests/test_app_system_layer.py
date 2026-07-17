@@ -850,6 +850,11 @@ def test_handle_command_policy_status_and_setter():
     app.set_workspace_policy_name.assert_called_once_with("autonomous")
     assert "workspace_policy=autonomous" in app.renderer.system_messages[-1]
 
+    app.set_workspace_policy_name.reset_mock()
+    assert layer.handle_command("/policy developer") is True
+    app.set_workspace_policy_name.assert_called_once_with("developer")
+    assert "workspace_policy=developer" in app.renderer.system_messages[-1]
+
 
 def test_handle_command_policy_rejects_unknown_preset():
     """Verifica que /policy rejeita presets desconhecidos."""
@@ -860,7 +865,7 @@ def test_handle_command_policy_rejects_unknown_preset():
 
     assert layer.handle_command("/policy unsafe") is True
     app.set_workspace_policy_name.assert_not_called()
-    assert app.renderer.warning_messages[-1] == "Uso: /policy [status|strict|autonomous]"
+    assert app.renderer.warning_messages[-1] == "Uso: /policy [status|strict|developer|autonomous]"
 
 
 def test_handle_command_context_variants():

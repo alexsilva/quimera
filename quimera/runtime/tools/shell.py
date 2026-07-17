@@ -21,7 +21,6 @@ from ..policy import ToolPolicyError, is_path_inside
 from .base import ToolBase, ValidatableTool
 
 
-_MAX_CHUNK_CHARS = 250_000  # limite de caracteres por stream (stdout/stderr)
 _MAX_SESSIONS = 64  # limite de sessões simultâneas
 _DENYLIST_REGEX = re.compile(
     r"(?:^|\s)(?:"
@@ -67,6 +66,8 @@ class CommandSession:
     tty_master_fd: int | None = None
     _stdout_total: int = 0
     _stderr_total: int = 0
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
     reader_threads: list[threading.Thread] = field(default_factory=list)
 
@@ -104,12 +105,13 @@ class ShellTool(ToolBase):
             )
 
         command = str(call.arguments["command"])
-        command = self._rewrite_command_for_local_venv(command, self.config.workspace_root)
+        workdir = self._resolve_workdir(call.arguments.get("workdir"))
+        command = self._rewrite_command_for_local_venv(command, workdir)
         started = time.perf_counter()
         proc = subprocess.run(
             command,
             shell=True,
-            cwd=str(self.config.workspace_root),
+            cwd=str(workdir),
             capture_output=True,
             text=True,
             timeout=self.config.command_timeout_seconds,
@@ -121,7 +123,7 @@ class ShellTool(ToolBase):
         visible_stderr = stderr[: self.config.max_output_chars]
         payload = {
             "command": command,
-            "cwd": str(self.config.workspace_root),
+            "cwd": str(workdir),
             "stdout": visible_stdout,
             "stderr": visible_stderr,
             "diff": self._build_output_diff(
@@ -341,8 +343,10 @@ class ShellTool(ToolBase):
                 candidate = workdir / ".venv" / "bin" / "python"
             if not candidate.exists():
                 return command
-        tokens[0] = str(candidate)
-        return shlex.join(tokens)
+        match = re.match(r"^(\s*)(\S+)", command)
+        if match is None:
+            return command
+        return f"{match.group(1)}{shlex.quote(str(candidate))}{command[match.end():]}"
 
     def _spawn_process(
             self,
@@ -399,20 +403,24 @@ class ShellTool(ToolBase):
         self._enforce_session_limit()
         return session
 
-    @staticmethod
     def _append_chunk(
+        self,
         session: CommandSession,
         buffer_attr: str,
         history_attr: str,
         counter_attr: str,
         chunk: str,
     ) -> None:
-        """Append com limite de caracteres total por stream."""
+        """Append com limite configurado e sinalização explícita de truncamento."""
         current_total = getattr(session, counter_attr)
-        if current_total >= _MAX_CHUNK_CHARS:
-            return  # descarta chunks além do limite
-        remaining = _MAX_CHUNK_CHARS - current_total
+        limit = self.config.max_output_chars
+        truncated_attr = "stdout_truncated" if counter_attr == "_stdout_total" else "stderr_truncated"
+        if current_total >= limit:
+            setattr(session, truncated_attr, True)
+            return
+        remaining = limit - current_total
         if len(chunk) > remaining:
+            setattr(session, truncated_attr, True)
             chunk = chunk[:remaining]
         setattr(session, buffer_attr, getattr(session, buffer_attr) + chunk)
         setattr(session, history_attr, getattr(session, history_attr) + chunk)
@@ -561,7 +569,9 @@ class ShellTool(ToolBase):
         visible_stdout = full_stdout if completed else stdout
         visible_stderr = full_stderr if completed else stderr
         truncated = (
-            len(visible_stdout) > self.config.max_output_chars
+            session.stdout_truncated
+            or session.stderr_truncated
+            or len(visible_stdout) > self.config.max_output_chars
             or len(visible_stderr) > self.config.max_output_chars
         )
         result = ToolResult(
@@ -721,6 +731,9 @@ class ShellToolValidator(ValidatableTool):
         """Executa validate run shell."""
         command = str(call.arguments.get("command", "")).strip()
         self._validate_shell_command(command, tool_name="run_shell")
+        raw_workdir = call.arguments.get("workdir")
+        if raw_workdir is not None:
+            self._resolve_workspace_path(str(raw_workdir))
 
     def _validate_exec_command(self, call: ToolCall) -> None:
         """Valida uma chamada interativa de execução de comando."""
@@ -787,23 +800,51 @@ class ShellToolValidator(ValidatableTool):
         chaining_allowed = policy is not None and policy.shell_allow_chaining
         allowlist_skipped = policy is not None and policy.shell_skip_allowlist
         try:
-            tokens = shlex.split(command)
-            first_token = tokens[0]
+            command_tokens = self._split_shell_commands(command)
         except Exception as exc:  # noqa: BLE001
             raise ToolPolicyError(f"Comando inválido: {command}") from exc
         if not chaining_allowed:
             self._validate_shell_operators(command)
         if allowlist_skipped:
             return
-        first_token = self._normalize_allowed_executable(first_token)
-        if first_token not in self.config.shell_allowlist:
-            raise ToolPolicyError(f"Comando fora da allowlist: {first_token}")
-        if first_token == "git" and len(tokens) > 1 and tokens[1] in {"push"}:
-            raise ToolPolicyError("Comando bloqueado: git push exige confirmação forte fora do shell MCP")
-        if first_token in self._FILE_PATH_CMDS:
-            self._validate_shell_file_paths(tokens[1:])
-        if first_token == "mkdir":
-            self._validate_mkdir_args(tokens[1:])
+        for tokens in command_tokens:
+            first_token = self._normalize_allowed_executable(tokens[0])
+            if first_token not in self.config.shell_allowlist:
+                raise ToolPolicyError(f"Comando fora da allowlist: {first_token}")
+            if first_token == "git" and len(tokens) > 1 and tokens[1] in {"push"}:
+                raise ToolPolicyError("Comando bloqueado: git push exige confirmação forte fora do shell MCP")
+            if first_token in self._FILE_PATH_CMDS:
+                self._validate_shell_file_paths(tokens[1:])
+            if first_token == "mkdir":
+                self._validate_mkdir_args(tokens[1:])
+
+    @staticmethod
+    def _split_shell_commands(command: str) -> list[list[str]]:
+        """Divide pipelines/chains e preserva argumentos entre aspas.
+
+        Cada estágio é validado individualmente contra a allowlist. Assim o
+        preset developer pode usar ``&&`` e pipes sem transformar o primeiro
+        executável permitido em bypass para comandos posteriores.
+        """
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        commands: list[list[str]] = []
+        current: list[str] = []
+        for token in lexer:
+            if token in {";", "&&", "||", "|"}:
+                if not current:
+                    raise ValueError("operador shell sem comando")
+                commands.append(current)
+                current = []
+                continue
+            if token == "&":
+                raise ValueError("execução em background não suportada")
+            current.append(token)
+        if not current:
+            raise ValueError("comando incompleto")
+        commands.append(current)
+        return commands
 
     def _normalize_allowed_executable(self, first_token: str) -> str:
         """Normaliza executáveis relativos/absolutos dentro da workspace para allowlist.

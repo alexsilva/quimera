@@ -161,7 +161,7 @@ class CoreFacadeMixin:
         if command == CMD_BUGS:
             return ["list", "show", "close", "analyze", "stats"]
         if command == CMD_POLICY:
-            return ["status", "strict", "autonomous"]
+            return ["status", "strict", "developer", "autonomous"]
         if command == CMD_RESET:
             return ["state", "history", "all"]
         if command in ("s", "o", "r"):

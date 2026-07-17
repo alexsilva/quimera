@@ -332,6 +332,10 @@ TOOL_SCHEMAS = [
                     "command": {
                         "type": "string",
                         "description": "Comando shell a executar.",
+                    },
+                    "workdir": {
+                        "type": "string",
+                        "description": "Diretório relativo ao workspace onde o comando deve rodar.",
                     }
                 },
                 "required": ["command"],

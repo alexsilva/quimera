@@ -7,7 +7,7 @@ from typing import ClassVar
 
 from .approval_broker import RiskLevel
 
-WORKSPACE_POLICY_PRESETS = ("strict", "autonomous")
+WORKSPACE_POLICY_PRESETS = ("strict", "developer", "autonomous")
 
 
 class AutonomyLevel(str, Enum):
@@ -67,6 +67,8 @@ class WorkspacePolicy:
     def from_name(cls, name: str | None) -> WorkspacePolicy:
         """Cria policy a partir do nome persistido."""
         normalized = cls.normalize_name(name)
+        if normalized == "developer":
+            return cls.developer()
         if normalized == "autonomous":
             return cls.autonomous()
         return cls.strict()
@@ -75,6 +77,22 @@ class WorkspacePolicy:
     def strict(cls) -> WorkspacePolicy:
         """Padrão restritivo — comportamento atual do sistema."""
         return cls()
+
+    @classmethod
+    def developer(cls) -> WorkspacePolicy:
+        """Autonomia prática para desenvolvimento, mantendo allowlist e denylist.
+
+        Escritas e comandos shell comuns são auto-aprovados. Operações
+        destrutivas continuam exigindo confirmação, e cada comando de uma
+        pipeline/chain continua sujeito à allowlist.
+        """
+        return cls(
+            write=AutonomyLevel.AUTO,
+            shell=AutonomyLevel.AUTO,
+            destructive=AutonomyLevel.PROMPT,
+            shell_allow_chaining=True,
+            shell_skip_allowlist=False,
+        )
 
     @classmethod
     def autonomous(cls) -> WorkspacePolicy:

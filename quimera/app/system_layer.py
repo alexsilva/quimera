@@ -149,7 +149,7 @@ class AppSystemLayer:
                 name = str(self.workspace_policy_getter() or "").strip().lower()
             except Exception:
                 name = ""
-            if name in {"strict", "autonomous"}:
+            if name in {"strict", "developer", "autonomous"}:
                 return name
         return "strict"
 
@@ -521,12 +521,12 @@ class AppSystemLayer:
             if raw_target in {"", "status", "show"}:
                 current = self._current_workspace_policy_name()
                 self._display.show_system(
-                    f"[policy] atual: {current}. Opções: strict, autonomous."
+                    f"[policy] atual: {current}. Opções: strict, developer, autonomous."
                 )
                 return True
-            if raw_target not in {"strict", "autonomous"}:
+            if raw_target not in {"strict", "developer", "autonomous"}:
                 self._display.show_warning_message(
-                    "Uso: /policy [status|strict|autonomous]"
+                    "Uso: /policy [status|strict|developer|autonomous]"
                 )
                 return True
             if callable(self.workspace_policy_setter):
