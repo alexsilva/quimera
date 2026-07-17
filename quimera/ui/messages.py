@@ -7,6 +7,7 @@ Módulo deliberadamente sem dependências internas: é importado por
 from __future__ import annotations
 
 NO_RESPONSE_MESSAGE = "sem resposta válida"
+AGENT_EXECUTION_STARTED_MESSAGE = "iniciando execução"
 
 #: Rótulos visuais (pt-BR) para os motivos estruturados de nova tentativa.
 #: Fonte única de tradução: chamadas estruturadas informam o ``reason``

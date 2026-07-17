@@ -8,6 +8,7 @@ import quimera.profiles as profiles
 from quimera.agent_events import SpyEvent
 from quimera.constants import Visibility
 from quimera.evidence import Evidence, EvidenceStore, PatternRegistry
+from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
 
 
 class SpyOutputPresenter:
@@ -30,6 +31,7 @@ class SpyOutputPresenter:
         self.turn_tools: list[dict] = []
         self._raw_output_lines: list[str] = []
         self._active_tool_calls: dict[str, dict] = {}
+        self._transient_content = ""
         self._start_turn()
 
     def _start_turn(self) -> None:
@@ -404,7 +406,14 @@ class SpyOutputPresenter:
     def notify_agent_started(self, agent: str | None) -> None:
         """Emite evento transitório de início de execução para todos os CLIs."""
         if agent:
-            self.emit(agent, SpyEvent(kind="context", text="iniciando execução", transient=True))
+            self.emit(
+                agent,
+                SpyEvent(
+                    kind="context",
+                    text=AGENT_EXECUTION_STARTED_MESSAGE,
+                    transient=True,
+                ),
+            )
 
     def _audit_spy_event(self, agent: str | None, event: SpyEvent) -> None:
         """Registra evento estruturado do pipeline de spy para debug pós-execução."""
@@ -512,6 +521,7 @@ class SpyOutputPresenter:
         self.pending_event = None
         self.current_status_label = ""
         self._raw_output_lines = []
+        self._transient_content = ""
         self._start_turn()
 
     def _show(self, agent: str | None, event: SpyEvent) -> None:
@@ -529,10 +539,22 @@ class SpyOutputPresenter:
         if event.kind != "clear" and dedupe_key == self.last_message:
             return
         if event.transient and agent:
-            self.renderer.update_agent_transient(agent, rendered)
-            self.last_message = dedupe_key
-            if event.kind != "tool" or self.renderer.supports_agent_feed is not True:
+            if event.kind == "tool" and self.renderer.supports_agent_feed is True:
+                # Tool transitória não sobrescreve o conteúdo do bloco do agente:
+                # o último pensamento/contexto permanece visível enquanto as
+                # tools fluem pelo canal de preview (lista de tools do bloco).
+                # Placeholders de lifecycle ("iniciando execução") não são
+                # pensamento — são limpos quando a primeira tool chega.
+                if self._is_lifecycle_context(self._transient_content):
+                    self._transient_content = ""
+                    self.renderer.update_agent_transient(agent, "")
+                self._show_persistent_line(rendered, agent=agent, muted=True)
+                self.last_message = dedupe_key
                 return
+            self.renderer.update_agent_transient(agent, rendered)
+            self._transient_content = rendered
+            self.last_message = dedupe_key
+            return
         if event.kind == "tool":
             self._show_persistent_line(rendered, agent=agent, muted=True)
         else:
@@ -552,4 +574,7 @@ class SpyOutputPresenter:
     @staticmethod
     def _is_lifecycle_context(text: str) -> bool:
         normalized = text.strip().lower()
-        return normalized in {"iniciando execução", "execução concluída"}
+        return normalized in {
+            AGENT_EXECUTION_STARTED_MESSAGE,
+            "execução concluída",
+        }

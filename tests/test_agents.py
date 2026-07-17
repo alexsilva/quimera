@@ -2420,9 +2420,58 @@ def test_spy_output_presenter_persists_tool_preview_when_feed_is_supported():
 
     presenter.emit("codex", SpyEvent(kind="tool", text="usando apply_patch", transient=True))
 
-    renderer.update_agent_transient.assert_called_once_with("codex", "usando apply_patch")
+    # tool não sobrescreve o transient (preserva o último pensamento do agente);
+    # a linha flui apenas pelo canal de preview do feed.
+    renderer.update_agent_transient.assert_not_called()
     renderer.show_feed.assert_called_once_with("usando apply_patch", agent="codex", muted=True)
     renderer.show_plain.assert_not_called()
+
+
+def test_spy_output_presenter_keeps_thinking_transient_while_tools_run():
+    """Verifica que o pensamento do agente permanece no transient durante as tools."""
+    class FeedRenderer(RendererBase):
+        supports_agent_feed = True
+
+        def __init__(self):
+            self.show_feed = MagicMock()
+            self.show_plain = MagicMock()
+            self.update_agent_transient = MagicMock()
+
+    renderer = FeedRenderer()
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    presenter.emit("codex", SpyEvent(kind="context", text="analisando o módulo de agents", transient=True))
+    presenter.emit("codex", SpyEvent(kind="tool", text="$ git status --short"))
+    presenter.emit("codex", SpyEvent(kind="tool", text="✓ git status --short"))
+
+    renderer.update_agent_transient.assert_called_once_with("codex", "analisando o módulo de agents")
+    renderer.show_feed.assert_has_calls([
+        call("$ git status --short", agent="codex", muted=True),
+        call("✓ git status --short", agent="codex", muted=True),
+    ])
+
+
+def test_spy_output_presenter_clears_lifecycle_placeholder_when_tools_start():
+    """Verifica que "iniciando execução" some do transient quando as tools começam."""
+    class FeedRenderer(RendererBase):
+        supports_agent_feed = True
+
+        def __init__(self):
+            self.show_feed = MagicMock()
+            self.show_plain = MagicMock()
+            self.update_agent_transient = MagicMock()
+
+    renderer = FeedRenderer()
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    presenter.notify_agent_started("codex")
+    presenter.emit("codex", SpyEvent(kind="tool", text="usando grep"))
+
+    renderer.update_agent_transient.assert_has_calls([
+        call("codex", "iniciando execução"),
+        call("codex", ""),
+    ])
+    renderer.show_feed.assert_called_once_with("usando grep", agent="codex", muted=True)
 
 
 def test_agent_client_uses_transient_for_live_stderr_when_renderer_supports_it():

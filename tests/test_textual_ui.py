@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from rich.console import Console, Group
 
+from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
 from quimera.ui.textual.app import run_textual_quimera_app
 from quimera.ui.textual.bridge import TextualUiBridge
 from quimera.ui.textual.events import TextualUiEvent
@@ -123,6 +124,57 @@ def test_textual_feed_keeps_distinct_commands_as_separate_lines():
     model.apply(TextualUiEvent("tool_preview", "$ pwd", agent="codex"))
 
     assert model.items[0].event.payload["tools"] == ["$ ls", "$ pwd"]
+
+
+def test_textual_feed_keeps_thinking_content_while_tools_stream():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] planejando refactor", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", "$ ls", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", "⌘ read_file app.py", agent="codex"))
+
+    assert len(model.items) == 1
+    payload = model.items[0].event.payload
+    assert payload["content"] == "[thinking] planejando refactor"
+    assert payload["tools"] == ["$ ls", "⌘ read_file app.py"]
+
+
+def test_textual_feed_drops_lifecycle_placeholder_when_tools_start():
+    model = TextualFeedModel()
+
+    model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            {
+                "status": "running",
+                "message": AGENT_EXECUTION_STARTED_MESSAGE,
+            },
+            agent="codex",
+        )
+    )
+    model.apply(TextualUiEvent("tool_preview", "usando grep", agent="codex"))
+
+    assert len(model.items) == 1
+    payload = model.items[0].event.payload
+    assert model.items[0].event.kind == "agent_update"
+    assert payload["content"] == ""
+    assert payload["tools"] == ["usando grep"]
+
+
+def test_textual_feed_does_not_treat_arbitrary_text_as_lifecycle_placeholder():
+    model = TextualFeedModel()
+
+    model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            {"status": "running", "message": "iniciando execucao"},
+            agent="codex",
+        )
+    )
+    model.apply(TextualUiEvent("tool_preview", "usando grep", agent="codex"))
+
+    assert model.items[0].event.kind == "agent_lifecycle"
+    assert model.items[0].event.payload["message"] == "iniciando execucao"
 
 
 def test_textual_feed_clears_tool_preview_with_final_agent_message():

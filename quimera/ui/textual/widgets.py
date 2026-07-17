@@ -11,7 +11,6 @@ from rich.highlighter import Highlighter
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.events import Click
 from textual.geometry import clamp
 from textual.worker import WorkerCancelled
 from textual.widgets import Header, Input, Static
@@ -333,14 +332,6 @@ class _CompletionInput(Input):
             dropdown.hide()
             return
 
-class _HeaderConfigButton(Static):
-    """Item de menu "Configurações" exibido no header."""
-
-    async def on_click(self, event: Click) -> None:
-        event.stop()
-        self.app.action_open_config()
-
-
 class _BreadcrumbWidget(Static):
     """Breadcrumb de delegação no header."""
 
@@ -355,11 +346,9 @@ class _SummaryHeader(Header):
         yield HeaderIcon().data_bind(Header.icon)
         yield HeaderTitle()
         yield _BreadcrumbWidget("", id="breadcrumb")
-        yield _HeaderConfigButton("Configurações", id="header_config_btn")
         yield _SummarySpinner("", id="summary-spinner")
         yield (
             HeaderClock().data_bind(Header.time_format)
             if self._show_clock
             else HeaderClockSpace()
         )
-

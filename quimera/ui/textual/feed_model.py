@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any, Callable
 
 from quimera.constants import USER_ROLE
+from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
 from quimera.ui.text import (
     _apply_stream_diff,
     _normalize_stream_diff,
@@ -444,6 +445,14 @@ class TextualFeedModel:
         merged["tools"] = list(tool_lines)
         return TextualUiEvent(event.kind, merged, agent=event.agent)
 
+    @staticmethod
+    def _is_lifecycle_placeholder_event(event: TextualUiEvent) -> bool:
+        """Retorna True para placeholders que não devem virar cabeçalho das tools."""
+        if event.kind != "agent_lifecycle":
+            return False
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        return payload.get("message") == AGENT_EXECUTION_STARTED_MESSAGE
+
     def _apply_tool_preview(self, event: TextualUiEvent) -> bool:
         """Atualiza previews de tools dentro do bloco transitório do agente."""
         agent = self._agent_key(event)
@@ -477,6 +486,8 @@ class TextualFeedModel:
             self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
             return True
         current_event = self._items[index].event
+        if self._is_lifecycle_placeholder_event(current_event):
+            current_event = TextualUiEvent("agent_update", {"content": ""}, agent=event.agent)
         self._items[index] = TextualFeedItem(self._with_transient_tools(current_event), transient=True)
         self._last_change = TextualFeedChange(True, redraw=True)
         return True

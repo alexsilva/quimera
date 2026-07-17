@@ -78,17 +78,7 @@ TEXTUAL_APP_CSS = """
             width: 3;
             color: $warning;
             content-align: center middle;
-        }
-        #header_config_btn {
-            dock: right;
-            width: auto;
-            color: $text-muted;
-            content-align: center middle;
-            margin-right: 1;
-        }
-        #header_config_btn:hover {
-            color: $accent;
-            text-style: bold;
+            margin-right: 10;
         }
         HeaderClock {
             width: 10;
