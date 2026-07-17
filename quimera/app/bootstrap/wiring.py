@@ -103,7 +103,7 @@ def _make_record_tool_event(session_metrics, app):
 def _make_background_delegate_fn(task_services, dispatch_services):
     def _fn(agent, **opts):
         bg = task_services._get_background_dispatch_services()
-        (bg or dispatch_services).delegate(agent, **opts)
+        return (bg or dispatch_services).delegate(agent, **opts)
     return _fn
 
 

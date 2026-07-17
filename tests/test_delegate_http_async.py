@@ -1145,3 +1145,48 @@ class TestOrchestratorRedelegationGuard:
         )
         result = tools.delegate(call)
         assert result.ok is True
+
+
+# ── background delegate fn (wiring) ─────────────────────────
+
+class TestMakeBackgroundDelegateFn:
+    """Testes para _make_background_delegate_fn (bootstrap/wiring).
+
+    A closure precisa propagar o retorno de dispatch.delegate(): se retornar
+    None, _execute_single_step interpreta como "no response" e dispara os
+    fallback_agents mesmo após execução bem-sucedida do agente alvo.
+    """
+
+    def test_retorna_resultado_do_dispatch_padrao(self):
+        """Sem background dispatch, usa dispatch_services e propaga o retorno."""
+        from quimera.app.bootstrap.wiring import _make_background_delegate_fn
+
+        task_services = MagicMock()
+        task_services._get_background_dispatch_services.return_value = None
+        dispatch_services = MagicMock()
+        dispatch_services.delegate.return_value = "resposta do agente"
+
+        fn = _make_background_delegate_fn(task_services, dispatch_services)
+        result = fn("claude-opus", delegation={"task": "revisar"})
+
+        assert result == "resposta do agente"
+        dispatch_services.delegate.assert_called_once_with(
+            "claude-opus", delegation={"task": "revisar"},
+        )
+
+    def test_retorna_resultado_do_background_dispatch(self):
+        """Com background dispatch disponível, usa-o e propaga o retorno."""
+        from quimera.app.bootstrap.wiring import _make_background_delegate_fn
+
+        background = MagicMock()
+        background.delegate.return_value = "resposta via background"
+        task_services = MagicMock()
+        task_services._get_background_dispatch_services.return_value = background
+        dispatch_services = MagicMock()
+
+        fn = _make_background_delegate_fn(task_services, dispatch_services)
+        result = fn("claude-opus", delegation={"task": "revisar"})
+
+        assert result == "resposta via background"
+        background.delegate.assert_called_once()
+        dispatch_services.delegate.assert_not_called()
