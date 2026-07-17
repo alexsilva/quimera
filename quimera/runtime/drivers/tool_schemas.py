@@ -1452,6 +1452,213 @@ TOOL_SCHEMAS = [
     },
 ]
 
+
+def _browser_schema(name: str, description: str, properties: dict, required: list[str]) -> dict:
+    """Constrói schema uniforme para a família de ferramentas browser."""
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string"},
+                    "data": {"type": "object"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    }
+
+
+_SESSION_ID = {
+    "type": "string",
+    "description": "ID retornado por browser_start.",
+}
+_SELECTOR = {
+    "type": "string",
+    "description": "Seletor CSS do elemento alvo.",
+}
+_TIMEOUT_MS = {
+    "type": "integer",
+    "minimum": 0,
+    "description": "Timeout da operação em milissegundos.",
+}
+
+TOOL_SCHEMAS.extend([
+    _browser_schema(
+        "browser_start",
+        "Inicia uma sessão persistente de Chrome/Chromium para testar sites e games web. Pode abrir uma URL imediatamente.",
+        {
+            "url": {"type": "string", "description": "URL http(s), about:blank ou file:// dentro do workspace."},
+            "headless": {"type": "boolean", "description": "Executa sem janela visível. Padrão true."},
+            "width": {"type": "integer", "minimum": 240, "maximum": 7680},
+            "height": {"type": "integer", "minimum": 200, "maximum": 4320},
+            "device_scale_factor": {"type": "number", "minimum": 0.5, "maximum": 4},
+            "timeout_ms": _TIMEOUT_MS,
+            "navigation_timeout_ms": _TIMEOUT_MS,
+            "wait_until": {"type": "string", "enum": ["commit", "domcontentloaded", "load", "networkidle"]},
+            "ignore_https_errors": {"type": "boolean"},
+            "disable_gpu": {"type": "boolean", "description": "Desativa GPU somente para diagnóstico de renderização."},
+            "executable_path": {"type": "string", "description": "Executável Chrome/Chromium opcional."},
+        },
+        [],
+    ),
+    _browser_schema(
+        "browser_status",
+        "Lista sessões de navegador ativas, URLs e títulos.",
+        {},
+        [],
+    ),
+    _browser_schema(
+        "browser_close",
+        "Encerra uma sessão de navegador e libera seus processos.",
+        {"session_id": _SESSION_ID},
+        ["session_id"],
+    ),
+    _browser_schema(
+        "browser_navigate",
+        "Navega uma sessão existente para outra URL.",
+        {
+            "session_id": _SESSION_ID,
+            "url": {"type": "string"},
+            "wait_until": {"type": "string", "enum": ["commit", "domcontentloaded", "load", "networkidle"]},
+            "timeout_ms": _TIMEOUT_MS,
+        },
+        ["session_id", "url"],
+    ),
+    _browser_schema(
+        "browser_snapshot",
+        "Retorna texto da página e inventário de elementos interativos com seletores e coordenadas. Use antes de clicar ou digitar.",
+        {
+            "session_id": _SESSION_ID,
+            "selector": _SELECTOR,
+            "max_text_chars": {"type": "integer", "minimum": 100, "maximum": 100000},
+            "max_elements": {"type": "integer", "minimum": 1, "maximum": 1000},
+            "timeout_ms": _TIMEOUT_MS,
+        },
+        ["session_id"],
+    ),
+    _browser_schema(
+        "browser_click",
+        "Clica por seletor CSS ou por coordenadas. Coordenadas são úteis para canvas e games web.",
+        {
+            "session_id": _SESSION_ID,
+            "selector": _SELECTOR,
+            "x": {"type": "number"},
+            "y": {"type": "number"},
+            "button": {"type": "string", "enum": ["left", "middle", "right"]},
+            "click_count": {"type": "integer", "minimum": 1, "maximum": 3},
+            "delay_ms": {"type": "integer", "minimum": 0},
+            "force": {"type": "boolean"},
+            "timeout_ms": _TIMEOUT_MS,
+        },
+        ["session_id"],
+    ),
+    _browser_schema(
+        "browser_type",
+        "Limpa opcionalmente e digita texto em input, textarea ou elemento editável.",
+        {
+            "session_id": _SESSION_ID,
+            "selector": _SELECTOR,
+            "text": {"type": "string"},
+            "clear": {"type": "boolean"},
+            "delay_ms": {"type": "integer", "minimum": 0},
+        },
+        ["session_id", "selector", "text"],
+    ),
+    _browser_schema(
+        "browser_press",
+        "Pressiona uma tecla ou combinação. Sem selector, envia ao foco atual; duration_ms mantém a tecla pressionada para games.",
+        {
+            "session_id": _SESSION_ID,
+            "key": {"type": "string", "description": "Ex.: Enter, ArrowLeft, Space, Control+A."},
+            "selector": _SELECTOR,
+            "duration_ms": {"type": "integer", "minimum": 0},
+        },
+        ["session_id", "key"],
+    ),
+    _browser_schema(
+        "browser_mouse",
+        "Controla mouse em baixo nível para canvas/games: move, down, up, click ou wheel.",
+        {
+            "session_id": _SESSION_ID,
+            "action": {"type": "string", "enum": ["move", "down", "up", "click", "wheel"]},
+            "x": {"type": "number"},
+            "y": {"type": "number"},
+            "button": {"type": "string", "enum": ["left", "middle", "right"]},
+            "steps": {"type": "integer", "minimum": 1},
+            "click_count": {"type": "integer", "minimum": 1, "maximum": 3},
+            "delay_ms": {"type": "integer", "minimum": 0},
+            "delta_x": {"type": "number"},
+            "delta_y": {"type": "number"},
+        },
+        ["session_id", "action"],
+    ),
+    _browser_schema(
+        "browser_wait",
+        "Espera tempo, estado de um seletor ou expressão JavaScript ficar verdadeira.",
+        {
+            "session_id": _SESSION_ID,
+            "selector": _SELECTOR,
+            "state": {"type": "string", "enum": ["attached", "detached", "visible", "hidden"]},
+            "expression": {"type": "string"},
+            "timeout_ms": _TIMEOUT_MS,
+        },
+        ["session_id"],
+    ),
+    _browser_schema(
+        "browser_evaluate",
+        "Executa JavaScript na página e retorna um valor serializável. Útil para estado interno, canvas e diagnósticos.",
+        {
+            "session_id": _SESSION_ID,
+            "expression": {"type": "string"},
+            "arg": {},
+        },
+        ["session_id", "expression"],
+    ),
+    _browser_schema(
+        "browser_screenshot",
+        "Salva screenshot da página inteira, viewport ou elemento dentro do workspace.",
+        {
+            "session_id": _SESSION_ID,
+            "path": {"type": "string", "description": "Path relativo no workspace. Padrão artifacts/browser/...png."},
+            "selector": _SELECTOR,
+            "full_page": {"type": "boolean"},
+            "quality": {"type": "integer", "minimum": 1, "maximum": 100},
+        },
+        ["session_id"],
+    ),
+    _browser_schema(
+        "browser_console",
+        "Lê mensagens console.log/warn/error e erros JavaScript capturados desde o início da sessão.",
+        {
+            "session_id": _SESSION_ID,
+            "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+            "clear": {"type": "boolean"},
+        },
+        ["session_id"],
+    ),
+    _browser_schema(
+        "browser_network",
+        "Lê requests e responses recentes, incluindo status HTTP e tipo de recurso.",
+        {
+            "session_id": _SESSION_ID,
+            "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+            "clear": {"type": "boolean"},
+        },
+        ["session_id"],
+    ),
+])
+
 _TASK_TOOL_NAMES = {"list_tasks", "list_jobs", "get_job"}
 
 

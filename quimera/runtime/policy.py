@@ -104,6 +104,7 @@ class ToolPolicy:
             "git_commit",
             "git_checkout",
             "git_push",
+            "browser_screenshot",
         }:
             return self.config.require_approval_for_mutations
         if call.name in self._external_mcp_tools:

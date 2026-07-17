@@ -19,6 +19,7 @@ from .tools import state as state_tools
 from .tools import tasks as tasks_tools
 from .tools import todo as todo_tools
 from .tools import web as web_tools
+from .tools import browser as browser_tools
 from .approval import ApprovalHandler, ApprovalManager
 
 
@@ -53,6 +54,7 @@ class ToolExecutor:
         self._delegate_tools = None
         self._interaction_tools = None
         self._state_tools = None
+        self._browser_tools = None
         self._register_builtin_tools()
 
     @staticmethod
@@ -77,6 +79,7 @@ class ToolExecutor:
         patch_tools.register(self.registry, self.policy, self.config)
         shell_tools.register(self.registry, self.policy, self.config)
         web_tools.register(self.registry, self.policy, self.config)
+        self._browser_tools = browser_tools.register(self.registry, self.policy, self.config)
         tasks_tools.register(self.registry, self.policy, self.config)
         todo_tools.register(self.registry, self.policy, self.config)
         memory_tools.register(self.registry, self.policy, self.config)

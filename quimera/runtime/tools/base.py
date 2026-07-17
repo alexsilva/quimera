@@ -21,9 +21,16 @@ class ToolBase:
     """
 
     _tool_prefix: str = ""
+    _tool_public_methods: frozenset[str] = frozenset()
 
-    def __init_subclass__(cls, tool_prefix: str = "", **kw: object) -> None:
+    def __init_subclass__(
+        cls,
+        tool_prefix: str = "",
+        tool_public_methods: tuple[str, ...] = (),
+        **kw: object,
+    ) -> None:
         super().__init_subclass__(**kw)
+        cls._tool_public_methods = frozenset(tool_public_methods)
         if not tool_prefix:
             return
         cls._tool_prefix = tool_prefix
@@ -31,6 +38,7 @@ class ToolBase:
             name for name in vars(cls)
             if not name.startswith("_")
             and callable(getattr(cls, name))
+            and name not in cls._tool_public_methods
             and not name.startswith(f"{tool_prefix}_")
         ]
         if bad:

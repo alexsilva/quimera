@@ -221,11 +221,18 @@ class ApprovalBroker:
         "list_files", "read_file", "grep_search", "list_tasks",
         "list_jobs", "get_job", "todo_list", "list_agents",
     })
-    _NETWORK_TOOLS = frozenset({"web_search", "web_fetch"})
+    _NETWORK_TOOLS = frozenset({
+        "web_search", "web_fetch",
+        "browser_start", "browser_status", "browser_close", "browser_navigate",
+        "browser_snapshot", "browser_click", "browser_type", "browser_press",
+        "browser_mouse", "browser_wait", "browser_evaluate", "browser_console",
+        "browser_network",
+    })
     _WRITE_TOOLS = frozenset({
         "write_file", "apply_patch", "todo_write", "write_stdin",
         "poll_command_session", "close_command_session", "git_add", "git_commit",
         "git_checkout", "git_push",
+        "browser_screenshot",
     })
     _SHELL_TOOLS = frozenset({
         "run_shell", "run_shell_command", "exec_command", "poll_command_session",
