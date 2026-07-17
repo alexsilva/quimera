@@ -7,7 +7,6 @@ import logging
 import re
 import socket
 import tempfile
-import time
 from html import unescape
 import urllib.parse
 from pathlib import Path

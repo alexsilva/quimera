@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import queue
 from contextlib import nullcontext
 
 from .render_event import RenderEvent

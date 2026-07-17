@@ -5,14 +5,16 @@ from . import renderer as _renderer
 from .renderer import TerminalRenderer
 from .renderer import _RICH_AVAILABLE
 from .renderer import _agent_style
-from .renderer import _apply_stream_diff
-from .renderer import _extract_text_from_renderable
-from .renderer import _highlight_tags
 from .renderer import _is_interactive_terminal
-from .renderer import _normalize_stream_diff
 from .renderer import os
-from .renderer import strip_ansi
 from .renderer import sys
+from .text import (
+    _apply_stream_diff,
+    _extract_text_from_renderable,
+    _highlight_tags,
+    _normalize_stream_diff,
+    strip_ansi,
+)
 
 if hasattr(_renderer, "Console"):
     Console = _renderer.Console
@@ -33,6 +35,7 @@ if hasattr(_renderer, "Text"):
 
 __all__ = [
     "Console",
+    "Group",
     "Live",
     "Markdown",
     "Panel",
@@ -40,5 +43,15 @@ __all__ = [
     "RenderAuditLogger",
     "TerminalRenderer",
     "Text",
+    "_RICH_AVAILABLE",
+    "_agent_style",
+    "_apply_stream_diff",
+    "_extract_text_from_renderable",
+    "_highlight_tags",
+    "_is_interactive_terminal",
+    "_normalize_stream_diff",
+    "markup_escape",
+    "os",
     "strip_ansi",
+    "sys",
 ]

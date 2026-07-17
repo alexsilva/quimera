@@ -5,7 +5,6 @@ de uma UI Textual rodando para fornecer input via fila.
 """
 from __future__ import annotations
 
-import sys
 import threading
 
 

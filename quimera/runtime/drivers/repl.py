@@ -252,7 +252,7 @@ class DriverRepl:
         print(f"{'=' * 60}")
 
         if one_shot_prompt is not None:
-            print(f"  [modo one-shot]\n")
+            print("  [modo one-shot]\n")
             result = self.probe(one_shot_prompt)
             print(f"\n{_SEP}")
             print(result if result else "[sem resposta]")
@@ -307,7 +307,7 @@ class DriverRepl:
 
             if self._connection_has_changed():
                 self._update_driver()
-                print(f"  [conexão alterada detectada, driver atualizado]")
+                print("  [conexão alterada detectada, driver atualizado]")
                 print(f"  [{self.connection.base_url}]")
 
             executor = self.tool_executor if use_tools else None

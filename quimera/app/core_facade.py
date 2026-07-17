@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 
 from .agent_pool import AgentPoolView
-from .bootstrap.wiring import normalize_agent_name
 from .chat_processor import run_chat_loop
 from .inputs import AskUserPrompter
 from .lifecycle import AppLifecycle

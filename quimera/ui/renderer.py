@@ -1,9 +1,7 @@
 """Renderização de terminal para a UI do Quimera."""
-import collections
+# ruff: noqa: E402
 import logging
 import os
-import queue as _queue_module
-import re
 import shutil
 import sys as _sys_module
 import sys
@@ -18,15 +16,9 @@ from .agent_window_controller import AgentWindowController
 from .compositor import TerminalCompositor
 from .audit import RenderAuditLogger
 from .events import (
-    LiveAbortEvent,
-    LiveStartEvent,
-    LiveStopEvent,
     LiveUpdateChunkEvent,
-    NoopEvent,
-    OutputControlEvent,
     PendingInputEvent,
     PrintEvent,
-    TerminalResizeEvent,
     TransientClearEvent,
     TransientWindowEvent,
 )
@@ -34,22 +26,14 @@ from .window_manager import WindowManager, WindowRenderPlan
 from .windows import (
     AgentWindowState,
     RenderWindowState,
-    RestorePolicy,
     WindowDeck,
     WindowKind,
-    WindowLayer,
-    WindowModality,
 )
 
 from .text import (
-    _PREVIEW_LIMIT,
-    _UNICODE_CONTROL_RE,
-    _apply_stream_diff,
     _extract_text_from_renderable,
     _highlight_tags,
     _normalize_completed_content,
-    _normalize_stream_diff,
-    _preview_chunk,
     _preview_text,
     strip_ansi,
 )
@@ -79,12 +63,12 @@ def _public_ui_module():
 
 
 try:
-    from rich import box as rich_box
-    from rich.console import Console, Group
-    from rich.markdown import Markdown
+    from rich import box as rich_box  # noqa: F401
+    from rich.console import Console, Group  # noqa: F401
+    from rich.markdown import Markdown  # noqa: F401
     from rich.markup import escape as markup_escape
     from rich.panel import Panel
-    from rich.live import Live
+    from rich.live import Live  # noqa: F401
     from rich.padding import Padding
     from rich.rule import Rule
     from rich.table import Table
@@ -732,7 +716,6 @@ class TerminalRenderer(RendererBase):
         public_ui = _public_ui_module()
         if not public_ui._RICH_AVAILABLE:
             return None
-        icon = "⚠" if kind == "approval" else "❓"
         lines = question.strip().splitlines()
         content = Text()
         for i, line in enumerate(lines):
@@ -1027,7 +1010,7 @@ class TerminalRenderer(RendererBase):
             lines = clean_message.splitlines() or [clean_message]
             first = lines[0] if lines else ""
             rest = lines[1:]
-            segments = [(f"⚠ ", "yellow"), (first, "bold yellow")]
+            segments = [("⚠ ", "yellow"), (first, "bold yellow")]
             text = Text.assemble(*segments)
             for line in rest:
                 text.append("\n")

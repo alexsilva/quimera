@@ -1,6 +1,5 @@
 """Componentes de `quimera.profiles.codex`."""
 import json
-import shlex
 from pathlib import Path
 
 from quimera.agent_events import SpyEvent
@@ -41,11 +40,6 @@ def _describe_command(command: str, phase: str, exit_code: int | None = None, it
     }
     if not command:
         return SpyEvent(kind="context", text=f"comando {phase}", transient=True, data=data_base)
-
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        parts = command.split()
 
     summary = _truncate_text(command)
     if phase == "concluído":

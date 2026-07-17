@@ -1,5 +1,14 @@
 """Componentes de `quimera.profiles.__init__`."""
-from quimera.profiles.base import ExecutionProfile, all_names, all_profiles, get, register, remove_connection
+# ruff: noqa: E402
+
+from quimera.profiles.base import (
+    ExecutionProfile,
+    all_names,
+    all_profiles,
+    get,
+    register,
+    remove_connection,
+)
 
 TEST_PROFILE_NAMES = ("fake-cli", "fake-cli-delegate", "fake-openai", "fake-openai-mcp-cli")
 
@@ -20,4 +29,13 @@ from .base import apply_connections  # noqa: F401
 
 apply_connections(exclude_names=set(TEST_PROFILE_NAMES))
 
-__all__ = ["ExecutionProfile", "register", "get", "all_names", "all_profiles", "enable_test_profiles", "TEST_PROFILE_NAMES"]
+__all__ = [
+    "ExecutionProfile",
+    "TEST_PROFILE_NAMES",
+    "all_names",
+    "all_profiles",
+    "enable_test_profiles",
+    "get",
+    "register",
+    "remove_connection",
+]

@@ -6,7 +6,10 @@ only transform strings and renderables. Safe to import from anywhere.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from rich.text import Text
 
 from quimera.runtime.streaming import apply_stream_diff, normalize_stream_diff
 

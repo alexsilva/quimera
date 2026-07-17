@@ -8,7 +8,7 @@ import sys
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
 
-from .approval_broker import ApprovalBroker, TrustedToolExecutionContext
+from .approval_broker import ApprovalBroker, TrustedToolExecutionContext  # noqa: F401
 
 
 def _emit_approval_message(renderer, message: str) -> None:

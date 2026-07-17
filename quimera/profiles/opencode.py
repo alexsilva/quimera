@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from quimera.agent_events import SpyEvent
-from quimera.profiles.base import ExecutionProfile, CliConnection, Connection, register
+from quimera.profiles.base import ExecutionProfile, register
 from quimera.profiles.spy_utils import describe_tool_input, format_agent_message_lines
 
 

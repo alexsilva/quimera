@@ -1,4 +1,5 @@
 """Renderables e helpers visuais da interface Textual."""
+# ruff: noqa: E402
 from __future__ import annotations
 
 import re

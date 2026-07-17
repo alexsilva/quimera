@@ -6,7 +6,6 @@ import threading
 
 import quimera.themes as themes
 from quimera.constants import CMD_EXIT
-from quimera.ui.textual.direct_input import DirectInputState
 from quimera.ui.textual.events import TextualUiEvent
 
 

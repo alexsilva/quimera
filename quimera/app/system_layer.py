@@ -31,8 +31,6 @@ from ..connection_configurator import ConnectionConfigurator
 from ..profiles import remove_connection
 from .. import profiles as _profiles
 from ..profiles.base import (
-    CliConnection,
-    OpenAIConnection,
     format_connection_label,
     get_connections,
     is_valid_agent_name,
@@ -433,7 +431,6 @@ class AppSystemLayer:
                     registry=profile_registry,
                 )
             set_connection(target, connection, persist=True, registry=profile_registry)
-            active_agents = self._get_active_agents()
             selected_agents = list(self.get_selected_agents() or [])
             if target not in self.agent_pool:
                 self.agent_pool.add(target)

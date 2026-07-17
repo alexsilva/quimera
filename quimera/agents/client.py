@@ -537,7 +537,7 @@ class AgentClient:
 
             else:
                 assert log_queue is not None
-                with nullcontext(None) as status:
+                with nullcontext(None):
                     _first_stdout_seen = [False]
 
                     def _on_item(stream_type, line):

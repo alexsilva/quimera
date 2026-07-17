@@ -303,7 +303,6 @@ class MCPServer:
         return None
 
     def _handle_initialize(self, msg_id: Any, params: dict, state: dict | None) -> dict:
-        requested = str(params.get("protocolVersion") or self.PROTOCOL_VERSION)
         selected = self.PROTOCOL_VERSION
         if state is not None:
             state["initialize_seen"] = True

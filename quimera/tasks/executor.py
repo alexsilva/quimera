@@ -4,7 +4,6 @@ Task executor for Stage 5 - autonomous task consumption and execution.
 import logging
 import queue
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Optional
 

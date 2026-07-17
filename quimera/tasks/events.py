@@ -2,8 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
-from ..constants import TaskStatus, TaskType
+from ..constants import TaskType
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -5,7 +5,6 @@ import json
 import locale
 import logging
 import os
-import shlex
 import sys
 from pathlib import Path
 
@@ -16,12 +15,10 @@ from .profiles.base import (
     CliConnection,
     OpenAIConnection,
     _connection_from_dict,
-    connection_to_dict,
     format_connection_label,
     is_valid_agent_name,
     load_connections,
     register_connection_profile,
-    save_connections,
     set_connection,
 )
 from . import themes as _themes

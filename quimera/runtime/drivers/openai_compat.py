@@ -20,7 +20,7 @@ from ...prompt_templates import PromptText
 from ..streaming import apply_stream_diff, normalize_stream_diff
 from ..tool_hops import (
     DEFAULT_MAX_TOOL_HOPS,
-    MAX_TOOL_HOPS_BY_RELIABILITY,
+    MAX_TOOL_HOPS_BY_RELIABILITY,  # noqa: F401
     get_invalid_tool_loop_threshold,
     get_max_tool_hops,
 )

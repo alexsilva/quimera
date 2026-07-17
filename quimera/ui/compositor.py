@@ -18,7 +18,6 @@ import signal as _signal
 import sys
 import threading
 from collections import defaultdict, deque
-from typing import Any
 
 from .events import (
     LiveAbortEvent,

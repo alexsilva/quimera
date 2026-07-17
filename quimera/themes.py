@@ -3,8 +3,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 try:
-    from rich.console import Group, RenderableType
-    from rich.markdown import Markdown
+    from rich.console import Group
     from rich.padding import Padding
     from rich.panel import Panel
     from rich.rule import Rule

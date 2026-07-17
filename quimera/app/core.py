@@ -1,16 +1,16 @@
 """Composição fina de `QuimeraApp`."""
 
-import sys
+import sys  # noqa: F401
 from pathlib import Path
 
 from .bootstrap import AppAssembler, AppOptions
-from .bootstrap.wiring import normalize_agent_name
+from .bootstrap.wiring import normalize_agent_name  # noqa: F401
 from .core_facade import CoreFacadeMixin
 from .runtime_state import AppRuntimeState
 from .turn import TurnManager
 from .worker import ChatWorker
 from .chat_processor import run_chat_loop
-from .. import profiles
+from .. import profiles  # noqa: F401
 from ..constants import Visibility
 from ..profiles.base import ProfileRegistry
 from ..workspace import Workspace

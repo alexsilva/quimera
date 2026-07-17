@@ -202,7 +202,10 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path != "/mcp":
-            self.send_response(404); self._send_cors(); self.end_headers(); return
+            self.send_response(404)
+            self._send_cors()
+            self.end_headers()
+            return
         if not self._is_authorized():
             self._send_error_response(401, -32001, "Unauthorized")
             return

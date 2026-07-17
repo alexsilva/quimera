@@ -1,4 +1,5 @@
 """Aplicação Textual principal do Quimera."""
+# ruff: noqa: E402
 from __future__ import annotations
 
 import os

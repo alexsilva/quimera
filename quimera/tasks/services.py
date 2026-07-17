@@ -23,10 +23,13 @@ from .executor import create_executor
 from ..app.dispatch import AppDispatchServices
 from ..domain.session_state import SessionRuntimeState
 from .classifiers import classify_task_execution_result, classify_task_review_result
-from .executor_pool import TaskExecutorPool, _BACKGROUND_AGENT_TIMEOUT_SECONDS, delegate_for_parallel_with_client
+from .executor_pool import (  # noqa: F401
+    TaskExecutorPool,
+    _BACKGROUND_AGENT_TIMEOUT_SECONDS,
+    delegate_for_parallel_with_client,
+)
 from .protocol import TaskProtocolService
 from .repository import TaskRepository
-from .utils import build_completed_task_results
 
 
 class AppTaskServices:

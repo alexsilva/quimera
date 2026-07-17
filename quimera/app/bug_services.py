@@ -1,7 +1,6 @@
 """Serviços de gerenciamento e análise de bugs para QuimeraApp."""
 from __future__ import annotations
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..bugs import (

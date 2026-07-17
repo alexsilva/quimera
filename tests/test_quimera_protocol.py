@@ -5,7 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
-from collections import defaultdict, deque
+from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,7 +29,6 @@ from tests.legacy_app_adapters import (
 )
 from quimera.app.inputs import AppInputServices, read_from_editor, read_user_input_with_timeout
 from quimera.app.session import AppSessionServices
-from quimera.app.system_layer import AppSystemLayer
 from quimera.tasks.services import AppTaskServices, delegate_for_parallel
 from quimera.tasks.classifiers import classify_task_execution_result, classify_task_review_result
 from quimera.app.protocol import AppProtocol
@@ -3866,7 +3865,6 @@ class ProfileTests(unittest.TestCase):
 
     def test_delegation_format_omits_priority_when_normal(self):
         """Verifica que delegation format omits priority when normal."""
-        builder = PromptBuilder(DummyContextManager(), history_window=3)
         delegation = {
             "task": "Revisar código",
             "priority": "normal",
@@ -4996,7 +4994,6 @@ class ProfileTests(unittest.TestCase):
 
     def test_resolve_agent_response_leaves_textual_tool_like_content_untouched(self):
         """Verifica que resolve agent response leaves textual tool like content untouched."""
-        from quimera.app.dispatch import AppDispatchServices
 
         app = Mock()
         app.tool_executor.execute = Mock(side_effect=AssertionError("text must not execute tools"))
@@ -5152,7 +5149,6 @@ class MetricsFeedbackTests(unittest.TestCase):
 
     def test_delegation_format_includes_chain(self):
         """Delegation format deve incluir cadeia de delegação quando presente."""
-        builder = PromptBuilder(DummyContextManager(), history_window=3)
         delegation = {
             "task": "Revisar parser",
             "context": "Parser quebrado",
@@ -5166,7 +5162,6 @@ class MetricsFeedbackTests(unittest.TestCase):
 
     def test_delegation_format_omits_chain_when_empty(self):
         """Delegation format não deve incluir CHAIN quando vazio."""
-        builder = PromptBuilder(DummyContextManager(), history_window=3)
         delegation = {
             "task": "Tarefa simples",
             "chain": [],
@@ -5663,7 +5658,7 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_get_decisions_logger_caches_instance(self):
         """Verifica que get decisions logger caches instance."""
-        with patch("quimera.workspace.DecisionsLogger") as MockDL:
+        with patch("quimera.workspace.DecisionsLogger"):
             import tempfile
             tmp = tempfile.mktemp(suffix=".json")
             proto = AppProtocol(lock=threading.Lock(), shared_state={}, decisions_log_path=tmp)
@@ -5675,7 +5670,7 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_get_decisions_logger_creates_instance_with_path(self):
         """Verifica que get decisions logger creates instance with path."""
-        with patch("quimera.app.protocol.DecisionsLogger", create=True) as MockDL:
+        with patch("quimera.app.protocol.DecisionsLogger", create=True):
             pass
         # test via apply_state_update which calls the logger (lines 37-39, 80-81)
         import tempfile
@@ -6266,7 +6261,6 @@ class TestToolRuntimeConfigGuardrails(unittest.TestCase):
 
     def test_config_rejects_non_path_workspace_root(self):
         """ToolRuntimeConfig com workspace_root não-Path levanta TypeError."""
-        from pathlib import Path
         with self.assertRaises(TypeError) as ctx:
             ToolRuntimeConfig(workspace_root="/tmp")
         self.assertIn("workspace_root", str(ctx.exception))

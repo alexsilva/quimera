@@ -4,7 +4,7 @@ import os
 import sqlite3
 from dataclasses import asdict
 
-from ..constants import TaskStatus, TaskType, can_transition
+from ..constants import TaskStatus, TaskType
 from .repository import TaskRepository
 
 _UNSET = object()
