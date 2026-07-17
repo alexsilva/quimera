@@ -15,6 +15,7 @@ class ToolRuntimeConfig:
     workspace_root: Path
     db_path: Path | None = None
     memory_file: Path | None = None
+    artifacts_root: Path | None = None
     command_timeout_seconds: int = 20
     interactive_command_default_yield_ms: int = 1000
     max_output_chars: int = 1_000_000
@@ -115,7 +116,16 @@ class ToolRuntimeConfig:
             self.db_path = Path(self.db_path).resolve()
         if self.memory_file is not None:
             self.memory_file = Path(self.memory_file).resolve()
+        if self.artifacts_root is not None:
+            self.artifacts_root = Path(self.artifacts_root).resolve()
+        else:
+            self.artifacts_root = self.workspace_root / "artifacts"
         if not self.allowed_read_roots:
             self.allowed_read_roots = [self.workspace_root]
         else:
             self.allowed_read_roots = [p.resolve() for p in self.allowed_read_roots]
+        already_covered = any(
+            self.artifacts_root.is_relative_to(root) for root in self.allowed_read_roots
+        )
+        if not already_covered:
+            self.allowed_read_roots.append(self.artifacts_root)

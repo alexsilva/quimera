@@ -16,7 +16,7 @@ def test_config_post_init_custom_read_roots():
     root = Path("/tmp").resolve()
     custom = Path("/home/alex").resolve()
     config = ToolRuntimeConfig(workspace_root=root, allowed_read_roots=[custom])
-    assert config.allowed_read_roots == [custom]
+    assert config.allowed_read_roots == [custom, config.artifacts_root]
 
 
 def test_config_resolves_optional_memory_file_and_db_path():

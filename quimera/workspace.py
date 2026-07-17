@@ -255,6 +255,11 @@ class Workspace:
         return self.history_dir / "prompt_history.jsonl"
 
     @property
+    def artifacts_dir(self) -> Path:
+        """Diretório persistente para artefatos gerados por ferramentas (ex: screenshots de browser)."""
+        return self._root / "data" / "artifacts"
+
+    @property
     def decisions_log(self) -> Path:
         """Log JSONL de decisões registradas durante as sessões."""
         return self._root / "data" / "decisions.jsonl"
@@ -287,6 +292,7 @@ class Workspace:
             self._root / "data" / "logs" / "render",
             self._root / "data" / "logs" / "metrics",
             self._root / "data" / "logs" / "sessions",
+            self._root / "data" / "artifacts",
             self._root / "state",
             self.base_dir / "index",
         ]

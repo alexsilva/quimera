@@ -118,13 +118,14 @@ class BrowserTool(
         raw_path = str(arguments.get("path") or "").strip()
         if not raw_path:
             stamp = time.strftime("%Y%m%d-%H%M%S")
-            raw_path = f"artifacts/browser/{session_id}-{stamp}.png"
-        output_path = (self.config.workspace_root / raw_path.lstrip("/")).resolve()
-        if not is_path_inside(output_path, self.config.workspace_root):
+            raw_path = f"browser/{session_id}/{stamp}.png"
+        artifacts_root = self.config.artifacts_root
+        output_path = (artifacts_root / raw_path.lstrip("/")).resolve()
+        if not is_path_inside(output_path, artifacts_root):
             return ToolResult(
                 ok=False,
                 tool_name=call.name,
-                error=f"Screenshot fora da workspace: {raw_path}",
+                error=f"Screenshot fora do diretório de artefatos: {raw_path}",
             )
         if output_path.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
             output_path = output_path.with_suffix(".png")
@@ -134,9 +135,8 @@ class BrowserTool(
             "screenshot",
         )
         if result.ok:
-            relative_path = str(output_path.relative_to(self.config.workspace_root))
-            result.data["path"] = relative_path
-            result.content = f"Screenshot salvo em {relative_path} ({result.data.get('bytes', 0)} bytes)."
+            result.data["path"] = str(output_path)
+            result.content = f"Screenshot salvo em {output_path} ({result.data.get('bytes', 0)} bytes)."
         return result
 
     def browser_console(self, call: ToolCall) -> ToolResult:
@@ -286,9 +286,10 @@ class BrowserToolValidator(ValidatableTool):
         self._validate_optional_selector(call)
         raw_path = str(call.arguments.get("path", "")).strip()
         if raw_path:
-            path = self._resolve_workspace_path(raw_path)
-            if not is_path_inside(path, self.config.workspace_root):
-                raise ToolPolicyError(f"Screenshot fora da workspace: {raw_path}")
+            artifacts_root = self.config.artifacts_root
+            path = (artifacts_root / raw_path.lstrip("/")).resolve()
+            if not is_path_inside(path, artifacts_root):
+                raise ToolPolicyError(f"Screenshot fora do diretório de artefatos: {raw_path}")
 
     def _validate_browser_console(self, call: ToolCall) -> None:
         self._validate_session(call)

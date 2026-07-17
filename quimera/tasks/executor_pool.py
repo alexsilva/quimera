@@ -262,6 +262,7 @@ class TaskExecutorPool:
             workspace_root=workspace.cwd,
             db_path=workspace.tasks_db,
             memory_file=getattr(workspace, "memory_file", None),
+            artifacts_root=getattr(workspace, "artifacts_dir", None),
             require_approval_for_mutations=require_approval_for_mutations,
             allow_ask_user=allow_ask_user,
             workspace_policy=self._get_workspace_policy() if self._get_workspace_policy else None,

@@ -41,7 +41,7 @@ def test_browser_validator_requires_click_target(tmp_path: Path):
 def test_browser_screenshot_path_is_confined_to_workspace(tmp_path: Path):
     validator = BrowserToolValidator(_config(tmp_path))
 
-    with pytest.raises(ToolPolicyError, match="Path fora da workspace"):
+    with pytest.raises(ToolPolicyError, match="Screenshot fora do diretório de artefatos"):
         validator.validate(
             ToolCall(
                 "browser_screenshot",
@@ -137,7 +137,7 @@ def test_browser_tool_end_to_end_with_dom_console_and_screenshot(tmp_path: Path)
         screenshot = tool.browser_screenshot(
             ToolCall(
                 "browser_screenshot",
-                {"session_id": session_id, "path": "artifacts/browser/test.png"},
+                {"session_id": session_id, "path": "browser/test.png"},
             )
         )
         assert screenshot.ok, screenshot.error

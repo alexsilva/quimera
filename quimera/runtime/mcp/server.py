@@ -1106,6 +1106,7 @@ def _build_standalone_executor():
         workspace_root=workspace.cwd,
         db_path=workspace.tasks_db,
         memory_file=workspace.memory_file,
+        artifacts_root=workspace.artifacts_dir,
     )
     approval = ApprovalManager(config)
     return ToolExecutor(config, approval)
