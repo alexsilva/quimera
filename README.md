@@ -179,9 +179,9 @@ A ferramenta `delegate` permite que qualquer agente MCP-capaz delegue trabalho a
 
 | Perfil | Tools expostas | Uso recomendado |
 |---|---|---|
-| `read-local` | `list_files`, `read_file`, `grep_search`, `list_tasks`, `list_jobs`, `get_job`, `todo_list` | Exposição externa mais restrita, sem ferramentas com acesso à rede. |
+| `read-local` | `list_files`, `read_file`, `grep_search`, `inspect_symbols`, `list_tasks`, `list_jobs`, `get_job`, `memory_retrieve`, `todo_list` + git somente leitura (`git_status`, `git_log`, `git_diff`, `git_branch`, `git_fetch`) | Exposição externa mais restrita, sem ferramentas com acesso à rede. |
 | `read` | Tudo de `read-local` + `web_search`, `web_fetch` | Leitura com pesquisa/fetch web quando a rede é necessária. |
-| `agent` | Tudo de `read` + `delegate` | Delegação entre agentes sem liberar `run_shell`, `exec_command`, `write_file`, `remove_file` ou `apply_patch`. |
+| `agent` | Tudo de `read` + `delegate`, `list_agents`, `replace_text`, `memory_save` + git de mutação (`git_add`, `git_commit`, `git_checkout`, `git_push`, com aprovação) | Delegação entre agentes sem liberar `run_shell`, `exec_command`, `write_file`, `remove_file` ou `apply_patch`. |
 | `all` | Sem filtro de allowlist | Apenas desenvolvimento local ou rede privada muito confiável. |
 
 ## Roteamento de tasks
@@ -223,12 +223,16 @@ Observações importantes:
 
 Ferramentas suportadas pelo runtime (expostas via MCP e, quando disponível, pelo tool calling nativo do driver OpenAI-compatible):
 
-- leitura/inspeção: `list_files`, `read_file`, `grep_search`
-- edição: `apply_patch`, `write_file`, `remove_file`
-- shell: `run_shell`, `exec_command`, `write_stdin`, `close_command_session`
-- tasks/jobs: `list_tasks`, `list_jobs`, `get_job`
+- leitura/inspeção: `list_files`, `read_file`, `grep_search`, `inspect_symbols`
+- edição: `apply_patch`, `write_file`, `replace_text`, `remove_file`
+- shell: `run_shell`, `exec_command`, `write_stdin`, `poll_command_session`, `close_command_session`
+- git: `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_branch`, `git_checkout`, `git_fetch`, `git_push`
+- navegador: família `browser_*` (start, navigate, click, type, snapshot, screenshot, console, network, evaluate, ...) — automação Chrome/Chromium via Playwright (extra `browser`), com screenshots salvos por sessão no diretório de artefatos do workspace
+- tasks/jobs/agentes: `list_tasks`, `list_jobs`, `get_job`, `list_agents`
+- memória/estado: `memory_save`, `memory_retrieve`, `update_shared_state`, `todo_write`, `todo_list`
+- interação: `ask_user`
 - web: `web_search`, `web_fetch`
-- **cross-MCP**: `delegate` — delega tarefas a outro agente no pool (disponível apenas quando MCP está ativo)
+- **cross-MCP**: `delegate` — delega tarefas a outro agente no pool (disponível apenas quando MCP está ativo); cada delegação executa em `AgentClient` isolado, com cancelamento propagado do fluxo principal
 
 ## Persistência e diretórios
 

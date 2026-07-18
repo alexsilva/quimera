@@ -106,6 +106,8 @@ quimera/
 │       ├── delegate.py               # Tool de delegação cross-MCP entre agentes
 │       ├── base.py                   # Classe base para tools
 │       ├── git.py                    # Tool de operações git
+│       ├── browser/                  # Tools de automação de navegador (browser_*)
+│       ├── mcp_clients.py            # Clientes MCP auxiliares das tools
 │       ├── memory.py                 # Tool de acesso à memória do workspace
 │       ├── state.py                  # Tool de acesso ao shared state
 │       ├── todo.py                   # Tool de gerenciamento de TODOs
@@ -243,7 +245,7 @@ Executor de tools e agentes em ambiente potencialmente sandboxed.
 
 ### 3.3 Camada de Agentes (`agents/`)
 
-- **`client.py`**: Interface unificada para todos os backends (CLI local, API remota, profile). Suporta streaming.
+- **`client.py`**: Interface unificada para todos os backends (CLI local, API remota, profile). Suporta streaming. `run()` não é reentrante: execução concorrente sobre o mesmo client é detectada e logada como erro; delegações usam `AgentClient` isolado via dispatch de background. `add_cancel_listener()` permite propagar o cancelamento do usuário a clients de background.
 - **`warm_pool.py`**: Pool de processos pré-iniciados para reduzir latência de cold start.
 - **`process_runner.py`**: Gerencia subprocessos de agentes (stdin/stdout/stderr, timeout, sinalização).
 
@@ -325,7 +327,9 @@ A ferramenta `delegate` é o mecanismo central de interoperabilidade entre agent
 - **Disponibilidade**: verifica se `_delegate_fn` foi injetado pelo `ToolExecutor.set_delegate_fn()`.
 - **Parâmetros**: `target_agent` (obrigatório), `request` (obrigatório), `context`, `fallback_agents`, `steps`.
 - **Validação**: agente alvo deve estar no pool ativo. `steps` suporta cadeias multi-passo.
-- **Execução**: dispatch via `dispatch_services.delegate()` com `protocol_mode="delegation"`, `silent=False`.
+- **Execução isolada**: toda delegação originada de tool call (socket interno ou HTTP) roda em serviços de dispatch de background com um `AgentClient` isolado criado por chamada (`wiring.py:_make_background_delegate_fn`). O `run()` do `AgentClient` não é reentrante — o agente delegado nunca executa sobre o client cujo `run()` do agente origem ainda está ativo.
+- **Herança de runtime**: o client de background herda `pause_idle_if` e `process_supervisor` do client do chat — um delegado em silêncio aguardando tool longa não morre por idle timeout, e seus subprocessos entram no `terminate_all()` de shutdown/cancelamento.
+- **Cancelamento**: ESC/Ctrl+C no fluxo principal propaga aos clients de background vivos via `AgentClient.add_cancel_listener()` → `TaskExecutorPool.cancel_background_work()`.
 - **Truncamento**: task limitada a 1200 caracteres, contexto a 4000.
 
 #### 3.9.6 MCP-First Mode
@@ -487,6 +491,7 @@ Quando o MCP está ativo (padrão), os agentes usam a tool `delegate` exposta vi
 - **Validação**: o alvo é verificado contra `_resolve_active_agents()` no pool.
 - **Failover**: `fallback_agents` tentado em sequência se o primário falhar.
 - **Cadeias**: `steps` executa passos adicionais, cada um com seu próprio fallback.
+- **Isolamento**: a execução usa dispatch de background com `AgentClient` isolado por chamada (cancel_event próprio), evitando reentrância do client principal; o cancelamento do usuário propaga aos clients de background (ver §3.9.5).
 
 
 ### 6.5 Arquitetura Orientada a Goals

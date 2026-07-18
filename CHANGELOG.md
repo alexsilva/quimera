@@ -1,6 +1,10 @@
 # Change Log
 
 ## Unreleased
+- fix(runtime): estabiliza delegação entre agentes CLI. Toda delegação originada de tool call (socket interno ou HTTP) passa a usar `AgentClient` isolado criado por chamada, eliminando reentrância de `AgentClient.run()` sobre o client principal do chat (que corrompia `cancel_event`, `_current_proc` e parava o EscMonitor do agente origem). O client de background herda `pause_idle_if` (delegado aguardando tool longa não morre por idle timeout) e `process_supervisor` (subprocessos delegados entram no `terminate_all()`). ESC/Ctrl+C propaga aos clients de background via `add_cancel_listener` → `TaskExecutorPool.cancel_background_work()`. Guard de reentrância com log de erro em `AgentClient.run()`. Testes em `test_agents.py`, `test_bootstrap_wiring.py`, `test_delegate_http_async.py` e `test_task_execution_service.py`.
+- feat(runtime): ferramentas de automação de navegador (`browser_*`, Chrome/Chromium via Playwright, extra `browser`); screenshots salvos por sessão no diretório de artefatos do workspace, com leitura permitida [47465fe, 008ca71].
+- feat(runtime): política de workspace de desenvolvedor (`workspace_policy`) [452a8ef].
+- docs: README, ARCHITECTURE e guia MCP atualizados para o conjunto atual de 49 tools (git, browser, memória, símbolos, interação) e para o novo fluxo de delegação isolada.
 - API Public: Stabilize QuimeraApp public surface. Expose only essential interfaces via quimera.app.__init__: QuimeraApp, logger, and PromptAwareStderrHandler. No breaking changes expected relative to previous public interface (item 5).
 - Compatibility: API surface reviewed; public surface remains stable with no breaking changes anticipated.
 - Document any future breaking changes here to aid consumers.

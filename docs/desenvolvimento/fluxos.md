@@ -79,8 +79,24 @@ agente chama tools/call
 ```text
 agente A chama delegate
   -> ferramenta resolve agente B no pool
+  -> dispatch de background cria AgentClient isolado por chamada
+     (cancel_event próprio; herda pause_idle_if e process_supervisor
+      do client do chat)
   -> prompt de delegação é montado
-  -> AgentGateway executa B
+  -> B executa no client isolado, sem tocar no run() ativo de A
   -> resposta retorna para A como resultado de tool
   -> eventos e evidências podem ser registrados
 ```
+
+Garantias do fluxo:
+
+- `AgentClient.run()` não é reentrante; delegações nunca reutilizam o client
+  principal do chat (execução concorrente sobre o mesmo client é logada como
+  erro).
+- ESC/Ctrl+C do usuário cancela o agente origem e propaga aos clients de
+  background vivos (`AgentClient.add_cancel_listener` →
+  `TaskExecutorPool.cancel_background_work`).
+- O client isolado herda `pause_idle_if`, então um delegado aguardando uma
+  tool longa (ex.: `exec_command` rodando testes) não morre por idle timeout;
+  e herda `process_supervisor`, então seus subprocessos entram no
+  `terminate_all()` de shutdown/cancelamento.
