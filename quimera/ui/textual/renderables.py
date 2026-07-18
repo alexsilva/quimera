@@ -20,6 +20,7 @@ from quimera.ui.textual.constants import (
     APPROVAL_OPTIONS as _APPROVAL_OPTIONS,
     APPROVAL_TITLE as _APPROVAL_TITLE,
 )
+from quimera.ui.branding import banner_gradient_text
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.clipboard_support import ClipboardManager
 
@@ -427,7 +428,7 @@ def _render_event(event: TextualUiEvent):
         style = "yellow" if event.kind == "warning" else "red"
         return Text(str(event.payload), style=style)
     if event.kind == "banner":
-        return Group(Text(str(event.payload), style="bold cyan"), Rule(style="dim cyan"))
+        return Group(banner_gradient_text(str(event.payload)), Rule(style="dim cyan"))
     if event.kind == "approval":
         return _build_approval_line_renderable(event.payload)
     if event.kind == "delegation":

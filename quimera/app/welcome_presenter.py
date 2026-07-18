@@ -6,10 +6,11 @@ class WelcomePresenter:
     """Apresentação de boas-vindas: logo, versão e mensagem inicial."""
 
     LOGO = (
-        " / __ \\__  __(_)___ ___  ___  _________ _\n"
-        "/ / / / / / / / __ `__ \\/ _ \\/ ___/ __ `/\n"
-        "/ /_/ / /_/ / / / / / / /  __/ /  / /_/ / \n"
-        "\\___\\_\\__,_/_/_/ /_/ /_/\\___/_/   \\__,_/  "
+        " █████╗ ██╗██╗ ██╗ ███╗███╗ █████╗ █████╗   ████╗\n"
+        "██╔═██╗ ██║██║ ██║ ███▄▄██║ ██╔══╝ ██╔═██╗ ██╔═██╗\n"
+        "██║▄██║ ██║██║ ██║ ██╔█╔██║ ████╗  █████╔╝ ██████║\n"
+        "╚████╔╝ ╚███╔╝ ██║ ██║╚╝██║ █████╗ ██║╚██╗ ██║ ██║\n"
+        " ╚═▀▀═╝  ╚══╝  ╚═╝ ╚═╝  ╚═╝ ╚════╝ ╚═╝ ╚═╝ ╚═╝ ╚═╝"
     )
 
     @staticmethod
@@ -33,5 +34,6 @@ class WelcomePresenter:
         """Monta texto de boas-vindas com logo e versão."""
         version = WelcomePresenter.resolve_app_version()
         logo_lines = WelcomePresenter.build_welcome_logo().split("\n")
-        logo_lines[-1] = logo_lines[-1].rstrip() + f"  v{version}"
+        width = max(len(line) for line in logo_lines)
+        logo_lines.append(f"v{version}".rjust(width))
         return f"{chr(10).join(logo_lines)}\n"

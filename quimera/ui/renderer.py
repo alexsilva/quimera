@@ -12,6 +12,7 @@ from typing import Any
 _log = logging.getLogger(__name__)
 
 from .base import RendererBase
+from .branding import banner_gradient_text
 from .agent_window_controller import AgentWindowController
 from .compositor import TerminalCompositor
 from .audit import RenderAuditLogger
@@ -982,9 +983,7 @@ class TerminalRenderer(RendererBase):
         """Exibe mensagem sem ícone (ex: logo de boas-vindas)."""
         clean_message = strip_ansi(str(message)).strip("\r\n")
         if self._console:
-            line = Text(clean_message, style="bold cyan")
-            line.no_wrap = True
-            line.overflow = "ignore"
+            line = banner_gradient_text(clean_message)
             self._print(line, kind="banner")
             self._print(Rule(style="dim cyan"), kind="banner")
         else:
