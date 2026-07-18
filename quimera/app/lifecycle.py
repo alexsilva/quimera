@@ -36,12 +36,18 @@ class AppLifecycle:
             pass
         process_supervisor = getattr(app, "process_supervisor", None)
         if process_supervisor is not None:
-            process_supervisor.shutdown()
+            # terminate_all() (e não shutdown()) para não bloquear novos
+            # registros: o resumo de sessão abaixo ainda precisa spawnar um
+            # agente CLI; shutdown() aqui matava esse processo no registro
+            # e o run() estourava Broken pipe ao escrever o prompt no stdin.
+            process_supervisor.terminate_all()
         try:
             session_services = getattr(app, "session_services", None)
             if session_services is not None:
                 session_services.shutdown(interrupted=interrupted)
         finally:
+            if process_supervisor is not None:
+                process_supervisor.shutdown()
             current_job_id = getattr(app, "current_job_id", None)
             if current_job_id is not None:
                 TodoRegistry.cleanup(current_job_id)
