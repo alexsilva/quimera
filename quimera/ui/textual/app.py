@@ -27,7 +27,10 @@ def _is_android() -> bool:
 from quimera.app.config import handler as _screen_handler
 from quimera.app.prompt_formatter import PromptFormatter
 from quimera.ui.textual.bridge import TextualUiBridge
-from quimera.ui.textual.constants import SUMMARY_SPINNER_FRAMES as _SUMMARY_SPINNER_FRAMES
+from quimera.ui.textual.constants import (
+    SUMMARY_NOTIFICATION_MESSAGE as _SUMMARY_NOTIFICATION_MESSAGE,
+    SUMMARY_SPINNER_FRAMES as _SUMMARY_SPINNER_FRAMES,
+)
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.feed_model import TextualFeedModel
 from rich.console import Group as _RichGroup
@@ -355,11 +358,17 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._refresh_now(layout=True)
 
         def _start_spinner(self) -> None:
-            """Inicia animação de loading ao lado do relógio do header."""
+            """Inicia feedback visual de loading para sumarização."""
             if self._spinner_timer is not None:
                 return
             self._summarizing = True
             self._spinner_index = 0
+            self.notify(
+                f"{_SUMMARY_SPINNER_FRAMES[0]} {_SUMMARY_NOTIFICATION_MESSAGE}",
+                severity="information",
+                timeout=4,
+                markup=False,
+            )
             self._update_spinner()
             self._spinner_timer = self.set_interval(0.1, self._update_spinner)
 
@@ -605,6 +614,17 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 return
             if event.kind == "open_config":
                 self.action_open_config()
+                return
+            if event.kind == "notification":
+                payload = event.payload or {}
+                message = str(payload.get("message") or "").strip()
+                if message:
+                    self.notify(
+                        message,
+                        severity=str(payload.get("severity") or "information"),
+                        timeout=payload.get("timeout"),
+                        markup=False,
+                    )
                 return
             if event.kind == "summarizing":
                 if event.payload:

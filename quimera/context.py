@@ -1,4 +1,5 @@
 """Componentes de `quimera.context`."""
+import logging
 import shlex
 import unicodedata
 from datetime import datetime
@@ -6,6 +7,8 @@ from datetime import datetime
 from .constants import CMD_CONTEXT
 from .editor import Editor
 from . import process_factory as subprocess
+
+logger = logging.getLogger(__name__)
 
 
 class ContextManager:
@@ -172,4 +175,6 @@ class ContextManager:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         new_section = f"{self.SUMMARY_MARKER}\n\n_Gerado em {timestamp}_\n{summary}"
         self.session_context_file.write_text(new_section.strip() + "\n", encoding="utf-8")
-        self.renderer.show_system(f"[memória] resumo salvo em {self.session_context_file.name}")
+        message = f"Resumo salvo em {self.session_context_file.name}"
+        logger.info("[memória] %s", message)
+        self.renderer.show_notification(message)

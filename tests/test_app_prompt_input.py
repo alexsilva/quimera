@@ -167,6 +167,19 @@ def test_textual_summary_spinner_uses_circular_frames():
     assert _SUMMARY_SPINNER_FRAMES == ("◐", "◓", "◑", "◒")
 
 
+def test_textual_summary_start_uses_loading_notification():
+    import inspect
+
+    from quimera.ui.textual.app import run_textual_quimera_app
+    from quimera.ui.textual.constants import SUMMARY_NOTIFICATION_MESSAGE
+
+    source = inspect.getsource(run_textual_quimera_app)
+
+    assert SUMMARY_NOTIFICATION_MESSAGE == "Gerando resumo"
+    assert "self.notify(" in source
+    assert "_SUMMARY_NOTIFICATION_MESSAGE" in source
+
+
 def test_textual_post_exit_failure_recorder_keeps_errors_and_warnings():
     from quimera.ui.textual.events import TextualUiEvent
     from quimera.ui.textual.app import _append_post_exit_failure_message

@@ -492,6 +492,23 @@ def test_textual_renderer_emits_agent_lifecycle_event():
     assert event.payload["style"] == "cyan"
 
 
+def test_textual_renderer_emits_notification_event_outside_feed():
+    bridge = TextualUiBridge()
+    bridge.emit = Mock()
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_notification("Resumo salvo", severity="information", timeout=4)
+
+    bridge.emit.assert_called_once()
+    event = bridge.emit.call_args.args[0]
+    assert event.kind == "notification"
+    assert event.payload == {
+        "message": "Resumo salvo",
+        "severity": "information",
+        "timeout": 4,
+    }
+
+
 def test_textual_renderer_abort_message_stream_skips_event_after_show_message():
     bridge = TextualUiBridge()
     bridge.emit = Mock()
@@ -2074,3 +2091,15 @@ def test_textual_app_imports_summary_spinner_used_by_spinner_update():
 
     assert "_SummarySpinner" in source
     assert "from quimera.ui.textual.widgets import" in source
+
+
+def test_textual_app_routes_notification_events_to_notify():
+    import inspect
+
+    from quimera.ui.textual.app import run_textual_quimera_app
+
+    source = inspect.getsource(run_textual_quimera_app)
+
+    assert 'event.kind == "notification"' in source
+    assert "self.notify(" in source
+    assert 'event.kind == "summarizing"' in source

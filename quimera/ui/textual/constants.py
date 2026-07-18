@@ -11,6 +11,7 @@ from quimera.ui.messages import (  # noqa: F401
     format_retry_message,
 )
 SUMMARY_SPINNER_FRAMES = ("◐", "◓", "◑", "◒")
+SUMMARY_NOTIFICATION_MESSAGE = "Gerando resumo"
 APPROVAL_TITLE = "Permissão solicitada"
 APPROVAL_OPTIONS = (
     "y/sim = aprovar",

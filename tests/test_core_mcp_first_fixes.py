@@ -33,9 +33,13 @@ class _Storage:
 class _Renderer(RendererBase):
     def __init__(self):
         self.system_messages = []
+        self.notifications = []
 
     def show_system(self, message):
         self.system_messages.append(message)
+
+    def show_notification(self, message, *, severity="information", timeout=None):
+        self.notifications.append((message, severity, timeout))
 
 
 class _ContextManager:
@@ -363,7 +367,7 @@ def test_session_summarize_does_not_save_summary_when_snapshot_changes():
     assert len(history) == original_length
     assert history[0] == {"role": "human", "content": "mutado durante resumo"}
     assert service._pending_summary_completion == (
-        "[memória] histórico mudou durante o resumo — truncamento adiado"
+        "Resumo adiado; histórico mudou durante a geração."
     )
 
 
@@ -595,11 +599,13 @@ def test_shutdown_flushes_pending_auto_summary_completion():
     service.maybe_auto_summarize()
     service.join_summarization(timeout=3)
     renderer.system_messages.clear()
+    renderer.notifications.clear()
 
     service.shutdown(interrupted=True)
 
-    assert renderer.system_messages == [
-        "[memória] histórico truncado para 2 mensagens recentes",
+    assert renderer.system_messages == []
+    assert renderer.notifications == [
+        ("Resumo concluído; histórico mantido em 2 mensagens recentes.", "information", None),
     ]
     assert service._pending_summary_completion is None
 
@@ -631,7 +637,7 @@ def test_auto_summarize_records_failure_when_worker_raises():
     service.join_summarization(timeout=3)
 
     assert service._pending_summary_completion == (
-        "[memória] resumo automático falhou — histórico mantido"
+        "Resumo automático falhou; histórico mantido."
     )
 
 

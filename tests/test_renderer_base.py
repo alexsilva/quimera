@@ -29,6 +29,7 @@ CONTRACT = [
     "show_prompt_preview",
     "notify_agent_retry",
     "notify_agent_failover",
+    "show_notification",
     "update_agent_transient",
     "clear_agent_transient",
     "commit_agent_stream",
@@ -109,6 +110,7 @@ class TestRendererBaseContract(unittest.TestCase):
         self.assertIsNone(renderer.set_summarizing(True))
         self.assertIsNone(renderer.set_prompt_integration(None, None))
         self.assertIsNone(renderer.log_debug_event("evt", key="v"))
+        self.assertIsNone(renderer.show_notification("mensagem"))
         self.assertIsNone(renderer.show_no_response("claude"))
         self.assertIsNone(renderer.show_delegation("a", "b"))
         self.assertIsNone(renderer.show_prompt_preview("a", "p"))

@@ -322,6 +322,15 @@ class TextualRenderer(RendererBase):
         """Exibe mensagem neutra."""
         self._bridge.emit(TextualUiEvent("muted", str(message)))
 
+    def show_notification(self, message: str, *, severity: str = "information", timeout: float | None = None) -> None:
+        """Exibe informação fora do feed, via toast da TUI."""
+        payload = {
+            "message": strip_ansi(str(message)).strip("\r\n"),
+            "severity": severity,
+            "timeout": timeout,
+        }
+        self._bridge.emit(TextualUiEvent("notification", payload))
+
     def signal_restore_history(self) -> None:
         """Sinaliza ao feed para exibir o histórico restaurado após as mensagens de startup."""
         self._bridge.emit(TextualUiEvent("restore_history"))

@@ -82,6 +82,9 @@ class RendererBase:
     def notify_agent_failover(self, agent, *, target, message=FAILOVER_DEFAULT_MESSAGE):
         self.show_system(format_failover_message(agent, target, message))
 
+    def show_notification(self, message, *, severity="information", timeout=None):
+        return None
+
     # ------------------------------------------------------------------
     # Fluxo de agentes — no-op quando o renderer não tem canal estruturado
     # ------------------------------------------------------------------

@@ -201,14 +201,15 @@ def test_edit_error(mock_run, mock_get, temp_files, renderer):
 
 
 def test_update_with_summary(temp_files, renderer):
-    """Verifica que update_with_summary escreve o resumo no arquivo de sessão."""
+    """Verifica que update_with_summary salva resumo sem publicar no chat."""
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     cm.update_with_summary("New Summary")
     content = session.read_text(encoding="utf-8")
     assert "## Resumo da última sessão" in content
     assert "New Summary" in content
-    renderer.show_system.assert_called()
+    renderer.show_system.assert_not_called()
+    renderer.show_notification.assert_called_once_with("Resumo salvo em session.md")
 
 
 def test_load_previous_session_exists(tmp_path, renderer):

@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 
-from ..constants import MSG_MEMORY_FAILED, MSG_MEMORY_SAVING
+from ..constants import MSG_MEMORY_FAILED
 from ..domain.session_state import SessionRuntimeState
 from .interfaces import IAgentPool, IRenderer, ISessionStorage
 
@@ -81,13 +81,13 @@ class AppSessionServices:
         self._pending_summary_completion: str | None = None
 
     def _flush_pending_summary_completion(self) -> None:
-        """Registra no log a mensagem pendente do último resumo automático."""
+        """Registra fora do chat a mensagem pendente do último resumo automático."""
         pending = self._pending_summary_completion
         if not pending:
             return
         logger.info(pending)
         if self._renderer is not None:
-            self._renderer.show_system(pending)
+            self._renderer.show_notification(pending)
         self._pending_summary_completion = None
 
     def _history_hard_limit(self) -> int:
@@ -180,7 +180,7 @@ class AppSessionServices:
                     )
                     if not matched:
                         self._pending_summary_completion = (
-                            "[memória] histórico mudou durante o resumo — truncamento adiado"
+                            "Resumo adiado; histórico mudou durante a geração."
                         )
                         return
                     self._storage.save_history(
@@ -190,15 +190,15 @@ class AppSessionServices:
                     current_len = len(final_history)
                     self._context_manager.update_with_summary(summary)
                     self._pending_summary_completion = (
-                        f"[memória] histórico truncado para {current_len} mensagens recentes"
+                        f"Resumo concluído; histórico mantido em {current_len} mensagens recentes."
                     )
                 else:
                     self._pending_summary_completion = (
-                        "[memória] resumo automático falhou — histórico mantido"
+                        "Resumo automático falhou; histórico mantido."
                     )
             except Exception:
                 self._pending_summary_completion = (
-                    "[memória] resumo automático falhou — histórico mantido"
+                    "Resumo automático falhou; histórico mantido."
                 )
             finally:
                 self._summarization_running.clear()
@@ -248,7 +248,7 @@ class AppSessionServices:
             return
 
         renderer = self._renderer
-        logger.info(MSG_MEMORY_SAVING)
+        logger.debug("[memória] gerando resumo da sessão")
         if renderer is not None:
             renderer.set_summarizing(True)
 
@@ -277,7 +277,9 @@ class AppSessionServices:
                     cancel_event.set()
             sys.stdout.write('\r\033[K')
             sys.stdout.flush()
-            logger.warning(MSG_MEMORY_FAILED)
+            logger.info(MSG_MEMORY_FAILED)
+            if renderer is not None:
+                renderer.show_notification("Resumo cancelado; histórico mantido.", severity="warning")
             try:
                 worker.join(timeout=1)
             except KeyboardInterrupt:
@@ -291,4 +293,4 @@ class AppSessionServices:
         if summary:
             self._context_manager.update_with_summary(summary)
         else:
-            logger.warning(MSG_MEMORY_FAILED)
+            logger.info(MSG_MEMORY_FAILED)

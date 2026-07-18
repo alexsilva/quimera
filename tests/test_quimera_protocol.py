@@ -86,6 +86,7 @@ class DummyRenderer(RendererBase):
     def __init__(self):
         self.warnings = []
         self.system_messages = []
+        self.notifications = []
         self.plain_messages = []
         self.delegations = []
         self.prompt_previews = []
@@ -97,6 +98,9 @@ class DummyRenderer(RendererBase):
 
     def show_system(self, message):
         self.system_messages.append(message)
+
+    def show_notification(self, message, *, severity="information", timeout=None):
+        self.notifications.append((message, severity, timeout))
 
     def show_plain(self, message):
         self.plain_messages.append(message)
@@ -2807,7 +2811,11 @@ class ProtocolTests(unittest.TestCase):
         )
 
         self.assertIsNone(summary)
-        self.assertIn("[memória] resumidores indisponíveis", renderer.system_messages)
+        self.assertEqual(renderer.system_messages, [])
+        self.assertIn(
+            ("Resumo não gerado: resumidores indisponíveis.", "warning", None),
+            renderer.notifications,
+        )
 
     def test_summarize_session_returns_none_when_backend_raises(self):
         """Verifica que summarize session returns none when backend raises."""
@@ -2834,7 +2842,11 @@ class ProtocolTests(unittest.TestCase):
         )
 
         self.assertIsNone(summary)
-        self.assertEqual(renderer.system_messages, ["[memória] resumidores indisponíveis"])
+        self.assertEqual(renderer.system_messages, [])
+        self.assertEqual(
+            renderer.notifications,
+            [("Resumo não gerado: resumidores indisponíveis.", "warning", None)],
+        )
 
     def test_chain_summarizer_stops_fallback_when_user_cancels(self):
         """Verifica que chain summarizer stops fallback when user cancels."""
@@ -2959,7 +2971,11 @@ class ProtocolTests(unittest.TestCase):
             agent_client.calls,
             [("chatgpt", unittest.mock.ANY, True, False), ("codex", unittest.mock.ANY, True, False)],
         )
-        self.assertEqual(renderer.system_messages, ["[memória] resumidores indisponíveis"])
+        self.assertEqual(renderer.system_messages, [])
+        self.assertEqual(
+            renderer.notifications,
+            [("Resumo não gerado: resumidores indisponíveis.", "warning", None)],
+        )
 
     def test_session_summary_prompt_explicitly_restricts_scope_to_provided_messages(self):
         """Verifica que session summary prompt explicitly restricts scope to provided messages."""

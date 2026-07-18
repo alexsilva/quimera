@@ -1,5 +1,8 @@
 """Componentes de `quimera.session_summary`."""
 import inspect
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _is_cancelled(agent_client) -> bool:
@@ -63,7 +66,9 @@ class SessionSummarizer:
             return None
 
         if self.summarizer_call is None:
-            self.renderer.show_system("[memória] nenhum agente disponível para resumo")
+            message = "Resumo não gerado: nenhum agente disponível."
+            logger.info("[memória] %s", message)
+            self.renderer.show_notification(message, severity="warning")
             return None
 
         prompt = self._build_prompt(history, existing_summary)
@@ -86,7 +91,9 @@ class SessionSummarizer:
         if not summary:
             outcome = getattr(self.summarizer_call, "last_outcome", None)
             if outcome != "cancelled":
-                self.renderer.show_system("[memória] resumidores indisponíveis")
+                message = "Resumo não gerado: resumidores indisponíveis."
+                logger.info("[memória] %s", message)
+                self.renderer.show_notification(message, severity="warning")
         return summary or None
 
     @staticmethod
