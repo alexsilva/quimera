@@ -8,7 +8,9 @@ aprovação automática de tools para tasks.
 
 from __future__ import annotations
 
+import logging
 import threading
+import weakref
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,6 +30,8 @@ from ..runtime.tools.todo import TodoRegistry
 
 
 _BACKGROUND_AGENT_TIMEOUT_SECONDS = 120
+
+_logger = logging.getLogger(__name__)
 
 
 class _BackgroundMetricsView:
@@ -187,6 +191,8 @@ class TaskExecutorPool:
         self._current_job_id_getter: Callable[[], Any] | None = None
         self._background_dispatch_services: Any = None
         self._background_tool_executor: ToolExecutor | None = None
+        # Clients isolados vivos (delegações/tasks); alvo de propagação de cancel.
+        self._background_agent_clients: "weakref.WeakSet[Any]" = weakref.WeakSet()
         self._approval_handler: Any = None
         self._dispatch_tool_executor: ToolExecutor | None = None
         self._dispatch_services: Any = None
@@ -546,12 +552,18 @@ class TaskExecutorPool:
             muted_reporter=_muted,
             session_id=session_state.get("session_id") if isinstance(session_state, dict) else None,
             workspace_tmp_root=workspace_tmp_root,
+            # Herdados do client do chat: sem pause_idle_if, um delegado em
+            # silêncio aguardando tool longa morre por idle timeout; sem
+            # supervisor, seus subprocessos escapam do terminate_all().
+            process_supervisor=getattr(chat_agent_client, "process_supervisor", None),
+            pause_idle_if=getattr(chat_agent_client, "_pause_idle_if", None),
         )
         background_agent_client.execution_mode = self.get_execution_mode()
         background_agent_client.tool_event_callback = self.get_record_tool_event()
         background_agent_client.tool_executor = self._get_background_tool_executor()
         if cancel_event is not None:
             background_agent_client._cancel_event = cancel_event
+        self._register_background_agent_client(background_agent_client)
 
         def _redisplay_prompt(**kw):
             callback = self.get_redisplay_prompt()
@@ -619,6 +631,21 @@ class TaskExecutorPool:
             return self._background_dispatch_services
         self._background_dispatch_services = self._create_background_dispatch_services()
         return self._background_dispatch_services
+
+    def _register_background_agent_client(self, client) -> None:
+        try:
+            self._background_agent_clients.add(client)
+        except TypeError:
+            # Stubs sem suporte a weakref não participam da propagação de cancel.
+            _logger.debug("background client sem suporte a weakref; cancel não propagará")
+
+    def cancel_background_work(self) -> None:
+        """Propaga cancelamento do usuário aos AgentClients de background vivos."""
+        for client in list(self._background_agent_clients):
+            try:
+                client.cancel_active_work()
+            except Exception:
+                _logger.debug("falha ao cancelar background client", exc_info=True)
 
     # ── Internal builders ──────────────────────────────────────────────
 

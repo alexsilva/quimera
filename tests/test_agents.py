@@ -434,6 +434,108 @@ def test_agent_client_run_ignores_codex_orphan_function_call_noise(renderer):
         assert "Orphan function call output for call id" not in joined
 
 
+def test_agent_client_run_reentrant_logs_error(renderer):
+    """run() reentrante deve deixar rastro alto em log — nunca falhar em silêncio.
+
+    A entrada reentrante corrompe cancel_event/_current_proc do run ativo e
+    para o EscMonitor ao terminar; delegações concorrentes devem usar um
+    AgentClient isolado (background dispatch).
+    """
+    client = AgentClient(renderer)
+    client._agent_running = True
+    client._running_agent = "agente-origem"
+    with patch("subprocess.Popen") as mock_popen, patch("quimera.agents.client._logger") as mock_logger:
+        mock_proc = MagicMock()
+        mock_proc.stdout = ["ok\n"]
+        mock_proc.stderr = []
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["echo", "hi"], silent=True, agent="agente-delegado")
+
+    assert result == "ok"
+    mock_logger.error.assert_called_once()
+    log_args = mock_logger.error.call_args[0]
+    assert "reentrante" in log_args[0]
+    assert "agente-delegado" in log_args[1:]
+    assert "agente-origem" in log_args[1:]
+
+
+def test_agent_client_run_sequential_does_not_log_reentrancy(renderer):
+    """Runs sequenciais no mesmo client são legítimos e não geram log de erro."""
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen, patch("quimera.agents.client._logger") as mock_logger:
+        mock_proc = MagicMock()
+        mock_proc.stdout = ["ok\n"]
+        mock_proc.stderr = []
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        assert client.run(["echo", "hi"], silent=True) == "ok"
+        mock_proc2 = MagicMock()
+        mock_proc2.stdout = ["ok2\n"]
+        mock_proc2.stderr = []
+        mock_proc2.returncode = 0
+        mock_popen.return_value = mock_proc2
+        assert client.run(["echo", "hi"], silent=True) == "ok2"
+
+    mock_logger.error.assert_not_called()
+    assert client._agent_running is False
+    assert client._running_agent is None
+
+
+def test_agent_client_cancel_notifies_listeners_before_terminating_processes(renderer):
+    """cancel_active_work propaga aos listeners antes do SIGTERM nos processos.
+
+    A ordem importa: o client de background precisa do cancel_event setado
+    antes do subprocess morrer, para tratar returncode -15 como término
+    esperado em vez de erro.
+    """
+    client = AgentClient(renderer)
+    events = []
+
+    background = AgentClient(renderer)
+    client.add_cancel_listener(lambda: events.append(("listener", background.cancel_active_work())))
+    client._current_proc = MagicMock()
+
+    with patch.object(client, "_terminate_process_group", side_effect=lambda proc: events.append(("terminate", None))):
+        client.cancel_active_work()
+
+    assert [name for name, _ in events] == ["listener", "terminate"]
+    assert background._cancel_event.is_set()
+    assert background._user_cancelled is True
+    assert client._cancel_event.is_set()
+
+
+def test_agent_client_cancel_listener_failure_does_not_block_cancel(renderer):
+    """Listener que levanta exceção não impede o cancel do processo ativo."""
+    client = AgentClient(renderer)
+
+    def _broken():
+        raise RuntimeError("listener quebrado")
+
+    called = []
+    client.add_cancel_listener(_broken)
+    client.add_cancel_listener(lambda: called.append(True))
+    client._current_proc = MagicMock()
+
+    with patch.object(client, "_terminate_process_group") as mock_terminate:
+        client.cancel_active_work()
+
+    assert called == [True]
+    mock_terminate.assert_called_once()
+    assert client._user_cancelled is True
+
+
+def test_agent_client_cancelled_background_run_treats_sigterm_as_expected(renderer):
+    """Após cancel propagado, retorno -15 do CLI delegado não vira erro no feed."""
+    client = AgentClient(renderer)
+    client.cancel_active_work()
+
+    assert client._is_expected_termination_return_code(-15) is True
+    assert client._is_expected_termination_return_code(143) is True
+
+
 def test_agent_client_run_os_error(renderer):
     """Verifica que agent client run os error."""
     client = AgentClient(renderer)

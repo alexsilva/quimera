@@ -245,6 +245,130 @@ def test_background_dispatch_exposes_agent_run_sink(tmp_path, monkeypatch):
     assert dispatch._call(dispatch._agent_run_sink) is sink
 
 
+def test_background_dispatch_client_inherits_supervision_from_chat_client(tmp_path, monkeypatch):
+    """O client de background herda pause_idle_if e process_supervisor do chat.
+
+    Sem pause_idle_if, um delegado aguardando tool longa em silêncio morre por
+    idle timeout ("returned no response"); sem process_supervisor, seus
+    subprocessos escapam do terminate_all() e sobrevivem à sessão.
+    """
+    supervisor = object()
+
+    def pause_if():
+        return False
+
+    app = type("App", (), {})()
+    app.renderer = object()
+    app.agent_client = type(
+        "ChatClient",
+        (),
+        {"idle_timeout": 45, "process_supervisor": supervisor, "_pause_idle_if": staticmethod(pause_if)},
+    )()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
+    app.visibility = "summary"
+    app.auto_approve_mutations = False
+    services = build_task_services(app)
+
+    captured = {}
+
+    class AgentClientStub:
+        def __init__(self, *args, **kwargs):
+            captured.update(kwargs)
+            self.execution_mode = None
+            self.tool_event_callback = None
+            self.tool_executor = None
+
+    monkeypatch.setattr("quimera.tasks.executor_pool.AgentClient", AgentClientStub)
+    dispatch = services._create_background_dispatch_services()
+
+    assert dispatch is not None
+    assert captured["process_supervisor"] is supervisor
+    assert captured["pause_idle_if"] is pause_if
+
+
+def test_cancel_background_work_cancels_live_background_clients(tmp_path, monkeypatch):
+    """cancel_background_work() propaga o cancel a todos os clients isolados vivos."""
+    app = type("App", (), {})()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
+    app.visibility = "summary"
+    app.auto_approve_mutations = False
+    services = build_task_services(app)
+
+    class AgentClientStub:
+        instances = []
+
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.execution_mode = None
+            self.tool_event_callback = None
+            self.tool_executor = None
+            self.cancelled = False
+            AgentClientStub.instances.append(self)
+
+        def cancel_active_work(self):
+            self.cancelled = True
+
+    monkeypatch.setattr("quimera.tasks.executor_pool.AgentClient", AgentClientStub)
+    dispatch_a = services._create_background_dispatch_services()
+    dispatch_b = services._create_background_dispatch_services()
+    assert dispatch_a is not None and dispatch_b is not None
+    assert len(AgentClientStub.instances) == 2
+
+    services.cancel_background_work()
+
+    assert all(client.cancelled for client in AgentClientStub.instances)
+
+
+def test_cancel_background_work_tolerates_client_failure(tmp_path, monkeypatch):
+    """Falha ao cancelar um client não impede o cancel dos demais."""
+    app = type("App", (), {})()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
+    app.visibility = "summary"
+    app.auto_approve_mutations = False
+    services = build_task_services(app)
+
+    class AgentClientStub:
+        instances = []
+
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.execution_mode = None
+            self.tool_event_callback = None
+            self.tool_executor = None
+            self.cancelled = False
+            AgentClientStub.instances.append(self)
+
+        def cancel_active_work(self):
+            if self is AgentClientStub.instances[0]:
+                raise RuntimeError("boom")
+            self.cancelled = True
+
+    monkeypatch.setattr("quimera.tasks.executor_pool.AgentClient", AgentClientStub)
+    dispatch_a = services._create_background_dispatch_services()
+    dispatch_b = services._create_background_dispatch_services()
+    assert dispatch_a is not None and dispatch_b is not None
+
+    services.cancel_background_work()
+
+    assert AgentClientStub.instances[1].cancelled is True
+
+
 def test_background_task_tool_executor_disables_ask_user(tmp_path):
     """Executores de /task não devem abrir perguntas interativas ao humano."""
     class AppStub:

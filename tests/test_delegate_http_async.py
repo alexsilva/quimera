@@ -1154,7 +1154,10 @@ class TestMakeBackgroundDelegateFn:
 
     A closure precisa propagar o retorno de dispatch.delegate(): se retornar
     None, _execute_single_step interpreta como "no response" e dispara os
-    fallback_agents mesmo após execução bem-sucedida do agente alvo.
+    fallback_agents mesmo após execução bem-sucedida do agente alvo. Além
+    disso, cada chamada deve usar um dispatch isolado recém-criado — o run()
+    de AgentClient não é reentrante, então delegações concorrentes não podem
+    compartilhar client.
     """
 
     def test_retorna_resultado_do_dispatch_padrao(self):
@@ -1162,7 +1165,7 @@ class TestMakeBackgroundDelegateFn:
         from quimera.app.bootstrap.wiring import _make_background_delegate_fn
 
         task_services = MagicMock()
-        task_services._get_background_dispatch_services.return_value = None
+        task_services._create_background_dispatch_services.return_value = None
         dispatch_services = MagicMock()
         dispatch_services.delegate.return_value = "resposta do agente"
 
@@ -1181,7 +1184,7 @@ class TestMakeBackgroundDelegateFn:
         background = MagicMock()
         background.delegate.return_value = "resposta via background"
         task_services = MagicMock()
-        task_services._get_background_dispatch_services.return_value = background
+        task_services._create_background_dispatch_services.return_value = background
         dispatch_services = MagicMock()
 
         fn = _make_background_delegate_fn(task_services, dispatch_services)
@@ -1190,3 +1193,71 @@ class TestMakeBackgroundDelegateFn:
         assert result == "resposta via background"
         background.delegate.assert_called_once()
         dispatch_services.delegate.assert_not_called()
+
+    def test_cria_dispatch_isolado_novo_a_cada_chamada(self):
+        """Cada delegação recebe dispatch (e AgentClient) próprio, nunca cacheado."""
+        from quimera.app.bootstrap.wiring import _make_background_delegate_fn
+
+        created = []
+
+        def _create():
+            bg = MagicMock()
+            bg.delegate.return_value = f"resposta-{len(created)}"
+            created.append(bg)
+            return bg
+
+        task_services = MagicMock()
+        task_services._create_background_dispatch_services.side_effect = _create
+        dispatch_services = MagicMock()
+
+        fn = _make_background_delegate_fn(task_services, dispatch_services)
+        assert fn("codex", delegation={"task": "a"}) == "resposta-0"
+        assert fn("codex", delegation={"task": "b"}) == "resposta-1"
+
+        assert len(created) == 2
+        assert created[0] is not created[1]
+
+    def test_fecha_dispatch_isolado_apos_uso(self):
+        """O dispatch criado por chamada é fechado ao final (libera o client)."""
+        from quimera.app.bootstrap.wiring import _make_background_delegate_fn
+
+        background = MagicMock()
+        background.delegate.return_value = "ok"
+        task_services = MagicMock()
+        task_services._create_background_dispatch_services.return_value = background
+        dispatch_services = MagicMock()
+
+        fn = _make_background_delegate_fn(task_services, dispatch_services)
+        fn("codex", delegation={"task": "a"})
+
+        background.close.assert_called_once()
+
+    def test_fecha_dispatch_isolado_mesmo_com_erro_no_delegate(self):
+        """close() acontece mesmo quando delegate levanta exceção."""
+        from quimera.app.bootstrap.wiring import _make_background_delegate_fn
+
+        background = MagicMock()
+        background.delegate.side_effect = RuntimeError("agente falhou")
+        task_services = MagicMock()
+        task_services._create_background_dispatch_services.return_value = background
+        dispatch_services = MagicMock()
+
+        fn = _make_background_delegate_fn(task_services, dispatch_services)
+        with pytest.raises(RuntimeError, match="agente falhou"):
+            fn("codex", delegation={"task": "a"})
+
+        background.close.assert_called_once()
+
+    def test_fallback_para_o_proprio_dispatch_services_nao_fecha(self):
+        """Se o factory devolve o dispatch principal (fallback), não o fecha."""
+        from quimera.app.bootstrap.wiring import _make_background_delegate_fn
+
+        dispatch_services = MagicMock()
+        dispatch_services.delegate.return_value = "resposta"
+        task_services = MagicMock()
+        task_services._create_background_dispatch_services.return_value = dispatch_services
+
+        fn = _make_background_delegate_fn(task_services, dispatch_services)
+        assert fn("codex", delegation={"task": "a"}) == "resposta"
+
+        dispatch_services.close.assert_not_called()

@@ -616,6 +616,10 @@ class AppTaskServices:
         """Interrompe todos os executores de tasks em segundo plano."""
         return self._executor_pool.stop_task_executors()
 
+    def cancel_background_work(self) -> None:
+        """Propaga cancelamento do usuário aos AgentClients de background."""
+        return self._executor_pool.cancel_background_work()
+
     # ── Overview / estado compartilhado (delegates to TaskProtocolService) ─
 
     def build_task_overview(self) -> dict:

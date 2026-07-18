@@ -101,9 +101,19 @@ def _make_record_tool_event(session_metrics, app):
 
 
 def _make_background_delegate_fn(task_services, dispatch_services):
+    # Um AgentClient isolado por chamada: run() não é reentrante, e reutilizar
+    # um client compartilhado corromperia cancel_event/_current_proc quando
+    # delegações concorrem (delegate paralelo, task runner + delegate).
     def _fn(agent, **opts):
-        bg = task_services._get_background_dispatch_services()
-        return (bg or dispatch_services).delegate(agent, **opts)
+        bg = task_services._create_background_dispatch_services()
+        if bg is None or bg is dispatch_services:
+            return dispatch_services.delegate(agent, **opts)
+        try:
+            return bg.delegate(agent, **opts)
+        finally:
+            close = getattr(bg, "close", None)
+            if callable(close):
+                close()
     return _fn
 
 
@@ -872,13 +882,18 @@ class AppAssembler:
         # Injeta o executor nos drivers de API do agent_client.
         rt.agent_client.tool_executor = tasks.tool_executor
         rt.agent_client.bind_tool_preview_callback(tasks.tool_executor)
-        tasks.tool_executor.set_delegate_fn(tasks.dispatch_services.delegate)
-        # background_delegate_fn usa AgentClient isolado (cancel_event próprio),
-        # impedindo que Ctrl+C no fluxo do chat cancele delegates assíncronos
-        # e que o delegate assíncrono afete o fluxo principal.
-        tasks.tool_executor.set_background_delegate_fn(
-            _make_background_delegate_fn(tasks.task_services, tasks.dispatch_services)
+        # Toda delegação originada de tool call (socket interno ou HTTP) usa
+        # AgentClient isolado por chamada: o run() do client principal não é
+        # reentrante, e a delegação síncrona via MCP executava o agente alvo
+        # sobre o mesmo client cujo run() do agente origem ainda estava ativo.
+        background_delegate_fn = _make_background_delegate_fn(
+            tasks.task_services, tasks.dispatch_services
         )
+        tasks.tool_executor.set_delegate_fn(background_delegate_fn)
+        tasks.tool_executor.set_background_delegate_fn(background_delegate_fn)
+        # ESC/Ctrl+C no fluxo principal também cancela delegações em background,
+        # que possuem cancel_event próprio.
+        rt.agent_client.add_cancel_listener(tasks.task_services.cancel_background_work)
         tasks.tool_executor.set_active_agents_provider(plat.agent_pool.list_agents)
         tasks.tool_executor.set_orchestrator_provider(plat.agent_pool.get_orchestrator)
         tasks.tool_executor.set_cancel_checker(rt.agent_client.is_cancelled)

@@ -85,7 +85,9 @@ class AgentClient:
         self._cancel_notice_shown = False
         self._cancel_notice_lock = threading.Lock()
         self._agent_running = False
+        self._running_agent = None
         self._current_proc = None
+        self._cancel_listeners: list = []
         self.session_id = session_id
         self.workspace_tmp_root = Path(workspace_tmp_root) if workspace_tmp_root is not None else None
         self._spy_output_presenter = SpyOutputPresenter(
@@ -263,10 +265,28 @@ class AgentClient:
         """Retorna True se o trabalho ativo foi cancelado."""
         return self._cancel_event.is_set() or self._user_cancelled
 
+    def add_cancel_listener(self, listener) -> None:
+        """Registra callback disparado quando o trabalho ativo é cancelado.
+
+        Usado para propagar o cancelamento do usuário a AgentClients de
+        background (delegações), que possuem cancel_event próprio.
+        """
+        self._cancel_listeners.append(listener)
+
+    def _notify_cancel_listeners(self) -> None:
+        for listener in list(self._cancel_listeners):
+            try:
+                listener()
+            except Exception:
+                _logger.debug("cancel listener falhou", exc_info=True)
+
     def cancel_active_work(self) -> None:
         """Cancela o trabalho atual e encerra subprocessos ainda vivos."""
         self._user_cancelled = True
         self._cancel_event.set()
+        # Listeners primeiro: clients de background precisam do cancel_event
+        # setado antes do SIGTERM chegar, para tratar -15 como término esperado.
+        self._notify_cancel_listeners()
         current_proc = self._current_proc
         if current_proc is not None:
             try:
@@ -381,11 +401,24 @@ class AgentClient:
         progress_callback=None,
     ):
         """Executa um comando (agente CLI) e retorna o stdout completo."""
+        if self._agent_running:
+            # run() não é reentrante: um segundo run sobre o mesmo client
+            # limpa cancel_event/_user_cancelled do run ativo, sobrescreve
+            # _current_proc e para o EscMonitor ao terminar. Delegações
+            # concorrentes devem usar um AgentClient isolado (background
+            # dispatch). O log alto garante que a regressão nunca seja muda.
+            _logger.error(
+                "AgentClient.run() reentrante: '%s' iniciado enquanto '%s' ainda executa "
+                "neste client; use o dispatch de background isolado para delegações",
+                agent or (cmd[0] if cmd else "?"),
+                self._running_agent or "?",
+            )
         self._cancel_event.clear()
         self._user_cancelled = False
         self.rate_limit_detected = False
         self.rate_limit_detected_at = None
         self._agent_running = True
+        self._running_agent = agent or (cmd[0] if cmd else None)
         self._start_esc_monitor()
         env = self._build_run_env(extra_env)
         effective_cmd, effective_cwd = self._build_effective_cmd(cmd, agent, cwd)
@@ -404,6 +437,7 @@ class AgentClient:
                 )
             except OSError as exc:
                 self._agent_running = False
+                self._running_agent = None
                 self._stop_esc_monitor()
                 self._show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
                 return None
@@ -455,6 +489,7 @@ class AgentClient:
                 proc.stdin.close()
         except Exception as exc:
             self._agent_running = False
+            self._running_agent = None
             self._stop_esc_monitor()
             self._show_error(f"[erro] falha ao enviar input para {cmd[0]}: {exc}")
             proc.kill()
@@ -640,6 +675,7 @@ class AgentClient:
             )
             self._pending_summary_render = (agent, self.last_spy_turn_detail, should_render_turn_summary)
             self._agent_running = False
+            self._running_agent = None
             self._stop_esc_monitor()
             self._spy_output_presenter.reset()
 
