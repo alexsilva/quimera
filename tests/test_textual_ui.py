@@ -1181,6 +1181,51 @@ def test_textual_render_event_renders_lifecycle_message_as_status_not_thinking()
     assert "✻" not in output
 
 
+def test_textual_render_event_aligns_gutter_and_draws_vertical_guide():
+    event = TextualUiEvent(
+        "agent_update",
+        {
+            "content": "analisando o projeto",
+            "tools": ["✓ $ pytest", "⚒ git_add arquivos\nquimera/app.py\nquimera/cli.py"],
+            "label": "Codex",
+            "style": "blue",
+            "theme": "chat",
+        },
+        agent="codex",
+    )
+    console = Console(record=True, width=120)
+
+    console.print(_render_event(event))
+    lines = [line for line in console.export_text().splitlines() if line.strip()]
+
+    header, body = lines[0], lines[1:]
+    assert header.startswith("●")
+    assert body, "bloco transitório deveria ter linhas de corpo"
+    # Guia vertical alinhada sob o ● do header em todas as linhas do bloco.
+    assert all(line.startswith("│") for line in body)
+    # Ícones de pensamento e tools caem na mesma coluna do label do header.
+    label_col = header.index("Codex")
+    assert lines[1].index("✻") == label_col
+    assert lines[2].index("✓") == label_col
+    assert lines[3].index("⚒") == label_col
+    # Continuações de preview ficam indentadas dentro da coluna de conteúdo.
+    assert lines[4].index("quimera/app.py") == label_col + 2
+
+
+def test_textual_render_event_routes_rotation_notice_as_status_line():
+    event = TextualUiEvent(
+        "system",
+        "[rotação] congelada para claude — todo input não-prefixado irá para este agente.",
+    )
+    console = Console(record=True, width=120)
+
+    console.print(_render_event(event))
+    output = console.export_text()
+
+    assert "rotação · congelada para claude" in output
+    assert not output.startswith("[rotação]")
+
+
 def test_textual_render_event_folds_long_tool_lines_without_ellipsis():
     long_args = "[" + ", ".join(f'"arquivo_{i}.py"' for i in range(20)) + "]"
     event = TextualUiEvent(
@@ -1331,9 +1376,12 @@ def test_textual_approval_event_renders_as_compact_line_not_panel():
 
     assert rendered is not None
     assert not isinstance(rendered, Panel)
-    assert "⚠" in str(rendered)
-    assert "git_commit :: risco: write" in str(rendered)
-    assert "opencode-big-pickle" in str(rendered)
+    console = Console(record=True, width=120)
+    console.print(rendered)
+    output = console.export_text()
+    assert "⚠" in output
+    assert "git_commit :: risco: write" in output
+    assert "opencode-big-pickle" in output
 
 
 def test_textual_renderer_interactive_windows_emit_semantic_overlay_events():

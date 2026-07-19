@@ -28,7 +28,7 @@ _clipboard_manager = ClipboardManager()
 
 _RICH_MARKUP_TAG_RE = re.compile(r"\[/?[a-zA-Z][a-zA-Z0-9_#= .:-]*\]")
 _TOOL_PREVIEW_LINE_LIMIT = 8
-_THINKING_MARKER = "✻"
+_GUTTER_GUIDE = "│"
 _THINKING_PULSE_FRAMES = ("✻", "✽", "✳", "✢", "·", "✢", "✳", "✽")
 _thinking_pulse_index = 0
 _DELEGATION_HINT_RE = re.compile(
@@ -54,6 +54,20 @@ def _thinking_pulse_marker() -> str:
     return _THINKING_PULSE_FRAMES[_thinking_pulse_index]
 
 
+def _gutter_row(marker: str, marker_style: str, content):
+    """Linha com coluna de gutter fixa: glifo/guia à esquerda, conteúdo alinhado.
+
+    Todas as linhas do feed passam por aqui para caírem na mesma vertical; o
+    ``Table.grid`` garante hanging indent — texto dobrado permanece na coluna
+    do conteúdo em vez de voltar para debaixo do glifo.
+    """
+    grid = Table.grid(expand=True, padding=(0, 1))
+    grid.add_column(width=2)
+    grid.add_column(ratio=1)
+    grid.add_row(Text(str(marker or ""), style=str(marker_style or "")), content)
+    return grid
+
+
 def _approval_options() -> list[str]:
     """Retorna as opções visuais padrão para confirmação de permissão."""
     return list(_APPROVAL_OPTIONS)
@@ -68,7 +82,6 @@ def _styled_tool_line(line: str, style: str) -> Text:
     """Estiliza uma linha de tool com ícone de status, sem cortar conteúdo."""
     stripped = str(line or "").strip()
     rendered = Text(no_wrap=False, overflow="fold")
-    rendered.append("  ")
     if stripped.startswith("✓ "):
         rendered.append("✓ ", style="bold green")
         rendered.append(stripped[2:], style="dim")
@@ -95,38 +108,46 @@ def _styled_tool_line(line: str, style: str) -> Text:
     return rendered
 
 
-def _build_tools_renderable(tools, style: str):
+def _build_tools_renderable(tools, style: str, *, guide: bool = True):
     """Monta o bloco visual de tools do turno com linhas estilizadas por status.
 
     Cada entrada pode ser multi-linha (previews de diff/saída); a primeira linha
     recebe o tratamento de status e as demais aparecem indentadas, limitadas por
-    quantidade de linhas — nunca por corte de caracteres.
+    quantidade de linhas — nunca por corte de caracteres. Cada linha passa pelo
+    gutter fixo, com a guia vertical ``│`` ligando o bloco ao header do agente.
     """
     if not isinstance(tools, list):
         return None
     entries = [str(tool) for tool in tools if str(tool).strip()]
     if not entries:
         return None
+    marker = _GUTTER_GUIDE if guide else ""
+    marker_style = f"dim {style}"
     parts = []
     for entry in entries:
         lines = entry.strip().splitlines()
         head, extra = lines[0], lines[1:]
-        parts.append(_styled_tool_line(head, style))
+        parts.append(_gutter_row(marker, marker_style, _styled_tool_line(head, style)))
         omitted = len(extra) - _TOOL_PREVIEW_LINE_LIMIT
         for continuation in extra[:_TOOL_PREVIEW_LINE_LIMIT]:
-            parts.append(Text(f"    {continuation}", style="dim", no_wrap=False, overflow="fold"))
+            body = Padding(Text(continuation, style="dim", no_wrap=False, overflow="fold"), pad=(0, 0, 0, 2))
+            parts.append(_gutter_row(marker, marker_style, body))
         if omitted > 0:
-            parts.append(Text(f"    ⋮ +{omitted} linhas", style=f"dim {style}"))
+            hint = Padding(Text(f"⋮ +{omitted} linhas", style=f"dim {style}"), pad=(0, 0, 0, 2))
+            parts.append(_gutter_row(marker, marker_style, hint))
     return Group(*parts)
 
 
-def _build_agent_live_body(content: str, tools, style: str, *, thinking: bool = True):
+def _build_agent_live_body(content: str, tools, style: str, *, thinking: bool = True, guide: bool = True):
     """Corpo do bloco transitório: pensamento em destaque e tools listadas abaixo.
 
     Mensagens de lifecycle (``thinking=False``) são status operacional e ficam
-    discretas, sem o marcador de pensamento.
+    discretas, sem o marcador de pensamento. Toda linha passa pelo gutter fixo;
+    quando ``guide`` está ativo a coluna exibe ``│`` na cor do agente.
     """
     parts = []
+    marker = _GUTTER_GUIDE if guide else ""
+    marker_style = f"dim {style}"
     text = str(content or "").strip()
     if text:
         head = Text(no_wrap=False, overflow="fold")
@@ -136,8 +157,8 @@ def _build_agent_live_body(content: str, tools, style: str, *, thinking: bool = 
         else:
             head.append("· ", style="dim")
             head.append(text, style="dim")
-        parts.append(head)
-    tools_renderable = _build_tools_renderable(tools, style)
+        parts.append(_gutter_row(marker, marker_style, head))
+    tools_renderable = _build_tools_renderable(tools, style, guide=guide)
     if tools_renderable is not None:
         parts.append(tools_renderable)
     if not parts:
@@ -167,8 +188,7 @@ def _build_agent_activity_renderable(payload, agent: str | None = None):
         "warning": ("!", "bold yellow"),
     }.get(activity, ("·", "dim"))
 
-    line = Text()
-    line.append(f"  {icon} ", style=icon_style)
+    line = Text(no_wrap=False, overflow="fold")
     line.append(label, style=f"bold {style}")
 
     if activity == "retrying":
@@ -180,16 +200,14 @@ def _build_agent_activity_renderable(payload, agent: str | None = None):
         detail = str(data.get("detail") or "").strip()
         if detail:
             line.append(f" · {detail}", style="dim")
-        line.no_wrap = False
-        line.overflow = "fold"
-        return line
+        return _gutter_row(icon, icon_style, line)
 
     if activity == "failover":
         target_label = str(data.get("target_label") or data.get("target") or "outro agente")
         target_style = str(data.get("target_style") or "cyan")
         line.append(f" · {message or 'indisponível'} · continuando com ", style="dim yellow")
         line.append(target_label, style=f"bold {target_style}")
-        return line
+        return _gutter_row(icon, icon_style, line)
 
     if activity in {"error", "failed", "warning", "cancelled", "aborted", "completed", "reconnecting"}:
         if activity in {"error", "failed"}:
@@ -199,11 +217,11 @@ def _build_agent_activity_renderable(payload, agent: str | None = None):
         else:
             message_style = "yellow"
         line.append(f" · {message}", style=message_style)
-        return line
+        return _gutter_row(icon, icon_style, line)
 
     if message:
         line.append(f" · {message}", style="dim")
-    return line
+    return _gutter_row(icon, icon_style, line)
 
 
 def _build_turn_summary_renderable(payload, agent: str | None = None):
@@ -222,8 +240,7 @@ def _build_turn_summary_renderable(payload, agent: str | None = None):
     icon_style = "bold green" if err_count == 0 else "bold yellow"
     noun = "ferramenta" if total == 1 else "ferramentas"
 
-    line = Text()
-    line.append(f"  {icon} ", style=icon_style)
+    line = Text(no_wrap=False, overflow="fold")
     line.append(label, style=f"bold {style}")
     line.append(f" · {total} {noun}", style="dim")
     line.append(f" · {ok_count} concluída{'s' if ok_count != 1 else ''}", style="green")
@@ -231,7 +248,7 @@ def _build_turn_summary_renderable(payload, agent: str | None = None):
         line.append(f" · {err_count} falha{'s' if err_count != 1 else ''}", style="yellow")
     if duration:
         line.append(f" · {duration}", style="dim")
-    return line
+    return _gutter_row(icon, icon_style, line)
 
 
 def _breadcrumb_items(chain: list[str], from_label: str, to_label: str) -> list[str]:
@@ -377,20 +394,19 @@ def _build_question_overlay(payload) -> Panel:
     return Panel(body, title=title, border_style=border_style)
 
 
-def _build_approval_line_renderable(payload) -> Text:
+def _build_approval_line_renderable(payload):
     """Renderiza aprovação no feed como linha compacta, sem caixa."""
     lines = [line.strip() for line in str(payload or "").splitlines() if line.strip()]
     if not lines:
-        return Text("⚠ aprovação solicitada", style="bold orange1")
+        return _gutter_row("⚠", "bold orange1", Text("aprovação solicitada", style="bold orange1"))
     title = lines[0]
     title = title.removeprefix("Aprovar ").strip() or title
-    text = Text()
-    text.append("⚠ ", style="bold orange1")
+    text = Text(no_wrap=False, overflow="fold")
     text.append(title, style="bold orange1")
     for line in lines[1:]:
-        text.append("\n  ", style="orange1")
+        text.append("\n")
         text.append(line, style="orange1")
-    return text
+    return _gutter_row("⚠", "bold orange1", text)
 
 
 def _build_window_overlay_payload(payload) -> dict[str, Any]:
@@ -567,19 +583,30 @@ def _render_event(event: TextualUiEvent):
     if event.kind == "plain":
         content = str(event.payload or "")
         if event.agent:
-            text = Text.assemble((f"◦ {event.agent} ", "dim cyan"), (content,))
-            return text
+            return _gutter_row(
+                "◦",
+                "dim cyan",
+                Text.assemble((f"{event.agent} ", "dim cyan"), (content,)),
+            )
         return Text(content)
     if event.kind == "muted":
         return Text(str(event.payload), style="dim")
     if event.kind == "system":
-        if str(event.payload or "").strip().lower() == "cancelamento solicitado":
-            return Text.assemble(
-                ("  ■ ", "bold yellow"),
-                ("Execução", "bold yellow"),
-                (" · cancelamento solicitado", "dim yellow"),
+        payload_text = str(event.payload or "").strip()
+        if payload_text.lower() == "cancelamento solicitado":
+            return _gutter_row(
+                "■",
+                "bold yellow",
+                Text.assemble(("Execução", "bold yellow"), (" · cancelamento solicitado", "dim yellow")),
             )
-        return Text(str(event.payload), style="blue")
+        if payload_text.startswith("[") and "]" in payload_text:
+            tag, _, rest = payload_text[1:].partition("]")
+            line = Text(no_wrap=False, overflow="fold")
+            line.append(tag.strip(), style="bold blue")
+            if rest.strip():
+                line.append(f" · {rest.strip().lstrip('—-· ')}", style="dim")
+            return _gutter_row("·", "dim blue", line)
+        return _gutter_row("·", "dim blue", Text(payload_text, style="blue", no_wrap=False, overflow="fold"))
     if event.kind == "theme_changed":
         payload = event.payload if isinstance(event.payload, dict) else {}
         theme_name = str(payload.get("theme", "")).strip()
@@ -594,17 +621,12 @@ def _render_themed_agent_block(theme_name: str, label: str, style: str, body, *,
         title = f"[bold {style}]{label}[/bold {style}]"
         return Panel(body, title=title, border_style=style, padding=(0, 1))
     if name == "chat":
-        table = Table.grid(expand=True, padding=(0, 1))
-        table.add_column(width=2)
-        table.add_column(ratio=1)
-        table.add_row(
-            Text("●", style=f"bold {style}"),
-            Group(
-                Text(label, style=f"bold {style}"),
-                Padding(body, pad=(0, 0, 0, 2)),
-            ),
+        # Header e corpo no mesmo nível: a guia vertical do corpo (│) cai
+        # exatamente sob o ● do header, formando um bloco visual único.
+        return Group(
+            _gutter_row("●", f"bold {style}", Text(label, style=f"bold {style}")),
+            body,
         )
-        return table
     if name == "rule":
         return Group(
             Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}"),
@@ -631,11 +653,7 @@ def _build_turn_header(theme_name: str, label: str, style: str):
     """Monta cabeçalho de turno seguindo o renderer main-tui."""
     name = themes.get(theme_name).name
     if name == "chat":
-        header = Table.grid(expand=True, padding=(0, 1))
-        header.add_column(width=2)
-        header.add_column(ratio=1)
-        header.add_row(Text("●", style=f"bold {style}"), Text(label, style=f"bold {style}"))
-        return header
+        return _gutter_row("●", f"bold {style}", Text(label, style=f"bold {style}"))
     if name == "rule":
         return Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}")
     if name == "minimal":
@@ -668,7 +686,7 @@ def _build_turn_body(
         title = f"[bold {style}]{label}[/bold {style}]" if streaming else None
         return Panel(body_content, title=title, border_style=style, padding=(0, 1))
     if name == "chat":
-        return Padding(body_content, pad=(0, 0, 0, 4))
+        return _gutter_row("", "", body_content)
     if name == "minimal":
         return Padding(body_content, pad=(0, 0, 0, 2))
     if name == "card":
@@ -764,8 +782,13 @@ def _build_turn_tools(theme_name: str, label: str, style: str, tools_table, turn
 
 
 def _build_stream_renderable(theme_name: str, label: str, style: str, content: str, tools=None, *, thinking: bool = True):
-    """Monta o renderable dinâmico usado no streaming, com pensamento em destaque."""
-    body = _build_agent_live_body(content, tools, style, thinking=thinking)
+    """Monta o renderable dinâmico usado no streaming, com pensamento em destaque.
+
+    Temas com borda própria (panel/card) dispensam a guia vertical do gutter —
+    a moldura já delimita o bloco.
+    """
+    guide = themes.get(theme_name).name not in {"panel", "card"}
+    body = _build_agent_live_body(content, tools, style, thinking=thinking, guide=guide)
     if body is None:
         return None
     return _render_themed_agent_block(theme_name, label, style, body, streaming=True)
