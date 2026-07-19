@@ -1,5 +1,7 @@
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -77,16 +79,22 @@ def bypass_cli_runtime_dependency_check(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def redirect_workspace_base_to_tmp(monkeypatch, tmp_path):
-    """Redireciona find_base_writable para tmp_path em todos os testes.
+    """Redireciona find_base_writable e TMP_BASE_DIR para diretórios descartáveis em todos os testes.
 
-    Evita que criações de Workspace escrevam em ~/.local/share/quimera durante testes.
-    Os arquivos ficam em /tmp/pytest-* e são removidos automaticamente pelo pytest.
+    Evita que criações de Workspace escrevam em ~/.local/share/quimera ou em
+    /tmp/quimera durante testes. Os arquivos de find_base_writable ficam em
+    /tmp/pytest-* e são removidos automaticamente pelo pytest. TMP_BASE_DIR usa
+    um diretório próprio e curto (fora da árvore pytest-of-*) porque caminhos de
+    socket AF_UNIX derivados dele têm limite de ~108 bytes.
     """
     tmp_base = tmp_path / "quimera_base"
     tmp_base.mkdir(exist_ok=True)
 
+    tmp_workspace_tmp = Path(tempfile.mkdtemp(prefix="qtmp-"))
+
     import quimera.workspace as _ws
     monkeypatch.setattr(_ws, "find_base_writable", lambda _candidates: tmp_base)
+    monkeypatch.setattr(_ws, "TMP_BASE_DIR", tmp_workspace_tmp)
 
     try:
         import quimera.profiles.base as _pb
@@ -101,3 +109,4 @@ def redirect_workspace_base_to_tmp(monkeypatch, tmp_path):
         pass
 
     yield
+    shutil.rmtree(tmp_workspace_tmp, ignore_errors=True)

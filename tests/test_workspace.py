@@ -11,6 +11,15 @@ from quimera.workspace import Workspace, WorkspaceTmp, find_base_writable
 
 
 class TestWorkspace(unittest.TestCase):
+    def setUp(self):
+        """Redireciona TMP_BASE_DIR para um diretório descartável, evitando poluir /tmp/quimera real."""
+        self._tmp_base_dir = tempfile.TemporaryDirectory()
+        self.tmp_base = Path(self._tmp_base_dir.name)
+        self._tmp_base_patcher = patch("quimera.workspace.TMP_BASE_DIR", self.tmp_base)
+        self._tmp_base_patcher.start()
+        self.addCleanup(self._tmp_base_patcher.stop)
+        self.addCleanup(self._tmp_base_dir.cleanup)
+
     def test_find_writable_prefers_writable_candidate(self):
         """Verifica que find_base_writable prefere o primeiro diretório gravável encontrado."""
         # cria dois diretórios; o primeiro será torna-se não gravável
@@ -130,7 +139,7 @@ class TestWorkspace(unittest.TestCase):
                 self.assertEqual(tmp.root, ws.tmp.root)
                 self.assertEqual(
                     tmp.render_logs_dir,
-                    Path("/tmp") / "quimera" / ws.cwd_hash / "data" / "logs" / "render",
+                    self.tmp_base / ws.cwd_hash / "data" / "logs" / "render",
                 )
                 self.assertEqual(
                     tmp.clipboard_dir,
@@ -138,7 +147,7 @@ class TestWorkspace(unittest.TestCase):
                 )
                 self.assertEqual(
                     tmp.artifacts_dir,
-                    Path("/tmp") / "quimera" / ws.cwd_hash / "data" / "artifacts",
+                    self.tmp_base / ws.cwd_hash / "data" / "artifacts",
                 )
                 self.assertEqual(ws.artifacts_dir, tmp.artifacts_dir)
                 self.assertEqual(
@@ -166,7 +175,7 @@ class TestWorkspace(unittest.TestCase):
 
                 self.assertEqual(
                     tmp.metrics_dir,
-                    Path("/tmp") / "quimera" / ws.cwd_hash / "data" / "logs" / "metrics",
+                    self.tmp_base / ws.cwd_hash / "data" / "logs" / "metrics",
                 )
                 self.assertEqual(
                     tmp.metrics_path_for("sessao-2026-05-14-225819"),
@@ -208,8 +217,8 @@ class TestWorkspace(unittest.TestCase):
 
     def test_tmp_ensure_dirs_logs_only_the_failing_directory(self):
         """Verifica que apenas o diretório com falha é registrado no log."""
-        render_dir = Path("/tmp") / "quimera" / "hash123" / "data" / "logs" / "render"
-        metrics_dir = Path("/tmp") / "quimera" / "hash123" / "data" / "logs" / "metrics"
+        render_dir = self.tmp_base / "hash123" / "data" / "logs" / "render"
+        metrics_dir = self.tmp_base / "hash123" / "data" / "logs" / "metrics"
 
         def fake_mkdir(path, parents=False, exist_ok=False):
             if path == render_dir:
