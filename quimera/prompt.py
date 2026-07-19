@@ -122,7 +122,7 @@ class PromptBuilder:
             route_agents = ""
 
         other_agents = [n for n in active_agents if n.lower() != agent.lower()]
-        agents_list = ", ".join(n.upper() for n in other_agents) if other_agents else "nenhum"
+        agents_list = ", ".join(other_agents) if other_agents else "nenhum"
 
         session_id = ""
         current_job_id = ""
@@ -181,7 +181,7 @@ class PromptBuilder:
         template = get_prompt_template(normalized_prompt_kind)
         prompt_text = template.render_prompt(
             normalized_prompt_kind,
-            agent=agent.upper(),
+            agent=agent,
             user_name=self.memory_selector.user_name.upper(),
             agents=agents_list,
             route_agents=route_agents,

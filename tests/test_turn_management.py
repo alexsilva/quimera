@@ -1125,11 +1125,11 @@ class TestSingleAgentPerTurn(unittest.TestCase):
     def test_single_agent_responds_normally(self):
         """Uma mensagem comum produz somente uma resposta."""
         app = _make_app(active_agents=["claude", "codex"])
-        app.parse_routing = Mock(return_value=("claude", "debate isso", False))
+        app.parse_routing = Mock(return_value=("claude", "analisa isso", False))
         app.parse_response = Mock(return_value=("resposta1", None, None, None))
         app.dispatch_services.delegate = Mock(return_value="r1")
 
-        QuimeraApp._do_process_chat_message(app, "debate isso")
+        QuimeraApp._do_process_chat_message(app, "analisa isso")
 
         self.assertEqual(app.dispatch_services.delegate.call_count, 1)
         self.assertEqual(app.dispatch_services.delegate.call_args_list[0][0][0], "claude")

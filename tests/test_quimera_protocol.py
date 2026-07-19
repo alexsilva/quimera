@@ -1558,9 +1558,9 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history)
 
-        self.assertIn("CLAUDE", prompt)
+        self.assertIn("Agentes de IA nesta conversa: claude", prompt)
         # CODEX é o agente falante — não aparece na lista de outros agentes
-        self.assertNotIn("QWEN", prompt)
+        self.assertNotIn("qwen", prompt)
 
     def test_prompt_includes_session_state_when_present(self):
         """Verifica que prompt includes session state when present."""
@@ -2030,7 +2030,7 @@ class ProtocolTests(unittest.TestCase):
             app._stop_task_executors()
 
     def test_run_uses_single_turn_by_default(self):
-        """No fluxo padrão (sem prefixo explícito, sem EXTEND), apenas um agente responde."""
+        """No fluxo padrão (sem prefixo explícito), apenas um agente responde."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
         app.user_name = "Você"

@@ -295,10 +295,34 @@ def test_prompt_uses_current_active_agents_in_header_without_route_list():
     state["active_agents"] = ["codex", "deepseek"]
     prompt = builder.build(agent="codex", history=history)
 
-    assert "Agentes de IA nesta conversa: DEEPSEEK" in prompt
+    assert "Você é codex." in prompt
+    assert "Agentes de IA nesta conversa: deepseek" in prompt
     assert "- Agentes:" not in prompt
     assert "CLAUDE" not in prompt
     assert "claude" not in prompt
+
+
+def test_prompt_preserves_agent_names_from_active_agents_provider():
+    """Preserva no header os identificadores fornecidos pelo pool."""
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        active_agents_provider=lambda: [
+            "codex-gpt-5-6-sol",
+            "opencode-big-pickle",
+            "claude-sonnet",
+        ],
+    )
+
+    prompt = builder.build(
+        agent="codex-gpt-5-6-sol",
+        history=[{"role": "human", "content": "valide os nomes"}],
+    )
+
+    assert "Você é codex-gpt-5-6-sol." in prompt
+    assert (
+        "Agentes de IA nesta conversa: opencode-big-pickle, claude-sonnet"
+        in prompt
+    )
 
 
 def test_delegation_prompt_uses_current_active_agents_for_route_candidates():
