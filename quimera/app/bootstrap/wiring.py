@@ -473,10 +473,6 @@ class AppAssembler:
             process_supervisor=process_supervisor,
             pause_idle_if=app._has_mcp_pending,
         )
-        plat.agent_pool.set_freeze_hooks(
-            on_freeze=agent_client.open_persistent_session,
-            on_unfreeze=agent_client.close_persistent_session,
-        )
         task_executor_factory = create_executor
         session_summarizer = SessionSummarizer(
             ui.renderer,

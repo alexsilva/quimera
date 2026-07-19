@@ -263,7 +263,6 @@ class ExecutionProfile:
     stderr_noise: FrozenSet[str] = field(default_factory=frozenset)
     stderr_noise_patterns: Tuple[str, ...] = field(default_factory=tuple)
     dynamic: bool = False
-    supports_resume: bool = False
     # Connection override (carregado automaticamente do base_dir)
     _connection_override: Optional[Connection] = field(default=None, repr=False)
     # Profile name (usado para herança de formatter/rw_paths em perfis de conexão)
@@ -387,16 +386,6 @@ class ExecutionProfile:
     def format_stdin_input(self, prompt) -> str:
         """Transforma o prompt antes de enviá-lo ao stdin do CLI."""
         return prompt
-
-    def extract_session_id(self, raw: str) -> str | None:
-        """Extrai session_id do output bruto do CLI quando o perfil suporta resume."""
-        _ = raw
-        return None
-
-    def inject_resume_arg(self, cmd: list[str], session_id: str) -> list[str]:
-        """Retorna o comando com argumento de retomada de sessão."""
-        _ = session_id
-        return cmd
 
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna args CLI para conectar no MCP local (default: sem suporte)."""

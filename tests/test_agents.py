@@ -677,46 +677,6 @@ def test_agent_client_call_prompt_as_arg(renderer):
                                         show_status=True, progress_callback=None)
 
 
-def test_agent_client_resume_session_only_when_agent_is_frozen(renderer):
-    """Verifica que session_id de profile CLI só é usado após abrir sessão persistente."""
-    client = AgentClient(renderer)
-
-    class ResumeProfile:
-        cmd = ["mock-agent"]
-        prompt_as_arg = False
-        output_format = None
-        supports_resume = True
-        supports_warm_pool = False
-
-        def effective_connection(self):
-            return CliConnection(cmd=list(self.cmd), prompt_as_arg=False)
-
-        def effective_cmd(self):
-            return list(self.cmd)
-
-        def format_stdin_input(self, prompt):
-            return f"stdin:{prompt}"
-
-        def extract_session_id(self, raw):
-            return raw.split("sid=", 1)[1] if "sid=" in raw else None
-
-        def inject_resume_arg(self, cmd, session_id):
-            return [*cmd, "--resume", session_id]
-
-    profile = ResumeProfile()
-    with patch("quimera.profiles.get", return_value=profile), patch.object(client, "run") as mock_run:
-        mock_run.side_effect = ["sid=abc123", "ok"]
-
-        assert client.open_persistent_session("mock") is True
-        assert client.call("mock", "primeiro") == "sid=abc123"
-        assert client.call("mock", "segundo") == "ok"
-
-    assert mock_run.call_args_list[0].kwargs["input_text"] == "stdin:primeiro"
-    assert mock_run.call_args_list[0].args[0] == ["mock-agent"]
-    assert mock_run.call_args_list[1].kwargs["input_text"] == "stdin:segundo"
-    assert mock_run.call_args_list[1].args[0] == ["mock-agent", "--resume", "abc123"]
-
-
 def test_agent_client_call_passes_prompt_text_unchanged(renderer):
     """Verifica que o PromptText é repassado intacto para run(), sem concatenação."""
     client = AgentClient(renderer)
@@ -1758,22 +1718,14 @@ def test_claude_profile_exposes_spy_stdout_formatter():
     assert profile.spy_stdout_formatter is _format_claude_spy_event
 
 
-def test_claude_profile_supports_stream_json_resume_protocol():
-    """Verifica que Claude serializa input e extrai session_id para resume."""
+def test_claude_profile_supports_stream_json_input_protocol():
+    """Verifica que Claude serializa input como evento stream-json."""
     profile = get_profile("claude")
     assert profile is not None
-    assert profile.supports_resume is True
     assert "--input-format=stream-json" in profile.cmd
 
     event = json.loads(profile.format_stdin_input("olá").strip())
     assert event == {"type": "user", "message": {"role": "user", "content": "olá"}}
-    assert profile.extract_session_id('{"type":"result","session_id":"sess-1"}\n') == "sess-1"
-    assert profile.inject_resume_arg(["claude", "--print"], "sess-1") == [
-        "claude",
-        "--resume",
-        "sess-1",
-        "--print",
-    ]
 
 
 def test_opencode_profile_exposes_spy_stdout_formatter_and_json_output():

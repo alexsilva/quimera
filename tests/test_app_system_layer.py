@@ -1335,21 +1335,6 @@ def test_unfreeze_descongela_pool():
     assert pool.frozen_agent is None
 
 
-def test_agent_pool_freeze_hooks_recebem_agente_congelado():
-    """Verifica que AgentPool notifica freeze/unfreeze sem depender da UI."""
-    pool = AgentPool(["claude", "codex"])
-    events = []
-    pool.set_freeze_hooks(
-        on_freeze=lambda agent: events.append(("freeze", agent)),
-        on_unfreeze=lambda agent: events.append(("unfreeze", agent)),
-    )
-
-    pool.freeze("codex")
-    pool.unfreeze()
-
-    assert events == [("freeze", "codex"), ("unfreeze", "codex")]
-
-
 def test_unfreeze_exibe_mensagem_sistema():
     """Verifica que Test unfreeze exibe mensagem sistema."""
     layer, pool, app = _make_layer_with_pool()
@@ -1400,19 +1385,6 @@ def test_remove_agente_orquestrador_limpa_estado():
     assert pool.orchestrator_agent is None
 
 
-def test_remove_agente_congelado_chama_hook_unfreeze():
-    """remove() do agente congelado deve disparar on_unfreeze."""
-    pool = AgentPool(["claude", "codex"])
-    events = []
-    pool.set_freeze_hooks(
-        on_freeze=lambda a: events.append(("freeze", a)),
-        on_unfreeze=lambda a: events.append(("unfreeze", a)),
-    )
-    pool.freeze("claude")
-    pool.remove("claude")
-    assert ("unfreeze", "claude") in events
-
-
 def test_set_sem_agente_congelado_limpa_estado():
     """set() com lista sem o agente congelado deve limpar frozen_agent e orchestrator_agent."""
     pool = AgentPool(["claude", "codex"])
@@ -1420,19 +1392,6 @@ def test_set_sem_agente_congelado_limpa_estado():
     pool.set(["codex"])
     assert pool.frozen_agent is None
     assert pool.orchestrator_agent is None
-
-
-def test_set_sem_agente_congelado_chama_hook_unfreeze():
-    """set() que remove o agente congelado deve disparar on_unfreeze."""
-    pool = AgentPool(["claude", "codex"])
-    events = []
-    pool.set_freeze_hooks(
-        on_freeze=lambda a: events.append(("freeze", a)),
-        on_unfreeze=lambda a: events.append(("unfreeze", a)),
-    )
-    pool.set_orchestrator("claude")
-    pool.set(["codex"])
-    assert ("unfreeze", "claude") in events
 
 
 def test_readd_apos_remove_nao_reactiva_orquestrador():

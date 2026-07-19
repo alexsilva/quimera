@@ -62,23 +62,6 @@ class ClaudeProfile(ExecutionProfile):
         event = {"type": "user", "message": {"role": "user", "content": str(prompt)}}
         return json.dumps(event, ensure_ascii=False) + "\n"
 
-    def extract_session_id(self, raw: str) -> str | None:
-        """Extrai session_id do evento result emitido pelo Claude CLI."""
-        for line in str(raw or "").splitlines():
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if payload.get("type") == "result" and payload.get("session_id"):
-                return str(payload["session_id"])
-        return None
-
-    def inject_resume_arg(self, cmd: list[str], session_id: str) -> list[str]:
-        """Injeta --resume <session_id> no comando do Claude CLI."""
-        if not cmd:
-            return cmd
-        return [cmd[0], "--resume", session_id, *cmd[1:]]
-
     def configure_with_model(self, model_id: str) -> CliConnection:
         """Retorna conexão CLI do Claude com --model aplicado."""
         normalized = (model_id or "").strip()
@@ -140,7 +123,6 @@ profile = ClaudeProfile(
     ],
     prompt_as_arg=False,
     output_format="stream-json",
-    supports_resume=True,
     style=("magenta", "Claude"),
     capabilities=["architecture", "code_review", "planning", "documentation", "code_editing"],
     preferred_task_types=["architecture", "code_review", "documentation", "code_edit", "general"],
