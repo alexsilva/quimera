@@ -143,7 +143,11 @@ def test_codex_profile_injects_mcp_server_before_stdin_sentinel():
     try:
         profile.set_mcp_socket_path("/tmp/quimera.sock")
         expected_args = json.dumps(
-            ["-m", "quimera.runtime.mcp", "--connect-socket", "/tmp/quimera.sock"],
+            [
+                "-m", "quimera.runtime.mcp",
+                "--connect-socket", "/tmp/quimera.sock",
+                "--agent-name", "codex",
+            ],
             ensure_ascii=False,
         )
         assert profile.effective_cmd() == [
@@ -1772,6 +1776,7 @@ def test_opencode_profile_injects_mcp_via_env_var():
         assert config["mcp"]["quimera"]["command"] == [
             "python", "-m", "quimera.runtime.mcp",
             "--connect-socket", "/tmp/quimera.sock",
+            "--agent-name", "opencode",
         ]
         assert config["mcp"]["quimera"]["enabled"] is True
     finally:
@@ -1846,6 +1851,7 @@ def test_agent_client_call_dynamic_opencode_base_passes_env_for_cli_to_run(rende
         assert config["mcp"]["quimera"]["command"] == [
             "python", "-m", "quimera.runtime.mcp",
             "--connect-socket", "/tmp/quimera.sock",
+            "--agent-name", "opencode-dyn-call-test",
         ]
     finally:
         profile._connection_override = original_override

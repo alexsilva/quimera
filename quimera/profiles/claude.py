@@ -88,7 +88,11 @@ class ClaudeProfile(ExecutionProfile):
 
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna flags para conectar o Claude ao MCP local do Quimera."""
-        proxy_args: list[str] = ["-m", "quimera.runtime.mcp", "--connect-socket", socket_path]
+        proxy_args: list[str] = [
+            "-m", "quimera.runtime.mcp",
+            "--connect-socket", socket_path,
+            "--agent-name", self.name,
+        ]
         proxy_args += self._build_token_args()
         config = {
             "mcpServers": {

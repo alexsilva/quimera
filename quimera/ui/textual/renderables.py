@@ -255,15 +255,15 @@ def _build_turn_summary_renderable(payload, agent: str | None = None):
 
 
 def _breadcrumb_items(chain: list[str], from_label: str, to_label: str) -> list[str]:
-    """Normaliza breadcrumb de delegação para sempre partir do humano."""
-    items = [str(item).strip() for item in (chain or [from_label, to_label]) if str(item).strip()]
+    """Normaliza a cadeia real sem inferir que o humano executou a delegação."""
+    raw_items = chain if len(chain or []) >= 2 else [from_label, to_label]
+    items = [str(item).strip() for item in raw_items if str(item).strip()]
     if not items:
-        return ["humano"]
+        return []
     first = items[0].lower()
     if first in {"human", "humano", "user", "usuario", "usuário", ">>>"}:
         items[0] = "humano"
-        return items
-    return ["humano", *items]
+    return items
 
 
 def _orchestrator_section_name(line: str) -> str | None:

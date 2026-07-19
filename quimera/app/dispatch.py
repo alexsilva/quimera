@@ -144,7 +144,7 @@ class AppDispatchServices:
             "delegation_id": delegation_id,
             "chain": list(chain or []),
         }
-        source_agent = str(from_agent or "quimera")
+        source_agent = str(from_agent or "agente")
         if self._ui_queue is not None:
             self._ui_queue.put(
                 RenderEvent(
@@ -343,7 +343,7 @@ class AppDispatchServices:
         from_agent = dispatch_options.get("from_agent")
         if isinstance(delegation, dict):
             self._show_delegation(
-                str(from_agent or delegation.get("from_agent") or "quimera"),
+                str(from_agent or delegation.get("from_agent") or "agente"),
                 str(agent),
                 delegation.get("task"),
                 delegation_id=delegation_id,

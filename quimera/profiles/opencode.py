@@ -74,6 +74,7 @@ class OpenCodeProfile(ExecutionProfile):
         proxy_cmd: list[str] = [
             "python", "-m", "quimera.runtime.mcp",
             "--connect-socket", socket_path,
+            "--agent-name", self.name,
         ]
         proxy_cmd += self._build_token_args()
         config = {

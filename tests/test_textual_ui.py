@@ -1098,6 +1098,29 @@ def test_textual_render_event_shows_delegation_chain_and_id():
     assert "dlg-123" in output
 
 
+def test_textual_render_event_does_not_infer_human_delegator():
+    event = TextualUiEvent(
+        "delegation",
+        {
+            "from_label": "Codex GPT 5 6 Sol",
+            "from_style": "blue",
+            "to_label": "OpenCode Big Pickle",
+            "to_style": "magenta",
+            "task": "teste visual",
+            "delegation_id": "dlg-456",
+            "chain": ["codex-gpt-5-6-sol", "opencode-big-pickle"],
+        },
+    )
+    console = Console(record=True, width=120)
+
+    console.print(_render_event(event))
+    output = console.export_text()
+
+    assert "codex-gpt-5-6-sol > opencode-big-pickle" in output
+    assert "humano" not in output
+    assert "Codex GPT 5 6 Sol" in output
+
+
 def test_textual_render_event_orchestrator_uses_sectioned_panel():
     event = TextualUiEvent(
         "agent_message",

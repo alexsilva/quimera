@@ -61,6 +61,8 @@ def _proxy_stdio_to_socket(
     path: str,
     *,
     token: str | None = None,
+    agent_name: str | None = None,
+    parent_agent: str | None = None,
     stdin: IO | None = None,
     stdout: IO | None = None,
 ) -> None:
@@ -87,10 +89,16 @@ def _proxy_stdio_to_socket(
             approval_scope = (os.environ.get("QUIMERA_MCP_APPROVAL_SCOPE") or "").strip()
             if approval_scope:
                 auth_payload["quimera_approval_scope"] = approval_scope
-            agent_name = (os.environ.get("QUIMERA_MCP_AGENT_NAME") or "").strip()
-            if agent_name:
-                auth_payload["quimera_agent_name"] = agent_name
-            parent_agent_name = (os.environ.get("QUIMERA_MCP_PARENT_AGENT") or "").strip()
+            resolved_agent_name = (
+                str(agent_name or "").strip()
+                or (os.environ.get("QUIMERA_MCP_AGENT_NAME") or "").strip()
+            )
+            if resolved_agent_name:
+                auth_payload["quimera_agent_name"] = resolved_agent_name
+            parent_agent_name = (
+                str(parent_agent or "").strip()
+                or (os.environ.get("QUIMERA_MCP_PARENT_AGENT") or "").strip()
+            )
             if parent_agent_name:
                 auth_payload["quimera_parent_agent"] = parent_agent_name
             auth_line = json.dumps(auth_payload) + "\n"
@@ -1163,6 +1171,18 @@ def main() -> None:
         default=None,
         help="Token de autenticação para o socket MCP (ou use QUIMERA_MCP_TOKEN).",
     )
+    parser.add_argument(
+        "--agent-name",
+        dest="agent_name",
+        default=None,
+        help="Identidade do agente vinculada à conexão MCP autenticada.",
+    )
+    parser.add_argument(
+        "--parent-agent",
+        dest="parent_agent",
+        default=None,
+        help="Agente pai opcional da execução delegada.",
+    )
     args = parser.parse_args()
 
     level_name = (
@@ -1178,7 +1198,12 @@ def main() -> None:
     )
     if args.connect_socket:
         token = args.token or os.environ.get("QUIMERA_MCP_TOKEN") or None
-        _proxy_stdio_to_socket(args.connect_socket, token=token)
+        _proxy_stdio_to_socket(
+            args.connect_socket,
+            token=token,
+            agent_name=args.agent_name,
+            parent_agent=args.parent_agent,
+        )
         return
 
     executor = _build_standalone_executor()

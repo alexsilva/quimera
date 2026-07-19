@@ -184,7 +184,11 @@ class CodexProfile(ExecutionProfile):
 
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna overrides de config para registrar MCP via stdio no Codex."""
-        proxy_cmd: list[str] = ["-m", "quimera.runtime.mcp", "--connect-socket", socket_path]
+        proxy_cmd: list[str] = [
+            "-m", "quimera.runtime.mcp",
+            "--connect-socket", socket_path,
+            "--agent-name", self.name,
+        ]
         proxy_cmd += self._build_token_args()
         args_toml = json.dumps(proxy_cmd, ensure_ascii=False)
         return [

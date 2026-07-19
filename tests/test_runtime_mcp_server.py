@@ -634,9 +634,11 @@ def test_main_connect_socket_usa_modo_proxy(monkeypatch):
     """Verifica que Test main connect socket usa modo proxy."""
     captured = {}
 
-    def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
+    def _fake_proxy(path, *, token=None, agent_name=None, parent_agent=None, stdin=None, stdout=None):
         captured["path"] = path
         captured["token"] = token
+        captured["agent_name"] = agent_name
+        captured["parent_agent"] = parent_agent
         captured["stdin"] = stdin
         captured["stdout"] = stdout
 
@@ -655,7 +657,7 @@ def test_main_connect_socket_com_token_cli(monkeypatch):
     """Verifica que Test main connect socket com token cli."""
     captured = {}
 
-    def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
+    def _fake_proxy(path, *, token=None, agent_name=None, parent_agent=None, stdin=None, stdout=None):
         captured["token"] = token
 
     monkeypatch.setattr("quimera.runtime.mcp.server._proxy_stdio_to_socket", _fake_proxy)
@@ -666,11 +668,39 @@ def test_main_connect_socket_com_token_cli(monkeypatch):
     assert captured["token"] == "mytoken"
 
 
+def test_main_connect_socket_repassa_identidade_cli(monkeypatch):
+    """Entrypoint encaminha identidade explícita ao proxy stdio."""
+    captured = {}
+
+    def _fake_proxy(path, *, token=None, agent_name=None, parent_agent=None, stdin=None, stdout=None):
+        captured["agent_name"] = agent_name
+        captured["parent_agent"] = parent_agent
+
+    monkeypatch.setattr("quimera.runtime.mcp.server._proxy_stdio_to_socket", _fake_proxy)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mcp_server", "--connect-socket", "/tmp/s.sock",
+            "--agent-name", "codex-gpt-5-6-sol",
+            "--parent-agent", "claude-opus",
+        ],
+    )
+
+    from quimera.runtime.mcp import server as mcp_server
+    mcp_server.main()
+
+    assert captured == {
+        "agent_name": "codex-gpt-5-6-sol",
+        "parent_agent": "claude-opus",
+    }
+
+
 def test_main_connect_socket_token_via_env(monkeypatch):
     """Verifica que Test main connect socket token via env."""
     captured = {}
 
-    def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
+    def _fake_proxy(path, *, token=None, agent_name=None, parent_agent=None, stdin=None, stdout=None):
         captured["token"] = token
 
     monkeypatch.setattr("quimera.runtime.mcp.server._proxy_stdio_to_socket", _fake_proxy)
@@ -686,7 +716,7 @@ def test_main_connect_socket_respeita_quimera_mcp_log_level(monkeypatch):
     """Verifica que Test main connect socket respeita quimera mcp log level."""
     captured = {}
 
-    def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
+    def _fake_proxy(path, *, token=None, agent_name=None, parent_agent=None, stdin=None, stdout=None):
         captured["path"] = path
 
     monkeypatch.setattr("quimera.runtime.mcp.server._proxy_stdio_to_socket", _fake_proxy)
@@ -820,6 +850,34 @@ class TestSocketAuth:
         assert responses[0]["id"] == 42
         assert responses[0]["result"] == {}
 
+    def test_proxy_vincula_agent_name_ao_contexto_confiavel(self, tmp_path):
+        """Identidade explícita sobrevive quando o launcher sanitiza o ambiente."""
+        sock_path = str(tmp_path / "mcp_proxy_agent.sock")
+        captured_state = {}
+
+        class CapturingMCPServer(MCPServer):
+            def serve(self, stdin=None, stdout=None):
+                captured_state.update(getattr(stdout, "_mcp_state", {}) or {})
+                return super().serve(stdin=stdin, stdout=stdout)
+
+        server = CapturingMCPServer(_make_executor(), auth_token="abc")
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+
+        request_line = json.dumps({"jsonrpc": "2.0", "id": 43, "method": "ping"}) + "\n"
+        out = io.StringIO()
+        _proxy_stdio_to_socket(
+            sock_path,
+            token="abc",
+            agent_name="codex-gpt-5-6-sol",
+            stdin=io.StringIO(request_line),
+            stdout=out,
+        )
+
+        responses = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+        assert responses[0]["result"] == {}
+        assert captured_state["agent_name"] == "codex-gpt-5-6-sol"
+
     def test_conexao_com_tool_desabilitada_remove_tool_do_tools_list(self, tmp_path):
         """Conexão MCP com tool desabilitada não deve anunciar essa tool."""
         sock_path = str(tmp_path / "mcp_disabled_tool_tools_list.sock")
@@ -948,6 +1006,7 @@ class TestProfileTokenIntegration:
         proxy_cmd = json.loads(args_json.split("=", 1)[1])
         assert "--token" in proxy_cmd
         assert "mytoken" in proxy_cmd
+        assert proxy_cmd[proxy_cmd.index("--agent-name") + 1] == "codex"
 
     def test_codex_sem_token_nao_inclui_token_arg(self):
         """Verifica que Test codex sem token nao inclui token arg."""
@@ -975,6 +1034,7 @@ class TestProfileTokenIntegration:
         proxy_args = config["mcpServers"]["quimera"]["args"]
         assert "--token" in proxy_args
         assert "claudetoken" in proxy_args
+        assert proxy_args[proxy_args.index("--agent-name") + 1] == "claude"
 
     def test_claude_sem_token_nao_inclui_token_arg(self):
         """Verifica que Test claude sem token nao inclui token arg."""
@@ -1001,6 +1061,7 @@ class TestProfileTokenIntegration:
         cmd = config["mcp"]["quimera"]["command"]
         assert "--token" in cmd
         assert "opencodetoken" in cmd
+        assert cmd[cmd.index("--agent-name") + 1] == "opencode"
 
     def test_opencode_sem_token_nao_inclui_token_arg(self):
         """Verifica que Test opencode sem token nao inclui token arg."""
