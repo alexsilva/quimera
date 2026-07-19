@@ -2449,8 +2449,10 @@ def test_call_api_cancel_event_detection(renderer):
         t.join(timeout=3)
 
     assert result is None
-    renderer.show_error.assert_called_once()
-    assert renderer.show_error.call_args[0][0].startswith("[cancelado] pelo usuário")
+    renderer.show_execution_control.assert_called_once()
+    event = renderer.show_execution_control.call_args.args[0]
+    assert event.status.value == "cancelled"
+    assert event.source.value == "user"
     process_supervisor.terminate_all.assert_called_once_with()
 
 
@@ -2461,11 +2463,26 @@ def test_show_cancelled_once_deduplicates_repeated_messages(renderer):
     client._show_cancelled_once()
     client._show_cancelled_once()
 
-    renderer.show_error.assert_called_once()
-    assert renderer.show_error.call_args[0][0].startswith("[cancelado] pelo usuário")
+    renderer.show_execution_control.assert_called_once()
+    event = renderer.show_execution_control.call_args.args[0]
+    assert event.status.value == "cancelled"
+    assert event.source.value == "user"
     client.reset_cancel_notices()
     client._show_cancelled_once()
-    assert renderer.show_error.call_count == 2
+    assert renderer.show_execution_control.call_count == 2
+
+
+def test_cancel_notice_is_deduplicated_across_isolated_clients(renderer):
+    """Clients da mesma rodada compartilham a confirmação de cancelamento."""
+    primary = AgentClient(renderer)
+    first = primary.fork_for_concurrent_run()
+    second = primary.fork_for_concurrent_run()
+
+    first._show_cancelled_once()
+    second._show_cancelled_once()
+    primary._show_cancelled_once()
+
+    renderer.show_execution_control.assert_called_once()
 
 
 def test_spy_output_presenter_drops_interrupt_echo_from_raw_stdout(renderer):

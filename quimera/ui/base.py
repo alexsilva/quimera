@@ -82,6 +82,17 @@ class RendererBase:
     def notify_agent_failover(self, agent, *, target, message=FAILOVER_DEFAULT_MESSAGE):
         self.show_system(format_failover_message(agent, target, message))
 
+    def show_execution_control(self, event):
+        """Apresenta uma transição estruturada de controle da execução.
+
+        Renderers ricos sobrescrevem este método. O fallback textual mantém o
+        contrato funcional sem exigir que consumidores reconstruam mensagens.
+        """
+        status = getattr(event, "status", "")
+        status_value = getattr(status, "value", str(status))
+        if status_value == "cancelled":
+            self.show_system("execução cancelada pelo usuário")
+
     def show_notification(self, message, *, severity="information", timeout=None):
         return None
 

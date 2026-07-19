@@ -26,6 +26,7 @@ from quimera.ui.textual.feed_model import (
     _agent_lifecycle_payload,
 )
 from quimera.ui.textual.terminal_modes import _external_textual_window
+from quimera.domain.execution import ExecutionControlEvent
 
 
 class _TextualStatus:
@@ -330,6 +331,10 @@ class TextualRenderer(RendererBase):
             "timeout": timeout,
         }
         self._bridge.emit(TextualUiEvent("notification", payload))
+
+    def show_execution_control(self, event: ExecutionControlEvent) -> None:
+        """Encaminha controle de execução sem converter o evento em texto."""
+        self._bridge.emit(TextualUiEvent("execution_control", event, agent=event.agent))
 
     def signal_restore_history(self) -> None:
         """Sinaliza ao feed para exibir o histórico restaurado após as mensagens de startup."""

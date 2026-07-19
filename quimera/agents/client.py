@@ -24,6 +24,11 @@ from quimera.agents.process_runner import ProcessRunner, MAX_WALL_CLOCK_SECONDS
 from quimera.agents.signal_guard import EscMonitor, terminate_process_group
 from quimera.agents.warm_pool import WarmPool
 from quimera.runtime.process_supervisor import ProcessSupervisor
+from quimera.domain.execution import (
+    ExecutionControlEvent,
+    ExecutionControlSource,
+    ExecutionControlStatus,
+)
 from quimera.agents.text_filters import (
     _strip_spinner,
     _should_ignore_stderr_line,
@@ -74,8 +79,8 @@ class AgentClient:
         self._cancel_event = threading.Event()
         self._esc_monitor = EscMonitor(self._cancel_event)
         self._user_cancelled = False
-        self._cancel_notice_shown = False
         self._cancel_notice_lock = threading.Lock()
+        self._cancel_notice_state = {"shown": False}
         self._agent_running = False
         self._running_agent = None
         self._current_proc = None
@@ -213,7 +218,7 @@ class AgentClient:
     def reset_cancel_notices(self) -> None:
         """Permite exibir novamente avisos de cancelamento em um novo ciclo."""
         with self._cancel_notice_lock:
-            self._cancel_notice_shown = False
+            self._cancel_notice_state["shown"] = False
 
     def reset_cancel_state(self) -> None:
         """Limpa estado de cancelamento antes de uma nova rodada."""
@@ -249,6 +254,8 @@ class AgentClient:
         forked.tool_event_callback = self.tool_event_callback
         forked._cancel_event = self._cancel_event
         forked._esc_monitor = EscMonitor(forked._cancel_event)
+        forked._cancel_notice_lock = self._cancel_notice_lock
+        forked._cancel_notice_state = self._cancel_notice_state
         return forked
 
     def _is_expected_termination_return_code(self, return_code) -> bool:
@@ -258,15 +265,20 @@ class AgentClient:
         return self._cancel_event.is_set() or self._user_cancelled
 
     def _show_cancelled_once(self) -> None:
-        """Evita repetição de '[cancelado] pelo usuário' em cancelamentos concorrentes."""
+        """Publica uma única confirmação estruturada de cancelamento."""
         should_show = False
         with self._cancel_notice_lock:
-            if not self._cancel_notice_shown:
-                self._cancel_notice_shown = True
+            if not self._cancel_notice_state["shown"]:
+                self._cancel_notice_state["shown"] = True
                 should_show = True
         if should_show:
-            ts = datetime.now().strftime("%H:%M:%S")
-            self._show_error(f"[cancelado] pelo usuário às {ts}")
+            self.renderer.show_execution_control(
+                ExecutionControlEvent(
+                    status=ExecutionControlStatus.CANCELLED,
+                    source=ExecutionControlSource.USER,
+                    agent=self._running_agent,
+                )
+            )
 
     # ------------------------------------------------------------------
     # Helpers de sinal (delegam para EscMonitor para retrocompatibilidade)

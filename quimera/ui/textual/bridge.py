@@ -238,14 +238,12 @@ class TextualUiBridge:
             handle_interrupt = getattr(lifecycle, "handle_local_interrupt", None)
             if callable(handle_interrupt):
                 handle_interrupt()
-                self.emit(TextualUiEvent("system", "cancelamento solicitado"))
                 return
         agent_client = getattr(quimera_app, "agent_client", None)
         if bool(getattr(agent_client, "_agent_running", False)):
             cancel = getattr(agent_client, "cancel_active_work", None)
             if callable(cancel):
                 cancel()
-                self.emit(TextualUiEvent("system", "cancelamento solicitado"))
                 return
         self.submit_input("/exit")
 

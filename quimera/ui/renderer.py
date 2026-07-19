@@ -38,6 +38,7 @@ from .text import (
     _preview_text,
     strip_ansi,
 )
+from quimera.domain.execution import ExecutionControlSource, ExecutionControlStatus
 
 _RENDER_MODES = {"plain", "markdown", "auto"}
 _SEQUENTIAL_STATUS_REFRESH_PER_SECOND = 4
@@ -1001,6 +1002,20 @@ class TerminalRenderer(RendererBase):
             self._remember_persistent_event("system")
         else:
             print(clean_message)
+
+    def show_execution_control(self, event) -> None:
+        """Renderiza uma transição de controle sem depender de parsing textual."""
+        status = getattr(event, "status", None)
+        if status is not ExecutionControlStatus.CANCELLED:
+            return
+        source = getattr(event, "source", None)
+        actor = "pelo usuário" if source is ExecutionControlSource.USER else "pelo sistema"
+        occurred_at = getattr(event, "occurred_at", None)
+        timestamp = occurred_at.astimezone().strftime("%H:%M:%S") if occurred_at else ""
+        message = f"execução cancelada {actor}"
+        if timestamp:
+            message = f"{message} às {timestamp}"
+        self.show_system(message)
 
     def show_approval(self, message):
         """Exibe bloco de aprovação com estilo visual distinto de logs de sistema."""

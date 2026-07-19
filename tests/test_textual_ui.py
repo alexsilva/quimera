@@ -832,7 +832,7 @@ def test_textual_bridge_cancel_uses_scheduler_state_for_isolated_chat_runs():
     lifecycle.handle_local_interrupt.assert_called_once_with()
     agent_client.cancel_active_work.assert_not_called()
     assert bridge.input_queue.empty()
-    bridge.emit.assert_called_once()
+    bridge.emit.assert_not_called()
 
 
 def test_textual_bridge_ctrl_c_exits_only_when_chat_is_idle():
@@ -1180,12 +1180,32 @@ def test_textual_render_event_contextualizes_agent_activity_and_tools():
     assert "no response, retrying" not in output
 
 
-def test_textual_render_event_contextualizes_cancel_request():
+def test_textual_render_event_uses_structured_execution_control():
+    from datetime import datetime, timezone
+    from quimera.domain.execution import (
+        ExecutionControlEvent,
+        ExecutionControlSource,
+        ExecutionControlStatus,
+    )
+
     console = Console(record=True, width=80)
 
-    console.print(_render_event(TextualUiEvent("system", "cancelamento solicitado")))
+    console.print(
+        _render_event(
+            TextualUiEvent(
+                "execution_control",
+                ExecutionControlEvent(
+                    status=ExecutionControlStatus.CANCELLED,
+                    source=ExecutionControlSource.USER,
+                    occurred_at=datetime(2026, 7, 19, 19, 13, 31, tzinfo=timezone.utc),
+                ),
+            )
+        )
+    )
 
-    assert "Execução · cancelamento solicitado" in console.export_text()
+    output = console.export_text()
+    assert "Execução · cancelada pelo usuário" in output
+    assert "[cancelado]" not in output
 
 
 def test_textual_render_event_uses_agent_identity_for_stream_abort():

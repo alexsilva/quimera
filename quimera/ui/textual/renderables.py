@@ -12,6 +12,7 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
+from quimera.domain.execution import ExecutionControlSource, ExecutionControlStatus
 
 _DEFAULT_SECTION_LINE_LIMIT = 20
 
@@ -513,6 +514,27 @@ def _render_event(event: TextualUiEvent):
         style = str(payload.get("style", "cyan") or "cyan") if isinstance(payload, dict) else "cyan"
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME) if isinstance(payload, dict) else themes.DEFAULT_THEME
         return _build_stream_renderable(theme_name, label, style, message, tools=tools, thinking=False)
+    if event.kind == "execution_control":
+        control = event.payload
+        status = getattr(control, "status", None)
+        source = getattr(control, "source", None)
+        occurred_at = getattr(control, "occurred_at", None)
+        if status is ExecutionControlStatus.CANCELLED:
+            actor = "pelo usuário" if source is ExecutionControlSource.USER else "pelo sistema"
+            timestamp = occurred_at.astimezone().strftime("%H:%M:%S") if occurred_at else ""
+            message = f"cancelada {actor}"
+            if timestamp:
+                message = f"{message} às {timestamp}"
+            return _build_agent_activity_renderable(
+                {
+                    "activity": "cancelled",
+                    "label": "Execução",
+                    "style": "yellow",
+                    "message": message,
+                },
+                event.agent,
+            )
+        return None
     if event.kind in {"warning", "error"}:
         if event.agent:
             return _build_agent_activity_renderable(
@@ -596,12 +618,6 @@ def _render_event(event: TextualUiEvent):
         return Text(str(event.payload), style="dim")
     if event.kind == "system":
         payload_text = str(event.payload or "").strip()
-        if payload_text.lower() == "cancelamento solicitado":
-            return _gutter_row(
-                "■",
-                "bold yellow",
-                Text.assemble(("Execução", "bold yellow"), (" · cancelamento solicitado", "dim yellow")),
-            )
         if payload_text.startswith("[") and "]" in payload_text:
             tag, _, rest = payload_text[1:].partition("]")
             line = Text(no_wrap=False, overflow="fold")
