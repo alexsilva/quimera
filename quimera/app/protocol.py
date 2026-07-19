@@ -1,7 +1,6 @@
 """Componentes de `quimera.app.protocol`."""
 import re
 
-from ..constants import EXTEND_MARKER
 from ..shared_state import (
     is_agent_state_key,
     normalize_state_key,
@@ -118,7 +117,7 @@ class AppProtocol:
     def parse_response(self, response, **_kwargs):
         """Extrai marcadores de controle e retorna estado estruturado."""
         if response is None:
-            return None, None, None, False, None
+            return None, None, None, None
 
         ack_id = None
 
@@ -129,10 +128,6 @@ class AppProtocol:
             logger.info("[ACK] received ack_id=%s", ack_id)
 
         if response is None:
-            return None, None, None, False, ack_id
+            return None, None, None, ack_id
 
-        extend = response.rstrip().endswith(EXTEND_MARKER)
-        if extend:
-            response = response.rstrip()[: -len(EXTEND_MARKER)].rstrip()
-
-        return response, None, None, extend, ack_id
+        return response, None, None, ack_id

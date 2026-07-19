@@ -7,9 +7,6 @@ from typing import Sequence
 DEFAULT_FIRST_AGENT = "claude"
 INPUT_PROMPT = "Você: "
 
-# Protocol markers
-EXTEND_MARKER = "[DEBATE]"
-
 # Commands
 CMD_EXIT = "/exit"
 CMD_CLEAR = "/clear"

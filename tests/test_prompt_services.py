@@ -80,10 +80,9 @@ class TestMemorySelector:
         assert MemorySelector.should_skip_fact("goal_canonical: corrigir bug")
         assert MemorySelector.should_skip_fact("Objetivo fixo é resolver")
 
-    def test_should_skip_fact_blocks_protocol_markers(self):
-        """Verifica que should skip fact blocks protocol markers."""
+    def test_should_skip_fact_blocks_ack_markers(self):
+        """Verifica que should skip fact blocks ACK markers."""
         assert MemorySelector.should_skip_fact("[ACK:abc123] recebido")
-        assert MemorySelector.should_skip_fact("Encaminhar para debate [DEBATE]")
 
     def test_build_conversation_block_skips_specified_indexes(self):
         """Verifica que build conversation block skips specified indexes."""

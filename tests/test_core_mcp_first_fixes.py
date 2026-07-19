@@ -77,14 +77,13 @@ def test_delegation_json_is_plain_content_not_protocol_envelope():
     """Verifica que delegation json is plain content not protocol envelope."""
     proto = AppProtocol(lock=threading.Lock(), shared_state={})
 
-    response, target, delegation, extend, ack_id = proto.parse_response(
+    response, target, delegation, ack_id = proto.parse_response(
         '{"type":"delegation","route":"codex","content":"delegar textual"}'
     )
 
     assert response == '{"type":"delegation","route":"codex","content":"delegar textual"}'
     assert target is None
     assert delegation is None
-    assert extend is False
     assert ack_id is None
 
 

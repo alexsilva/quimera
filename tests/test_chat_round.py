@@ -64,7 +64,7 @@ def _make_app(active_agents=None, threads=1):
     # parse_routing padrão: ("claude", "hello", False)
     app.parse_routing = Mock(return_value=("claude", "hello", False))
     # parse_response padrão: resposta simples sem delegation
-    app.parse_response = Mock(return_value=("resposta", None, None, False, None))
+    app.parse_response = Mock(return_value=("resposta", None, None, None))
 
     app.chat_round_orchestrator = _make_orchestrator(app)
     return app
@@ -120,7 +120,7 @@ class TestProcessMainFlow(unittest.TestCase):
         """_user_cancelled após primeira chamada deve resetar turno e retornar."""
         app = _make_app()
         app.dispatch_services.delegate = Mock(return_value="alguma resposta")
-        app.parse_response = Mock(return_value=("alguma resposta", None, None, False, None))
+        app.parse_response = Mock(return_value=("alguma resposta", None, None, None))
         app.agent_client._user_cancelled = True
 
         app.chat_round_orchestrator.process("hello")
@@ -137,8 +137,8 @@ class TestProcessMainFlow(unittest.TestCase):
 
         def fake_parse(resp):
             if resp is None:
-                return (None, None, None, False, None)
-            return (resp, None, None, False, None)
+                return (None, None, None, None)
+            return (resp, None, None, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
 
@@ -152,7 +152,7 @@ class TestProcessMainFlow(unittest.TestCase):
         app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
         app.parse_routing = Mock(return_value=("codex", "status", False))
         app.dispatch_services.delegate = Mock(return_value="resposta codex")
-        app.parse_response = Mock(return_value=("resposta codex", None, None, False, None))
+        app.parse_response = Mock(return_value=("resposta codex", None, None, None))
 
         app.chat_round_orchestrator.process("status")
 
@@ -178,8 +178,8 @@ class TestProcessMainFlow(unittest.TestCase):
 
         def fake_parse(resp):
             if resp is None:
-                return (None, None, None, False, None)
-            return (resp, None, None, False, None)
+                return (None, None, None, None)
+            return (resp, None, None, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
 
@@ -200,79 +200,13 @@ class TestProcessMainFlow(unittest.TestCase):
         app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
         app.parse_routing = Mock(return_value=("codex", "status", False))
         app.dispatch_services.delegate = Mock(return_value=None)
-        app.parse_response = Mock(return_value=(None, None, None, False, None))
+        app.parse_response = Mock(return_value=(None, None, None, None))
 
         app.chat_round_orchestrator.process("status")
 
         self.assertEqual(app.dispatch_services.delegate.call_count, 3)
         app.renderer.show_warning.assert_called_once_with(
             "Nenhum agente disponível respondeu."
-        )
-
-    def test_failover_recomputes_other_agents_before_extend_follow_up(self):
-        """Após failover, o debate sequencial deve excluir o agente que assumiu."""
-        app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
-        app.parse_routing = Mock(return_value=("codex", "status", False))
-        responses = iter([None, "claude respondeu", "codex debate", "claude síntese", "codex réplica"])
-        app.dispatch_services.delegate = Mock(side_effect=lambda *a, **kw: next(responses))
-
-        def fake_parse(resp):
-            if resp is None:
-                return (None, None, None, False, None)
-            if resp == "claude respondeu":
-                return (resp, None, None, True, None)
-            return (resp, None, None, False, None)
-
-        app.parse_response = Mock(side_effect=fake_parse)
-
-        app.chat_round_orchestrator.process("status")
-
-        delegated_agents = [call.args[0] for call in app.dispatch_services.delegate.call_args_list]
-        self.assertEqual(delegated_agents[:2], ["codex", "claude"])
-        self.assertEqual(delegated_agents[2:], ["opencode", "claude", "opencode"])
-
-    def test_extend_follow_up_does_not_reuse_stale_user_only_history_snapshot(self):
-        """Após persistir resposta, chamadas seguintes não devem receber snapshot antigo."""
-        app = _make_app(active_agents=["openai", "codex"], threads=1)
-        app.session_state.history.clear()
-        app.parse_routing = Mock(return_value=("openai", "segunda mensagem", False))
-        responses = iter([
-            "resposta openai",
-            "resposta codex",
-            "resposta openai 2",
-            "resposta codex 2",
-        ])
-        app.dispatch_services.delegate = Mock(side_effect=lambda *a, **kw: next(responses))
-
-        def persist_message(role, content, *, return_history_snapshot=False):
-            app.session_state.history.append({"role": role, "content": content})
-            if return_history_snapshot:
-                return list(app.session_state.history)
-            return None
-
-        app.session_services.persist_message = persist_message
-
-        def fake_parse(resp):
-            if resp == "resposta openai":
-                return (resp, None, None, True, None)
-            return (resp, None, None, False, None)
-
-        app.parse_response = Mock(side_effect=fake_parse)
-
-        app.chat_round_orchestrator.process("segunda mensagem")
-
-        first_call_kwargs = app.dispatch_services.delegate.call_args_list[0].kwargs
-        follow_up_kwargs = [call.kwargs for call in app.dispatch_services.delegate.call_args_list[1:]]
-
-        self.assertEqual(
-            first_call_kwargs["history_snapshot"],
-            [{"role": "human", "content": "segunda mensagem"}],
-        )
-        self.assertTrue(follow_up_kwargs)
-        self.assertTrue(all("history_snapshot" not in kwargs for kwargs in follow_up_kwargs))
-        self.assertIn(
-            {"role": "openai", "content": "resposta openai"},
-            app.session_state.history,
         )
 
     def test_main_flow_fallback_cancelled_resets_turn_without_warning(self):
@@ -292,8 +226,8 @@ class TestProcessMainFlow(unittest.TestCase):
 
         def fake_parse(resp):
             if resp is None:
-                return (None, None, None, False, None)
-            return (resp, None, None, False, None)
+                return (None, None, None, None)
+            return (resp, None, None, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
 
@@ -324,8 +258,8 @@ class TestProcessMainFlow(unittest.TestCase):
 
         def fake_parse(resp):
             if resp is None:
-                return (None, None, None, False, None)
-            return (resp, None, None, False, None)
+                return (None, None, None, None)
+            return (resp, None, None, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
 
@@ -343,7 +277,7 @@ class TestProcessMainFlow(unittest.TestCase):
         app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
         app.parse_routing = Mock(return_value=("codex", "status", False))
         app.dispatch_services.delegate = Mock(return_value=None)
-        app.parse_response = Mock(return_value=(None, None, None, False, None))
+        app.parse_response = Mock(return_value=(None, None, None, None))
 
         cancel_checks = iter([False, False, False, True])
         app.chat_round_orchestrator._is_cancelled = Mock(side_effect=lambda: next(cancel_checks))
@@ -363,7 +297,7 @@ class TestProcessMainFlow(unittest.TestCase):
             ("A", "p3", False),
         ])
         app.dispatch_services.delegate = Mock(side_effect=["r1", "r2", "r3"])
-        app.parse_response = Mock(return_value=("ok", None, None, False, None))
+        app.parse_response = Mock(return_value=("ok", None, None, None))
 
         app.chat_round_orchestrator.process("p1")
         app.chat_round_orchestrator.process("p2")
@@ -373,61 +307,6 @@ class TestProcessMainFlow(unittest.TestCase):
             [call.args[0] for call in app.dispatch_services.delegate.call_args_list],
             ["A", "B", "C"],
         )
-
-
-# ---------------------------------------------------------------------------
-# _process_standard_flow
-# ---------------------------------------------------------------------------
-
-class TestProcessStandardFlow(unittest.TestCase):
-
-    def test_standard_flow_does_not_dispatch_followers_with_extra_threads(self):
-        """`threads` não deve disparar followers para o mesmo prompt."""
-        app = _make_app(active_agents=["claude", "codex", "deepseek"], threads=2)
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_standard_flow("claude", False, False, ["codex", "deepseek"])
-
-        app.dispatch_services.delegate.assert_not_called()
-        app.task_services.delegate_for_parallel.assert_not_called()
-        self.assertEqual(app.agent_pool.agents, ["claude", "codex", "deepseek"])
-        self.assertEqual(app.dispatch_services.print_response.call_args_list, [])
-
-    def test_standard_flow_ignores_overflow_followers(self):
-        """Followers extras também não executam no mesmo prompt."""
-        app = _make_app(active_agents=["claude", "codex", "deepseek", "qwen"], threads=2)
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_standard_flow("claude", False, False, ["codex", "deepseek", "qwen"])
-
-        app.task_services.delegate_for_parallel.assert_not_called()
-        self.assertEqual(app.agent_pool.agents, ["claude", "codex", "deepseek", "qwen"])
-        self.assertEqual(app.dispatch_services.print_response.call_args_list, [])
-
-    def test_standard_flow_does_not_rotate_pool(self):
-        """A rotação do pool acontece na reserva do prompt, não aqui."""
-        app = _make_app(active_agents=["claude", "codex"], threads=3)
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_standard_flow("claude", False, False, ["codex", "codex"])
-
-        app.task_services.delegate_for_parallel.assert_not_called()
-        self.assertEqual(app.agent_pool.agents, ["claude", "codex"])
-
-    def test_standard_flow_extend_runs_sequential_follow_up(self):
-        """`extend` mantém o fluxo histórico de follow-up sequencial no mesmo prompt."""
-        app = _make_app(active_agents=["claude", "codex"], threads=2)
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_standard_flow("claude", False, True, ["codex"])
-
-        self.assertEqual(
-            [call.args[0] for call in app.dispatch_services.delegate.call_args_list],
-            ["codex", "claude", "codex"],
-        )
-        app.renderer.show_system.assert_called_once_with("[debate] iniciado: claude ↔ codex")
-        app.task_services.delegate_for_parallel.assert_not_called()
-        self.assertEqual(app.agent_pool.agents, ["claude", "codex"])
 
 
 # ---------------------------------------------------------------------------
@@ -465,49 +344,6 @@ class TestShowSystem(unittest.TestCase):
         orchestrator._show_system("teste")
 
         app.renderer.show_system.assert_called_once_with("teste")
-
-
-# ---------------------------------------------------------------------------
-# Lacunas de cobertura restantes
-# ---------------------------------------------------------------------------
-
-class TestCoverageGaps(unittest.TestCase):
-
-    def test_process_standard_flow_explicit_without_parallel_slots_skips_followers(self):
-        """explicit=True com threads=1 não deve executar followers."""
-        app = _make_app(active_agents=["claude", "codex"], threads=1)
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_standard_flow("claude", True, False, ["codex"])
-
-        app.dispatch_services.delegate.assert_not_called()
-        app.task_services.delegate_for_parallel.assert_not_called()
-
-    def test_process_standard_flow_explicit_with_threads_still_skips_followers(self):
-        """explicit=True não deve fan-out para followers, mesmo com threads sobrando."""
-        app = _make_app(active_agents=["claude", "codex", "deepseek", "qwen"], threads=4)
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_standard_flow(
-            "claude", True, False, ["codex", "deepseek", "qwen"]
-        )
-
-        app.dispatch_services.delegate.assert_not_called()
-        app.task_services.delegate_for_parallel.assert_not_called()
-
-    def test_standard_flow_keeps_toolbar_idle_even_with_extra_threads(self):
-        """A toolbar permanece ociosa quando não há fan-out dentro do prompt."""
-        app = _make_app(active_agents=["claude", "codex"], threads=2)
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_standard_flow("claude", False, False, ["codex"])
-
-        self.assertEqual(
-            app._parallel_toolbar_state,
-            {"active": 0, "queued": 0, "capacity": 2, "active_agents": ()},
-        )
-        app.task_services.delegate_for_parallel.assert_not_called()
-
 
 if __name__ == "__main__":
     unittest.main()

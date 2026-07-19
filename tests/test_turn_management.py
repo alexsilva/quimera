@@ -148,9 +148,9 @@ def _make_app(active_agents=None):
     from quimera.domain.session_state import SessionRuntimeState
     app._chat_state = SessionRuntimeState.from_legacy(history=[], shared_state={}, session_meta={})
 
-    # Comportamento padrão: primeira chamada retorna resposta simples (sem delegation, sem extend)
+    # Comportamento padrão: primeira chamada retorna resposta simples.
     app.parse_routing = Mock(return_value=("claude", "olá", False))
-    app.parse_response = Mock(return_value=("resposta", None, None, False, None))
+    app.parse_response = Mock(return_value=("resposta", None, None, None))
     app.session_services = Mock()
     app.dispatch_services = Mock()
     app.dispatch_services.delegate = Mock(return_value="resposta")
@@ -207,7 +207,7 @@ class TestChatRoundContextBridge(unittest.TestCase):
             parse_routing=lambda _user: (None, None, False),
             agent_pool=AgentPool(["claude"]),
             session_services=Mock(),
-            parse_response=lambda response: (response, None, None, False, None),
+            parse_response=lambda response: (response, None, None, None),
             threads=1,
             renderer=DummyRenderer(),
         )
@@ -218,7 +218,7 @@ class TestChatRoundContextBridge(unittest.TestCase):
         new_ui_queue = queue.Queue()
         new_state = {"history": []}
         parse_routing = lambda _user: (None, None, False)
-        parse_response = lambda response: (response, None, None, False, None)
+        parse_response = lambda response: (response, None, None, None)
         show_system = Mock()
 
         ctx = ChatRoundContext(
@@ -1097,12 +1097,12 @@ class TestChatWorker(unittest.TestCase):
 class TestSingleAgentPerTurn(unittest.TestCase):
 
     def test_default_mode_only_first_agent_responds(self):
-        """Sem prefixo explícito e sem EXTEND, apenas um agente responde por turno."""
+        """Sem prefixo explícito, apenas um agente responde por turno."""
         app = _make_app(active_agents=["claude", "codex"])
         # Roteamento padrão: sem prefixo explícito
         app.parse_routing = Mock(return_value=("claude", "olá", False))
-        # parse_response: sem extend, sem delegation, sem needs_human_input
-        app.parse_response = Mock(return_value=("resposta", None, None, False, None))
+        # Resposta comum, sem envelope de controle.
+        app.parse_response = Mock(return_value=("resposta", None, None, None))
 
         QuimeraApp._do_process_chat_message(app, "olá")
 
@@ -1115,18 +1115,18 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         """/claude ou /codex explícito → apenas aquele agente responde."""
         app = _make_app(active_agents=["claude", "codex"])
         app.parse_routing = Mock(return_value=("codex", "revisa isso", True))
-        app.parse_response = Mock(return_value=("resposta", None, None, False, None))
+        app.parse_response = Mock(return_value=("resposta", None, None, None))
 
         QuimeraApp._do_process_chat_message(app, "/codex revisa isso")
 
         self.assertEqual(app.dispatch_services.delegate.call_count, 1)
         self.assertEqual(app.dispatch_services.delegate.call_args_list[0][0][0], "codex")
 
-    def test_extend_mode_stays_on_first_agent(self):
-        """EXTEND_MARKER no chat interativo não deve mais disparar outros agentes no mesmo prompt."""
+    def test_single_agent_responds_normally(self):
+        """Uma mensagem comum produz somente uma resposta."""
         app = _make_app(active_agents=["claude", "codex"])
         app.parse_routing = Mock(return_value=("claude", "debate isso", False))
-        app.parse_response = Mock(return_value=("resposta1", None, None, True, None))
+        app.parse_response = Mock(return_value=("resposta1", None, None, None))
         app.dispatch_services.delegate = Mock(return_value="r1")
 
         QuimeraApp._do_process_chat_message(app, "debate isso")
@@ -1134,12 +1134,11 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         self.assertEqual(app.dispatch_services.delegate.call_count, 1)
         self.assertEqual(app.dispatch_services.delegate.call_args_list[0][0][0], "claude")
 
-    def test_extend_with_explicit_prefix_still_single_agent(self):
-        """Prefixo explícito anula extend: mesmo com EXTEND_MARKER, só um agente responde."""
+    def test_explicit_prefix_still_single_agent(self):
+        """Prefixo explícito garante que apenas um agente responde."""
         app = _make_app(active_agents=["claude", "codex"])
-        app.parse_routing = Mock(return_value=("claude", "faz algo", True))  # explicit=True
-        # Resposta com extend=True mas explicit cancela o debate
-        app.parse_response = Mock(return_value=("resposta", None, None, True, None))
+        app.parse_routing = Mock(return_value=("claude", "faz algo", True))
+        app.parse_response = Mock(return_value=("resposta", None, None, None))
 
         QuimeraApp._do_process_chat_message(app, "/claude faz algo")
 
@@ -1159,11 +1158,11 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         }
         responses = [
             # Primeira resposta: delegation para codex
-            ("resposta claude", "codex", delegation_payload, False, None),
+            ("resposta claude", "codex", delegation_payload, None),
             # Resposta do codex (delegation_only)
-            ("resposta codex", None, None, False, "abc123"),
+            ("resposta codex", None, None, "abc123"),
             # Síntese do claude
-            ("síntese", None, None, False, None),
+            ("síntese", None, None, None),
         ]
         app.parse_response = Mock(side_effect=responses)
         app.dispatch_services.delegate = Mock(side_effect=["r1", "r2", "r3"])
@@ -1191,7 +1190,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
             "chain": [],
         }
         # parse_response retorna route_target == first_agent ("claude") — self-delegation
-        app.parse_response = Mock(return_value=("resposta claude", "claude", delegation_payload, False, None))
+        app.parse_response = Mock(return_value=("resposta claude", "claude", delegation_payload, None))
         app.dispatch_services.delegate = Mock(return_value="resposta claude")
 
         QuimeraApp._do_process_chat_message(app, "analisa")
@@ -1219,10 +1218,10 @@ class TestSingleAgentPerTurn(unittest.TestCase):
             "chain": ["claude"],
         }
         app.parse_response = Mock(side_effect=[
-            ("resposta claude", "codex", first_delegation, False, None),
-            ("resposta codex", "opencode-qwen", second_delegation, False, "h1"),
-            ("resposta qwen", None, None, False, "h2"),
-            ("síntese final", None, None, False, None),
+            ("resposta claude", "codex", first_delegation, None),
+            ("resposta codex", "opencode-qwen", second_delegation, "h1"),
+            ("resposta qwen", None, None, "h2"),
+            ("síntese final", None, None, None),
         ])
         app.dispatch_services.delegate = Mock(side_effect=["r1", "r2", "r3", "r4"])
 
@@ -1252,9 +1251,9 @@ class TestSingleAgentPerTurn(unittest.TestCase):
             "chain": ["claude", "codex"],
         }
         parsed = iter([
-            ("resposta claude", "codex", first_delegation, False, None),
-            ("resposta codex", "claude", circular_delegation, False, "h1"),
-            ("síntese", None, None, False, None),
+            ("resposta claude", "codex", first_delegation, None),
+            ("resposta codex", "claude", circular_delegation, "h1"),
+            ("síntese", None, None, None),
         ])
 
         def fake_parse_response(_response):
@@ -1284,7 +1283,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         """Com apenas um agente ativo, não há tentativa de chamar agente secundário."""
         app = _make_app(active_agents=["claude"])
         app.parse_routing = Mock(return_value=("claude", "oi", False))
-        app.parse_response = Mock(return_value=("resposta", None, None, False, None))
+        app.parse_response = Mock(return_value=("resposta", None, None, None))
 
         QuimeraApp._do_process_chat_message(app, "oi")
 
@@ -1311,10 +1310,10 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         }
         # codex responde com apenas delegation (body=None) — sem texto, só delegação
         app.parse_response = Mock(side_effect=[
-            ("resposta claude", "codex", first_delegation, False, None),
-            (None, "opencode-qwen", second_delegation, False, "h1"),  # sem body
-            ("resposta qwen", None, None, False, "h2"),
-            ("síntese final", None, None, False, None),
+            ("resposta claude", "codex", first_delegation, None),
+            (None, "opencode-qwen", second_delegation, "h1"),  # sem body
+            ("resposta qwen", None, None, "h2"),
+            ("síntese final", None, None, None),
         ])
         app.dispatch_services.delegate = Mock(side_effect=["r1", "r2", "r3", "r4"])
 
@@ -1338,7 +1337,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
             "chain": [],
         }
         # claude responde com delegation para agente fora de active_agents
-        app.parse_response = Mock(return_value=("resposta claude", "agente", delegation, False, None))
+        app.parse_response = Mock(return_value=("resposta claude", "agente", delegation, None))
 
         QuimeraApp._do_process_chat_message(app, "mensagem")
 
@@ -1371,10 +1370,10 @@ class TestSingleAgentPerTurn(unittest.TestCase):
             ],
         }
         app.parse_response = Mock(side_effect=[
-            (None, "codex", first_delegation, False, None),
-            ("resposta codex", None, None, False, "h1"),
-            ("resposta qwen", None, None, False, "h2"),
-            ("síntese final", None, None, False, None),
+            (None, "codex", first_delegation, None),
+            ("resposta codex", None, None, "h1"),
+            ("resposta qwen", None, None, "h2"),
+            ("síntese final", None, None, None),
         ])
         app.dispatch_services.delegate = Mock(side_effect=["r1", "r2", "r3", "r4"])
 
@@ -1392,7 +1391,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
             ("claude", "primeira fala", False),
             ("codex", "segunda fala", False),
         ])
-        app.parse_response = Mock(return_value=("resposta", None, None, False, None))
+        app.parse_response = Mock(return_value=("resposta", None, None, None))
 
         QuimeraApp._do_process_chat_message(app, "primeira fala")
         QuimeraApp._do_process_chat_message(app, "segunda fala")

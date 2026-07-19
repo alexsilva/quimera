@@ -275,7 +275,7 @@ class ChatRoundOrchestrator:
             protocol_mode="standard",
             **prompt_binding,
         )
-        response, _, _, extend, _ = self._parse_response(response)
+        response, _, _, _ = self._parse_response(response)
 
         if self._is_cancelled():
             self._handle_cancelled()
@@ -307,7 +307,7 @@ class ChatRoundOrchestrator:
                     protocol_mode="standard",
                     **prompt_binding,
                 )
-                fallback_response, _, _, extend, _ = self._parse_response(
+                fallback_response, _, _, _ = self._parse_response(
                     fallback_response
                 )
                 if self._is_cancelled():
@@ -328,90 +328,8 @@ class ChatRoundOrchestrator:
                 self._show_warning("Nenhum agente disponível respondeu.")
                 return
 
-        other_agents = [agent for agent in self._agent_pool.agents if agent != first_agent]
         self._dispatch_services.print_response(first_agent, response)
         if response is not None:
             self._session_services.persist_message(first_agent, response)
 
-        self._process_standard_flow(
-            first_agent,
-            route.explicit,
-            extend,
-            other_agents,
-            request_override=message,
-            history_snapshot=None,
-        )
-
         self._session_services.maybe_auto_summarize(preferred_agent=first_agent)
-
-    def _process_standard_flow(
-        self,
-        first_agent,
-        explicit,
-        extend,
-        other_agents,
-        *,
-        request_override: str | None = None,
-        history_snapshot: list | None = None,
-    ):
-        protocol_mode = "extended" if extend else "standard"
-        call_prompt_binding = {}
-        if request_override:
-            call_prompt_binding["request_override"] = request_override
-        if history_snapshot:
-            call_prompt_binding["history_snapshot"] = history_snapshot
-        parallel_slots = max(0, self._threads)
-        self._set_parallel_toolbar_state(
-            active=0,
-            queued=0,
-            capacity=parallel_slots,
-            active_agents=(),
-        )
-        if extend and not explicit and self._task_services is not None:
-            logger.info(
-                "[standard-flow] extend marker received; running sequential follow-up from %s",
-                first_agent,
-            )
-            if other_agents:
-                self._show_system(f"[debate] iniciado: {first_agent} ↔ {other_agents[0]}")
-            else:
-                self._show_system(f"[debate] iniciado: {first_agent}")
-            remaining = [other_agents[0], first_agent, other_agents[0]] if other_agents else []
-            for index, agent in enumerate(remaining):
-                self._set_parallel_toolbar_state(
-                    active=0,
-                    queued=max(0, len(remaining) - (index + 1)),
-                    capacity=parallel_slots,
-                    active_agents=(),
-                )
-                response = self._delegate(
-                    agent,
-                    primary=False,
-                    protocol_mode=protocol_mode,
-                    **call_prompt_binding,
-                )
-                if self._is_cancelled():
-                    self._handle_cancelled()
-                    return
-                response, _, _, _, _ = self._parse_response(response)
-                self._dispatch_services.print_response(agent, response)
-                if response is not None:
-                    self._session_services.persist_message(agent, response)
-            self._set_parallel_toolbar_state(
-                active=0,
-                queued=0,
-                capacity=parallel_slots,
-                active_agents=(),
-            )
-            return
-        if extend:
-            logger.info(
-                "[standard-flow] extend marker ignored in chat round; same prompt stays bound to %s",
-                first_agent,
-            )
-        self._set_parallel_toolbar_state(
-            active=0,
-            queued=0,
-            capacity=parallel_slots,
-            active_agents=(),
-        )

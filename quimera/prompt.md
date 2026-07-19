@@ -49,10 +49,6 @@ Contar eventos: `python3 -c "import collections,json;c=collections.Counter(json.
 - Ao final, diga o que mudou, a evidência e o próximo passo.
 <!-- ENDIF:delegation_only -->
 
-<!-- IF:is_first_speaker -->
-- Se o tópico exigir debate mais aprofundado entre os agentes, inclua {marker} ao final da sua resposta (sem explicação).
-<!-- ENDIF:is_first_speaker -->
-
 <!-- IF:is_reviewer -->
 Você é o validador desta rodada. Emita um veredicto:
 

@@ -28,7 +28,6 @@ from quimera.runtime.tool_schema_defs import (  # noqa: F401
 from quimera.ui.commands import (  # noqa: F401
     DEFAULT_FIRST_AGENT,
     INPUT_PROMPT,
-    EXTEND_MARKER,
     CMD_EXIT,
     CMD_CLEAR,
     CMD_PROMPT,

@@ -2,7 +2,6 @@ from pathlib import Path
 
 from . import profiles
 from .config import DEFAULT_HISTORY_WINDOW
-from .constants import EXTEND_MARKER
 from .evidence import EvidenceFormatter, EvidenceStore
 from .execution_mode_presenter import ExecutionModePresenter
 from .delegate_presenter import DelegatePresenter
@@ -191,7 +190,6 @@ class PromptBuilder:
             delegation_only=delegation_only,
             is_first_speaker=is_first_speaker_flag,
             is_reviewer=is_reviewer,
-            marker=EXTEND_MARKER,
             session_id=session_id,
             current_job_id=current_job_id,
             workspace_root=workspace_root,

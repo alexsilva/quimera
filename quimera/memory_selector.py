@@ -1,5 +1,4 @@
 from .config import DEFAULT_HISTORY_WINDOW, DEFAULT_USER_NAME
-from .constants import EXTEND_MARKER
 
 
 class MemorySelector:
@@ -63,7 +62,6 @@ class MemorySelector:
         "arquivo alterado:",
         # Protocol / control markers
         "[ack:",
-        EXTEND_MARKER.lower(),
     })
 
     @staticmethod

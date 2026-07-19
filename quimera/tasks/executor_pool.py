@@ -717,7 +717,7 @@ def delegate_for_parallel_with_client(
     set_staging_root(staging_root / str(index))
     try:
         raw = delegate(agent, delegation=delegation, primary=False, protocol_mode=protocol_mode, silent=True, show_output=False)
-        response, _, _, extend, _ = parse_response(raw)
-        return agent, response, extend
+        response, _, _, _ = parse_response(raw)
+        return agent, response
     finally:
         set_staging_root(None)
