@@ -1928,6 +1928,7 @@ def test_textual_transient_layer_is_hidden_by_default_in_css():
     transient_rule = TEXTUAL_APP_CSS.split("#feed_transient", 1)[1].split("}", 1)[0]
 
     assert "display: none;" in transient_rule
+    assert "background: $surface;" in transient_rule
 
 
 def test_toolbar_coordinator_formats_agent_names_with_profile_icons():

@@ -28,7 +28,7 @@ TEXTUAL_APP_CSS = """
             height: auto;
             max-height: 10;
             padding: 0 1;
-            background: $background;
+            background: $surface;
         }
         #toolbar {
             height: 1;
