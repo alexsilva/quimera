@@ -53,6 +53,16 @@ from quimera.ui.textual.terminal_modes import (
 from quimera.ui.textual.styles import TEXTUAL_APP_CSS
 
 
+def _update_transient_widget(widget, renderables: list[object]) -> None:
+    """Atualiza a camada transitória e a remove do layout quando está vazia."""
+    if renderables:
+        widget.update(_RichGroup(*renderables))
+        widget.display = True
+        return
+    widget.update("")
+    widget.display = False
+
+
 def _resolve_textual_feed_limit(quimera_app) -> int | None:
     """Retorna o limite visual do feed Textual.
 
@@ -483,7 +493,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._feed_model.clear()
             self.query_one("#feed", RichLog).clear()
             self._written_to_richlog.clear()
-            self.query_one("#feed_transient", Static).update("")
+            _update_transient_widget(self.query_one("#feed_transient", Static), [])
             self._clear_status_bar()
             self._refresh_now(layout=True)
 
@@ -526,10 +536,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     r = _render_event(item.event)
                     if r is not None:
                         parts.append(r)
-            if parts:
-                widget.update(_RichGroup(*parts))
-            else:
-                widget.update("")
+            _update_transient_widget(widget, parts)
 
         def _sync_permanent_to_richlog(self, feed: RichLog) -> None:
             """Adiciona ao RichLog apenas itens permanentes ainda não escritos."""
@@ -593,7 +600,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 self._feed_model.clear()
                 self.query_one("#feed", RichLog).clear()
                 self._written_to_richlog.clear()
-                self.query_one("#feed_transient", Static).update("")
+                _update_transient_widget(self.query_one("#feed_transient", Static), [])
                 self._clear_status_bar()
                 self._refresh_now(layout=True)
                 return

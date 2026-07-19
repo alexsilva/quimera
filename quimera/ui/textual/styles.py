@@ -24,6 +24,7 @@ TEXTUAL_APP_CSS = """
             overflow-x: auto;
         }
         #feed_transient {
+            display: none;
             height: auto;
             max-height: 10;
             padding: 0 1;

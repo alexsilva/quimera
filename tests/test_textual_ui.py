@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from rich.console import Console, Group
 
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
-from quimera.ui.textual.app import run_textual_quimera_app
+from quimera.ui.textual.app import _update_transient_widget, run_textual_quimera_app
 from quimera.ui.textual.bridge import TextualUiBridge
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.feed_model import (
@@ -1901,6 +1901,33 @@ def test_textual_feed_reserves_at_least_ten_lines_for_agent_output():
     assert "overflow-y: auto;" in css
     assert "#input_bar" in css
     assert "max-height: 3;" in css
+
+
+def test_textual_transient_layer_is_removed_from_layout_when_empty():
+    widget = SimpleNamespace(display=True, update=Mock())
+
+    _update_transient_widget(widget, [])
+
+    widget.update.assert_called_once_with("")
+    assert widget.display is False
+
+
+def test_textual_transient_layer_is_visible_while_agent_output_exists():
+    widget = SimpleNamespace(display=False, update=Mock())
+
+    _update_transient_widget(widget, ["executando"])
+
+    rendered = widget.update.call_args.args[0]
+    assert isinstance(rendered, Group)
+    assert widget.display is True
+
+
+def test_textual_transient_layer_is_hidden_by_default_in_css():
+    from quimera.ui.textual.styles import TEXTUAL_APP_CSS
+
+    transient_rule = TEXTUAL_APP_CSS.split("#feed_transient", 1)[1].split("}", 1)[0]
+
+    assert "display: none;" in transient_rule
 
 
 def test_toolbar_coordinator_formats_agent_names_with_profile_icons():
