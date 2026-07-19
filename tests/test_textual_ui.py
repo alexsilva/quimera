@@ -16,6 +16,10 @@ from quimera.ui.textual.feed_model import (
     _agent_lifecycle_payload,
 )
 from quimera.ui.textual.input_gate import TextualInputGate
+from quimera.ui.textual.prompt_preview_screen import (
+    PromptPreviewLog,
+    PromptPreviewScreen,
+)
 from quimera.ui.textual.renderer import TextualRenderer, _TextualStatus
 import quimera.ui.textual.renderables as renderables
 from quimera.ui.textual.renderables import (
@@ -29,6 +33,70 @@ from quimera.ui.textual.terminal_modes import _external_textual_window
 
 def _events(model: TextualFeedModel):
     return [item.event for item in model.items]
+
+
+def test_textual_renderer_routes_prompt_preview_to_modal_event():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_prompt_preview("codex", "PROMPT FINAL:\nTeste")
+
+    assert len(emitted) == 1
+    assert emitted[0].kind == "prompt_preview"
+    assert emitted[0].agent == "codex"
+    assert emitted[0].payload == {
+        "agent": "codex",
+        "preview": "PROMPT FINAL:\nTeste",
+    }
+
+
+def test_prompt_preview_screen_shows_content_and_closes_with_button():
+    import asyncio
+
+    from textual.app import App
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test() as pilot:
+            app.push_screen(PromptPreviewScreen("codex", "PROMPT FINAL:\nTeste"))
+            await pilot.pause()
+
+            screen = app.screen
+            assert isinstance(screen, PromptPreviewScreen)
+            assert screen.ALLOW_SELECT is False
+            assert app.ALLOW_SELECT is False
+            content = screen.query_one("#prompt_preview_content", PromptPreviewLog)
+            assert content.ALLOW_SELECT is False
+            assert content.styles.pointer == "default"
+            assert "PROMPT FINAL:" in str(content.lines[0])
+            assert "Teste" in str(content.lines[1])
+
+            await pilot.click("#prompt_preview_close")
+            await pilot.pause()
+            assert not isinstance(app.screen, PromptPreviewScreen)
+            assert app.ALLOW_SELECT is True
+
+    asyncio.run(run_test())
+
+
+def test_prompt_preview_screen_closes_with_escape():
+    import asyncio
+
+    from textual.app import App
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test() as pilot:
+            app.push_screen(PromptPreviewScreen("claude", "preview"))
+            await pilot.pause()
+            assert isinstance(app.screen, PromptPreviewScreen)
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, PromptPreviewScreen)
+
+    asyncio.run(run_test())
 
 
 def test_textual_feed_replaces_agent_lifecycle_with_final_message():

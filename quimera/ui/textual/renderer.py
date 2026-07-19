@@ -609,8 +609,14 @@ class TextualRenderer(RendererBase):
         self._bridge.emit(TextualUiEvent("plain", ""))
 
     def show_prompt_preview(self, agent: str, preview: str) -> None:
-        """Exibe preview de prompt."""
-        self._bridge.emit(TextualUiEvent("plain", preview, agent=agent))
+        """Solicita a exibição do preview em uma janela modal."""
+        self._bridge.emit(
+            TextualUiEvent(
+                "prompt_preview",
+                {"agent": str(agent), "preview": str(preview)},
+                agent=agent,
+            )
+        )
 
     def set_summarizing(self, active: bool) -> None:
         """Sinaliza início/fim de sumarização para animação no header."""

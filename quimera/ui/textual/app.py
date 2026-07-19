@@ -103,6 +103,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         from textual.widgets import Input, RichLog, Static
         from quimera.app.completion_dropdown import CompletionDropdown
         from quimera.ui.textual.config_screen import ConfigScreen
+        from quimera.ui.textual.prompt_preview_screen import PromptPreviewScreen
         from quimera.ui.textual.widgets import _BreadcrumbWidget, _CompletionInput, _SummaryHeader, _SummarySpinner
     except ImportError as exc:
         raise SystemExit(
@@ -630,6 +631,15 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 return
             if event.kind == "open_config":
                 self.action_open_config()
+                return
+            if event.kind == "prompt_preview":
+                payload = event.payload or {}
+                self.push_screen(
+                    PromptPreviewScreen(
+                        str(payload.get("agent") or event.agent or "agente"),
+                        str(payload.get("preview") or ""),
+                    )
+                )
                 return
             if event.kind == "notification":
                 payload = event.payload or {}
