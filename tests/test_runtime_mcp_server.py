@@ -101,6 +101,7 @@ class TestInitialize:
         server = _make_server()
         [resp] = _exchange(server, {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {}})
         assert resp["result"]["serverInfo"]["name"] == MCPServer.SERVER_NAME
+        assert resp["result"]["serverInfo"]["version"] == MCPServer.SERVER_VERSION
 
     def test_retorna_capabilities_com_tools(self):
         """Verifica que Test retorna capabilities com tools."""

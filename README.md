@@ -88,6 +88,30 @@ Principais flags:
 - `--cmd COMANDO`: comando para driver=cli.
 - `--working-dir DIR`: diretório de trabalho.
 - `--history-window N`: tamanho da janela de histórico.
+- `--version`: exibe a versão derivada do Git e encerra.
+
+## Versionamento
+
+A versão do Quimera é derivada automaticamente do histórico Git por
+`setuptools-scm`; não existe número de versão duplicado no código. Tags de
+release usam o formato `vX.Y.Z`:
+
+```bash
+git tag -a v0.1.0 -m "Quimera 0.1.0"
+git push origin v0.1.0
+```
+
+Um build feito exatamente na tag recebe `X.Y.Z`. Commits posteriores recebem
+uma versão de desenvolvimento com distância e hash do commit; uma árvore com
+alterações locais também é identificada como suja. Wheels e sdists guardam a
+versão no metadata, portanto a aplicação instalada não depende da presença do
+diretório `.git`.
+
+Para consultar a versão efetiva:
+
+```bash
+quimera --version
+```
 
 Ajuda completa:
 

@@ -707,6 +707,18 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         self.assertIn("v0.1.0", message)
 
+    def test_version_resolver_uses_safe_fallback_without_package_metadata(self):
+        from importlib import metadata
+        from unittest.mock import patch
+
+        from quimera.version import UNKNOWN_VERSION, resolve_version
+
+        with patch(
+            "quimera.version.metadata.version",
+            side_effect=metadata.PackageNotFoundError,
+        ):
+            self.assertEqual(resolve_version(), UNKNOWN_VERSION)
+
     def test_resolve_active_model_label_extracts_model_from_cli_equals(self):
         from quimera.app.core import QuimeraApp
         from quimera.profiles.base import CliConnection

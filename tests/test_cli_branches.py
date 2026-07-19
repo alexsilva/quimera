@@ -138,6 +138,26 @@ def test_main_help_does_not_check_required_runtime_dependencies(monkeypatch, cap
     assert exc.value.code == 0
     assert "usage: quimera" in capsys.readouterr().out
 
+
+def test_main_version_uses_package_version_without_starting_runtime(
+    monkeypatch,
+    capsys,
+):
+    """--version encerra cedo usando a versão central do pacote."""
+    monkeypatch.setattr(sys, "argv", ["quimera", "--version"])
+    monkeypatch.setattr(
+        cli,
+        "_ensure_required_runtime_dependencies",
+        lambda: (_ for _ in ()).throw(AssertionError("should not run")),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == f"quimera {cli.__version__}"
+
+
 def test_prompt_text_uses_default_when_empty(monkeypatch):
     """Verifica que prompt text uses default when empty."""
     monkeypatch.setattr(cli, "_read_input", lambda _text: "")

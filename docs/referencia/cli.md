@@ -12,6 +12,7 @@ quimera [opções] [test_agent]
 
 | Flag | Descrição |
 |---|---|
+| `--version` | Exibe a versão derivada do Git e encerra. |
 | `--name NOME [NOME ...]` | Define nome do usuário na sessão. |
 | `--whoami` | Mostra identificação/configuração relacionada ao usuário. |
 | `--debug` | Ativa métricas e auditoria de renderização em logs. |
@@ -55,6 +56,12 @@ quimera [opções] [test_agent]
 
 ```bash
 quimera
+```
+
+### Consultar versão
+
+```bash
+quimera --version
 ```
 
 ### Sessão com agentes específicos

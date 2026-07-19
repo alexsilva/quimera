@@ -1,5 +1,5 @@
 """Apresentação de boas-vindas: logo ASCII, versão e mensagem inicial."""
-from importlib import metadata
+from quimera.version import resolve_version
 
 
 class WelcomePresenter:
@@ -15,14 +15,8 @@ class WelcomePresenter:
 
     @staticmethod
     def resolve_app_version() -> str:
-        """Resolve a versão instalada do pacote, com fallback seguro."""
-        try:
-            ver = metadata.version("quimera")
-            if ver is not None:
-                return ver
-        except Exception:
-            pass
-        return "dev"
+        """Resolve a versão instalada pela fonte única da aplicação."""
+        return resolve_version()
 
     @staticmethod
     def build_welcome_logo() -> str:

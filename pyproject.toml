@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "quimera"
-version = "0.1.0"
+dynamic = ["version"]
 requires-python = ">=3.10"
 dependencies = [
     "rich>=14.0",
@@ -22,6 +22,11 @@ quimera-fake = "quimera.devtools.fake_agents:main"
 
 [tool.setuptools.packages.find]
 include = ["quimera*"]
+
+[tool.setuptools_scm]
+fallback_version = "0.1.0"
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"
 
 [tool.pytest.ini_options]
 filterwarnings = [

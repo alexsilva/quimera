@@ -30,6 +30,7 @@ from .runtime.mcp.client import start_mcp_clients
 from .config import ConfigManager
 from .workspace import Workspace
 from .prompt_templates import PromptText
+from .version import __version__
 
 DriverRepl = None
 
@@ -261,6 +262,11 @@ def main():
             pass
 
     parser = argparse.ArgumentParser(prog="quimera")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     parser.add_argument("--name", metavar="NOME", nargs="+", default=None)
     parser.add_argument("--whoami", action="store_true")
     parser.add_argument(
