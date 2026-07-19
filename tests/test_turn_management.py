@@ -982,6 +982,48 @@ class TestTurnCycle(unittest.TestCase):
             "a primeira resposta só apareceu depois que todos os prompts terminaram",
         )
 
+    def test_exit_waits_for_already_accepted_prompt(self):
+        """Um /exit imediato não pode descartar o prompt já enviado ao worker."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
+        app.renderer = DummyRenderer()
+        app.threads = 1
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.session_services = Mock()
+        app.agent_client = Mock()
+        app.turn_manager = TurnManager()
+        app._format_user_prompt = lambda: "User: "
+        app.bug_services = Mock()
+        app.read_user_input = Mock(side_effect=["mensagem", CMD_EXIT])
+
+        completed = threading.Event()
+
+        def observed_process(user):
+            time.sleep(0.05)
+            app._ui_event_queue.put(
+                RenderEvent(RenderEvent.TEXT, f"resposta {user}", agent="agent")
+            )
+            completed.set()
+
+        app._do_process_chat_message = observed_process
+
+        _materialize_ui_event_handler(app)
+        QuimeraApp.run(app)
+
+        self.assertTrue(completed.is_set())
+        self.assertTrue(app.renderer.messages)
+
     def test_threads_one_is_serial(self):
         """Com threads=1, no máximo uma execução de agente roda por vez (sem overlap).
 

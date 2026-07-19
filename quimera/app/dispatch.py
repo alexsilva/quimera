@@ -394,6 +394,22 @@ class AppDispatchServices:
         if delegate_fn_override is not None:
             return delegate_fn_override(agent, **options)
 
+        isolated_run = bool(options.pop("isolated_run", False))
+        if isolated_run:
+            isolated_dispatch = self._fork_for_concurrent_delegate()
+            if isolated_dispatch is None:
+                # Integrações customizadas sem suporte a fork continuam
+                # corretas, ainda que serializadas no client principal.
+                self._wait_and_reserve_primary_delegate()
+                try:
+                    return self._delegate_reserved(agent, **options)
+                finally:
+                    self._release_primary_delegate()
+            try:
+                return isolated_dispatch._delegate_reserved(agent, **options)
+            finally:
+                isolated_dispatch.close()
+
         uses_primary = self._try_reserve_primary_delegate()
         if not uses_primary:
             concurrent_dispatch = self._fork_for_concurrent_delegate()

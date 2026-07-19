@@ -161,6 +161,7 @@ class TestProcessMainFlow(unittest.TestCase):
             is_first_speaker=True,
             protocol_mode="standard",
             request_override="status",
+            isolated_run=True,
             max_retries=1,
         )
         app.task_services.delegate_for_parallel.assert_not_called()

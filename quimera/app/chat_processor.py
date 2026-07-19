@@ -329,13 +329,25 @@ def run_chat_loop(
             if threaded_chat and chat_queue is not None:
                 chat_queue.put(None)
             if chat_worker is not None:
-                chat_worker.join(timeout=0.5)
+                # No encerramento normal, todos os prompts já aceitos precisam
+                # ser retirados da fila e submetidos ao executor antes de ele
+                # ser fechado. O timeout anterior permitia que um `/exit`
+                # imediato encerrasse o executor enquanto o worker ainda
+                # carregava uma mensagem, perdendo a resposta.
+                chat_worker.join(timeout=0.5 if interrupted_shutdown else None)
             if chat_executor is not None:
                 if interrupted_shutdown:
                     chat_executor.shutdown(wait=False, cancel_futures=True)
                     _join_executor_threads(chat_executor, timeout=0.3)
                 else:
                     chat_executor.shutdown(wait=True, cancel_futures=False)
+            if not interrupted_shutdown:
+                # Futures concluídos podem ter publicado RenderEvents depois da
+                # última iteração do loop. Drena-os antes de desmontar renderer,
+                # sessão e bridge.
+                chat_lifecycle.drain_ui_events(_ui_event_queue)
+                if hasattr(app, "event_sink") and app.event_sink is not None:
+                    app.event_sink.drain_pending()
         except KeyboardInterrupt:
             pass
         app.runtime_state.chat_executor = None

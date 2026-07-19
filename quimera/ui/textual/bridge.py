@@ -212,11 +212,28 @@ class TextualUiBridge:
             except queue.Empty:
                 return events
 
+    @staticmethod
+    def _has_active_chat_work(quimera_app) -> bool:
+        """Retorna True quando o scheduler do chat possui trabalho aceito.
+
+        O AgentClient principal não é uma fonte confiável nesse caso: rodadas
+        normais podem executar em clients isolados. O estado canônico é o
+        contador de prompts ativos/pendentes do runtime.
+        """
+        runtime_state = getattr(quimera_app, "runtime_state", None)
+        get_outstanding = getattr(runtime_state, "get_chat_outstanding_count", None)
+        if callable(get_outstanding):
+            try:
+                return int(get_outstanding() or 0) > 0
+            except (TypeError, ValueError):
+                pass
+        return bool(getattr(quimera_app, "is_agent_running", False))
+
     def cancel_or_exit(self) -> None:
         """Cancela agente ativo ou solicita saída limpa."""
         with self._lock:
             quimera_app = self.quimera_app
-        if bool(getattr(quimera_app, "is_agent_running", False)):
+        if self._has_active_chat_work(quimera_app):
             lifecycle = getattr(quimera_app, "chat_lifecycle", None)
             handle_interrupt = getattr(lifecycle, "handle_local_interrupt", None)
             if callable(handle_interrupt):

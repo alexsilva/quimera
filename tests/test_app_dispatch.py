@@ -255,6 +255,55 @@ class TestCallAgent:
         assert len(forks) == 1
         assert forks[0].closed is True
 
+    def test_isolated_chat_runs_never_use_primary_client(self):
+        """Rodadas normais do chat devem seguir o mesmo caminho isolado."""
+        calls = []
+        forks = []
+
+        class IsolatedClient:
+            def __init__(self, label):
+                self.label = label
+                self._user_cancelled = False
+                self._cancel_event = threading.Event()
+                self.rate_limit_detected = False
+                self.execution_mode = None
+                self.tool_executor = None
+                self.closed = False
+
+            def call(self, agent):
+                calls.append((self.label, agent))
+                return f"{self.label}:{agent}"
+
+            def fork_for_concurrent_run(self):
+                forked = IsolatedClient(f"run-{len(forks) + 1}")
+                forked._cancel_event = self._cancel_event
+                forks.append(forked)
+                return forked
+
+            def close(self):
+                self.closed = True
+
+        primary = IsolatedClient("primary")
+        ds = AppDispatchServices(
+            agent_client_override=primary,
+            refresh_task_state=lambda: None,
+            get_execution_mode=lambda: None,
+            max_retries=1,
+        )
+
+        def low_level(dispatch, agent, **_options):
+            return dispatch._get_agent_client().call(agent)
+
+        with patch.object(AppDispatchServices, "delegate_low_level", autospec=True, side_effect=low_level):
+            first = ds.delegate("agent-a", isolated_run=True)
+            second = ds.delegate("agent-b", isolated_run=True)
+
+        assert first == "run-1:agent-a"
+        assert second == "run-2:agent-b"
+        assert calls == [("run-1", "agent-a"), ("run-2", "agent-b")]
+        assert all(client.closed for client in forks)
+        assert primary.closed is False
+
     def test_retry_on_none_low_level(self, dispatch_app):
         """response None → retry até max_retries, depois record_failure"""
         dispatch_app.MAX_RETRIES = 2

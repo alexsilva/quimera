@@ -812,6 +812,46 @@ def test_textual_bridge_cancel_uses_chat_lifecycle_before_agent_client():
     agent_client.cancel_active_work.assert_not_called()
 
 
+def test_textual_bridge_cancel_uses_scheduler_state_for_isolated_chat_runs():
+    bridge = TextualUiBridge()
+    lifecycle = Mock()
+    runtime_state = Mock()
+    runtime_state.get_chat_outstanding_count.return_value = 2
+    agent_client = Mock(_agent_running=False)
+    app = SimpleNamespace(
+        is_agent_running=False,
+        runtime_state=runtime_state,
+        chat_lifecycle=lifecycle,
+        agent_client=agent_client,
+    )
+    bridge.emit = Mock()
+    bridge.attach_quimera_app(app)
+
+    bridge.cancel_or_exit()
+
+    lifecycle.handle_local_interrupt.assert_called_once_with()
+    agent_client.cancel_active_work.assert_not_called()
+    assert bridge.input_queue.empty()
+    bridge.emit.assert_called_once()
+
+
+def test_textual_bridge_ctrl_c_exits_only_when_chat_is_idle():
+    bridge = TextualUiBridge()
+    runtime_state = Mock()
+    runtime_state.get_chat_outstanding_count.return_value = 0
+    app = SimpleNamespace(
+        is_agent_running=False,
+        runtime_state=runtime_state,
+        chat_lifecycle=Mock(),
+        agent_client=Mock(_agent_running=False),
+    )
+    bridge.attach_quimera_app(app)
+
+    bridge.cancel_or_exit()
+
+    assert bridge.input_queue.get_nowait() == "/exit"
+
+
 def test_textual_input_gate_is_active_while_textual_is_mounted():
     gate = TextualInputGate(TextualUiBridge())
 

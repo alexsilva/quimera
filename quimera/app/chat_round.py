@@ -104,6 +104,11 @@ class ChatRoundOrchestrator:
         return self._snapshot_history()
 
     def _delegate(self, agent: str, **kwargs):
+        # Toda execução iniciada pelo chat usa um runtime isolado. Isso evita
+        # que o primeiro prompt concorrente siga pelo AgentClient principal
+        # enquanto os seguintes usam clients forkados, produzindo dois fluxos
+        # operacionais diferentes para a mesma rodada de chat.
+        kwargs.setdefault("isolated_run", True)
         if self._threads > 1 and "max_retries" not in kwargs:
             # Em modo threaded cada prompt deve executar uma vez por agente;
             # retries automáticos causam efeito de loop/cascata no chat.

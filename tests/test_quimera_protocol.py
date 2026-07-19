@@ -420,12 +420,17 @@ def _materialize_chat_lifecycle(app):
             else:
                 super().handle_local_interrupt()
 
-        def submit_async_message(self, user):
+        def submit_async_message(self, user, *, slot_reserved=True):
             fn = app.__dict__.get('_submit_async_chat_message')
             if callable(fn):
-                fn(user)
+                try:
+                    fn(user, slot_reserved=slot_reserved)
+                except TypeError as exc:
+                    if "slot_reserved" not in str(exc):
+                        raise
+                    fn(user)
             else:
-                super().submit_async_message(user)
+                super().submit_async_message(user, slot_reserved=slot_reserved)
 
         def drain_ui_events(self, ui_queue):
             fn = app.__dict__.get('_drain_ui_events')
