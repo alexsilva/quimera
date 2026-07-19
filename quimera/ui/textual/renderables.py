@@ -27,11 +27,31 @@ from quimera.clipboard_support import ClipboardManager
 _clipboard_manager = ClipboardManager()
 
 _RICH_MARKUP_TAG_RE = re.compile(r"\[/?[a-zA-Z][a-zA-Z0-9_#= .:-]*\]")
-_TOOL_PREVIEW_LINE_LIMIT = 5
+_TOOL_PREVIEW_LINE_LIMIT = 8
+_THINKING_MARKER = "✻"
+_THINKING_PULSE_FRAMES = ("✻", "✽", "✳", "✢", "·", "✢", "✳", "✽")
+_thinking_pulse_index = 0
 _DELEGATION_HINT_RE = re.compile(
     r"(\bdelegate\b|\bdelegar\b|\bdelegação\b|\bdelegacao\b|->|→|=>)",
     re.IGNORECASE,
 )
+
+
+def advance_thinking_pulse() -> None:
+    """Avança um frame da animação do marcador de pensamento."""
+    global _thinking_pulse_index
+    _thinking_pulse_index = (_thinking_pulse_index + 1) % len(_THINKING_PULSE_FRAMES)
+
+
+def reset_thinking_pulse() -> None:
+    """Volta o marcador de pensamento ao frame base (``✻``)."""
+    global _thinking_pulse_index
+    _thinking_pulse_index = 0
+
+
+def _thinking_pulse_marker() -> str:
+    """Retorna o glifo atual do marcador de pensamento pulsante."""
+    return _THINKING_PULSE_FRAMES[_thinking_pulse_index]
 
 
 def _approval_options() -> list[str]:
@@ -44,20 +64,87 @@ def _strip_rich_markup_tags(value: str) -> str:
     return _RICH_MARKUP_TAG_RE.sub("", str(value or ""))
 
 
-def _truncate_tool_preview(value: str, *, line_limit: int = _TOOL_PREVIEW_LINE_LIMIT) -> str:
-    """Limita previews/resultados de tools para não dominar o feed."""
-    lines = str(value or "").strip().splitlines()
-    if len(lines) <= line_limit:
-        return "\n".join(lines)
-    return "\n".join([*lines[:line_limit], "...\n[expandir]"])
+def _styled_tool_line(line: str, style: str) -> Text:
+    """Estiliza uma linha de tool com ícone de status, sem cortar conteúdo."""
+    stripped = str(line or "").strip()
+    rendered = Text(no_wrap=False, overflow="fold")
+    rendered.append("  ")
+    if stripped.startswith("✓ "):
+        rendered.append("✓ ", style="bold green")
+        rendered.append(stripped[2:], style="dim")
+        return rendered
+    if stripped.startswith("✗ "):
+        rendered.append("✗ ", style="bold red")
+        rendered.append(stripped[2:], style="red")
+        return rendered
+    if stripped.startswith(("⚒ ", "⌘ ")):
+        stripped = stripped[2:].strip()
+    if stripped.startswith("$ "):
+        rendered.append("$ ", style=f"bold {style}")
+        rendered.append(stripped[2:])
+        return rendered
+    if stripped.startswith("usando "):
+        rendered.append("· ", style="dim")
+        rendered.append(stripped, style="dim")
+        return rendered
+    name, _, args = stripped.partition(" ")
+    rendered.append("⚒ ", style=f"bold {style}")
+    rendered.append(name, style=f"bold {style}")
+    if args:
+        rendered.append(f" {args}", style="dim")
+    return rendered
 
 
-def _build_tool_preview_block(tools) -> str:
-    """Monta bloco textual de previews de tools com truncamento por item."""
+def _build_tools_renderable(tools, style: str):
+    """Monta o bloco visual de tools do turno com linhas estilizadas por status.
+
+    Cada entrada pode ser multi-linha (previews de diff/saída); a primeira linha
+    recebe o tratamento de status e as demais aparecem indentadas, limitadas por
+    quantidade de linhas — nunca por corte de caracteres.
+    """
     if not isinstance(tools, list):
-        return ""
-    lines = [_truncate_tool_preview(str(tool)) for tool in tools if str(tool).strip()]
-    return "\n".join(line for line in lines if line.strip())
+        return None
+    entries = [str(tool) for tool in tools if str(tool).strip()]
+    if not entries:
+        return None
+    parts = []
+    for entry in entries:
+        lines = entry.strip().splitlines()
+        head, extra = lines[0], lines[1:]
+        parts.append(_styled_tool_line(head, style))
+        omitted = len(extra) - _TOOL_PREVIEW_LINE_LIMIT
+        for continuation in extra[:_TOOL_PREVIEW_LINE_LIMIT]:
+            parts.append(Text(f"    {continuation}", style="dim", no_wrap=False, overflow="fold"))
+        if omitted > 0:
+            parts.append(Text(f"    ⋮ +{omitted} linhas", style=f"dim {style}"))
+    return Group(*parts)
+
+
+def _build_agent_live_body(content: str, tools, style: str, *, thinking: bool = True):
+    """Corpo do bloco transitório: pensamento em destaque e tools listadas abaixo.
+
+    Mensagens de lifecycle (``thinking=False``) são status operacional e ficam
+    discretas, sem o marcador de pensamento.
+    """
+    parts = []
+    text = str(content or "").strip()
+    if text:
+        head = Text(no_wrap=False, overflow="fold")
+        if thinking:
+            head.append(f"{_thinking_pulse_marker()} ", style=f"bold {style}")
+            head.append(text, style="italic")
+        else:
+            head.append("· ", style="dim")
+            head.append(text, style="dim")
+        parts.append(head)
+    tools_renderable = _build_tools_renderable(tools, style)
+    if tools_renderable is not None:
+        parts.append(tools_renderable)
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return Group(*parts)
 
 
 def _build_agent_activity_renderable(payload, agent: str | None = None):
@@ -92,8 +179,9 @@ def _build_agent_activity_renderable(payload, agent: str | None = None):
             line.append(f" · tentativa {attempt}/{limit}", style="dim yellow")
         detail = str(data.get("detail") or "").strip()
         if detail:
-            shortened = detail if len(detail) <= 120 else f"{detail[:117]}..."
-            line.append(f" · {shortened}", style="dim")
+            line.append(f" · {detail}", style="dim")
+        line.no_wrap = False
+        line.overflow = "fold"
         return line
 
     if activity == "failover":
@@ -378,15 +466,10 @@ def _render_event(event: TextualUiEvent):
         payload = event.payload if isinstance(event.payload, dict) else {}
         content = str(payload.get("content") or payload.get("text") or event.payload)
         tools = payload.get("tools") if isinstance(payload, dict) else None
-        tool_block = _build_tool_preview_block(tools)
-        if tool_block:
-            content = f"{content.rstrip()}\n{tool_block}" if content.strip() else tool_block
-        if not content.strip():
-            return None
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
         style = str(payload.get("style", "cyan") or "cyan")
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
-        return _build_stream_renderable(theme_name, label, style, content)
+        return _build_stream_renderable(theme_name, label, style, content, tools=tools)
     if event.kind == "pending_input":
         payload = event.payload if isinstance(event.payload, dict) else {}
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
@@ -407,15 +490,10 @@ def _render_event(event: TextualUiEvent):
             activity_payload.update({"activity": status, "message": message})
             return _build_agent_activity_renderable(activity_payload, event.agent)
         tools = payload.get("tools") if isinstance(payload, dict) else None
-        tool_block = _build_tool_preview_block(tools)
-        if tool_block:
-            message = f"{message.rstrip()}\n{tool_block}" if message.strip() else tool_block
-        if not message.strip():
-            return None
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}")) if isinstance(payload, dict) else f"🤖 {event.agent or 'agente'}"
         style = str(payload.get("style", "cyan") or "cyan") if isinstance(payload, dict) else "cyan"
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME) if isinstance(payload, dict) else themes.DEFAULT_THEME
-        return _build_stream_renderable(theme_name, label, style, message)
+        return _build_stream_renderable(theme_name, label, style, message, tools=tools, thinking=False)
     if event.kind in {"warning", "error"}:
         if event.agent:
             return _build_agent_activity_renderable(
@@ -466,21 +544,19 @@ def _render_event(event: TextualUiEvent):
         if isinstance(event.payload, dict):
             content = str(event.payload.get("content") or "")
             tools = event.payload.get("tools")
-            tool_block = _build_tool_preview_block(tools)
-            if tool_block:
-                content = f"{content.rstrip()}\n{tool_block}" if content.strip() else tool_block
             label = str(event.payload.get("label", f"🤖 {event.agent or 'agente'}"))
             style = str(event.payload.get("style", "cyan") or "cyan")
             theme_name = str(event.payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         else:
             content = str(event.payload)
+            tools = None
             label = f"🤖 {event.agent or 'agente'}"
             style = "cyan"
             theme_name = themes.DEFAULT_THEME
+        if event.agent:
+            return _build_stream_renderable(theme_name, label, style, content, tools=tools)
         if not content.strip():
             return None
-        if event.agent:
-            return _build_stream_renderable(theme_name, label, style, content)
         return Text(content, style="dim")
     if event.kind == "prompt":
         return None
@@ -687,18 +763,12 @@ def _build_turn_tools(theme_name: str, label: str, style: str, tools_table, turn
     return tools_table
 
 
-def _build_stream_renderable(theme_name: str, label: str, style: str, content: str):
-    """Monta o renderable dinâmico usado no streaming."""
-    return _render_turn_block(
-        theme_name,
-        label,
-        style,
-        content=content,
-        include_header=True,
-        streaming=True,
-        render_mode="plain",
-        muted_body=True,
-    )
+def _build_stream_renderable(theme_name: str, label: str, style: str, content: str, tools=None, *, thinking: bool = True):
+    """Monta o renderable dinâmico usado no streaming, com pensamento em destaque."""
+    body = _build_agent_live_body(content, tools, style, thinking=thinking)
+    if body is None:
+        return None
+    return _render_themed_agent_block(theme_name, label, style, body, streaming=True)
 
 
 def _build_pending_card_renderable(label: str, style: str, question: str, *, kind: str = "input"):

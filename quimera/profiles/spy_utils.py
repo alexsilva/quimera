@@ -8,7 +8,7 @@ def normalize_spy_text(value: str) -> str:
     return " ".join((value or "").split())
 
 
-def truncate_spy_text(value: str, limit: int = 160) -> str:
+def truncate_spy_text(value: str, limit: int = 400) -> str:
     """Normaliza texto em linha única com limite de tamanho."""
     value = normalize_spy_text(value)
     if len(value) <= limit:
@@ -62,8 +62,8 @@ def describe_tool_input(tool_name: str, inp: dict) -> str:
         pattern = inp.get("pattern") or inp.get("query") or inp.get("regex") or ""
         path = inp.get("path") or inp.get("directory") or ""
         if pattern:
-            loc = f" em {truncate_spy_text(str(path), limit=60)}" if path else ""
-            return f'buscar "{truncate_spy_text(str(pattern), limit=80)}"{loc}'
+            loc = f" em {truncate_spy_text(str(path), limit=200)}" if path else ""
+            return f'buscar "{truncate_spy_text(str(pattern), limit=240)}"{loc}'
 
     # Ferramentas de listagem de arquivos
     if name in {"glob", "find_files", "list_files", "ls"}:

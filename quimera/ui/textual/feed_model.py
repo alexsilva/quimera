@@ -424,12 +424,53 @@ class TextualFeedModel:
         text = str(content or "").strip()
         if not text:
             return ""
-        for marker in ("$ ", "✓ ", "✗ ", "⌘ "):
+        for marker in ("$ ", "✓ ", "✗ ", "⌘ ", "⚒ "):
             if text.startswith(marker):
                 text = text[len(marker):].strip()
                 break
         text = re.sub(r"\s*\(exit\s+-?\d+\)\s*$", "", text).strip()
         return text
+
+    @staticmethod
+    def _tool_preview_tool_name(subject: str) -> str:
+        """Extrai o nome canônico da tool de uma linha de preview.
+
+        Normaliza o prefixo genérico "usando " e o namespace MCP ("quimera_")
+        para que a linha genérica emitida pelo CLI e a linha rica emitida pelo
+        executor de tools refiram-se à mesma identidade.
+        """
+        text = str(subject or "").strip()
+        if text.startswith("usando "):
+            text = text[7:].strip()
+        token = text.split(" ", 1)[0].strip().strip(":")
+        for prefix in ("mcp__quimera__", "quimera_"):
+            if token.startswith(prefix):
+                token = token[len(prefix):]
+                break
+        return token
+
+    def _merge_generic_tool_line(self, lines: list[str], content: str, subject: str) -> bool:
+        """Funde a linha genérica "usando X" com a linha rica da mesma tool.
+
+        A mesma chamada chega por dois canais (stdout do CLI e preview do
+        executor); manter as duas duplica o feed. Retorna True quando a linha
+        nova foi absorvida por uma existente (descartada ou substituindo-a).
+        """
+        tool_name = self._tool_preview_tool_name(subject)
+        if not tool_name:
+            return False
+        new_is_generic = str(content).strip().startswith("usando ")
+        for idx in range(len(lines) - 1, -1, -1):
+            existing_subject = self._tool_preview_subject(lines[idx])
+            if self._tool_preview_tool_name(existing_subject) != tool_name:
+                continue
+            if new_is_generic:
+                return True
+            if existing_subject.startswith("usando "):
+                lines[idx] = content
+                return True
+            return False
+        return False
 
     def _with_transient_tools(self, event: TextualUiEvent) -> TextualUiEvent:
         """Anexa previews de tools ao evento transitório do agente."""
@@ -476,6 +517,8 @@ class TextualFeedModel:
                     lines[idx] = content
                     replaced_line = True
                     break
+        if not replaced_line and subject:
+            replaced_line = self._merge_generic_tool_line(lines, content, subject)
         if not replaced_line:
             lines.append(content)
             if len(lines) > 12:

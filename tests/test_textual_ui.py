@@ -17,6 +17,7 @@ from quimera.ui.textual.feed_model import (
 )
 from quimera.ui.textual.input_gate import TextualInputGate
 from quimera.ui.textual.renderer import TextualRenderer, _TextualStatus
+import quimera.ui.textual.renderables as renderables
 from quimera.ui.textual.renderables import (
     _build_question_overlay,
     _build_window_overlay_payload,
@@ -1084,12 +1085,12 @@ def test_textual_render_event_orchestrator_uses_sectioned_panel():
     assert "↳ delegate -> codex: escrever testes" in output
 
 
-def test_textual_render_event_truncates_multiline_tool_results():
+def test_textual_render_event_limits_multiline_tool_results_by_line_count():
     event = TextualUiEvent(
         "agent_update",
         {
             "content": "executando",
-            "tools": ["linha 1\nlinha 2\nlinha 3\nlinha 4\nlinha 5\nlinha 6"],
+            "tools": ["\n".join(f"linha {i}" for i in range(1, 13))],
             "label": "Codex",
             "style": "blue",
             "theme": "chat",
@@ -1101,9 +1102,135 @@ def test_textual_render_event_truncates_multiline_tool_results():
     console.print(_render_event(event))
     output = console.export_text()
 
-    assert "linha 5" in output
-    assert "[expandir]" in output
-    assert "linha 6" not in output
+    assert "linha 9" in output
+    assert "⋮ +3 linhas" in output
+    assert "linha 10" not in output
+
+
+def test_textual_render_event_highlights_thinking_and_styles_tools():
+    event = TextualUiEvent(
+        "agent_update",
+        {
+            "content": "analisando o código do projeto",
+            "tools": [
+                "⚒ git_add [\"quimera/agents/client.py\", \"quimera/app/agent_pool.py\"]",
+                "✓ $ pytest",
+                "✗ $ ruff check (exit 1)",
+                "usando quimera_git_status",
+            ],
+            "label": "Codex",
+            "style": "blue",
+            "theme": "chat",
+        },
+        agent="codex",
+    )
+    console = Console(record=True, width=200)
+
+    console.print(_render_event(event))
+    output = console.export_text()
+
+    assert "✻ analisando o código do projeto" in output
+    assert '⚒ git_add ["quimera/agents/client.py", "quimera/app/agent_pool.py"]' in output
+    assert "✓ $ pytest" in output
+    assert "✗ $ ruff check (exit 1)" in output
+    assert "· usando quimera_git_status" in output
+
+
+def test_textual_thinking_marker_pulses_and_resets_to_base_frame():
+    event = TextualUiEvent(
+        "agent_update",
+        {"content": "analisando", "label": "Codex", "style": "blue", "theme": "chat"},
+        agent="codex",
+    )
+
+    def render() -> str:
+        console = Console(record=True, width=120)
+        console.print(_render_event(event))
+        return console.export_text()
+
+    try:
+        assert "✻ analisando" in render()
+        renderables.advance_thinking_pulse()
+        assert "✽ analisando" in render()
+        renderables.advance_thinking_pulse()
+        assert "✳ analisando" in render()
+        renderables.reset_thinking_pulse()
+        assert "✻ analisando" in render()
+    finally:
+        renderables.reset_thinking_pulse()
+
+
+def test_textual_render_event_renders_lifecycle_message_as_status_not_thinking():
+    event = TextualUiEvent(
+        "agent_lifecycle",
+        {
+            "message": "iniciando execução",
+            "status": "started",
+            "label": "Codex",
+            "style": "blue",
+            "theme": "chat",
+        },
+        agent="codex",
+    )
+    console = Console(record=True, width=120)
+
+    console.print(_render_event(event))
+    output = console.export_text()
+
+    assert "· iniciando execução" in output
+    assert "✻" not in output
+
+
+def test_textual_render_event_folds_long_tool_lines_without_ellipsis():
+    long_args = "[" + ", ".join(f'"arquivo_{i}.py"' for i in range(20)) + "]"
+    event = TextualUiEvent(
+        "agent_update",
+        {
+            "content": "",
+            "tools": [f"⚒ git_add {long_args}"],
+            "label": "Codex",
+            "style": "blue",
+            "theme": "chat",
+        },
+        agent="codex",
+    )
+    console = Console(record=True, width=80)
+
+    console.print(_render_event(event))
+    output = console.export_text()
+
+    assert "arquivo_19.py" in output
+    assert "…" not in output
+
+
+def test_textual_feed_merges_generic_tool_line_into_rich_preview():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] commitando", agent="opencode"))
+    model.apply(TextualUiEvent("tool_preview", '⚒ git_add ["a.py", "b.py"]', agent="opencode"))
+    model.apply(TextualUiEvent("tool_preview", "usando quimera_git_add", agent="opencode"))
+
+    assert model.items[0].event.payload["tools"] == ['⚒ git_add ["a.py", "b.py"]']
+
+
+def test_textual_feed_upgrades_generic_tool_line_with_rich_preview():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] commitando", agent="opencode"))
+    model.apply(TextualUiEvent("tool_preview", "usando quimera_git_add", agent="opencode"))
+    model.apply(TextualUiEvent("tool_preview", '⚒ git_add ["a.py", "b.py"]', agent="opencode"))
+
+    assert model.items[0].event.payload["tools"] == ['⚒ git_add ["a.py", "b.py"]']
+
+
+def test_textual_feed_keeps_distinct_rich_calls_of_same_tool():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] lendo", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", "⚒ read_file a.py", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", "⚒ read_file b.py", agent="codex"))
+
+    assert model.items[0].event.payload["tools"] == ["⚒ read_file a.py", "⚒ read_file b.py"]
 
 
 def test_transient_overlay_replace_reads_previous_lines_when_executed():

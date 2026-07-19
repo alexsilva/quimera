@@ -14,8 +14,14 @@ class ToolPreview:
     }
     _PREVIEW_MAX_LINES = 6
     _PREVIEW_MAX_CHARS = 500
+    # Limites de approval (caixa compacta de confirmação).
     _MAX_VALUE_LEN = 80
     _MAX_ITEMS = 4
+    # Limites de execução (feed operacional): folgados para não cortar os dados
+    # do agente; a UI dobra a linha em vez de truncar. O teto alto existe só
+    # como proteção contra payloads patológicos (ex.: conteúdo de write_file).
+    _EXEC_MAX_VALUE_LEN = 400
+    _EXEC_MAX_ITEMS = 8
 
     @classmethod
     def build(
@@ -54,18 +60,18 @@ class ToolPreview:
     @classmethod
     def _format_execution_read_file(cls, args: dict[str, Any]) -> str:
         path = args.get("path", "?")
-        return f"⚒ read_file {cls._truncate(str(path), cls._MAX_VALUE_LEN)}"
+        return f"⚒ read_file {cls._truncate(str(path), cls._EXEC_MAX_VALUE_LEN)}"
 
     @classmethod
     def _format_execution_list_files(cls, args: dict[str, Any]) -> str:
         path = args.get("path") or args.get("directory") or "?"
-        return f"⚒ list_files {cls._truncate(str(path), cls._MAX_VALUE_LEN)}"
+        return f"⚒ list_files {cls._truncate(str(path), cls._EXEC_MAX_VALUE_LEN)}"
 
     @classmethod
     def _format_execution_grep_search(cls, args: dict[str, Any]) -> str:
         pattern = args.get("pattern", "?")
         path = args.get("path") or args.get("root") or "."
-        return f"⚒ grep {pattern!r} {cls._truncate(str(path), cls._MAX_VALUE_LEN)}"
+        return f"⚒ grep {pattern!r} {cls._truncate(str(path), cls._EXEC_MAX_VALUE_LEN)}"
 
     @classmethod
     def _format_execution_web_search(cls, args: dict[str, Any]) -> str:
@@ -75,17 +81,17 @@ class ToolPreview:
     @classmethod
     def _format_execution_web_fetch(cls, args: dict[str, Any]) -> str:
         url = args.get("url", "?")
-        return f"⚒ web_fetch {cls._truncate(str(url), cls._MAX_VALUE_LEN)}"
+        return f"⚒ web_fetch {cls._truncate(str(url), cls._EXEC_MAX_VALUE_LEN)}"
 
     @classmethod
     def _format_execution_run_shell(cls, args: dict[str, Any]) -> str:
         cmd = args.get("command") or args.get("cmd") or "?"
-        return f"⚒ $ {cls._truncate(str(cmd), 120)}"
+        return f"⚒ $ {cls._truncate(str(cmd), cls._EXEC_MAX_VALUE_LEN)}"
 
     @classmethod
     def _format_execution_exec_command(cls, args: dict[str, Any]) -> str:
         cmd = args.get("cmd", "?")
-        return f"⚒ $ {cls._truncate(str(cmd), 120)}"
+        return f"⚒ $ {cls._truncate(str(cmd), cls._EXEC_MAX_VALUE_LEN)}"
 
     @classmethod
     def _format_execution_write_stdin(cls, args: dict[str, Any]) -> str:
@@ -93,7 +99,7 @@ class ToolPreview:
         chars = str(args.get("chars", ""))
         line = f"⚒ write_stdin session={sid}"
         if chars:
-            line += f" {cls._truncate(chars, 80)!r}"
+            line += f" {cls._truncate(chars, 200)!r}"
         if args.get("close_stdin"):
             line += " [close]"
         return line
@@ -109,8 +115,8 @@ class ToolPreview:
     def _format_execution_unknown(cls, tool_name: str, args: dict[str, Any]) -> str:
         parts = []
         for index, (key, value) in enumerate(args.items()):
-            if index >= cls._MAX_ITEMS:
-                parts.append("...")
+            if index >= cls._EXEC_MAX_ITEMS:
+                parts.append(f"+{len(args) - cls._EXEC_MAX_ITEMS} args")
                 break
             parts.append(f"{cls._sanitize_value(key, value)}")
         suffix = f" {' '.join(parts)}" if parts else ""
@@ -250,17 +256,17 @@ class ToolPreview:
         if isinstance(value, dict):
             inner = []
             for index, (inner_key, inner_value) in enumerate(value.items()):
-                if index >= cls._MAX_ITEMS:
-                    inner.append("...")
+                if index >= cls._EXEC_MAX_ITEMS:
+                    inner.append(f"+{len(value) - cls._EXEC_MAX_ITEMS} itens")
                     break
                 inner.append(f"{inner_key}={cls._sanitize_value(inner_key, inner_value)}")
-            return cls._truncate("{" + ", ".join(inner) + "}", cls._MAX_VALUE_LEN)
+            return cls._truncate("{" + ", ".join(inner) + "}", cls._EXEC_MAX_VALUE_LEN)
         if isinstance(value, (list, tuple, set)):
-            items = [cls._sanitize_value(key, item) for item in list(value)[: cls._MAX_ITEMS]]
-            if len(value) > cls._MAX_ITEMS:
-                items.append("...")
-            return cls._truncate("[" + ", ".join(items) + "]", cls._MAX_VALUE_LEN)
-        return cls._truncate(str(value), cls._MAX_VALUE_LEN)
+            items = [cls._sanitize_value(key, item) for item in list(value)[: cls._EXEC_MAX_ITEMS]]
+            if len(value) > cls._EXEC_MAX_ITEMS:
+                items.append(f"+{len(value) - cls._EXEC_MAX_ITEMS} itens")
+            return cls._truncate("[" + ", ".join(items) + "]", cls._EXEC_MAX_VALUE_LEN)
+        return cls._truncate(str(value), cls._EXEC_MAX_VALUE_LEN)
 
     @classmethod
     def _format_paths(cls, value: Any) -> str:

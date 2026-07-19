@@ -40,6 +40,8 @@ from quimera.ui.textual.renderables import (
     _build_window_overlay_payload,
     _clear_question_overlay_widget,
     _render_event,
+    advance_thinking_pulse,
+    reset_thinking_pulse,
 )
 from quimera.ui.textual.terminal_modes import (
     _restore_terminal_modes,
@@ -138,6 +140,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._spinner_timer = None
             self._bridge_drain_timer = None
             self._active_agent_timer = None
+            self._thinking_pulse_timer = None
             self.active_agent: str | None = None
             self._last_active_agent_info: tuple[str, str] | None = None
             self._active_tool_previews: dict[str, str] = {}
@@ -187,6 +190,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 self.handle_bridge_event(event)
             self._bridge_drain_timer = self.set_interval(0.05, self._drain_bridge_events)
             self._active_agent_timer = self.set_interval(0.2, self._poll_active_agent)
+            self._thinking_pulse_timer = self.set_interval(0.25, self._pulse_thinking_marker)
             renderer = getattr(quimera_app, "renderer", None)
             if renderer is not None:
                 _orq = getattr(getattr(quimera_app, "agent_pool", None), "orchestrator_agent", None)
@@ -385,6 +389,14 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             frame = _SUMMARY_SPINNER_FRAMES[self._spinner_index % len(_SUMMARY_SPINNER_FRAMES)]
             self.query_one("#summary-spinner", _SummarySpinner).update(frame)
             self._spinner_index += 1
+
+        def _pulse_thinking_marker(self) -> None:
+            """Anima o marcador de pensamento enquanto houver execução em andamento."""
+            if not any(item.transient for item in self._feed_model.items):
+                reset_thinking_pulse()
+                return
+            advance_thinking_pulse()
+            self._sync_transient_layer()
 
         def _run_quimera_app(self) -> None:
             try:
