@@ -168,8 +168,8 @@ def test_prompt_omits_render_debug_block_when_inactive():
     assert "- SISTEMA OPERACIONAL: \n\n</session_state>" not in prompt
 
 
-def test_prompt_includes_mcp_runtime_instruction_when_enabled():
-    """Verifica que prompt includes mcp runtime instruction when enabled."""
+def test_prompt_omits_mcp_runtime_details_when_enabled():
+    """O prompt não expõe detalhes da infraestrutura MCP da sessão."""
     session_state = {
         "session_id": "test-session",
         "current_job_id": 123,
@@ -185,35 +185,13 @@ def test_prompt_includes_mcp_runtime_instruction_when_enabled():
         user_name="ALEX",
     )
 
-    prompt = builder.build(agent="codex", history=[{"role": "human", "content": "teste MCP"}])
+    prompt = builder.build(agent="codex", history=[{"role": "human", "content": "pedido"}])
     rules_block = _extract_block(prompt, "rules")
 
-    assert "MCP bridge da sessão ativado." in rules_block
-    assert "Use o servidor MCP `quimera` já injetado pelo runtime" in rules_block
-    assert "ToolExecutor" in rules_block
-
-
-def test_prompt_omits_mcp_runtime_instruction_when_disabled():
-    """Verifica que prompt omits mcp runtime instruction when disabled."""
-    session_state = {
-        "session_id": "test-session",
-        "current_job_id": 123,
-        "workspace_root": "/tmp/test",
-        "current_dir": ".",
-        "mcp_enabled": False,
-    }
-
-    builder = PromptBuilder(
-        context_manager=_make_context_manager(""),
-        session_state=session_state,
-        user_name="ALEX",
-    )
-
-    prompt = builder.build(agent="codex", history=[{"role": "human", "content": "teste MCP"}])
-    rules_block = _extract_block(prompt, "rules")
-
-    assert "MCP da sessão está ativo" not in rules_block
-    assert "Não inicie servidor MCP externo/manualmente." not in rules_block
+    assert "MCP bridge" not in rules_block
+    assert "servidor MCP" not in rules_block
+    assert "mcp_socket_path" not in prompt
+    assert "ToolExecutor" not in rules_block
 
 
 def test_prompt_template_loads_file_lazily(tmp_path):
@@ -779,6 +757,9 @@ def test_task_executor_prompt_uses_dedicated_template_without_chat_blocks():
     assert '<recent_agent_messages title=' not in prompt
     assert '<persistent_context title=' not in prompt
     assert "contexto persistente que não deve entrar" not in prompt
+    assert "MCP da sessão está ativo" not in prompt
+    assert "servidor MCP" not in prompt
+    assert "conectividade" not in prompt
 
 
 def test_task_reviewer_prompt_uses_dedicated_template_and_review_material():

@@ -135,8 +135,6 @@ class PromptBuilder:
         render_ansi_path = ""
         metrics_path = ""
         app_log_path = ""
-        mcp_enabled = False
-        mcp_socket_path = ""
         if self.session_state and primary:
             session_id = self.session_state.get("session_id", "desconhecida")
             current_job_id = self.session_state.get("current_job_id", "desconhecido")
@@ -152,8 +150,6 @@ class PromptBuilder:
                 if render_debug_active
                 else ""
             )
-            mcp_enabled = bool(self.session_state.get("mcp_enabled", False))
-            mcp_socket_path = self.session_state.get("mcp_socket_path", "")
 
         delegation_fields = self.delegate_presenter.present(delegation, from_agent)
         if is_chat_prompt:
@@ -206,8 +202,6 @@ class PromptBuilder:
             render_ansi_path=render_ansi_path,
             metrics_path=metrics_path,
             app_log_path=app_log_path,
-            mcp_enabled=mcp_enabled,
-            mcp_socket_path=mcp_socket_path,
             context=context,
             request=request,
             shared_state_json=shared_state_json,

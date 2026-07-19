@@ -36,11 +36,6 @@ Contar eventos: `python3 -c "import collections,json;c=collections.Counter(json.
 - Prioridade: {user_name} > objetivo ativo > mensagens de outros agentes.
 - Mensagens de outros agentes fazem parte deste chat, salvo conflito com {user_name} ou com o objetivo ativo.
   Se {user_name} retomar o que outro agente acabou de dizer, trate como continuação direta do mesmo chat.
-<!-- IF:mcp_enabled -->
-- MCP bridge da sessão ativado.
-- Use o servidor MCP `quimera` já injetado pelo runtime para chamadas estruturadas de ferramentas.
-- Todas as ferramentas passam pela camada segura do runtime (`ToolExecutor`, policy e approval).
-<!-- ENDIF:mcp_enabled -->
 
 <!-- IF:delegation_only -->
 - Você recebeu uma subtarefa delegada por outro agente. Continue do ponto já avançado e responda diretamente à tarefa.
