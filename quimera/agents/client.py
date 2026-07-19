@@ -221,6 +221,36 @@ class AgentClient:
         self._cancel_event.clear()
         self.reset_cancel_notices()
 
+    def fork_for_concurrent_run(self) -> "AgentClient":
+        """Cria um client isolado para uma execução concorrente.
+
+        ``AgentClient.run`` deliberadamente não é reentrante porque mantém estado
+        mutável por processo (``_current_proc``, ``_agent_running``, warm pool e
+        drivers de API). O fork preserva a configuração operacional do client do
+        chat, mas recebe estado de execução próprio. O evento de cancelamento é
+        compartilhado para que Ctrl+C continue cancelando todas as execuções da
+        rodada, inclusive as que usam clients isolados.
+        """
+        forked = AgentClient(
+            self.renderer,
+            metrics_file=self.metrics_file,
+            idle_timeout=self.idle_timeout,
+            visibility=self.visibility,
+            working_dir=self.working_dir,
+            tool_executor=self.tool_executor,
+            error_reporter=self.error_reporter,
+            muted_reporter=self.muted_reporter,
+            session_id=self.session_id,
+            workspace_tmp_root=self.workspace_tmp_root,
+            process_supervisor=self.process_supervisor,
+            pause_idle_if=self._pause_idle_if,
+        )
+        forked.execution_mode = self.execution_mode
+        forked.tool_event_callback = self.tool_event_callback
+        forked._cancel_event = self._cancel_event
+        forked._esc_monitor = EscMonitor(forked._cancel_event)
+        return forked
+
     def _is_expected_termination_return_code(self, return_code) -> bool:
         """Retorna True para SIGTERM decorrente de cancelamento controlado."""
         if return_code not in {-15, 143}:

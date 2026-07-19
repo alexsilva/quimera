@@ -57,7 +57,7 @@ class ChatLifecycle:
             if (
                 self._turn_manager is not None
                 and self._turn_manager.is_ai_turn
-                and self._runtime_state.get_chat_inflight_count() <= 1
+                and self._runtime_state.get_chat_outstanding_count() <= 1
             ):
                 self._turn_manager.next_turn()
 
@@ -95,20 +95,60 @@ class ChatLifecycle:
         finally:
             remaining = self._runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
             self._runtime_state.release_chat_slot()
-            if remaining == 0 and self._turn_manager is not None and self._turn_manager.is_ai_turn:
+            if (
+                remaining == 0
+                and self._runtime_state.get_chat_pending_count() == 0
+                and self._turn_manager is not None
+                and self._turn_manager.is_ai_turn
+            ):
                 self._turn_manager.next_turn()
 
-    def submit_async_message(self, user):
+    def process_queued_message(self, user):
+        """Promove um prompt pendente quando um worker do executor fica livre."""
+        slot_semaphore = getattr(self._runtime_state, "chat_slot_semaphore", None)
+        if slot_semaphore is not None:
+            slot_semaphore.acquire()
+        promoted = False
+        try:
+            self._runtime_state.promote_chat_pending_to_inflight(
+                self._refresh_parallel_toolbar
+            )
+            promoted = True
+            self.process_message(user)
+        finally:
+            if promoted:
+                remaining = self._runtime_state.decrement_chat_inflight(
+                    self._refresh_parallel_toolbar
+                )
+                self._runtime_state.release_chat_slot()
+                if (
+                    remaining == 0
+                    and self._runtime_state.get_chat_pending_count() == 0
+                    and self._turn_manager is not None
+                    and self._turn_manager.is_ai_turn
+                ):
+                    self._turn_manager.next_turn()
+            else:
+                self._runtime_state.decrement_chat_pending(
+                    self._refresh_parallel_toolbar
+                )
+                self._runtime_state.release_chat_slot()
+
+    def submit_async_message(self, user, *, slot_reserved=True):
         """Submete um prompt já reservado para a pool de execução do chat."""
         chat_executor = getattr(self._runtime_state, "chat_executor", None)
         if chat_executor is None:
             raise RuntimeError("chat executor não inicializado")
         try:
-            chat_executor.submit(self.process_async_message, user)
+            target = self.process_async_message if slot_reserved else self.process_queued_message
+            chat_executor.submit(target, user)
             self._refresh_parallel_toolbar()
         except Exception:
-            self._runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
-            self._runtime_state.release_chat_slot()
+            if slot_reserved:
+                self._runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
+                self._runtime_state.release_chat_slot()
+            else:
+                self._runtime_state.decrement_chat_pending(self._refresh_parallel_toolbar)
             self._refresh_parallel_toolbar()
             raise
 

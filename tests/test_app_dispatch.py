@@ -187,6 +187,74 @@ class TestCallAgent:
             result = ds.delegate("agent1")
         assert result == "result"
 
+    def test_concurrent_calls_use_isolated_agent_client(self):
+        """Chamadas simultâneas não podem cair no guard reentrante do client principal."""
+        entered_primary = threading.Event()
+        release_primary = threading.Event()
+        calls = []
+        forks = []
+
+        class ConcurrentClient:
+            def __init__(self, label):
+                self.label = label
+                self._user_cancelled = False
+                self._cancel_event = threading.Event()
+                self.rate_limit_detected = False
+                self.execution_mode = None
+                self.tool_executor = None
+                self.closed = False
+
+            def call(self, agent):
+                calls.append((self.label, agent))
+                if self.label == "primary":
+                    entered_primary.set()
+                    assert release_primary.wait(timeout=2)
+                return f"{self.label}:{agent}"
+
+            def fork_for_concurrent_run(self):
+                forked = ConcurrentClient(f"fork-{len(forks) + 1}")
+                forked._cancel_event = self._cancel_event
+                forks.append(forked)
+                return forked
+
+            def close(self):
+                self.closed = True
+
+        primary = ConcurrentClient("primary")
+        ds = AppDispatchServices(
+            agent_client_override=primary,
+            refresh_task_state=lambda: None,
+            get_execution_mode=lambda: None,
+            max_retries=1,
+        )
+
+        def low_level(dispatch, agent, **_options):
+            return dispatch._get_agent_client().call(agent)
+
+        results = {}
+
+        def invoke(key, agent):
+            results[key] = ds.delegate(agent)
+
+        with patch.object(AppDispatchServices, "delegate_low_level", autospec=True, side_effect=low_level):
+            first = threading.Thread(target=invoke, args=("first", "agent-a"))
+            second = threading.Thread(target=invoke, args=("second", "agent-b"))
+            first.start()
+            assert entered_primary.wait(timeout=2)
+            second.start()
+            second.join(timeout=2)
+            assert not second.is_alive()
+            release_primary.set()
+            first.join(timeout=2)
+
+        assert results == {
+            "first": "primary:agent-a",
+            "second": "fork-1:agent-b",
+        }
+        assert calls == [("primary", "agent-a"), ("fork-1", "agent-b")]
+        assert len(forks) == 1
+        assert forks[0].closed is True
+
     def test_retry_on_none_low_level(self, dispatch_app):
         """response None → retry até max_retries, depois record_failure"""
         dispatch_app.MAX_RETRIES = 2

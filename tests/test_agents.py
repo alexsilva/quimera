@@ -468,6 +468,39 @@ def test_agent_client_run_reentrant_is_rejected(renderer):
     assert "agente-origem" in log_args[1:]
 
 
+def test_agent_client_fork_for_concurrent_run_isolates_process_state(renderer):
+    """Fork concorrente preserva configuração sem compartilhar estado do processo."""
+    client = AgentClient(
+        renderer,
+        metrics_file="metrics.jsonl",
+        idle_timeout=17,
+        working_dir="/workspace",
+        session_id="session-test",
+    )
+    tool_executor = object()
+    callback = object()
+    client.tool_executor = tool_executor
+    client.tool_event_callback = callback
+    client.execution_mode = "sandbox"
+    client._agent_running = True
+    client._running_agent = "agente-origem"
+
+    forked = client.fork_for_concurrent_run()
+
+    assert forked is not client
+    assert forked.renderer is client.renderer
+    assert forked.metrics_file == client.metrics_file
+    assert forked.idle_timeout == client.idle_timeout
+    assert forked.working_dir == client.working_dir
+    assert forked.tool_executor is tool_executor
+    assert forked.tool_event_callback is callback
+    assert forked.execution_mode == "sandbox"
+    assert forked._cancel_event is client._cancel_event
+    assert forked._esc_monitor is not client._esc_monitor
+    assert forked._agent_running is False
+    assert forked._running_agent is None
+
+
 def test_agent_client_run_sequential_does_not_log_reentrancy(renderer):
     """Runs sequenciais no mesmo client são legítimos e não geram log de erro."""
     client = AgentClient(renderer)

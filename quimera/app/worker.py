@@ -5,12 +5,21 @@ import logging
 import queue
 import threading
 import time
+from dataclasses import dataclass
 
 from .render_event import RenderEvent
 
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL = 2.0   # segundos entre heartbeats
+
+
+@dataclass(frozen=True)
+class ChatWorkItem:
+    """Mensagem do chat com indicação de slot previamente reservado."""
+
+    message: object
+    slot_reserved: bool = True
 
 
 class ChatWorker:
@@ -66,7 +75,13 @@ class ChatWorker:
     def _process_chat_queue(self, msg) -> None:
         """Processa uma mensagem sem derrubar a thread em caso de erro."""
         try:
-            self._agent_executor(msg)
+            if isinstance(msg, ChatWorkItem):
+                self._agent_executor(
+                    msg.message,
+                    slot_reserved=msg.slot_reserved,
+                )
+            else:
+                self._agent_executor(msg)
         except Exception as exc:
             logger.exception("ChatWorker: erro ao processar mensagem")
             self._ui_queue.put(RenderEvent(RenderEvent.ERROR, str(exc)))

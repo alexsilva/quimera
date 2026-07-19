@@ -18,7 +18,7 @@ from .session_bootstrap import (
     resolve_session_log_path,
 )
 from .turn import TurnManager
-from .worker import ChatWorker
+from .worker import ChatWorker, ChatWorkItem
 from ..runtime.tools.mcp_clients import get_bridge as get_mcp_client_bridge
 from ..runtime.drivers.tool_schemas import get_bridge_schemas
 from ..constants import (
@@ -222,8 +222,8 @@ def run_chat_loop(
                     swallow_threaded_input_interrupt = False
                     continue
                 if threaded_chat:
-                    inflight = app.runtime_state.get_chat_inflight_count()
-                    if inflight > 0 and not ctrl_c_cancelled:
+                    outstanding = app.runtime_state.get_chat_outstanding_count()
+                    if outstanding > 0 and not ctrl_c_cancelled:
                         ctrl_c_cancelled = True
                         chat_lifecycle.handle_local_interrupt()
                         swallow_threaded_input_interrupt = True
@@ -270,7 +270,7 @@ def run_chat_loop(
                     ):
                         app.turn_manager.next_turn()
                     _pending_async_slot = True
-                    chat_queue.put(user)
+                    chat_queue.put(ChatWorkItem(user, slot_reserved=True))
                     _pending_async_slot = False
                     app._refresh_parallel_toolbar()
                     deadline = time.monotonic() + 0.05
@@ -279,14 +279,9 @@ def run_chat_loop(
                 else:
                     if hasattr(app, "turn_manager") and app.turn_manager.is_human_turn:
                         app.turn_manager.next_turn()
-                    try:
-                        chat_lifecycle.process_sync_message_with_slot(user)
-                    except KeyboardInterrupt:
-                        swallow_threaded_input_interrupt = True
-                        chat_lifecycle.handle_local_interrupt()
-                        continue
-                    if hasattr(app, "turn_manager") and app.turn_manager.is_ai_turn:
-                        app.turn_manager.next_turn()
+                    app.runtime_state.increment_chat_pending(app._refresh_parallel_toolbar)
+                    chat_queue.put(ChatWorkItem(user, slot_reserved=False))
+                    app._refresh_parallel_toolbar()
             else:
                 if hasattr(app, "turn_manager"):
                     app.turn_manager.next_turn()
@@ -346,6 +341,7 @@ def run_chat_loop(
         app.runtime_state.chat_executor = None
         app.runtime_state.chat_slot_semaphore = None
         app.runtime_state.chat_queue = None
+        app.runtime_state.chat_pending_count = 0
         app._refresh_parallel_toolbar()
         try:
             lifecycle = getattr(app, "lifecycle", None)

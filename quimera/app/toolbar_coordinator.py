@@ -150,9 +150,16 @@ class ToolbarCoordinator:
                 queued_from_queue = max(0, int(chat_queue.qsize()))
             except Exception:
                 queued_from_queue = None
+        pending_count = self._runtime_state.get_chat_pending_count()
+        if queued_from_queue is None:
+            queued_count = pending_count
+        else:
+            # Um item pendente pode ainda estar na chat_queue ou já ter sido
+            # entregue ao executor. ``max`` evita contar o mesmo prompt duas vezes.
+            queued_count = max(queued_from_queue, pending_count)
         request = ParallelToolbarSnapshotRequest(
             inflight_count=active,
-            queued_count=queued_from_queue,
+            queued_count=queued_count,
         )
         return self._toolbar.build_parallel_toolbar_state(request)
 

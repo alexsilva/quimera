@@ -1,6 +1,7 @@
 """Componentes de `quimera.app.dispatch`."""
 import copy
 import queue as _queue_module
+import threading
 import time
 from contextlib import nullcontext
 
@@ -87,6 +88,8 @@ class AppDispatchServices:
         self._agent_run_sink = agent_run_sink
         self._gateway = None
         self._agent_call_service = None
+        self._primary_delegate_condition = threading.Condition()
+        self._primary_delegate_in_use = False
 
     @staticmethod
     def _call(val, *args, **kwargs):
@@ -310,6 +313,65 @@ class AppDispatchServices:
     # API pública
     # -------------------------------------------------------------------------
 
+    def _try_reserve_primary_delegate(self) -> bool:
+        """Reserva atomicamente o AgentClient principal para uma chamada."""
+        with self._primary_delegate_condition:
+            if self._primary_delegate_in_use:
+                return False
+            self._primary_delegate_in_use = True
+            return True
+
+    def _wait_and_reserve_primary_delegate(self) -> None:
+        """Fallback serial para clients que não oferecem fork concorrente."""
+        with self._primary_delegate_condition:
+            while self._primary_delegate_in_use:
+                self._primary_delegate_condition.wait()
+            self._primary_delegate_in_use = True
+
+    def _release_primary_delegate(self) -> None:
+        with self._primary_delegate_condition:
+            self._primary_delegate_in_use = False
+            self._primary_delegate_condition.notify_all()
+
+    def _fork_for_concurrent_delegate(self):
+        """Replica o dispatch usando um AgentClient não reentrante isolado."""
+        agent_client = self._get_agent_client()
+        fork_method = getattr(type(agent_client), "fork_for_concurrent_run", None)
+        if not callable(fork_method):
+            return None
+
+        forked_client = agent_client.fork_for_concurrent_run()
+        return AppDispatchServices(
+            agent_client_override=forked_client,
+            tool_executor_override=getattr(forked_client, "tool_executor", None),
+            cancel_checker_override=self._cancel_checker_override,
+            ui_queue=self._ui_queue,
+            prompt_builder=self._prompt_builder,
+            renderer=self._renderer,
+            get_agent_profile=self._get_agent_profile,
+            session_state=self._session_state,
+            get_execution_mode=self._get_execution_mode,
+            refresh_task_state=self._refresh_task_state,
+            debug_prompt_metrics=self._debug_prompt_metrics,
+            redisplay_prompt=self._redisplay_prompt,
+            output_lock=self._output_lock,
+            counter_lock=self._counter_lock,
+            session_metrics=self._session_metrics,
+            print_response_fn=self._print_response_fn,
+            persist_message_fn=self._persist_message_fn,
+            record_session_metric=self._record_session_metric,
+            record_tool_event_fn=self._record_tool_event_fn,
+            max_retries=self._max_retries,
+            retry_backoff=self._retry_backoff,
+            rate_limit_backoff=self._rate_limit_backoff,
+            record_failure=self._record_failure,
+            record_success=self._record_success,
+            notify_warning=self._notify_warning,
+            notify_retry=self._notify_retry,
+            notify_error=self._notify_error,
+            agent_run_sink=self._agent_run_sink,
+        )
+
     def resolve_agent_response(
             self,
             agent: str,
@@ -331,6 +393,30 @@ class AppDispatchServices:
         delegate_fn_override = self._call(self._get_delegate_fn_override)
         if delegate_fn_override is not None:
             return delegate_fn_override(agent, **options)
+
+        uses_primary = self._try_reserve_primary_delegate()
+        if not uses_primary:
+            concurrent_dispatch = self._fork_for_concurrent_delegate()
+            if concurrent_dispatch is not None:
+                try:
+                    return concurrent_dispatch.delegate(agent, **options)
+                finally:
+                    concurrent_dispatch.close()
+
+            # Stubs ou integrações customizadas sem suporte a fork continuam
+            # corretos, ainda que serializados, em vez de entrar no client
+            # não reentrante e produzir uma falsa ausência de resposta.
+            self._wait_and_reserve_primary_delegate()
+            uses_primary = True
+
+        try:
+            return self._delegate_reserved(agent, **options)
+        finally:
+            if uses_primary:
+                self._release_primary_delegate()
+
+    def _delegate_reserved(self, agent, **options):
+        """Implementação da chamada após reservar um AgentClient exclusivo."""
         dispatch_options = dict(options)
         max_retries_override = dispatch_options.pop("max_retries", None)
         silent = dispatch_options.pop("silent", False)
