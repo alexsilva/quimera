@@ -704,6 +704,33 @@ def test_handle_command_connect_dynamic_profile_and_configure_error():
     assert any("Conexão registrada" in msg for msg in app.renderer.system_messages)
 
 
+def test_handle_command_connect_opens_textual_modal_without_prompting():
+    app = make_app()
+    layer = system_layer_from_app(app)
+    profile = make_profile(name="target")
+    app.get_agent_profile = Mock(return_value=profile)
+    app.renderer.open_connection_config = Mock(return_value=True)
+
+    with patch.object(layer, "_configure_connection_interactively") as configure:
+        handled = layer.handle_command("/connect target")
+
+    assert handled is True
+    app.renderer.open_connection_config.assert_called_once_with("target", advanced=False)
+    configure.assert_not_called()
+
+
+def test_handle_command_connect_forwards_advanced_flag_to_modal():
+    app = make_app()
+    layer = system_layer_from_app(app)
+    profile = make_profile(name="target")
+    app.get_agent_profile = Mock(return_value=profile)
+    app.renderer.open_connection_config = Mock(return_value=True)
+
+    assert layer.handle_command("/connect target --advanced") is True
+
+    app.renderer.open_connection_config.assert_called_once_with("target", advanced=True)
+
+
 def test_handle_command_connect_applies_profile_and_updates_active_lists():
     """Verifica que Test handle command connect applies profile and updates active lists."""
     app = make_app()

@@ -190,6 +190,10 @@ class RendererBase:
         """Abre a janela popup de configurações."""
         return None
 
+    def open_connection_config(self, agent_name: str, *, advanced: bool = False) -> bool:
+        """Abre a configuração de conexão quando a UI oferece modal próprio."""
+        return False
+
     def set_orchestrator(self, agent_name):
         return None
 

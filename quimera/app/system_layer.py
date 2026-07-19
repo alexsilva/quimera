@@ -267,6 +267,31 @@ class AppSystemLayer:
         )
         return configurator.configure_with_profile(profile, advanced=advanced)
 
+    def apply_connection_configuration(
+        self,
+        target: str,
+        connection,
+        *,
+        profile_name: str | None = None,
+    ) -> None:
+        """Persiste uma conexão configurada e ativa o agente na sessão."""
+        profile_registry = self.profile_registry
+        if profile_name:
+            register_connection_profile(
+                target,
+                metadata={"profile": profile_name},
+                registry=profile_registry,
+            )
+        set_connection(target, connection, persist=True, registry=profile_registry)
+        selected_agents = list(self.get_selected_agents() or [])
+        if target not in self.agent_pool:
+            self.agent_pool.add(target)
+        if target not in selected_agents:
+            self.set_selected_agents(selected_agents + [target])
+        self.show_system_message(
+            f"Conexão ativa para {target}: {format_connection_label(connection)}"
+        )
+
     def _resolve_prompt_target(self, command: str) -> str | None:
         """Resolve o agente alvo para preview de prompt."""
         raw_target = command[len(CMD_PROMPT):].strip()
@@ -417,6 +442,12 @@ class AppSystemLayer:
             if profile is None:
                 profile = register_connection_profile(target, registry=profile_registry)
                 self.show_system_message(f"Conexão registrada: {target}")
+            open_connection_config = getattr(renderer, "open_connection_config", None)
+            if callable(open_connection_config) and open_connection_config(
+                target,
+                advanced=advanced,
+            ):
+                return True
             self.show_system_message(f"Configurando conexão para {target}")
             self.show_system_message(f"Atual: {format_connection_label(profile.effective_connection())}")
             try:
@@ -424,19 +455,11 @@ class AppSystemLayer:
             except ValueError as exc:
                 self._display.show_warning_message(str(exc))
                 return True
-            if profile_name:
-                profile = register_connection_profile(
-                    target,
-                    metadata={"profile": profile_name},
-                    registry=profile_registry,
-                )
-            set_connection(target, connection, persist=True, registry=profile_registry)
-            selected_agents = list(self.get_selected_agents() or [])
-            if target not in self.agent_pool:
-                self.agent_pool.add(target)
-            if target not in selected_agents:
-                self.set_selected_agents(selected_agents + [target])
-            self.show_system_message(f"Conexão ativa para {target}: {format_connection_label(connection)}")
+            self.apply_connection_configuration(
+                target,
+                connection,
+                profile_name=profile_name,
+            )
             return True
 
         if command == CMD_DISCONNECT or command.startswith(f"{CMD_DISCONNECT} "):

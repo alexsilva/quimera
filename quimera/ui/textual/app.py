@@ -113,6 +113,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         from textual.widgets import Input, RichLog, Static
         from quimera.app.completion_dropdown import CompletionDropdown
         from quimera.ui.textual.config_screen import ConfigScreen
+        from quimera.ui.textual.connection_screen import ConnectionScreen
         from quimera.ui.textual.prompt_preview_screen import PromptPreviewScreen
         from quimera.ui.textual.widgets import _BreadcrumbWidget, _CompletionInput, _SummaryHeader, _SummarySpinner
     except ImportError as exc:
@@ -638,6 +639,19 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 return
             if event.kind == "open_config":
                 self.action_open_config()
+                return
+            if event.kind == "open_connection_config":
+                payload = event.payload if isinstance(event.payload, dict) else {}
+                agent_name = str(payload.get("agent") or event.agent or "").strip()
+                if agent_name:
+                    self.push_screen(
+                        ConnectionScreen(
+                            quimera_app,
+                            self,
+                            agent_name,
+                            advanced=bool(payload.get("advanced", False)),
+                        )
+                    )
                 return
             if event.kind == "prompt_preview":
                 payload = event.payload or {}

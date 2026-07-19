@@ -20,6 +20,7 @@ from quimera.ui.textual.prompt_preview_screen import (
     PromptPreviewLog,
     PromptPreviewScreen,
 )
+from quimera.ui.textual.connection_screen import ConnectionScreen
 from quimera.ui.textual.renderer import TextualRenderer, _TextualStatus
 import quimera.ui.textual.renderables as renderables
 from quimera.ui.textual.renderables import (
@@ -873,6 +874,20 @@ def test_textual_bridge_does_not_exit_while_openai_thread_is_still_alive():
 
     lifecycle.handle_local_interrupt.assert_called_once_with()
     assert bridge.input_queue.empty()
+
+
+def test_connection_screen_resolves_profile_from_system_layer_contract():
+    profile = SimpleNamespace(effective_connection=Mock(return_value=SimpleNamespace()))
+    profile_resolver = Mock()
+    profile_resolver.get.return_value = profile
+    quimera_app = SimpleNamespace(
+        system_layer=SimpleNamespace(profile_resolver=profile_resolver),
+    )
+
+    screen = ConnectionScreen(quimera_app, Mock(), "openai")
+
+    assert screen.profile is profile
+    profile_resolver.get.assert_called_once_with("openai")
 
 
 def test_textual_input_gate_is_active_while_textual_is_mounted():
@@ -1891,6 +1906,19 @@ def test_textual_bridge_echoes_regular_user_message_to_feed():
     assert emitted[-1].kind == "user_message"
     assert emitted[-1].payload["content"] == "oi agente"
     assert emitted[-1].payload["label"] == "Alex"
+
+
+def test_textual_renderer_routes_connection_config_to_modal_event():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    assert renderer.open_connection_config("openai", advanced=True) is True
+
+    assert emitted[-1].kind == "open_connection_config"
+    assert emitted[-1].agent == "openai"
+    assert emitted[-1].payload == {"agent": "openai", "advanced": True}
 
 
 def test_textual_bridge_does_not_echo_slash_command_as_user_message():

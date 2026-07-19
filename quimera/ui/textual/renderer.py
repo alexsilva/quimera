@@ -299,6 +299,17 @@ class TextualRenderer(RendererBase):
         """Abre a janela popup de configurações."""
         self._bridge.emit(TextualUiEvent("open_config", None))
 
+    def open_connection_config(self, agent_name: str, *, advanced: bool = False) -> bool:
+        """Solicita ao app Textual a abertura do modal de conexão."""
+        self._bridge.emit(
+            TextualUiEvent(
+                "open_connection_config",
+                {"agent": agent_name, "advanced": bool(advanced)},
+                agent=agent_name,
+            )
+        )
+        return True
+
     def flush(self, timeout: float = 5.0) -> None:
         """Drena eventos visuais pendentes no app Textual."""
         self._bridge.flush_ui_events()
