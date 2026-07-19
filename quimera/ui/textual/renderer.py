@@ -27,6 +27,7 @@ from quimera.ui.textual.feed_model import (
 )
 from quimera.ui.textual.terminal_modes import _external_textual_window
 from quimera.domain.execution import ExecutionControlEvent
+from quimera.domain.tool_activity import count_tool_activities
 
 
 class _TextualStatus:
@@ -428,6 +429,7 @@ class TextualRenderer(RendererBase):
                 "ok_count": ok_count,
                 "err_count": err_count,
                 "duration": duration,
+                "activity_counts": count_tool_activities(tools),
             },
         )
         self._bridge.emit(TextualUiEvent("turn_summary", payload, agent=agent))

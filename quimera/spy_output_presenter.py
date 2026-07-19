@@ -8,6 +8,7 @@ import quimera.profiles as profiles
 from quimera.agent_events import SpyEvent
 from quimera.constants import Visibility
 from quimera.evidence import Evidence, EvidenceStore, PatternRegistry
+from quimera.domain.tool_activity import classify_tool_activity
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
 
 
@@ -145,14 +146,21 @@ class SpyOutputPresenter:
 
         if operation == "start":
             key = self._tool_key(tool, tool_call_id)
+            input_payload = data.get("input")
+            activity = classify_tool_activity(
+                tool,
+                input_payload if isinstance(input_payload, dict) else None,
+                explicit=data.get("activity"),
+            )
             record = {
                 "tool_call_id": key,
                 "tool": tool,
+                "activity": activity.value,
                 "status": status or "running",
                 "started_at": now,
                 "ended_at": None,
                 "duration_ms": None,
-                "input": data.get("input"),
+                "input": input_payload,
             }
             self.turn_tools.append(record)
             self._active_tool_calls[key] = record
@@ -164,14 +172,21 @@ class SpyOutputPresenter:
         key = tool_call_id or self._find_open_tool(tool)
         if not key:
             key = self._tool_key(tool, tool_call_id)
+            input_payload = data.get("input")
+            activity = classify_tool_activity(
+                tool,
+                input_payload if isinstance(input_payload, dict) else None,
+                explicit=data.get("activity"),
+            )
             record = {
                 "tool_call_id": key,
                 "tool": tool,
+                "activity": activity.value,
                 "status": "unknown",
                 "started_at": now,
                 "ended_at": None,
                 "duration_ms": None,
-                "input": data.get("input"),
+                "input": input_payload,
             }
             self.turn_tools.append(record)
             self._active_tool_calls[key] = record
@@ -181,6 +196,12 @@ class SpyOutputPresenter:
             return
 
         record["status"] = status or record.get("status") or "unknown"
+        if data.get("activity"):
+            record["activity"] = classify_tool_activity(
+                tool or record.get("tool"),
+                record.get("input") if isinstance(record.get("input"), dict) else None,
+                explicit=data.get("activity"),
+            ).value
         record["ended_at"] = now
         started_at = record.get("started_at")
         if isinstance(started_at, (int, float)):
@@ -228,6 +249,7 @@ class SpyOutputPresenter:
                 {
                     "tool_call_id": record.get("tool_call_id"),
                     "tool": record.get("tool"),
+                    "activity": record.get("activity"),
                     "status": record.get("status"),
                     "started_at": self._iso(record.get("started_at")),
                     "ended_at": self._iso(record.get("ended_at")),

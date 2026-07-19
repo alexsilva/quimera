@@ -1159,12 +1159,15 @@ def test_textual_render_event_contextualizes_agent_activity_and_tools():
     tools_event = TextualUiEvent(
         "turn_summary",
         {
-            "label": "OpenCode",
-            "style": "magenta",
             "total": 3,
             "ok_count": 2,
             "err_count": 1,
             "duration": "1.2s",
+            "activity_counts": {
+                "inspection": 1,
+                "modification": 1,
+                "validation": 1,
+            },
         },
         agent="opencode",
     )
@@ -1175,7 +1178,9 @@ def test_textual_render_event_contextualizes_agent_activity_and_tools():
     output = console.export_text()
 
     assert "OpenCode · sem resposta · tentativa 1/2" in output
-    assert "OpenCode · 3 ferramentas · 2 concluídas · 1 falha · 1.2s" in output
+    assert "3 ferramentas · 2 concluídas · 1 falha" in output
+    assert "1 inspeção · 1 alteração · 1 validação · 1.2s" in output
+    assert "OpenCode · 3 ferramentas" not in output
     assert "TOOLS:" not in output
     assert "no response, retrying" not in output
 

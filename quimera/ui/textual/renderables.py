@@ -231,28 +231,35 @@ def _build_agent_activity_renderable(payload, agent: str | None = None):
 def _build_turn_summary_renderable(payload, agent: str | None = None):
     """Monta resumo contextualizado das ferramentas usadas no turno."""
     if not isinstance(payload, dict):
-        prefix = f"{agent} " if agent else ""
-        return Text(f"{prefix}{payload}", style="dim")
+        return _gutter_row("└", "dim", Text(str(payload), style="dim"))
 
     total = int(payload.get("total") or 0)
     ok_count = int(payload.get("ok_count") or 0)
     err_count = int(payload.get("err_count") or 0)
     duration = str(payload.get("duration") or "").strip()
-    label = str(payload.get("label") or agent or "Agente")
-    style = str(payload.get("style") or "cyan")
-    icon = "✓" if err_count == 0 else "!"
-    icon_style = "bold green" if err_count == 0 else "bold yellow"
+    activity_counts = payload.get("activity_counts") or {}
     noun = "ferramenta" if total == 1 else "ferramentas"
 
     line = Text(no_wrap=False, overflow="fold")
-    line.append(label, style=f"bold {style}")
-    line.append(f" · {total} {noun}", style="dim")
+    line.append(f"{total} {noun}", style="dim")
     line.append(f" · {ok_count} concluída{'s' if ok_count != 1 else ''}", style="green")
     if err_count:
         line.append(f" · {err_count} falha{'s' if err_count != 1 else ''}", style="yellow")
+    category_labels = (
+        ("inspection", "inspeção", "inspeções"),
+        ("modification", "alteração", "alterações"),
+        ("validation", "validação", "validações"),
+        ("version_control", "versionamento", "versionamentos"),
+        ("research", "pesquisa", "pesquisas"),
+        ("execution", "execução", "execuções"),
+    )
+    for category, singular, plural in category_labels:
+        count = int(activity_counts.get(category) or 0)
+        if count:
+            line.append(f" · {count} {singular if count == 1 else plural}", style="dim")
     if duration:
         line.append(f" · {duration}", style="dim")
-    return _gutter_row(icon, icon_style, line)
+    return _gutter_row("└", "dim", line)
 
 
 def _breadcrumb_items(chain: list[str], from_label: str, to_label: str) -> list[str]:
