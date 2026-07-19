@@ -46,7 +46,7 @@ class DecisionsLogger:
 
 
 class WorkspaceTmp:
-    """Subtree temporária do workspace em /tmp — logs de sessão, nunca dados persistentes."""
+    """Subtree temporária do workspace em /tmp para dados descartáveis."""
 
     def __init__(self, cwd_hash: str):
         """Inicializa a subtree temporária para o workspace identificado por *cwd_hash*."""
@@ -59,6 +59,7 @@ class WorkspaceTmp:
         self._ensure_dir(self.render_logs_dir, "render logs dir")
         self._ensure_dir(self.metrics_dir, "metrics dir")
         self._ensure_dir(self.clipboard_dir, "clipboard dir")
+        self._ensure_dir(self.artifacts_dir, "artifacts dir")
 
     def _ensure_dir(self, path: Path, label: str) -> None:
         """Cria *path* (incluindo pais) e registra warning se a criação falhar."""
@@ -91,6 +92,11 @@ class WorkspaceTmp:
     def clipboard_dir(self) -> Path:
         """Diretório temporário de anexos colados no input."""
         return self._root / "clipboard"
+
+    @property
+    def artifacts_dir(self) -> Path:
+        """Diretório temporário para artefatos gerados por ferramentas."""
+        return self._root / "data" / "artifacts"
 
     def render_log_path_for(self, session_id: str) -> Path:
         """Caminho do arquivo JSONL de auditoria de render para *session_id*."""
@@ -256,8 +262,8 @@ class Workspace:
 
     @property
     def artifacts_dir(self) -> Path:
-        """Diretório persistente para artefatos gerados por ferramentas (ex: screenshots de browser)."""
-        return self._root / "data" / "artifacts"
+        """Diretório temporário para artefatos gerados por ferramentas."""
+        return self._tmp.artifacts_dir
 
     @property
     def decisions_log(self) -> Path:
@@ -292,7 +298,6 @@ class Workspace:
             self._root / "data" / "logs" / "render",
             self._root / "data" / "logs" / "metrics",
             self._root / "data" / "logs" / "sessions",
-            self._root / "data" / "artifacts",
             self._root / "state",
             self.base_dir / "index",
         ]

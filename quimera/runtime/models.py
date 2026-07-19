@@ -78,6 +78,7 @@ class ToolResult:
     duration_ms: int | None = None
     truncated: bool = False
     data: dict[str, Any] = field(default_factory=dict)
+    content_blocks: list[dict[str, Any]] = field(default_factory=list)
 
     @staticmethod
     def _truncate_text(value: str, max_chars: int) -> tuple[str, bool]:

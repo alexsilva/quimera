@@ -64,6 +64,17 @@ class MultiFakeSession(FakeSession):
         )
         return tools
 
+
+class ImageFakeSession(FakeSession):
+    def call_tool(self, name: str, arguments: dict):
+        return {
+            "content": [
+                {"type": "text", "text": "Screenshot salvo."},
+                {"type": "image", "data": "aW1hZ2U=", "mimeType": "image/png"},
+            ],
+            "isError": False,
+        }
+
 def teardown_function() -> None:
     set_bridge(None)
     set_bridge_schemas([])
@@ -95,6 +106,19 @@ def test_mcp_client_bridge_registers_external_tools_in_executor_registry(tmp_pat
     assert result.ok is True
     assert result.content == "PC-1 Example issue"
     assert session.calls == [("search_issue", {"jql": "key = PC-1"})]
+
+
+def test_mcp_client_bridge_preserves_non_text_content_blocks(tmp_path):
+    handler = MCPClientBridge._make_handler(
+        ImageFakeSession(), "screenshot", "Screenshot", {"type": "object"}
+    )
+
+    result = handler(ToolCall(name="remote_screenshot", arguments={}))
+
+    assert result.content == "Screenshot salvo."
+    assert result.content_blocks == [
+        {"type": "image", "data": "aW1hZ2U=", "mimeType": "image/png"}
+    ]
 
 
 def test_mcp_client_bridge_schemas_are_resolved_when_registered(tmp_path):

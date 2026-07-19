@@ -738,7 +738,7 @@ class MCPServer:
             structured["exit_code"] = result.exit_code
 
         return self._ok(msg_id, {
-            "content": self._build_content(text),
+            "content": self._build_content(text) + list(result.content_blocks),
             "isError": not result.ok,
             "structuredContent": structured,
         })

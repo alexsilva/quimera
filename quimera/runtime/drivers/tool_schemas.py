@@ -1630,7 +1630,7 @@ TOOL_SCHEMAS.extend([
         "Salva screenshot da página inteira, viewport ou elemento no diretório de artefatos do workspace (não no diretório de trabalho do projeto).",
         {
             "session_id": _SESSION_ID,
-            "path": {"type": "string", "description": "Path relativo ao diretório de artefatos do workspace. Padrão browser/...png."},
+            "path": {"type": "string", "description": "Nome ou subpath relativo a artifacts/browser/<session_id>/. Padrão <timestamp>.png."},
             "selector": _SELECTOR,
             "full_page": {"type": "boolean"},
             "quality": {"type": "integer", "minimum": 1, "maximum": 100},

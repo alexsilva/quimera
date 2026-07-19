@@ -186,6 +186,34 @@ class TestToolsCall:
         assert call_arg.name == "read_file"
         assert call_arg.arguments == {"path": "foo.py"}
 
+    def test_retorna_texto_e_imagem_sem_duplicar_base64_nos_metadados(self):
+        image_block = {
+            "type": "image",
+            "data": "aW1hZ2U=",
+            "mimeType": "image/png",
+        }
+        result = ToolResult(
+            ok=True,
+            tool_name="read_file",
+            content="Screenshot salvo.",
+            data={"path": "/tmp/shot.png", "mimeType": "image/png"},
+            content_blocks=[image_block],
+        )
+        server = _make_server(_make_executor(call_result=result))
+
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 15, "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {"path": "shot.png"}},
+        })
+
+        assert resp["result"]["content"] == [
+            {"type": "text", "text": "Screenshot salvo."},
+            image_block,
+        ]
+        structured = resp["result"]["structuredContent"]
+        assert structured["data"]["path"] == "/tmp/shot.png"
+        assert "aW1hZ2U=" not in str(structured)
+
     def test_mcp_socket_reusa_preview_do_executor_para_tool_sem_approval(self, tmp_path):
         """tools/call via MCP deve acionar o mesmo preview operacional do executor."""
         file_path = tmp_path / "foo.py"

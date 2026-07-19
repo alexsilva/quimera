@@ -690,6 +690,41 @@ class TestToolsCallHTTP:
         finally:
             httpd.shutdown()
 
+    def test_tools_call_http_preserves_native_image_content(self):
+        image_block = {
+            "type": "image",
+            "data": "aW1hZ2U=",
+            "mimeType": "image/png",
+        }
+        result = ToolResult(
+            ok=True,
+            tool_name="read_file",
+            content="Screenshot salvo.",
+            content_blocks=[image_block],
+        )
+        httpd = _start_http_server(
+            _make_mcp_server(_make_executor(call_result=result))
+        )
+        try:
+            body = json.dumps({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {"path": "shot.png"}},
+            }).encode("utf-8")
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+
+            assert resp.status == 200
+            result_data = json.loads(resp.data)["result"]
+            assert result_data["content"] == [
+                {"type": "text", "text": "Screenshot salvo."},
+                image_block,
+            ]
+        finally:
+            httpd.shutdown()
+
     def test_tools_call_http_reusa_preview_do_executor_para_tool_sem_approval(self, tmp_path):
         """POST /message deve acionar o mesmo preview operacional do executor."""
         (tmp_path / "foo.py").write_text("print('ok')\n", encoding="utf-8")

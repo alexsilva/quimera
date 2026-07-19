@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import shutil
 from pathlib import Path
@@ -7,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
-from quimera.runtime.models import ToolCall
+from quimera.runtime.models import ToolCall, ToolResult
 from quimera.runtime.policy import ToolPolicyError
 from quimera.runtime.tools.browser.tools import BrowserTool, BrowserToolValidator
 
@@ -48,6 +49,83 @@ def test_browser_screenshot_path_is_confined_to_workspace(tmp_path: Path):
                 {"session_id": "abc", "path": "../../outside.png"},
             )
         )
+
+
+def test_browser_screenshot_custom_path_stays_inside_session(tmp_path: Path, monkeypatch):
+    tool = BrowserTool(_config(tmp_path))
+
+    def execute_screenshot(call, operation, timeout_seconds=30):
+        output_path = Path(call.arguments["path"])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+        return ToolResult(ok=True, tool_name=call.name)
+
+    monkeypatch.setattr(tool, "_execute", execute_screenshot)
+    result = tool.browser_screenshot(
+        ToolCall(
+            "browser_screenshot",
+            {"session_id": "session-123", "path": "reports/home.png"},
+        )
+    )
+
+    expected = (
+        tool.config.artifacts_root
+        / "browser"
+        / "session-123"
+        / "reports"
+        / "home.png"
+    ).resolve()
+    assert result.data["path"] == str(expected)
+    assert expected.is_file()
+    tool.shutdown()
+
+
+def test_browser_screenshot_includes_native_mcp_image(tmp_path: Path, monkeypatch):
+    tool = BrowserTool(_config(tmp_path))
+    image_bytes = b"\x89PNG\r\n\x1a\nimage"
+
+    def execute_screenshot(call, operation, timeout_seconds=30):
+        output_path = Path(call.arguments["path"])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(image_bytes)
+        return ToolResult(ok=True, tool_name=call.name, data={"bytes": len(image_bytes)})
+
+    monkeypatch.setattr(tool, "_execute", execute_screenshot)
+    result = tool.browser_screenshot(
+        ToolCall("browser_screenshot", {"session_id": "abc", "path": "shot.png"})
+    )
+
+    assert result.ok is True
+    assert result.data["mimeType"] == "image/png"
+    assert result.data["image_inline"] is True
+    assert result.content_blocks[0]["type"] == "image"
+    assert result.content_blocks[0]["mimeType"] == "image/png"
+    assert base64.b64decode(result.content_blocks[0]["data"]) == image_bytes
+    assert Path(result.data["path"]).parent.name == "abc"
+    tool.shutdown()
+
+
+def test_browser_screenshot_omits_oversized_inline_image(tmp_path: Path, monkeypatch):
+    tool = BrowserTool(_config(tmp_path))
+    monkeypatch.setattr(tool, "max_inline_screenshot_bytes", 3)
+
+    def execute_screenshot(call, operation, timeout_seconds=30):
+        output_path = Path(call.arguments["path"])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"large")
+        return ToolResult(ok=True, tool_name=call.name)
+
+    monkeypatch.setattr(tool, "_execute", execute_screenshot)
+    result = tool.browser_screenshot(
+        ToolCall("browser_screenshot", {"session_id": "abc", "path": "shot.jpg"})
+    )
+
+    assert result.ok is True
+    assert result.content_blocks == []
+    assert result.data["mimeType"] == "image/jpeg"
+    assert result.data["image_inline"] is False
+    assert "excede o limite" in result.content
+    tool.shutdown()
 
 
 @pytest.mark.skipif(
@@ -137,13 +215,14 @@ def test_browser_tool_end_to_end_with_dom_console_and_screenshot(tmp_path: Path)
         screenshot = tool.browser_screenshot(
             ToolCall(
                 "browser_screenshot",
-                {"session_id": session_id, "path": "browser/test.png"},
+                {"session_id": session_id, "path": "test.png"},
             )
         )
         assert screenshot.ok, screenshot.error
         output = tmp_path / screenshot.data["path"]
         assert output.is_file()
         assert output.stat().st_size > 0
+        assert output.parent.name == session_id
     finally:
         if session_id:
             tool.browser_close(ToolCall("browser_close", {"session_id": session_id}))

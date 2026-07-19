@@ -714,9 +714,13 @@ class MCPClientBridge:
 
                 content_parts = result.get("content", [])
                 text_parts = []
+                content_blocks = []
                 for part in content_parts:
                     if isinstance(part, dict):
-                        text_parts.append(part.get("text", str(part)))
+                        if part.get("type") == "text":
+                            text_parts.append(str(part.get("text", "")))
+                        else:
+                            content_blocks.append(dict(part))
                     else:
                         text_parts.append(str(part))
 
@@ -728,6 +732,7 @@ class MCPClientBridge:
                     error=result.get("error") if is_error else None,
                     duration_ms=duration,
                     data=result,
+                    content_blocks=content_blocks,
                 )
             except Exception as exc:
                 duration = int((time.monotonic() - start) * 1000)
