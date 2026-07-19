@@ -1,12 +1,16 @@
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from quimera.runtime.approval import TrustedToolExecutionContext
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.models import ToolCall
-from quimera.runtime.tools.tasks import TaskTools
+from quimera.runtime.policy import ToolPolicyError
+from quimera.runtime.tools.tasks import TaskTools, TaskToolsValidator
+from quimera.tasks.protocol import TaskCreationResult
 
 
 @pytest.fixture
@@ -17,6 +21,72 @@ def config():
 @pytest.fixture
 def tools(config):
     return TaskTools(config)
+
+
+def test_tasks_creates_task_with_trusted_agent_and_monitor_receipt(tools):
+    """Cria task pelo callback canônico e informa como acompanhar o resultado."""
+    calls = []
+
+    def create_task(description, *, requested_by):
+        calls.append((description, requested_by))
+        return TaskCreationResult(
+            task_id=17,
+            job_id=4,
+            assigned_to="codex",
+            task_type="code_edit",
+        )
+
+    tools.set_create_task_fn(create_task)
+    call = ToolCall(
+        name="tasks",
+        arguments={"description": "corrigir o parser"},
+        metadata={
+            "trusted_context": TrustedToolExecutionContext(
+                agent_name="claude-sonnet",
+            ),
+        },
+    )
+
+    result = tools.tasks(call)
+
+    assert result.ok is True
+    assert calls == [("corrigir o parser", "claude-sonnet")]
+    assert json.loads(result.content) == result.data
+    assert result.data["task_id"] == 17
+    assert result.data["monitor_with"] == {
+        "tool": "list_tasks",
+        "arguments": {"id": 17},
+    }
+
+
+def test_tasks_returns_unavailable_without_application_binding(tools):
+    """Não cria task fora de uma sessão ligada ao domínio da aplicação."""
+    result = tools.tasks(
+        ToolCall(name="tasks", arguments={"description": "executar testes"}),
+    )
+
+    assert result.ok is False
+    assert "unavailable" in str(result.error)
+
+
+def test_tasks_rejects_missing_trusted_agent_identity(tools):
+    """Não cria task sem identidade confiável do agente solicitante."""
+    tools.set_create_task_fn(lambda *_args, **_kwargs: None)
+
+    result = tools.tasks(
+        ToolCall(name="tasks", arguments={"description": "executar testes"}),
+    )
+
+    assert result.ok is False
+    assert "trusted agent identity" in str(result.error)
+
+
+def test_tasks_validator_rejects_empty_description(config):
+    """Rejeita criação sem descrição antes de chamar o domínio."""
+    validator = TaskToolsValidator(config)
+
+    with pytest.raises(ToolPolicyError, match="description"):
+        validator.validate(ToolCall(name="tasks", arguments={"description": " "}))
 
 
 def test_resolve_job_id_env(tools):

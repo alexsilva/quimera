@@ -28,7 +28,7 @@ from .executor_pool import (  # noqa: F401
     _BACKGROUND_AGENT_TIMEOUT_SECONDS,
     delegate_for_parallel_with_client,
 )
-from .protocol import TaskProtocolService
+from .protocol import TaskCreationResult, TaskProtocolService
 from .repository import TaskRepository
 
 
@@ -663,6 +663,19 @@ class AppTaskServices:
     def handle_task_command(self, command: str) -> None:
         """Processa o comando /task: classifica, roteia e persiste a task."""
         self._protocol.handle_task_command(command)
+
+    def create_agent_task(
+        self,
+        description: str,
+        requested_by: str,
+    ) -> TaskCreationResult:
+        """Cria uma task solicitada por agente usando o mesmo protocolo de /task."""
+        return self._protocol.create_task(
+            description,
+            origin="agent_tool",
+            requested_by=requested_by,
+            source_context="tool:tasks",
+        )
 
     # ── Builders privados ──────────────────────────────────────────
 

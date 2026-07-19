@@ -14,6 +14,7 @@ from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.mcp import MCPServer
 from quimera.runtime.models import ToolCall, ToolResult
+from quimera.tasks.protocol import TaskCreationResult
 
 
 def _trusted(**overrides):
@@ -100,6 +101,42 @@ def test_delegate_internal_auto_approved_with_server_side_budget(tmp_path):
     approval.approve.assert_not_called()
     assert executor.approval_broker.audit_log[-1]["event"] == "auto_approved"
     assert executor.approval_broker.audit_log[-1]["run_id"] == "run-1"
+
+
+def test_tasks_uses_dedicated_approval_flag_through_broker(tmp_path):
+    """A flag dedicada permite tasks sem desclassificá-la como operação de escrita."""
+    approval = MagicMock()
+    approval.approve.return_value = False
+    executor = ToolExecutor(
+        ToolRuntimeConfig(
+            workspace_root=tmp_path,
+            db_path=tmp_path / "tasks.db",
+            require_approval_for_mutations=True,
+            require_approval_for_task_creation=False,
+        ),
+        approval,
+    )
+    executor.set_task_create_fn(
+        lambda description, *, requested_by: TaskCreationResult(
+            task_id=1,
+            job_id=2,
+            assigned_to="codex",
+            task_type="general",
+        ),
+    )
+
+    result = executor.execute(
+        ToolCall(
+            name="tasks",
+            arguments={"description": "documentar fluxo"},
+            metadata=_trusted(),
+        ),
+    )
+
+    assert result.ok is True
+    approval.approve.assert_not_called()
+    assert executor.approval_broker.audit_log[-1]["event"] == "auto_approved"
+    assert executor.approval_broker.audit_log[-1]["risk"] == "write"
 
 
 def test_delegate_http_external_requires_user_approval(tmp_path):

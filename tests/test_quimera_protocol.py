@@ -1261,6 +1261,38 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(tasks[0]["assigned_to"], "opencode")
         self.assertIn("atribuída para opencode", app.renderer.system_messages[-1])
 
+    def test_agent_task_uses_same_classification_and_routing_as_task_command(self):
+        """A tool de agente reutiliza o protocolo canônico de /task."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.user_name = "Alex"
+        app.shared_state = {}
+        app.current_job_id = 1
+        app.history = []
+        app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 4})()
+        tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        db_path = tmp_dir / "tasks.db"
+        init_db(str(db_path))
+        add_job("Session", db_path=str(db_path), job_id=1)
+        app.tasks_db_path = str(db_path)
+        app.task_services = build_task_services(app)
+
+        receipt = app.task_services.create_agent_task(
+            "execute os testes",
+            requested_by="claude-sonnet",
+        )
+
+        tasks = list_tasks({"job_id": 1}, db_path=str(db_path))
+        self.assertEqual(receipt.task_id, tasks[0]["id"])
+        self.assertEqual(receipt.task_type, "test_execution")
+        self.assertEqual(tasks[0]["origin"], "agent_tool")
+        self.assertEqual(tasks[0]["requested_by"], "claude-sonnet")
+        self.assertEqual(tasks[0]["assigned_to"], AGENT_CODEX)
+
     def test_handle_task_command_uses_injected_task_classifier(self):
         """Verifica que handle task command uses injected task classifier."""
         app = QuimeraApp.__new__(QuimeraApp)

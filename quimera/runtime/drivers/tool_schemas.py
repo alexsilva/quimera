@@ -527,6 +527,59 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "tasks",
+            "description": (
+                "Cria uma task pelo mesmo fluxo do comando /task. Retorna task_id, job_id, "
+                "agente atribuído, tipo e status; acompanhe o resultado com list_tasks usando o ID."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "Descrição completa da task a executar.",
+                    },
+                },
+                "required": ["description"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "JSON do recibo de criação"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type": "integer"},
+                            "job_id": {"type": "integer"},
+                            "assigned_to": {
+                                "oneOf": [{"type": "string"}, {"type": "null"}],
+                            },
+                            "task_type": {"type": "string"},
+                            "status": {"type": "string"},
+                            "monitor_with": {
+                                "type": "object",
+                                "properties": {
+                                    "tool": {"type": "string", "enum": ["list_tasks"]},
+                                    "arguments": {
+                                        "type": "object",
+                                        "properties": {"id": {"type": "integer"}},
+                                        "required": ["id"],
+                                    },
+                                },
+                                "required": ["tool", "arguments"],
+                            },
+                        },
+                    },
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_tasks",
             "description": "Lista tarefas com filtros opcionais do job atual ou de qualquer job.",
             "parameters": {
@@ -1659,7 +1712,7 @@ TOOL_SCHEMAS.extend([
     ),
 ])
 
-_TASK_TOOL_NAMES = {"list_tasks", "list_jobs", "get_job"}
+_TASK_TOOL_NAMES = {"tasks", "list_tasks", "list_jobs", "get_job"}
 
 
 def resolve_tool_schemas(tool_executor=None) -> list[dict]:
@@ -1697,6 +1750,13 @@ def resolve_tool_schemas(tool_executor=None) -> list[dict]:
         schemas = [
             schema for schema in schemas
             if schema["function"]["name"] not in ("delegate", "list_agents")
+        ]
+
+    is_tasks_available = getattr(tool_executor, "is_tasks_available", None)
+    if callable(is_tasks_available) and not is_tasks_available():
+        schemas = [
+            schema for schema in schemas
+            if schema["function"]["name"] != "tasks"
         ]
 
     is_ask_user_available = getattr(tool_executor, "is_ask_user_available", None)

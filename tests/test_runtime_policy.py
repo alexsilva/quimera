@@ -205,7 +205,20 @@ def test_policy_requires_approval(policy):
     assert policy.requires_approval(ToolCall(name="write_file", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="apply_patch", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="run_shell_command", arguments={})) is True
+    assert policy.requires_approval(ToolCall(name="tasks", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="read_file", arguments={})) is False
+
+
+def test_tasks_uses_dedicated_creation_approval_flag(tmp_path):
+    """A governança de tasks não depende da flag genérica de mutações."""
+    config = ToolRuntimeConfig(
+        workspace_root=tmp_path,
+        require_approval_for_mutations=True,
+        require_approval_for_task_creation=False,
+    )
+    policy = _make_policy(config)
+
+    assert policy.requires_approval(ToolCall(name="tasks", arguments={})) is False
 
 
 def test_policy_other_validations(policy):

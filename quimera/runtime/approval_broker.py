@@ -229,7 +229,7 @@ class ApprovalBroker:
         "browser_network",
     })
     _WRITE_TOOLS = frozenset({
-        "write_file", "apply_patch", "todo_write", "write_stdin",
+        "write_file", "apply_patch", "todo_write", "tasks", "write_stdin",
         "poll_command_session", "close_command_session", "git_add", "git_commit",
         "git_checkout", "git_push",
         "browser_screenshot",

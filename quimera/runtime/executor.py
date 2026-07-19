@@ -54,6 +54,7 @@ class ToolExecutor:
         self._delegate_tools = None
         self._interaction_tools = None
         self._state_tools = None
+        self._task_tools = None
         self._browser_tools = None
         self._register_builtin_tools()
 
@@ -80,7 +81,7 @@ class ToolExecutor:
         shell_tools.register(self.registry, self.policy, self.config)
         web_tools.register(self.registry, self.policy, self.config)
         self._browser_tools = browser_tools.register(self.registry, self.policy, self.config)
-        tasks_tools.register(self.registry, self.policy, self.config)
+        self._task_tools = tasks_tools.register(self.registry, self.policy, self.config)
         todo_tools.register(self.registry, self.policy, self.config)
         memory_tools.register(self.registry, self.policy, self.config)
         self._delegate_tools = delegate_module.register(self.registry, self.policy, self.config)
@@ -158,6 +159,14 @@ class ToolExecutor:
         Assinatura esperada: fn(agent_name: str, **options) -> str | None
         """
         self._delegate_tools.set_delegate_fn(fn)
+
+    def set_task_create_fn(self, fn) -> None:
+        """Injeta o serviço de criação usado pela tool tasks."""
+        self._task_tools.set_create_task_fn(fn)
+
+    def is_tasks_available(self) -> bool:
+        """Indica se a tool tasks está ligada ao serviço da aplicação."""
+        return self._task_tools.is_tasks_available()
 
     def set_background_delegate_fn(self, fn) -> None:
         """Injeta callable isolado para delegação assíncrona via HTTP MCP.

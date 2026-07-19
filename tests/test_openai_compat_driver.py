@@ -103,7 +103,7 @@ def test_schema_names_match_registered_tools():
     expected = {
         "list_files", "read_file", "write_file", "replace_text", "apply_patch", "grep_search",
         "inspect_symbols", "run_shell",
-        "exec_command", "write_stdin", "poll_command_session", "close_command_session", "list_tasks", "list_jobs",
+        "exec_command", "write_stdin", "poll_command_session", "close_command_session", "tasks", "list_tasks", "list_jobs",
         "get_job", "memory_save", "memory_retrieve", "remove_file", "web_search", "web_fetch", "delegate",
         "todo_write", "todo_list", "list_agents", "ask_user", "update_shared_state",
         "browser_start", "browser_status", "browser_close", "browser_navigate",
@@ -191,6 +191,23 @@ def test_resolve_tool_schemas_hides_delegate_when_not_bound():
     actual = {s["function"]["name"] for s in resolve_tool_schemas(mock_executor)}
     assert "delegate" not in actual
     assert "list_agents" not in actual
+
+
+def test_resolve_tool_schemas_hides_tasks_when_not_bound():
+    """Oculta criação de tasks quando o serviço da aplicação não foi ligado."""
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db")
+    mock_executor.policy = SimpleNamespace(blocked_tools=[])
+    mock_executor.is_delegate_available.return_value = True
+    mock_executor.is_tasks_available.return_value = False
+    mock_executor.registry.names.return_value = [
+        schema["function"]["name"] for schema in TOOL_SCHEMAS
+    ]
+
+    actual = {schema["function"]["name"] for schema in resolve_tool_schemas(mock_executor)}
+
+    assert "tasks" not in actual
+    assert "list_tasks" in actual
 
 
 def test_required_args_are_lists():

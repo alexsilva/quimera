@@ -89,6 +89,8 @@ class ToolPolicy:
 
     def requires_approval(self, call: ToolCall) -> bool:
         """Retorna True quando a tool requer aprovação humana antes de ser executada."""
+        if call.name == "tasks":
+            return self.config.require_approval_for_task_creation
         if call.name in {
             "write_file",
             "apply_patch",
@@ -127,8 +129,8 @@ class ToolPolicy:
         return PathPermissionError(raw, path)
 
     def _validate_propose_task(self, call: ToolCall) -> None:
-        """propose_task foi desativada; crie tasks apenas com o comando /task do humano."""
-        raise ToolPolicyError("propose_task foi desativada; crie tasks apenas com o comando /task do humano")
+        """propose_task foi substituída pelos fluxos canônicos de criação."""
+        raise ToolPolicyError("propose_task foi desativada; use /task ou a tool tasks")
 
     def _validate_approve_task(self, call: ToolCall) -> None:
         """approve_task foi desativada no chat."""

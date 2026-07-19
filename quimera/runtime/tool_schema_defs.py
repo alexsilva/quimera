@@ -83,6 +83,13 @@ TOOL_SCHEMA: dict[str, dict] = {
             "session_id": {"type": "int", "description": "ID da sessão", "required": True},
         },
     },
+    "tasks": {
+        "name": "tasks",
+        "description": "Cria uma task como o comando /task e retorna dados para acompanhamento",
+        "parameters": {
+            "description": {"type": "str", "description": "Descrição da task", "required": True},
+        },
+    },
     "list_tasks": {
         "name": "list_tasks",
         "description": "Lista tarefas de um job ou todas",

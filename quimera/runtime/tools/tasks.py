@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Protocol
 
+from ..approval import TrustedToolExecutionContext
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
 from ..policy import ToolPolicyError
@@ -15,15 +17,91 @@ from ...tasks.api import (
 from ._helpers import resolve_current_job_id
 from .base import ToolBase, ValidatableTool
 
-_TASK_TOOL_NAMES = ["list_tasks", "list_jobs", "get_job"]
+_TASK_TOOL_NAMES = ["tasks", "list_tasks", "list_jobs", "get_job"]
+
+
+class _TaskCreationReceipt(Protocol):
+    """Contrato mínimo do recibo retornado pelo domínio de tasks."""
+
+    def as_dict(self) -> dict:
+        """Serializa o recibo."""
+        ...
+
+
+class _CreateTaskFn(Protocol):
+    """Contrato do serviço de criação injetado pelo bootstrap."""
+
+    def __call__(
+        self,
+        description: str,
+        *,
+        requested_by: str,
+    ) -> _TaskCreationReceipt:
+        """Cria uma task e retorna seu recibo."""
+        ...
 
 
 class TaskTools(ToolBase):
-    """Ferramentas de consulta a tasks e jobs."""
+    """Ferramentas de criação e consulta a tasks e jobs."""
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de TaskTools."""
         super().__init__(config)
+        self._create_task_fn: _CreateTaskFn | None = None
+
+    def set_create_task_fn(self, fn: _CreateTaskFn | None) -> None:
+        """Injeta o serviço canônico que cria tasks da sessão."""
+        self._create_task_fn = fn
+
+    def is_tasks_available(self) -> bool:
+        """Indica se a criação de tasks está ligada ao serviço da aplicação."""
+        return callable(self._create_task_fn)
+
+    @staticmethod
+    def _get_calling_agent(call: ToolCall) -> str | None:
+        """Obtém a identidade confiável do agente solicitante."""
+        trusted = call.metadata.get("trusted_context")
+        if isinstance(trusted, TrustedToolExecutionContext):
+            return trusted.agent_name
+        if isinstance(trusted, dict):
+            name = trusted.get("agent_name")
+            return str(name).strip() if name else None
+        return None
+
+    def tasks(self, call: ToolCall) -> ToolResult:
+        """Cria uma task pelo mesmo protocolo usado pelo comando /task."""
+        if not callable(self._create_task_fn):
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="tasks is unavailable outside an active Quimera session",
+            )
+        requested_by = self._get_calling_agent(call)
+        if not requested_by:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="tasks requires a trusted agent identity",
+            )
+        description = str(call.arguments.get("description") or "").strip()
+        try:
+            receipt = self._create_task_fn(
+                description,
+                requested_by=requested_by,
+            )
+            data = receipt.as_dict()
+            data["monitor_with"] = {
+                "tool": "list_tasks",
+                "arguments": {"id": data["task_id"]},
+            }
+            return ToolResult(
+                ok=True,
+                tool_name=call.name,
+                content=json.dumps(data, ensure_ascii=False),
+                data=data,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
     def _resolve_job_id(self, raw_job_id, *, allow_recent_fallback: bool = False) -> int | None:
         """Resolve job id."""
@@ -122,6 +200,12 @@ class TaskTools(ToolBase):
 class TaskToolsValidator(ValidatableTool):
     """Validação de policy para as ferramentas de tasks."""
 
+    def _validate_tasks(self, call: ToolCall) -> None:
+        """Exige uma descrição textual não vazia para criar a task."""
+        description = call.arguments.get("description")
+        if not isinstance(description, str) or not description.strip():
+            raise ToolPolicyError("tasks requer 'description' não vazia")
+
     def _validate_list_tasks(self, call: ToolCall) -> None:
         """Exige ao menos um filtro para evitar DoS por listagem sem limites."""
         filt = call.arguments.get("filters") or {}
@@ -142,10 +226,11 @@ class TaskToolsValidator(ValidatableTool):
         """get_job não exige job_id obrigatório (usa fallback)."""
 
 
-def register(registry, policy, config) -> None:
+def register(registry, policy, config) -> TaskTools:
     """Registra todas as tools de tasks no registry e a validação na policy."""
     task_tools = TaskTools(config)
     task_validator = TaskToolsValidator(config)
     for name in _TASK_TOOL_NAMES:
         registry.register(name, getattr(task_tools, name))
     policy.register_tool_validator(_TASK_TOOL_NAMES, task_validator)
+    return task_tools

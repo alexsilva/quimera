@@ -57,6 +57,15 @@ def test_wire_uses_same_isolated_fn_for_sync_and_background_delegate(wired):
     assert background_fn is delegate_fn
 
 
+def test_wire_binds_tasks_tool_to_canonical_task_service(wired):
+    """A tool tasks reutiliza o mesmo serviço de domínio do comando /task."""
+    _app, _plat, _ui, _sess, _rt, tasks, _chat = wired
+
+    tasks.tool_executor.set_task_create_fn.assert_called_once_with(
+        tasks.task_services.create_agent_task,
+    )
+
+
 def test_wire_registers_cancel_propagation_to_background_clients(wired):
     """ESC no fluxo principal deve cancelar delegações em background."""
     _app, _plat, _ui, _sess, rt, tasks, _chat = wired

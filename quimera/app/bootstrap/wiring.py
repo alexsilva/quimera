@@ -891,6 +891,7 @@ class AppAssembler:
         )
         tasks.tool_executor.set_delegate_fn(background_delegate_fn)
         tasks.tool_executor.set_background_delegate_fn(background_delegate_fn)
+        tasks.tool_executor.set_task_create_fn(tasks.task_services.create_agent_task)
         # ESC/Ctrl+C no fluxo principal também cancela delegações em background,
         # que possuem cancel_event próprio.
         rt.agent_client.add_cancel_listener(tasks.task_services.cancel_background_work)

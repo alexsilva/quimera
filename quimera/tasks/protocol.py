@@ -7,6 +7,7 @@ classificação, roteamento, montagem de prompt e overview de tasks.
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
 from ..constants import TaskStatus
@@ -17,6 +18,21 @@ from .prompt import TaskPromptFactory
 from .repository import TaskRepository
 from .router import TaskRouter
 from .utils import build_completed_task_results
+
+
+@dataclass(frozen=True)
+class TaskCreationResult:
+    """Recibo estruturado de uma task criada pelo protocolo."""
+
+    task_id: int
+    job_id: int
+    assigned_to: str | None
+    task_type: str
+    status: str = TaskStatus.PENDING.value
+
+    def as_dict(self) -> dict[str, Any]:
+        """Serializa o recibo para adapters de UI e ferramentas."""
+        return asdict(self)
 
 
 class TaskProtocolService:
@@ -87,6 +103,36 @@ class TaskProtocolService:
                 renderer.show_warning("Uso: /task <descrição>")
             return
 
+        user_name = self._get_user_name()
+        result = self.create_task(
+            description,
+            origin="human_command",
+            requested_by=user_name,
+            source_context=command,
+        )
+        lines = [f"task criada com id {result.task_id}"]
+        if result.assigned_to:
+            lines.append(f"atribuída para {result.assigned_to}")
+        lines.append(f"tipo inferido: {result.task_type}")
+        system_layer = self._get_system_layer()
+        if system_layer is not None:
+            system_layer.show_system_message(" | ".join(lines))
+        elif renderer is not None:
+            renderer.show_system(" | ".join(lines))
+
+    def create_task(
+        self,
+        description: str,
+        *,
+        origin: str,
+        requested_by: str | None,
+        source_context: str | None,
+    ) -> TaskCreationResult:
+        """Classifica, roteia e persiste uma task independentemente do adapter."""
+        description = str(description or "").strip()
+        if not description:
+            raise ValueError("description is required")
+
         task_classifier = self._get_task_classifier()
         if task_classifier is not None and not hasattr(task_classifier, "classify"):
             logger.debug(
@@ -99,30 +145,29 @@ class TaskProtocolService:
         selected_agent = self.choose_agent_with_load_balance(task_type)
 
         repo = self._build_task_repository()
-        user_name = self._get_user_name()
+        current_job_id = self._get_current_job_id()
+        if current_job_id is None:
+            raise RuntimeError("current job is unavailable")
         task_id = repo.create_task(
-            self._get_current_job_id(),
+            current_job_id,
             description,
             task_type=task_type,
             assigned_to=selected_agent,
-            origin="human_command",
+            origin=origin,
             status="pending",
-            created_by=user_name,
-            requested_by=user_name,
+            created_by=requested_by,
+            requested_by=requested_by,
             body=self.build_task_body(description),
-            source_context=command,
+            source_context=source_context,
         )
         self._wake_executors()
         self.refresh_task_shared_state()
-        lines = [f"task criada com id {task_id}"]
-        if selected_agent:
-            lines.append(f"atribuída para {selected_agent}")
-        lines.append(f"tipo inferido: {task_type}")
-        system_layer = self._get_system_layer()
-        if system_layer is not None:
-            system_layer.show_system_message(" | ".join(lines))
-        elif renderer is not None:
-            renderer.show_system(" | ".join(lines))
+        return TaskCreationResult(
+            task_id=task_id,
+            job_id=current_job_id,
+            assigned_to=selected_agent,
+            task_type=task_type.value,
+        )
 
     # ── Task router delegates ──────────────────────────────────────────
 
@@ -182,11 +227,11 @@ class TaskProtocolService:
                 for task in open_tasks[:6]
             ]
             if counts["pending"] > 0:
-                recommended = "Há tasks pendentes criadas pelo humano aguardando execução."
+                recommended = "Há tasks pendentes aguardando execução."
             elif counts["in_progress"] > 0:
                 recommended = "Há trabalho em andamento; acompanhe antes de abrir tarefas paralelas."
             else:
-                recommended = "Sem tarefas abertas; novas tasks só podem ser criadas pelo humano com /task."
+                recommended = "Sem tarefas abertas; use /task ou a tool tasks para criar uma nova."
             return {
                 "job_id": current_job_id,
                 "job_description": job.description if job else None,

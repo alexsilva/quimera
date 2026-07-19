@@ -88,6 +88,7 @@ HTTP_AGENT_TOOLS = frozenset({
     "memory_save",
     "delegate",
     "list_agents",
+    "tasks",
     # Git mutation tools (require approval)
     "git_add",
     "git_commit",
