@@ -67,6 +67,11 @@ class PromptParser:
         r"<!--\s*(NOT_IF|IF):([A-Za-z_][A-Za-z0-9_]*)\s*-->(.*?)<!--\s*END\1:\2\s*-->",
         re.DOTALL,
     )
+    LINE_IF_PATTERN = re.compile(
+        r"(?m)^[ \t]*<!--\s*(NOT_IF|IF):([A-Za-z_][A-Za-z0-9_]*)\s*-->[ \t]*\n"
+        r"(.*?)^[ \t]*<!--\s*END\1:\2\s*-->[ \t]*(?:\n|$)",
+        re.DOTALL,
+    )
     TITLE_ATTR_PATTERN = re.compile(r"""\btitle\s*=\s*(?:"([^"]*)"|'([^']*)')""")
     TAG_PATTERN = re.compile(r"(?m)^<(?P<name>[A-Za-z_][A-Za-z0-9_-]*)\b")
 
@@ -181,12 +186,19 @@ class PromptParser:
             should_include = value if mode == "IF" else not value
             return content.strip() if should_include else ""
 
+        def replace_lines(match: re.Match[str]) -> str:
+            mode, key, content = match.groups()
+            value = cls._resolve_condition_value(context.get(key))
+            should_include = value if mode == "IF" else not value
+            return content if should_include else ""
+
         rendered = template
         while True:
-            updated = cls.IF_PATTERN.sub(replace, rendered)
-            if updated == rendered:
-                return updated
-            rendered = updated
+            updated = cls.LINE_IF_PATTERN.sub(replace_lines, rendered)
+            if updated != rendered:
+                rendered = updated
+                continue
+            return cls.IF_PATTERN.sub(replace, rendered)
 
 
 class PromptTemplate:

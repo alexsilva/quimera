@@ -556,7 +556,11 @@ class AppAssembler:
             "render_log_path": str(plat.render_log_path) if opts.debug else "",
             "render_ansi_path": str(plat.render_ansi_path) if opts.debug else "",
             "metrics_path": str(plat.metrics_file) if plat.metrics_file else "",
-            "app_log_path": str(plat.app_log_path) if plat.app_log_path else "",
+            "app_log_path": (
+                str(plat.app_log_path)
+                if opts.debug and plat.app_log_path
+                else ""
+            ),
             "mcp_enabled": False,
             "mcp_socket_path": "",
         }

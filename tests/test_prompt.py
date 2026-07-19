@@ -121,6 +121,7 @@ def test_prompt_includes_render_debug_block_when_active():
         "render_log_path": "/tmp/test/data/logs/render/render.jsonl",
         "render_ansi_path": "/tmp/test/data/logs/render/render.ansi",
         "metrics_path": "/tmp/test/data/logs/metrics/test-session.jsonl",
+        "app_log_path": "/tmp/test/data/logs/app-test-session.log",
     }
 
     builder = PromptBuilder(
@@ -137,6 +138,8 @@ def test_prompt_includes_render_debug_block_when_active():
     assert "/tmp/test/data/logs/render/render.ansi" in debug_block
     assert "/tmp/test/data/logs/metrics/test-session.jsonl" in debug_block
     assert "Counter" in debug_block
+    session_block = _extract_block(prompt, "session_state")
+    assert "LOG DA APLICAÇÃO: /tmp/test/data/logs/app-test-session.log" in session_block
 
 
 def test_prompt_omits_render_debug_block_when_inactive():
@@ -147,6 +150,7 @@ def test_prompt_omits_render_debug_block_when_inactive():
         "workspace_root": "/tmp/test",
         "current_dir": ".",
         "render_debug_active": False,
+        "app_log_path": "/tmp/test/data/logs/app-test-session.log",
     }
 
     builder = PromptBuilder(
@@ -158,6 +162,10 @@ def test_prompt_omits_render_debug_block_when_inactive():
     prompt = builder.build(agent="codex", history=[{"role": "human", "content": "pedido"}])
 
     assert '<debug_state title="Debug de render ativo">' not in prompt
+    assert "LOG DA APLICAÇÃO:" not in prompt
+    assert "/tmp/test/data/logs/app-test-session.log" not in prompt
+    assert "- SISTEMA OPERACIONAL: " in prompt
+    assert "- SISTEMA OPERACIONAL: \n\n</session_state>" not in prompt
 
 
 def test_prompt_includes_mcp_runtime_instruction_when_enabled():

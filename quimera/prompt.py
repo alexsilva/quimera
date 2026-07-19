@@ -147,7 +147,11 @@ class PromptBuilder:
             render_log_path = self.session_state.get("render_log_path", "")
             render_ansi_path = self.session_state.get("render_ansi_path", "")
             metrics_path = self.session_state.get("metrics_path", "")
-            app_log_path = self.session_state.get("app_log_path", "")
+            app_log_path = (
+                self.session_state.get("app_log_path", "")
+                if render_debug_active
+                else ""
+            )
             mcp_enabled = bool(self.session_state.get("mcp_enabled", False))
             mcp_socket_path = self.session_state.get("mcp_socket_path", "")
 
