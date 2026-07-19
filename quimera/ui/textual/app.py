@@ -2,6 +2,7 @@
 # ruff: noqa: E402
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -34,6 +35,8 @@ from quimera.ui.textual.constants import (
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.feed_model import TextualFeedModel
 from rich.console import Group as _RichGroup
+
+_logger = logging.getLogger(__name__)
 
 from quimera.ui.textual.renderables import (
     _build_question_overlay,
@@ -451,6 +454,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             try:
                 self.refresh(layout=layout)
             except Exception:
+                _logger.exception("Falha ao atualizar a interface Textual")
                 return
 
         def _refresh_toolbar(self) -> None:

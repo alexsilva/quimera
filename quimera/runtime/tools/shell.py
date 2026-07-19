@@ -6,6 +6,7 @@ import pty
 import random
 import shlex
 import re
+import signal
 import threading
 import time
 import warnings
@@ -45,6 +46,34 @@ _ALLOWED_SHELLS: frozenset[str] = frozenset({
     "/bin/bash", "/bin/sh", "/bin/zsh", "/bin/dash",
     "/usr/bin/bash", "/usr/bin/sh", "/usr/bin/zsh", "/usr/bin/dash",
 })
+
+
+def _terminate_process_group(process: subprocess.ProcessHandle) -> None:
+    """Encerra processo e filhos, preservando fallback para fakes e Windows."""
+    pid = getattr(process, "pid", None)
+    try:
+        if isinstance(pid, int):
+            pgid = os.getpgid(pid)
+            if pgid == pid and pgid != os.getpgrp():
+                os.killpg(pgid, signal.SIGTERM)
+                return
+    except OSError:
+        pass
+    process.terminate()
+
+
+def _kill_process_group(process: subprocess.ProcessHandle) -> None:
+    """Força o encerramento do grupo de processos quando SIGTERM não bastou."""
+    pid = getattr(process, "pid", None)
+    try:
+        if isinstance(pid, int):
+            pgid = os.getpgid(pid)
+            if pgid == pid and pgid != os.getpgrp():
+                os.killpg(pgid, signal.SIGKILL)
+                return
+    except OSError:
+        pass
+    process.kill()
 
 
 @dataclass
@@ -258,11 +287,11 @@ class ShellTool(ToolBase):
         terminate = bool(call.arguments.get("terminate", True))
         try:
             if terminate and session.process.poll() is None:
-                session.process.terminate()
+                _terminate_process_group(session.process)
                 try:
                     session.process.wait(timeout=1)
                 except subprocess.TimeoutExpired:
-                    session.process.kill()
+                    _kill_process_group(session.process)
                     try:
                         session.process.wait(timeout=1)
                     except subprocess.TimeoutExpired:
@@ -368,10 +397,15 @@ class ShellTool(ToolBase):
                 stdout=slave_fd,
                 stderr=slave_fd,
                 close_fds=True,
+                start_new_session=True,
             )
             os.close(slave_fd)
             return process, master_fd
-        process = subprocess.popen_text(shell_args, cwd=str(workdir))
+        process = subprocess.popen_text(
+            shell_args,
+            cwd=str(workdir),
+            start_new_session=True,
+        )
         return process, None
 
     def _create_session(
@@ -644,11 +678,11 @@ class ShellTool(ToolBase):
     def _cleanup_session_resources(session: CommandSession, *, terminate: bool = False) -> None:
         """Libera recursos associados a uma sessão já removida do registro."""
         if terminate and session.process.poll() is None:
-            session.process.terminate()
+            _terminate_process_group(session.process)
             try:
                 session.process.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                session.process.kill()
+                _kill_process_group(session.process)
         if session.tty_master_fd is not None:
             try:
                 os.close(session.tty_master_fd)

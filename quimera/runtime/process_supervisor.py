@@ -170,8 +170,8 @@ class ProcessSupervisor:
             if not self._is_process_alive(mp.pid):
                 continue
             try:
-                os.killpg(mp.pgid, signal.SIGTERM)
-                _logger.info("process_supervisor: SIGTERM enviado para pgid=%d (pid=%d)", mp.pgid, mp.pid)
+                self._signal_process(mp.pgid, mp.pid, signal.SIGTERM)
+                _logger.info("process_supervisor: SIGTERM enviado para pid=%d", mp.pid)
             except OSError as exc:
                 _logger.debug("process_supervisor: SIGTERM falhou para pid=%d: %s", mp.pid, exc)
 
@@ -189,8 +189,8 @@ class ProcessSupervisor:
             if not self._is_process_alive(mp.pid):
                 continue
             try:
-                os.killpg(mp.pgid, signal.SIGKILL)
-                _logger.warning("process_supervisor: SIGKILL enviado para pgid=%d (pid=%d)", mp.pgid, mp.pid)
+                self._signal_process(mp.pgid, mp.pid, signal.SIGKILL)
+                _logger.warning("process_supervisor: SIGKILL enviado para pid=%d", mp.pid)
             except OSError as exc:
                 _logger.debug("process_supervisor: SIGKILL falhou para pid=%d: %s", mp.pid, exc)
 
@@ -216,9 +216,14 @@ class ProcessSupervisor:
     @staticmethod
     def _kill_process_group(pgid: int, pid: int) -> None:
         try:
-            os.killpg(pgid, signal.SIGTERM)
+            ProcessSupervisor._signal_process(pgid, pid, signal.SIGTERM)
         except OSError:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except OSError:
-                pass
+            pass
+
+    @staticmethod
+    def _signal_process(pgid: int, pid: int, sig: int) -> None:
+        """Sinaliza grupo somente quando ele é isolado e liderado pelo filho."""
+        if pgid == pid and pgid != os.getpgrp():
+            os.killpg(pgid, sig)
+            return
+        os.kill(pid, sig)

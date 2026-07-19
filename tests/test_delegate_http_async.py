@@ -13,6 +13,7 @@ Execute com:
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -811,64 +812,167 @@ class TestCallAgentAutoReferencia:
         assert "cannot delegate to itself" in result.error
 
 
-def test_delegate_passes_source_agent_chain_and_id(tmp_path):
-    """Delegações carregam origem, cadeia e id para renderização no feed."""
-    config = ToolRuntimeConfig(workspace_root=tmp_path)
-    tools = DelegateTools(config)
-    captured: list[tuple[str, dict]] = []
+    def test_delegate_passes_source_agent_chain_and_id(self, tmp_path):
+        """Delegações carregam origem, cadeia e id para renderização no feed."""
+        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        tools = DelegateTools(config)
+        captured: list[tuple[str, dict]] = []
 
-    def dispatch(agent, **kwargs):
-        captured.append((agent, kwargs))
-        return "ok"
+        def dispatch(agent, **kwargs):
+            captured.append((agent, kwargs))
+            return "ok"
 
-    tools.set_delegate_fn(dispatch)
-    tools.set_active_agents_provider(lambda: ["codex", "claude"])
+        tools.set_delegate_fn(dispatch)
+        tools.set_active_agents_provider(lambda: ["codex", "claude"])
 
-    call = _make_call(
-        metadata={"calling_agent": "claude"},
-        args={"target_agent": "codex", "request": "revisar"},
-    )
+        call = _make_call(
+            metadata={"calling_agent": "claude"},
+            args={"target_agent": "codex", "request": "revisar"},
+        )
 
-    result = tools.delegate(call)
+        result = tools.delegate(call)
 
-    assert result.ok is True
-    assert captured[0][0] == "codex"
-    delegation = captured[0][1]["delegation"]
-    assert captured[0][1]["from_agent"] == "claude"
-    assert delegation["chain"] == ["claude", "codex"]
-    assert delegation["delegation_id"].startswith("dlg-")
+        assert result.ok is True
+        assert captured[0][0] == "codex"
+        delegation = captured[0][1]["delegation"]
+        assert captured[0][1]["from_agent"] == "claude"
+        assert delegation["chain"] == ["claude", "codex"]
+        assert delegation["delegation_id"].startswith("dlg-")
 
 
-def test_delegate_stops_on_user_cancel_without_trying_fallbacks(tmp_path):
-    """Cancelamento do usuário não deve virar fallback silencioso."""
-    config = ToolRuntimeConfig(workspace_root=tmp_path)
-    tools = DelegateTools(config)
-    dispatched = []
-    cancel_state = {"cancelled": False}
+    def test_delegate_stops_on_user_cancel_without_trying_fallbacks(self, tmp_path):
+        """Cancelamento do usuário não deve virar fallback silencioso."""
+        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        tools = DelegateTools(config)
+        dispatched = []
+        cancel_state = {"cancelled": False}
 
-    def dispatch(agent, **kwargs):
-        dispatched.append(agent)
-        cancel_state["cancelled"] = True
-        return None
+        def dispatch(agent, **kwargs):
+            dispatched.append(agent)
+            cancel_state["cancelled"] = True
+            return None
 
-    tools.set_delegate_fn(dispatch)
-    tools.set_active_agents_provider(lambda: ["codex", "claude"])
-    tools.set_cancel_checker(lambda: cancel_state["cancelled"])
+        tools.set_delegate_fn(dispatch)
+        tools.set_active_agents_provider(lambda: ["codex", "claude"])
+        tools.set_cancel_checker(lambda: cancel_state["cancelled"])
 
-    call = _make_call(
-        metadata={"calling_agent": "deepseek"},
-        args={
-            "target_agent": "codex",
-            "request": "faz algo",
-            "fallback_agents": ["claude"],
-        },
-    )
+        call = _make_call(
+            metadata={"calling_agent": "deepseek"},
+            args={
+                "target_agent": "codex",
+                "request": "faz algo",
+                "fallback_agents": ["claude"],
+            },
+        )
 
-    result = tools.delegate(call)
+        result = tools.delegate(call)
 
-    assert result.ok is False
-    assert result.error == "Execução cancelada pelo usuário"
-    assert dispatched == ["codex"]
+        assert result.ok is False
+        assert result.error == "Execução cancelada pelo usuário"
+        assert dispatched == ["codex"]
+
+
+    def test_parallel_delegate_timeout_cleans_up_and_preserves_completed_result(
+        self,
+        tmp_path,
+    ):
+        """Timeout encerra o step pendente sem perder respostas já concluídas."""
+        config = ToolRuntimeConfig(
+            workspace_root=tmp_path,
+            delegate_parallel_timeout_seconds=1,
+        )
+        tools = DelegateTools(config)
+        release_slow = threading.Event()
+        cleaned: list[str] = []
+
+        def dispatch(agent, **kwargs):
+            if agent == "slow":
+                release_slow.wait(timeout=5)
+                return None
+            return "resultado rápido"
+
+        def cleanup(agent: str) -> None:
+            cleaned.append(agent)
+            if agent == "slow":
+                release_slow.set()
+
+        steps = [
+            {
+                "target_agent": "fast",
+                "fallback_agents": [],
+                "request": "rápido",
+                "context": "",
+                "source_agent": "",
+            },
+            {
+                "target_agent": "slow",
+                "fallback_agents": [],
+                "request": "lento",
+                "context": "",
+                "source_agent": "",
+            },
+        ]
+
+        result = tools._execute_steps_parallel(
+            steps,
+            dispatch,
+            None,
+            lambda: {"fast", "slow"},
+            lambda value: str(value or ""),
+            cleanup,
+        )
+
+        assert result.ok is False
+        assert "excedeu o limite" in str(result.error)
+        assert "[fast] resultado rápido" in result.content
+        assert "slow" in cleaned
+
+    def test_parallel_delegate_timeout_rejects_late_success(self, tmp_path):
+        """Resultado posterior ao deadline não pode sobrescrever o timeout."""
+        config = ToolRuntimeConfig(
+            workspace_root=tmp_path,
+            delegate_parallel_timeout_seconds=1,
+        )
+        tools = DelegateTools(config)
+        release_slow = threading.Event()
+
+        def dispatch(agent, **kwargs):
+            release_slow.wait(timeout=5)
+            return "late success"
+
+        def cleanup(agent: str) -> None:
+            if threading.current_thread() is threading.main_thread():
+                worker = next(
+                    thread
+                    for thread in threading.enumerate()
+                    if thread.name == "delegate-parallel-0"
+                )
+                release_slow.set()
+                worker.join(timeout=1)
+                assert worker.is_alive() is False
+
+        steps = [
+            {
+                "target_agent": "slow",
+                "fallback_agents": [],
+                "request": "lento",
+                "context": "",
+                "source_agent": "",
+            },
+        ]
+
+        result = tools._execute_steps_parallel(
+            steps,
+            dispatch,
+            None,
+            lambda: {"slow"},
+            lambda value: str(value or ""),
+            cleanup,
+        )
+
+        assert result.ok is False
+        assert "excedeu o limite" in str(result.error)
+        assert "late success" not in result.content
 
     def test_bloqueia_main_step_case_insensitive(self, tmp_path):
         """Comparação de auto-referência é case-insensitive."""

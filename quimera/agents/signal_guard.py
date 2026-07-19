@@ -5,14 +5,20 @@ import threading
 
 
 def terminate_process_group(proc) -> None:
-    """Termina o processo e todo seu grupo (filhos)."""
+    """Termina um grupo isolado; nunca sinaliza o grupo compartilhado do app."""
     try:
-        os.killpg(os.getpgid(proc.pid), 15)
+        pid = int(proc.pid)
+        pgid = os.getpgid(pid)
+        current_pgid = os.getpgrp()
+        if pgid == pid and pgid != current_pgid:
+            os.killpg(pgid, signal.SIGTERM)
+            return
+    except (OSError, TypeError, ValueError):
+        pass
+    try:
+        proc.terminate()
     except OSError:
-        try:
-            proc.terminate()
-        except OSError:
-            pass
+        pass
 
 
 class EscMonitor:

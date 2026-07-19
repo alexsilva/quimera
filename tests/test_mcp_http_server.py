@@ -106,6 +106,51 @@ def _start_http_server(mcp=None, cors_origins="*") -> MCP_HTTPServer:
     return httpd
 
 
+def test_http_background_start_propagates_bind_failure():
+    """Falha de bind deve chegar ao chamador, sem thread fantasma."""
+    httpd = MCP_HTTPServer(_make_mcp_server(), host="127.0.0.1", port=0)
+
+    with patch(
+        "quimera.runtime.mcp.http_server._QuietThreadingHTTPServer",
+        side_effect=OSError("address unavailable"),
+    ):
+        with pytest.raises(RuntimeError, match="Não foi possível iniciar"):
+            httpd.start_background()
+
+    assert httpd._thread is None
+    assert httpd.httpd is None
+
+
+def test_http_shutdown_joins_background_thread():
+    """Shutdown deve encerrar e recolher a thread do transporte HTTP."""
+    httpd = _start_http_server()
+    thread = httpd._thread
+
+    httpd.shutdown()
+
+    assert thread is not None
+    assert not thread.is_alive()
+    assert httpd._thread is None
+    assert httpd.httpd is None
+
+
+def test_http_start_timeout_marks_late_startup_as_abandoned():
+    """Servidor que ficar pronto tarde não pode sobreviver ao timeout de startup."""
+    httpd = MCP_HTTPServer(_make_mcp_server(), host="127.0.0.1", port=0)
+    fake_thread = MagicMock()
+
+    with patch(
+        "quimera.runtime.mcp.http_server.threading.Thread",
+        return_value=fake_thread,
+    ), patch.object(httpd._ready_event, "wait", return_value=False):
+        with pytest.raises(TimeoutError, match="não ficou pronto"):
+            httpd.start_background()
+
+    assert httpd._startup_abandoned.is_set()
+    fake_thread.start.assert_called_once_with()
+    fake_thread.join.assert_called_once_with(timeout=1)
+
+
 # ---------------------------------------------------------------------------
 # _SSEQueueOutput
 # ---------------------------------------------------------------------------

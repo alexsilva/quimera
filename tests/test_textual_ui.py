@@ -140,6 +140,44 @@ def test_textual_feed_keeps_thinking_content_while_tools_stream():
     assert payload["tools"] == ["$ ls", "⌘ read_file app.py"]
 
 
+def test_textual_feed_preserves_tool_history_and_marks_hidden_entries():
+    model = TextualFeedModel()
+    model.apply(TextualUiEvent("agent_update", {"content": "pensando"}, agent="codex"))
+
+    for index in range(14):
+        model.apply(TextualUiEvent("tool_preview", f"$ tool-{index}", agent="codex"))
+
+    payload = model.items[0].event.payload
+    assert payload["tools"][0] == "⋮ +2 ferramentas anteriores"
+    assert payload["tools"][1:] == [f"$ tool-{index}" for index in range(2, 14)]
+    assert model._transient_tools_by_agent["codex"] == [
+        f"$ tool-{index}" for index in range(14)
+    ]
+
+    model.apply(TextualUiEvent("tool_preview", "✓ tool-0", agent="codex"))
+
+    assert model._transient_tools_by_agent["codex"][0] == "✓ tool-0"
+    assert len(model._transient_tools_by_agent["codex"]) == 14
+
+
+def test_textual_tool_history_indicator_is_not_rendered_as_a_tool():
+    event = TextualUiEvent(
+        "agent_update",
+        {
+            "content": "pensando",
+            "tools": ["⋮ +2 ferramentas anteriores", "$ tool-atual"],
+        },
+        agent="codex",
+    )
+    console = Console(width=100, record=True)
+
+    console.print(_render_event(event))
+    rendered = console.export_text()
+
+    assert "⋮ +2 ferramentas anteriores" in rendered
+    assert "⚒ ⋮" not in rendered
+
+
 def test_textual_feed_drops_lifecycle_placeholder_when_tools_start():
     model = TextualFeedModel()
 
@@ -2093,6 +2131,7 @@ def test_textual_bridge_handler_refreshes_after_visual_event_updates():
     assert "def _refresh_now" in source
     assert "self._refresh_now(layout=True)" in source
     assert "self._refresh_now()" in source
+    assert "_logger.exception(\"Falha ao atualizar a interface Textual\")" in source
 
 
 

@@ -290,14 +290,24 @@ class StdioMCPTransport(MCPTransport):
     def disconnect(self) -> None:
         if self._process:
             try:
-                os.killpg(self._process.pid, 15)
+                pid = self._process.pid
+                pgid = os.getpgid(pid)
+                if pgid == pid and pgid != os.getpgrp():
+                    os.killpg(pgid, 15)
+                else:
+                    self._process.terminate()
             except Exception:
                 self._process.terminate()
             try:
                 self._process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 try:
-                    os.killpg(self._process.pid, 9)
+                    pid = self._process.pid
+                    pgid = os.getpgid(pid)
+                    if pgid == pid and pgid != os.getpgrp():
+                        os.killpg(pgid, 9)
+                    else:
+                        self._process.kill()
                 except Exception:
                     self._process.kill()
             self._process = None

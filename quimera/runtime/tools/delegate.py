@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 import uuid
 from typing import Protocol, Callable
 
@@ -492,8 +493,8 @@ class DelegateTools(ToolBase):
                 error=str(exc),
             )
 
-    @staticmethod
     def _execute_steps_parallel(
+        self,
         steps: list[dict],
         delegate_fn: _DelegateFnProto,
         progress_callback: Callable[[str], None] | None,
@@ -505,6 +506,13 @@ class DelegateTools(ToolBase):
         """Execução paralela de steps — cada step roda em thread própria."""
         tool_name = "delegate"
         n = len(steps)
+        timeout_cancelled = threading.Event()
+
+        def is_cancelled() -> bool:
+            return timeout_cancelled.is_set() or bool(
+                callable(cancel_checker) and cancel_checker()
+            )
+
         # Validate all agents before spawning threads
         active_agents = resolve_active_agents_fn()
         if active_agents:
@@ -526,13 +534,20 @@ class DelegateTools(ToolBase):
                         ),
                     )
 
-        results: list[tuple[str | None, str | None, str | None]] = [(None, None, None)] * n
+        results: list[tuple[str | None, str | None, str | None]] = [
+            (None, None, None)
+        ] * n
+        results_lock = threading.Lock()
+        timed_out_indexes: set[int] = set()
 
         def run_step(idx: int, step: dict) -> None:
-            results[idx] = DelegateTools._execute_single_step(
+            step_result = DelegateTools._execute_single_step(
                 step, delegate_fn, progress_callback, normalize_agent_fn,
-                cleanup_callback, cancel_checker,
+                cleanup_callback, is_cancelled,
             )
+            with results_lock:
+                if idx not in timed_out_indexes:
+                    results[idx] = step_result
 
         threads = [
             threading.Thread(
@@ -543,18 +558,66 @@ class DelegateTools(ToolBase):
         ]
         for t in threads:
             t.start()
-        for t in threads:
-            t.join()
+        timeout_seconds = max(1, int(self.config.delegate_parallel_timeout_seconds))
+        deadline = time.monotonic() + timeout_seconds
+        for index, thread in enumerate(threads):
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                thread.join(timeout=remaining)
+            if thread.is_alive():
+                with results_lock:
+                    timed_out_indexes.add(index)
+                    results[index] = (
+                        None,
+                        None,
+                        f"Delegação paralela excedeu o limite de {timeout_seconds}s",
+                    )
+
+        if timed_out_indexes:
+            timeout_cancelled.set()
+            if cleanup_callback:
+                for index in timed_out_indexes:
+                    targets = (
+                        steps[index]["target_agent"],
+                        *steps[index]["fallback_agents"],
+                    )
+                    for target in targets:
+                        normalized = normalize_agent_fn(target)
+                        if not normalized:
+                            continue
+                        try:
+                            cleanup_callback(normalized)
+                        except Exception:
+                            logger.warning(
+                                "cleanup_callback failed for %s after timeout",
+                                normalized,
+                                exc_info=True,
+                            )
+
+        with results_lock:
+            result_snapshot = list(results)
 
         errors = [
-            (i, err) for i, (_, _, err) in enumerate(results) if err is not None
+            (i, err)
+            for i, (_, _, err) in enumerate(result_snapshot)
+            if err is not None
         ]
         if errors:
             error_msg = "; ".join(f"step[{i}]: {e}" for i, e in errors)
-            return ToolResult(ok=False, tool_name=tool_name, error=error_msg)
+            completed = [
+                f"[{selected or steps[i]['target_agent']}] {result}"
+                for i, (selected, result, _) in enumerate(result_snapshot)
+                if result is not None
+            ]
+            return ToolResult(
+                ok=False,
+                tool_name=tool_name,
+                content="\n\n".join(completed),
+                error=error_msg,
+            )
 
         step_outputs: list[str] = []
-        for i, (selected_agent, step_result, _) in enumerate(results):
+        for i, (selected_agent, step_result, _) in enumerate(result_snapshot):
             if step_result is None:
                 continue
             if n == 1:

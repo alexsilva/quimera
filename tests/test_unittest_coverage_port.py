@@ -100,7 +100,7 @@ class AgentsCoverageTests(unittest.TestCase):
         proc.stdin.write.side_effect = RuntimeError("broken pipe")
         with patch("subprocess.Popen", return_value=proc):
             self.assertIsNone(client.run(["cmd"], input_text="hello", silent=True))
-        proc.kill.assert_called_once()
+        proc.terminate.assert_called_once()
         self.renderer.show_error.assert_called_once()
 
     def test_run_handles_timeout(self):

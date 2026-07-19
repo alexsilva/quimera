@@ -1,5 +1,7 @@
 import json
 import queue
+import signal
+import subprocess
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -434,8 +436,8 @@ def test_agent_client_run_ignores_codex_orphan_function_call_noise(renderer):
         assert "Orphan function call output for call id" not in joined
 
 
-def test_agent_client_run_reentrant_logs_error(renderer):
-    """run() reentrante deve deixar rastro alto em log — nunca falhar em silêncio.
+def test_agent_client_run_reentrant_is_rejected(renderer):
+    """run() reentrante deve falhar sem sobrescrever o processo ativo.
 
     A entrada reentrante corrompe cancel_event/_current_proc do run ativo e
     para o EscMonitor ao terminar; delegações concorrentes devem usar um
@@ -453,7 +455,8 @@ def test_agent_client_run_reentrant_logs_error(renderer):
 
         result = client.run(["echo", "hi"], silent=True, agent="agente-delegado")
 
-    assert result == "ok"
+    assert result is None
+    mock_popen.assert_not_called()
     mock_logger.error.assert_called_once()
     log_args = mock_logger.error.call_args[0]
     assert "reentrante" in log_args[0]
@@ -776,8 +779,25 @@ def test_agent_client_run_input_failure(renderer):
 
         result = client.run(["cmd"], input_text="input", silent=True)
         assert result is None
-        mock_proc.kill.assert_called()
+        mock_proc.terminate.assert_called_once_with()
+        mock_proc.kill.assert_not_called()
         renderer.show_error.assert_called()
+
+
+def test_agent_client_run_input_failure_escalates_only_after_timeout(renderer):
+    """Broken pipe só força kill do PID quando terminate não encerra a tempo."""
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdin.write.side_effect = Exception("broken pipe")
+        mock_proc.wait.side_effect = subprocess.TimeoutExpired("cmd", 1)
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["cmd"], input_text="input", silent=True)
+
+    assert result is None
+    mock_proc.terminate.assert_called_once_with()
+    mock_proc.kill.assert_called_once_with()
 
 
 def test_agent_client_run_communication_error(renderer):
@@ -2721,20 +2741,35 @@ def test_start_esc_monitor_is_noop_outside_main_thread(renderer):
 
 
 def test_terminate_process_group_uses_killpg(renderer):
-    """_terminate_process_group deve usar os.killpg para matar processo e filhos."""
+    """Grupo isolado usa killpg para terminar processo e filhos."""
     client = AgentClient(renderer)
     proc = MagicMock()
     proc.pid = 12345
 
     with patch("quimera.agents.signal_guard.os") as mock_os:
         mock_os.getpgid.return_value = 12345
-        mock_os.killpg.return_value = None
-        mock_os.killpg.side_effect = OSError(" ESRCH")
+        mock_os.getpgrp.return_value = 999
 
         client._terminate_process_group(proc)
 
         mock_os.getpgid.assert_called_once_with(12345)
-        mock_os.killpg.assert_called_once()
+        mock_os.killpg.assert_called_once_with(12345, signal.SIGTERM)
+        proc.terminate.assert_not_called()
+
+
+def test_terminate_process_group_never_kills_shared_group(renderer):
+    """Processo sem grupo isolado recebe terminate sem atingir a sessão do app."""
+    client = AgentClient(renderer)
+    proc = MagicMock(pid=12345)
+
+    with patch("quimera.agents.signal_guard.os") as mock_os:
+        mock_os.getpgid.return_value = 777
+        mock_os.getpgrp.return_value = 777
+
+        client._terminate_process_group(proc)
+
+    mock_os.killpg.assert_not_called()
+    proc.terminate.assert_called_once_with()
 
 
 def test_cancel_event_cleared_on_start(renderer):

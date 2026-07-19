@@ -82,6 +82,9 @@ def _styled_tool_line(line: str, style: str) -> Text:
     """Estiliza uma linha de tool com ícone de status, sem cortar conteúdo."""
     stripped = str(line or "").strip()
     rendered = Text(no_wrap=False, overflow="fold")
+    if stripped.startswith("⋮ +"):
+        rendered.append(stripped, style=f"dim {style}")
+        return rendered
     if stripped.startswith("✓ "):
         rendered.append("✓ ", style="bold green")
         rendered.append(stripped[2:], style="dim")

@@ -404,6 +404,7 @@ class AgentClient:
                 agent or (cmd[0] if cmd else "?"),
                 self._running_agent or "?",
             )
+            return None
         self._cancel_event.clear()
         self._user_cancelled = False
         self.rate_limit_detected = False
@@ -483,7 +484,20 @@ class AgentClient:
             self._running_agent = None
             self._stop_esc_monitor()
             self._show_error(f"[erro] falha ao enviar input para {cmd[0]}: {exc}")
-            proc.kill()
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                # O fallback é deliberadamente no PID, nunca no grupo do processo.
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            except Exception:
+                pass
             return None
 
         runner = ProcessRunner(

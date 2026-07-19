@@ -483,7 +483,14 @@ class TextualFeedModel:
             merged = dict(payload)
         else:
             merged = {"content": str(payload or "")}
-        merged["tools"] = list(tool_lines)
+        visible_tools = tool_lines[-12:]
+        hidden_count = len(tool_lines) - len(visible_tools)
+        if hidden_count > 0:
+            visible_tools = [
+                f"⋮ +{hidden_count} ferramentas anteriores",
+                *visible_tools,
+            ]
+        merged["tools"] = visible_tools
         return TextualUiEvent(event.kind, merged, agent=event.agent)
 
     @staticmethod
@@ -521,8 +528,6 @@ class TextualFeedModel:
             replaced_line = self._merge_generic_tool_line(lines, content, subject)
         if not replaced_line:
             lines.append(content)
-            if len(lines) > 12:
-                del lines[:-12]
         index = self._transient_index_by_agent.get(agent)
         if index is None or not (0 <= index < len(self._items)):
             replaced = self._upsert_transient(TextualUiEvent("agent_update", {"content": "", "tools": list(lines)}, agent=event.agent))

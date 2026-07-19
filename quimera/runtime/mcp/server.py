@@ -640,18 +640,36 @@ class MCPServer:
 
         return None
 
-    def _resolve_tool_response(self, call: dict, wait_timeout: float = 600) -> dict | None:
+    def _configured_tool_timeout(self) -> float:
+        """Retorna timeout MCP válido, tolerando executors de compatibilidade."""
+        raw_timeout = getattr(
+            getattr(self._executor, "config", None),
+            "mcp_tool_timeout_seconds",
+            600,
+        )
+        try:
+            timeout = float(raw_timeout)
+        except (TypeError, ValueError):
+            timeout = 600.0
+        return max(1.0, timeout)
+
+    def _resolve_tool_response(
+        self, call: dict, wait_timeout: float | None = None
+    ) -> dict | None:
         """Resolve a resposta de uma tool call (bloqueante). Retorna o dict de resposta ou None se não concluída."""
         future = call["future"]
         msg_id = call["msg_id"]
         tool_name = call["tool_name"]
         started_at = call["started_at"]
         cancel_event = call["cancel_event"]
+        if wait_timeout is None:
+            wait_timeout = self._configured_tool_timeout()
 
         if not future.done():
             try:
                 future.result(timeout=wait_timeout)
             except concurrent.futures.TimeoutError:
+                cancel_event.set()
                 with self._cancel_lock:
                     self._cancel_events.pop(msg_id, None)
                 with self._pending_lock:
@@ -941,9 +959,24 @@ class MCPServer:
                 pass
 
     def start_background(self, path: str) -> None:
-        """Inicia serve_socket em thread daemon e retorna imediatamente."""
+        """Inicia serve_socket e retorna somente quando aceita conexões."""
         t = threading.Thread(target=self.serve_socket, args=(path,), daemon=True)
         t.start()
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if not os.path.exists(path):
+                time.sleep(0.01)
+                continue
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                probe.settimeout(0.2)
+                probe.connect(path)
+                return
+            except OSError:
+                time.sleep(0.01)
+            finally:
+                probe.close()
+        raise TimeoutError(f"MCP socket não ficou pronto: {path}")
 
     # ------------------------------------------------------------------
     # Loop principal
@@ -1034,10 +1067,12 @@ class MCPServer:
 
         futures = [c["future"] for c in owned]
         if futures:
-            concurrent.futures.wait(futures, timeout=610)
+            timeout = self._configured_tool_timeout()
+            concurrent.futures.wait(futures, timeout=timeout)
 
         for call in owned:
-            resp = self._resolve_tool_response(call)
+            wait_timeout = timeout if call["future"].done() else 0
+            resp = self._resolve_tool_response(call, wait_timeout=wait_timeout)
             idx = pending_ids.get(call["msg_id"])
             if idx is not None and resp is not None:
                 responses[idx] = resp

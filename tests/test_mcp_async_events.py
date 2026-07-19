@@ -393,6 +393,55 @@ class TestTimeout:
         assert "error" in responses[0]
         assert "timed out" in responses[0]["error"]["message"].lower()
 
+    def test_blocking_timeout_signals_cancel_and_removes_tracking(self):
+        """Timeout bloqueante deve solicitar cancelamento da execução real."""
+        server = _make_server(_make_executor())
+        future = concurrent.futures.Future()
+        cancel_event = threading.Event()
+        call = {
+            "msg_id": 77,
+            "future": future,
+            "out": io.StringIO(),
+            "started_at": time.perf_counter(),
+            "tool_name": "read_file",
+            "cancel_event": cancel_event,
+        }
+        server._cancel_events[77] = cancel_event
+        server._pending_calls.append(call)
+
+        response = server._resolve_tool_response(call, wait_timeout=0.01)
+
+        assert response["error"]["message"] == "Tool execution timed out"
+        assert cancel_event.is_set()
+        assert 77 not in server._cancel_events
+        assert call not in server._pending_calls
+
+    def test_batch_timeout_uses_single_deadline(self):
+        """Batch não deve aguardar novamente depois de esgotar seu deadline."""
+        server = _make_server(_make_executor())
+        future = concurrent.futures.Future()
+        cancel_event = threading.Event()
+        out = io.StringIO()
+        call = {
+            "msg_id": 88,
+            "future": future,
+            "out": out,
+            "started_at": time.perf_counter(),
+            "tool_name": "read_file",
+            "cancel_event": cancel_event,
+        }
+        server._cancel_events[88] = cancel_event
+        server._pending_calls.append(call)
+        responses = [None]
+
+        with patch.object(server, "_configured_tool_timeout", return_value=0.01):
+            started_at = time.perf_counter()
+            server._resolve_batch_calls(out, responses, {88: 0})
+
+        assert time.perf_counter() - started_at < 0.2
+        assert cancel_event.is_set()
+        assert responses[0]["error"]["message"] == "Tool execution timed out"
+
     def test_timeout_does_not_crash_server(self):
         """Timeout não crasha o servidor — chamadas seguintes funcionam."""
         executor = _make_executor()

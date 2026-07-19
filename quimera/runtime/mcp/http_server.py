@@ -619,6 +619,10 @@ class MCP_HTTPServer:
         self._sse_lock = threading.Lock()
         self._httpd: ThreadingHTTPServer | None = None
         self._ready_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._startup_error: Exception | None = None
+        self._startup_lock = threading.Lock()
+        self._startup_abandoned = threading.Event()
 
 
     @staticmethod
@@ -677,14 +681,31 @@ class MCP_HTTPServer:
 
     def serve_forever(self) -> None:
         """Inicia o servidor HTTP e bloqueia até ser interrompido."""
-        server = _QuietThreadingHTTPServer(
-            (self._host, self._port), _MCPHTTPRequestHandler
-        )
+        try:
+            server = _QuietThreadingHTTPServer(
+                (self._host, self._port), _MCPHTTPRequestHandler
+            )
+        except Exception as exc:
+            self._startup_error = exc
+            self._ready_event.set()
+            return
+        with self._startup_lock:
+            if self._startup_abandoned.is_set():
+                server.server_close()
+                self._ready_event.set()
+                return
+            self._httpd = server
         # Captura a porta real após o bind (relevante quando port=0 foi pedido).
         self._port = server.server_address[1]
         server.mcp_http_server = self
-        self._httpd = server
         self._mcp._start_background_flush()
+        with self._startup_lock:
+            if self._startup_abandoned.is_set():
+                self._mcp._stop_background_flush()
+                server.server_close()
+                self._httpd = None
+                self._ready_event.set()
+                return
         self._ready_event.set()
         _logger.info(
             "MCP HTTP+SSE server listening on http://%s:%d",
@@ -698,19 +719,32 @@ class MCP_HTTPServer:
         finally:
             self._mcp._stop_background_flush()
             server.server_close()
+            self._httpd = None
             _logger.info("MCP HTTP+SSE server stopped")
 
     def start_background(self) -> None:
         """Inicia o servidor HTTP em uma thread daemon e retorna após o bind."""
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeError("MCP HTTP server já está em execução")
         if self._host not in ("127.0.0.1", "localhost", ""):
             _logger.warning(
                 "MCP HTTP server sem TLS — tráfego não criptografado em rede: %s",
                 self._host,
             )
         self._ready_event.clear()
-        t = threading.Thread(target=self.serve_forever, daemon=True)
-        t.start()
-        self._ready_event.wait(timeout=10)
+        self._startup_abandoned.clear()
+        self._startup_error = None
+        self._thread = threading.Thread(target=self.serve_forever, daemon=True)
+        self._thread.start()
+        if not self._ready_event.wait(timeout=10):
+            with self._startup_lock:
+                self._startup_abandoned.set()
+            self._thread.join(timeout=1)
+            raise TimeoutError("MCP HTTP server não ficou pronto em 10 segundos")
+        if self._startup_error is not None:
+            self._thread.join(timeout=1)
+            self._thread = None
+            raise RuntimeError("Não foi possível iniciar o servidor MCP HTTP") from self._startup_error
 
     def shutdown(self) -> None:
         """Para o servidor HTTP e sinaliza todas as conexões SSE."""
@@ -718,6 +752,12 @@ class MCP_HTTPServer:
         self._mcp.shutdown()
         if self._httpd:
             self._httpd.shutdown()
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                _logger.warning("Thread do servidor MCP HTTP não encerrou em 5 segundos")
+            else:
+                self._thread = None
         with self._sse_lock:
             for q in self._sse_clients.values():
                 q.put_nowait(None)
