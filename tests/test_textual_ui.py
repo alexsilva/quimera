@@ -1316,6 +1316,35 @@ def test_textual_feed_keeps_distinct_rich_calls_of_same_tool():
     assert model.items[0].event.payload["tools"] == ["⚒ read_file a.py", "⚒ read_file b.py"]
 
 
+def test_textual_feed_replaces_delegate_preview_with_delegation_card():
+    model = TextualFeedModel()
+    task = "Delegação simples recebida e concluída."
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] delegando", agent="codex"))
+    model.apply(
+        TextualUiEvent(
+            "tool_preview",
+            f"⚒ delegate opencode-big-pickle verifier {task} False",
+            agent="codex",
+        )
+    )
+    model.apply(
+        TextualUiEvent(
+            "delegation",
+            {
+                "from_label": "Codex",
+                "to_label": "OpenCode Big Pickle",
+                "task": task,
+                "delegation_id": "dlg-123",
+            },
+        )
+    )
+
+    assert "tools" not in model.items[0].event.payload
+    assert model.items[1].event.kind == "delegation"
+    assert model.last_change.redraw is True
+
+
 def test_transient_overlay_replace_reads_previous_lines_when_executed():
     from quimera.ui.overlay import TransientOverlay
 

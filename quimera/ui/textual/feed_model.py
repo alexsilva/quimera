@@ -234,6 +234,16 @@ class TextualFeedModel:
             self._transient_tools_by_agent.pop(agent, None)
         if event.kind == "tool_preview":
             return self._apply_tool_preview(event)
+        if event.kind == "delegation":
+            removed_preview = self._consume_delegate_tool_preview(event)
+            item = TextualFeedItem(event, transient=False)
+            self._items.append(item)
+            self._last_change = TextualFeedChange(
+                True,
+                redraw=removed_preview,
+                appended=None if removed_preview else item,
+            )
+            return True
         if event.kind in self._TRANSIENT_KINDS:
             agent = self._agent_key(event)
             if self._is_finalized_agent(agent):
@@ -471,6 +481,52 @@ class TextualFeedModel:
                 return True
             return False
         return False
+
+    def _consume_delegate_tool_preview(self, event: TextualUiEvent) -> bool:
+        """Remove a preview genérica quando o cartão rico da delegação chega."""
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        task = str(payload.get("task") or "").strip()
+        task_prefix = task[:80]
+        candidates: list[tuple[bool, int, str, int]] = []
+        for agent, lines in self._transient_tools_by_agent.items():
+            item_index = self._transient_index_by_agent.get(agent, -1)
+            for line_index in range(len(lines) - 1, -1, -1):
+                line = lines[line_index]
+                subject = self._tool_preview_subject(line)
+                if self._tool_preview_tool_name(subject) != "delegate":
+                    continue
+                matches_task = not task_prefix or task_prefix in line
+                candidates.append((matches_task, item_index, agent, line_index))
+                break
+        if not candidates:
+            return False
+        matching = [candidate for candidate in candidates if candidate[0]]
+        _, item_index, agent, line_index = max(
+            matching or candidates,
+            key=lambda candidate: candidate[1],
+        )
+        lines = self._transient_tools_by_agent[agent]
+        del lines[line_index]
+        if not lines:
+            self._transient_tools_by_agent.pop(agent, None)
+        if 0 <= item_index < len(self._items):
+            current_item = self._items[item_index]
+            current_payload = current_item.event.payload
+            if isinstance(current_payload, dict):
+                clean_payload = dict(current_payload)
+                clean_payload.pop("tools", None)
+            else:
+                clean_payload = current_payload
+            clean_event = TextualUiEvent(
+                current_item.event.kind,
+                clean_payload,
+                agent=current_item.event.agent,
+            )
+            self._items[item_index] = TextualFeedItem(
+                self._with_transient_tools(clean_event),
+                transient=True,
+            )
+        return True
 
     def _with_transient_tools(self, event: TextualUiEvent) -> TextualUiEvent:
         """Anexa previews de tools ao evento transitório do agente."""
