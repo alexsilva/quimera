@@ -107,11 +107,69 @@ def test_textual_feed_replaces_agent_lifecycle_with_final_message():
 
     final = TextualUiEvent("agent_message", {"content": "Oi, Alex!", "label": "Claude"}, agent="claude")
     assert model.apply(final)
-
     assert len(model.items) == 1
     assert model.items[0].transient is False
     assert model.items[0].event is final
     assert not model.last_change.redraw
+
+
+def test_textual_feed_moves_turn_summary_after_agent_message():
+    model = TextualFeedModel()
+    summary = TextualUiEvent(
+        "turn_summary",
+        {
+            "label": "Claude Sonnet",
+            "total": 5,
+            "ok_count": 5,
+            "duration": "157.9s",
+        },
+        agent="claude-sonnet",
+    )
+
+    assert model.apply(summary) is False
+    assert model.items == []
+    assert model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            {"status": "completed", "message": "execução concluída"},
+            agent="claude-sonnet",
+        )
+    ) is False
+
+    final = TextualUiEvent(
+        "agent_message",
+        {"content": "Resposta concluída.", "label": "Claude Sonnet"},
+        agent="claude-sonnet",
+    )
+    assert model.apply(final)
+
+    assert [event.kind for event in _events(model)] == [
+        "agent_message",
+        "turn_summary",
+    ]
+    assert model.items[-1].event is summary
+    assert model.last_change.redraw is True
+
+
+def test_textual_feed_discards_stale_turn_summary_when_new_run_starts():
+    model = TextualFeedModel()
+    summary = TextualUiEvent(
+        "turn_summary",
+        {"total": 1, "ok_count": 1, "duration": "1.0s"},
+        agent="claude-sonnet",
+    )
+
+    assert model.apply(summary) is False
+    assert model.apply(TextualUiEvent("stream_start", {}, agent="claude-sonnet"))
+    assert model.apply(
+        TextualUiEvent(
+            "agent_message",
+            {"content": "Nova resposta.", "label": "Claude Sonnet"},
+            agent="claude-sonnet",
+        )
+    )
+
+    assert [event.kind for event in _events(model)] == ["agent_message"]
 
 
 def test_textual_feed_marks_plain_events_as_append_only():

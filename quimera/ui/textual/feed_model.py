@@ -116,6 +116,7 @@ class TextualFeedModel:
         self._stream_buffer_by_agent: dict[str, str] = {}
         self._stream_meta_by_agent: dict[str, dict[str, Any]] = {}
         self._transient_tools_by_agent: dict[str, list[str]] = {}
+        self._pending_turn_summary_by_agent: dict[str, TextualUiEvent] = {}
         self._finalized_agents: set[str] = set()
         self._last_change = TextualFeedChange(False)
 
@@ -136,6 +137,7 @@ class TextualFeedModel:
         self._stream_buffer_by_agent.clear()
         self._stream_meta_by_agent.clear()
         self._transient_tools_by_agent.clear()
+        self._pending_turn_summary_by_agent.clear()
         self._finalized_agents.clear()
         self._last_change = TextualFeedChange(True, redraw=True)
 
@@ -213,12 +215,22 @@ class TextualFeedModel:
             return self._apply_visual_reset(event)
         if event.kind == "agent_message":
             replaced = self._replace_transient_with_final(event)
-            self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
+            summary = self._pending_turn_summary_by_agent.pop(self._agent_key(event), None)
+            if summary is not None:
+                self._items.append(TextualFeedItem(summary, transient=False))
+                self._last_change = TextualFeedChange(True, redraw=True)
+            else:
+                self._last_change = TextualFeedChange(
+                    True,
+                    redraw=replaced,
+                    appended=None if replaced else self._items[-1],
+                )
             return True
         if event.kind == "stream_start":
             agent = self._agent_key(event)
             self._finalized_agents.discard(agent)
             self._transient_tools_by_agent.pop(agent, None)
+            self._pending_turn_summary_by_agent.pop(agent, None)
             self._stream_buffer_by_agent[agent] = ""
             self._stream_meta_by_agent[agent] = dict(event.payload or {}) if isinstance(event.payload, dict) else {}
             replaced = self._upsert_transient(event)
@@ -244,6 +256,12 @@ class TextualFeedModel:
                 appended=None if removed_preview else item,
             )
             return True
+        if event.kind == "turn_summary":
+            agent = self._agent_key(event)
+            if not self._is_finalized_agent(agent):
+                self._pending_turn_summary_by_agent[agent] = event
+                self._last_change = TextualFeedChange(False)
+                return False
         if event.kind in self._TRANSIENT_KINDS:
             agent = self._agent_key(event)
             if self._is_finalized_agent(agent):
@@ -258,6 +276,7 @@ class TextualFeedModel:
                 if is_new_run_signal:
                     self._finalized_agents.discard(agent)
                     self._transient_tools_by_agent.pop(agent, None)
+                    self._pending_turn_summary_by_agent.pop(agent, None)
                 else:
                     self._last_change = TextualFeedChange(False)
                     return False
