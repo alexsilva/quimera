@@ -839,17 +839,40 @@ def test_textual_bridge_ctrl_c_exits_only_when_chat_is_idle():
     bridge = TextualUiBridge()
     runtime_state = Mock()
     runtime_state.get_chat_outstanding_count.return_value = 0
+    agent_client = Mock(_agent_running=False)
+    agent_client.has_active_work.return_value = False
     app = SimpleNamespace(
         is_agent_running=False,
         runtime_state=runtime_state,
         chat_lifecycle=Mock(),
-        agent_client=Mock(_agent_running=False),
+        agent_client=agent_client,
     )
     bridge.attach_quimera_app(app)
 
     bridge.cancel_or_exit()
 
     assert bridge.input_queue.get_nowait() == "/exit"
+
+
+def test_textual_bridge_does_not_exit_while_openai_thread_is_still_alive():
+    bridge = TextualUiBridge()
+    lifecycle = Mock()
+    runtime_state = Mock()
+    runtime_state.get_chat_outstanding_count.return_value = 0
+    agent_client = Mock(_agent_running=False)
+    agent_client.has_active_work.return_value = True
+    app = SimpleNamespace(
+        is_agent_running=False,
+        runtime_state=runtime_state,
+        chat_lifecycle=lifecycle,
+        agent_client=agent_client,
+    )
+    bridge.attach_quimera_app(app)
+
+    bridge.cancel_or_exit()
+
+    lifecycle.handle_local_interrupt.assert_called_once_with()
+    assert bridge.input_queue.empty()
 
 
 def test_textual_input_gate_is_active_while_textual_is_mounted():

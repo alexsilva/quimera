@@ -60,7 +60,7 @@ class _ThinkingStreamRelay:
         if not text:
             return
         if self._renderer is not None:
-            self._renderer.update_agent_transient(self._agent, f"[thinking] {text}")
+            self._renderer.update_agent_transient(self._agent, text)
 
 
 def _is_user_cancelled(agent_client) -> bool:

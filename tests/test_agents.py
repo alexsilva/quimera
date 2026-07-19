@@ -1993,6 +1993,20 @@ def test_agent_client_call_opencode_json_format(renderer):
             assert result == "parsed"
 
 
+def test_openai_thinking_stream_relay_omits_thinking_tag(renderer):
+    """O feed transitório já identifica pensamento visualmente; não repete a tag textual."""
+    from quimera.app.agent_gateway import _ThinkingStreamRelay
+
+    relay = _ThinkingStreamRelay(renderer, "openai")
+
+    relay.feed("<think>Analisando o fluxo de cancelamento.</think>")
+
+    renderer.update_agent_transient.assert_called_once_with(
+        "openai",
+        "Analisando o fluxo de cancelamento.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Testes de cancelamento via API (_call_api)
 # ---------------------------------------------------------------------------
@@ -2025,7 +2039,7 @@ def test_call_api_starts_and_stops_esc_monitor(renderer):
 
 
 def test_call_api_passes_cancel_event_to_driver(renderer):
-    """cancel_event deve ser passado ao driver para cancelamento cooperativo."""
+    """Cada chamada API recebe um cancel_event próprio e registrável."""
     from types import SimpleNamespace
     client = AgentClient(renderer)
     profile = SimpleNamespace(
@@ -2048,7 +2062,63 @@ def test_call_api_passes_cancel_event_to_driver(renderer):
 
         call_kwargs = mock_driver.run.call_args.kwargs
         assert "cancel_event" in call_kwargs
-        assert call_kwargs["cancel_event"] is client._cancel_event
+        assert call_kwargs["cancel_event"] is not client._cancel_event
+        assert hasattr(call_kwargs["cancel_event"], "is_set")
+
+
+def test_reset_cancel_state_does_not_revive_cancelled_api_run(renderer):
+    """Novo prompt não pode limpar o cancelamento de uma chamada API antiga."""
+    from types import SimpleNamespace
+    import threading as _threading
+
+    client = AgentClient(renderer)
+    profile = SimpleNamespace(
+        driver="openai_compat",
+        model="test-model",
+        base_url="http://localhost",
+        api_key_env=None,
+        tool_use_reliability="medium",
+        supports_tools=True,
+    )
+    driver_started = _threading.Event()
+    release_driver = _threading.Event()
+    observed_cancel_event = {}
+
+    with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls, \
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"):
+        mock_driver = MagicMock()
+
+        def slow_run(**kwargs):
+            observed_cancel_event["event"] = kwargs["cancel_event"]
+            driver_started.set()
+            release_driver.wait(timeout=2)
+            return "late-response"
+
+        mock_driver.run.side_effect = slow_run
+        mock_driver_cls.return_value = mock_driver
+        result_holder = {}
+        api_thread = _threading.Thread(
+            target=lambda: result_holder.setdefault(
+                "result",
+                client._call_api("test-agent", profile, "prompt"),
+            )
+        )
+        api_thread.start()
+        assert driver_started.wait(timeout=1)
+
+        client.cancel_active_work()
+        assert observed_cancel_event["event"].is_set()
+
+        client.reset_cancel_state()
+        assert client._cancel_event.is_set() is False
+        assert observed_cancel_event["event"].is_set() is True
+
+        release_driver.set()
+        api_thread.join(timeout=2)
+
+    assert not api_thread.is_alive()
+    assert result_holder["result"] is None
 
 
 def test_call_api_recreates_cached_driver_when_connection_changes(renderer):
@@ -2406,8 +2476,8 @@ def test_call_api_propagates_task_approval_scope_to_driver_thread(renderer):
     renderer.show_system_neutral.assert_not_called()
 
 
-def test_call_api_cancel_event_detection(renderer):
-    """Quando cancel_event é acionado externamente, o while loop detecta e retorna None."""
+def test_call_api_cancel_waits_for_driver_thread_before_releasing_run(renderer):
+    """Cancelamento não libera o scheduler enquanto o driver ainda está vivo."""
     from types import SimpleNamespace
     import threading as _threading
 
@@ -2423,6 +2493,7 @@ def test_call_api_cancel_event_detection(renderer):
     )
 
     driver_started = _threading.Event()
+    release_driver = _threading.Event()
 
     with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls, \
             patch.object(client, "_start_esc_monitor"), \
@@ -2430,30 +2501,79 @@ def test_call_api_cancel_event_detection(renderer):
         mock_driver = MagicMock()
 
         def slow_run(**kwargs):
-            # Driver bloqueia sem verificar cancel_event — o while loop externo deve detectá-lo
             driver_started.set()
-            _threading.Event().wait(5.0)  # bloqueia por mais tempo que o teste
-            return "never"
+            release_driver.wait(timeout=3)
+            return "late-response"
 
         mock_driver.run.side_effect = slow_run
         mock_driver_cls.return_value = mock_driver
 
-        def trigger():
-            driver_started.wait(timeout=2)
-            client._cancel_event.set()
+        result_holder = {}
 
-        t = _threading.Thread(target=trigger)
-        t.start()
+        def call_api():
+            result_holder["result"] = client._call_api("test-agent", profile, "prompt")
 
-        result = client._call_api("test-agent", profile, "prompt")
-        t.join(timeout=3)
+        api_thread = _threading.Thread(target=call_api)
+        api_thread.start()
+        assert driver_started.wait(timeout=2)
 
-    assert result is None
+        client._cancel_event.set()
+        _threading.Event().wait(0.4)
+
+        assert api_thread.is_alive()
+        release_driver.set()
+        api_thread.join(timeout=2)
+
+    assert not api_thread.is_alive()
+    assert result_holder["result"] is None
     renderer.show_execution_control.assert_called_once()
     event = renderer.show_execution_control.call_args.args[0]
     assert event.status.value == "cancelled"
     assert event.source.value == "user"
-    process_supervisor.terminate_all.assert_called_once_with()
+    process_supervisor.terminate_all.assert_not_called()
+
+
+def test_openai_driver_drops_late_tool_calls_after_cancel(renderer):
+    """Resposta tardia da API não pode executar ferramentas após cancelamento."""
+    import threading as _threading
+    from quimera.runtime.drivers.openai_compat import OpenAICompatDriver
+
+    driver = OpenAICompatDriver(
+        model="test-model",
+        base_url="http://localhost",
+        api_key="test",
+    )
+    cancel_event = _threading.Event()
+    chat_started = _threading.Event()
+    release_chat = _threading.Event()
+    tool_executor = MagicMock()
+
+    def delayed_chat(*args, **kwargs):
+        chat_started.set()
+        release_chat.wait(timeout=2)
+        return "", [{"id": "call-1", "name": "read_file", "arguments": {"path": "README.md"}}]
+
+    result_holder = {}
+    with patch.object(driver, "_chat", side_effect=delayed_chat):
+        thread = _threading.Thread(
+            target=lambda: result_holder.setdefault(
+                "result",
+                driver.run(
+                    prompt="prompt",
+                    tool_executor=tool_executor,
+                    cancel_event=cancel_event,
+                ),
+            )
+        )
+        thread.start()
+        assert chat_started.wait(timeout=1)
+        cancel_event.set()
+        release_chat.set()
+        thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert result_holder["result"] is None
+    tool_executor.execute.assert_not_called()
 
 
 def test_show_cancelled_once_deduplicates_repeated_messages(renderer):

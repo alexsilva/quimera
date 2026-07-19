@@ -224,8 +224,17 @@ class TextualUiBridge:
         get_outstanding = getattr(runtime_state, "get_chat_outstanding_count", None)
         if callable(get_outstanding):
             try:
-                return int(get_outstanding() or 0) > 0
+                if int(get_outstanding() or 0) > 0:
+                    return True
             except (TypeError, ValueError):
+                pass
+        agent_client = getattr(quimera_app, "agent_client", None)
+        has_active_work = getattr(agent_client, "has_active_work", None)
+        if callable(has_active_work):
+            try:
+                if bool(has_active_work()):
+                    return True
+            except Exception:
                 pass
         return bool(getattr(quimera_app, "is_agent_running", False))
 

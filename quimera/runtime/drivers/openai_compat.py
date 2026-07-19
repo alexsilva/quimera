@@ -358,6 +358,9 @@ class OpenAICompatDriver:
                             return fatal_msg
                         return None
 
+                    if cancel_event is not None and cancel_event.is_set():
+                        return None
+
                     if not tool_calls:
                         return _sanitize_assistant_text(
                             response_text,
@@ -397,8 +400,12 @@ class OpenAICompatDriver:
 
                     # Executa cada ferramenta e adiciona os resultados
                     for tc in tool_calls:
+                        if cancel_event is not None and cancel_event.is_set():
+                            return None
                         if on_tool_call is not None:
                             on_tool_call(tc["name"], tc["arguments"])
+                        if cancel_event is not None and cancel_event.is_set():
+                            return None
                         result = self._execute_tool(
                             tc,
                             tool_executor,
@@ -406,6 +413,8 @@ class OpenAICompatDriver:
                             parent_agent=parent_agent,
                             progress_callback=progress_callback,
                         )
+                        if cancel_event is not None and cancel_event.is_set():
+                            return None
                         _logger.info(
                             "OpenAICompatDriver: tool=%s ok=%s hop=%d",
                             tc["name"], result.ok, hop,
@@ -461,10 +470,21 @@ class OpenAICompatDriver:
         if cancel_event is not None and cancel_event.is_set():
             return "", []
         if tools:
-            return self._chat_with_tools(messages, tools, on_text_chunk=on_text_chunk)
+            return self._chat_with_tools(
+                messages,
+                tools,
+                cancel_event=cancel_event,
+                on_text_chunk=on_text_chunk,
+            )
         return self._chat_streaming(messages, cancel_event=cancel_event, on_text_chunk=on_text_chunk)
 
-    def _chat_with_tools(self, messages: list[dict], tools: list[dict], on_text_chunk=None) -> tuple[str, list[dict]]:
+    def _chat_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        cancel_event=None,
+        on_text_chunk=None,
+    ) -> tuple[str, list[dict]]:
         """
         Chamada não-streaming quando há ferramentas.
 
@@ -483,16 +503,22 @@ class OpenAICompatDriver:
             **( {"extra_body": self.extra_body} if self.extra_body else {} ),
             stream=False,
         )
+        if cancel_event is not None and cancel_event.is_set():
+            return "", []
         if not response.choices:
             raise ValueError(
                 f"API retornou choices vazio ou None (model={self.model!r}): {response!r}"
             )
         choice = response.choices[0]
         reasoning = getattr(choice.message, "reasoning", None) or getattr(choice.message, "reasoning_content", None)
-        if reasoning and on_text_chunk is not None:
+        if reasoning and on_text_chunk is not None and not (
+            cancel_event is not None and cancel_event.is_set()
+        ):
             on_text_chunk(f"<think>{reasoning}</think>")
         text = (choice.message.content or "").strip()
-        if text and on_text_chunk is not None:
+        if text and on_text_chunk is not None and not (
+            cancel_event is not None and cancel_event.is_set()
+        ):
             on_text_chunk(text)
         tool_calls: list[dict] = []
         if choice.message.tool_calls:

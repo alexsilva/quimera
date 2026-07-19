@@ -73,6 +73,8 @@ class AgentClient:
         # Cache de instâncias de driver por nome de agente.
         self._api_drivers: dict = {}
         self._api_driver_signatures: dict = {}
+        self._active_api_runs: dict[object, threading.Event] = {}
+        self._active_api_runs_lock = threading.Lock()
         self.tool_event_callback = None
         # Modo de execução ativo; quando definido, subprocessos são envolvidos com bwrap.
         self.execution_mode = None
@@ -256,7 +258,30 @@ class AgentClient:
         forked._esc_monitor = EscMonitor(forked._cancel_event)
         forked._cancel_notice_lock = self._cancel_notice_lock
         forked._cancel_notice_state = self._cancel_notice_state
+        forked._active_api_runs = self._active_api_runs
+        forked._active_api_runs_lock = self._active_api_runs_lock
         return forked
+
+    def has_active_work(self) -> bool:
+        """Indica trabalho ainda vivo, inclusive chamadas API abandonadas pelo chamador."""
+        if self._agent_running:
+            return True
+        with self._active_api_runs_lock:
+            return bool(self._active_api_runs)
+
+    def _register_api_run(self, token: object, cancel_event: threading.Event) -> None:
+        with self._active_api_runs_lock:
+            self._active_api_runs[token] = cancel_event
+
+    def _unregister_api_run(self, token: object) -> None:
+        with self._active_api_runs_lock:
+            self._active_api_runs.pop(token, None)
+
+    def _cancel_active_api_runs(self) -> None:
+        with self._active_api_runs_lock:
+            cancel_events = list(self._active_api_runs.values())
+        for cancel_event in cancel_events:
+            cancel_event.set()
 
     def _is_expected_termination_return_code(self, return_code) -> bool:
         """Retorna True para SIGTERM decorrente de cancelamento controlado."""
@@ -317,6 +342,7 @@ class AgentClient:
         """Cancela o trabalho atual e encerra subprocessos ainda vivos."""
         self._user_cancelled = True
         self._cancel_event.set()
+        self._cancel_active_api_runs()
         # Listeners primeiro: clients de background precisam do cancel_event
         # setado antes do SIGTERM chegar, para tratar -15 como término esperado.
         self._notify_cancel_listeners()
@@ -1061,6 +1087,10 @@ class AgentClient:
                             resume_spinner_fn=lambda: _live.start(),
                         )
                 result_holder = {"result": None, "error": None}
+                api_run_token = object()
+                api_cancel_event = threading.Event()
+                if self._cancel_event.is_set():
+                    api_cancel_event.set()
 
                 def _run_driver():
                     previous_scope = None
@@ -1074,6 +1104,12 @@ class AgentClient:
                             if callable(bind_approval_scope):
                                 previous_scope = bind_approval_scope(approval_scope)
 
+                        guarded_on_text_chunk = None
+                        if on_text_chunk is not None:
+                            def guarded_on_text_chunk(chunk):
+                                if not api_cancel_event.is_set():
+                                    on_text_chunk(chunk)
+
                         result_holder["result"] = driver_instance.run(
                             prompt=prompt,
                             tool_executor=effective_tool_executor,
@@ -1082,13 +1118,13 @@ class AgentClient:
                             session_id=self.session_id,
                             base_dir=self.workspace_tmp_root,
                             quiet=quiet,
-                            cancel_event=self._cancel_event,
+                            cancel_event=api_cancel_event,
                             on_tool_result=(lambda tool_result: self.tool_event_callback(agent, result=tool_result))
                             if self.tool_event_callback else None,
                             on_tool_abort=(
                                 lambda reason: self.tool_event_callback(agent, loop_abort=True, reason=reason))
                             if self.tool_event_callback else None,
-                            on_text_chunk=on_text_chunk,
+                            on_text_chunk=guarded_on_text_chunk,
                             progress_callback=progress_callback,
                         )
                     except Exception as exc:
@@ -1102,11 +1138,14 @@ class AgentClient:
                             )
                             if callable(bind_approval_scope):
                                 bind_approval_scope(previous_scope)
+                        self._unregister_api_run(api_run_token)
 
                 t = threading.Thread(target=_run_driver, daemon=True)
+                self._register_api_run(api_run_token, api_cancel_event)
                 t.start()
 
                 _api_start = time.time()
+                cancellation_announced = False
                 while t.is_alive():
                     if effective_tool_executor is not None:
                         process_input = getattr(
@@ -1116,24 +1155,32 @@ class AgentClient:
                         )
                         if callable(process_input) and process_input():
                             continue
-                    if self._cancel_event.is_set():
-                        self.cancel_active_work()
-                        t.join(timeout=0.5)
-                        self._show_cancelled_once()
-                        return None
+                    if self._cancel_event.is_set() and not api_cancel_event.is_set():
+                        api_cancel_event.set()
+                    if api_cancel_event.is_set():
+                        if not cancellation_announced:
+                            self._show_cancelled_once()
+                            cancellation_announced = True
+                        # A chamada HTTP do SDK pode permanecer bloqueada até o
+                        # timeout do transporte. Não abandonamos a thread: enquanto
+                        # ela estiver viva o scheduler deve continuar contabilizando
+                        # a execução, impedindo que um segundo Ctrl+C seja tratado
+                        # como saída do app. O driver recebe o mesmo cancel_event e
+                        # descarta qualquer resposta tardia antes de executar tools.
+                        t.join(timeout=0.1)
+                        continue
                     time.sleep(0.25)
                     _api_elapsed = time.time() - _api_start
                     if progress_callback:
                         progress_callback(f"aguardando resposta da API ({connection.model})... {int(_api_elapsed)}s")
 
                     if _api_elapsed > MAX_WALL_CLOCK_SECONDS:
-                        self._cancel_event.set()
+                        api_cancel_event.set()
                         self._show_error(
                             f"[erro] wall-clock timeout after {MAX_WALL_CLOCK_SECONDS}s em driver API")
                         return None
 
-                if self._cancel_event.is_set() and result_holder["result"] is None:
-                    self.cancel_active_work()
+                if api_cancel_event.is_set():
                     return None
 
                 if result_holder["error"]:
