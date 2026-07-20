@@ -1181,6 +1181,12 @@ class AgentClient:
                         return None
 
                 if api_cancel_event.is_set():
+                    # O próprio driver pode concluir imediatamente após
+                    # sinalizar o evento, sem permanecer vivo tempo suficiente
+                    # para o loop acima observar o cancelamento. Normalize o
+                    # estado público do client também nesse caminho rápido.
+                    self._user_cancelled = True
+                    self._show_cancelled_once()
                     return None
 
                 if result_holder["error"]:

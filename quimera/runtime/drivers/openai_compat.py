@@ -359,6 +359,17 @@ class OpenAICompatDriver:
                         return None
 
                     if cancel_event is not None and cancel_event.is_set():
+                        # Streaming pode terminar por cancelamento depois de
+                        # já produzir texto válido. Preserve somente essa saída
+                        # textual parcial; nunca continue uma sequência parcial
+                        # de chamadas de ferramenta.
+                        if response_text and not tool_calls:
+                            return _sanitize_assistant_text(
+                                response_text,
+                                agent_name=agent_name,
+                                session_id=session_id,
+                                base_dir=base_dir,
+                            )
                         return None
 
                     if not tool_calls:

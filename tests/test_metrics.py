@@ -1,6 +1,9 @@
 """Testes para o sistema de métricas de comportamento dos agentes."""
 import unittest
+from types import SimpleNamespace
 
+from quimera.app.session_metrics import SessionMetricsService
+from quimera.domain.session_state import SessionRuntimeState
 from quimera.metrics import AgentBehaviorMetrics, BehaviorMetricsTracker
 from quimera.prompt_templates import prompt_template
 
@@ -357,6 +360,28 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
 
         self.assertIn("RESPOSTAS LONGAS", feedback)
         self.assertIn("2-4 frases", feedback)
+
+
+class TestSessionMetricsService(unittest.TestCase):
+    """Integração entre classificação de resposta e estado canônico da sessão."""
+
+    def test_redundant_response_is_counted_once_without_clear_next_step(self):
+        repeated = "Resposta suficientemente longa e repetida para caracterizar redundância no histórico da sessão."
+        state = SessionRuntimeState()
+        app = SimpleNamespace(
+            session_state=state,
+            history=[
+                {"role": "assistant", "content": repeated},
+                {"role": "assistant", "content": repeated},
+            ],
+            behavior_metrics=None,
+        )
+
+        SessionMetricsService().update_persisted_message_metrics(app, "assistant", repeated)
+
+        self.assertEqual(state.metrics.total_responses, 1)
+        self.assertEqual(state.metrics.responses_with_clear_next_step, 0)
+        self.assertEqual(state.metrics.consecutive_redundant_responses, 1)
 
 
 class TestPromptMetricsFeedback(unittest.TestCase):

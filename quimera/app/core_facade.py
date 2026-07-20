@@ -104,7 +104,7 @@ class CoreFacadeMixin:
     def summary_agent_preference(self, value):
         chat_state = self.__dict__.get("_chat_state")
         if chat_state is not None:
-            chat_state.summary_agent_preference = value
+            chat_state.set_summary_agent_preference(value)
         else:
             self.__dict__["_summary_agent_preference_fallback"] = value
 

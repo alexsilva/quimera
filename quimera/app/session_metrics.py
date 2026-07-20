@@ -157,20 +157,14 @@ class SessionMetricsService:
         if not hasattr(app, "session_state") or not app.session_state or role == "human":
             return
         try:
-            app.session_state["total_responses"] = app.session_state.get("total_responses", 0) + 1
             has_next = self.has_clear_next_step(content)
             is_redundant = self.is_response_redundant(content, app.history)
             is_empty = not content or not content.strip()
-            if has_next:
-                app.session_state["responses_with_clear_next_step"] = app.session_state.get(
-                    "responses_with_clear_next_step", 0
-                ) + 1
+            app.session_state.record_session_response(has_clear_next_step=has_next)
             if is_redundant:
-                app.session_state["consecutive_redundant_responses"] = app.session_state.get(
-                    "consecutive_redundant_responses", 0
-                ) + 1
+                app.session_state.increment_redundant_responses()
             else:
-                app.session_state["consecutive_redundant_responses"] = 0
+                app.session_state.reset_consecutive_redundant()
             if hasattr(app, "behavior_metrics") and app.behavior_metrics:
                 app.behavior_metrics.record_response(
                     role,
