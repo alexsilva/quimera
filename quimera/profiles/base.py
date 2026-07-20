@@ -274,6 +274,11 @@ class ExecutionProfile:
     _mcp_token: Optional[str] = field(default=None, repr=False)
 
     @property
+    def mcp_socket_path(self) -> Optional[str]:
+        """Retorna o socket MCP local injetado pelo runtime, quando presente."""
+        return self._mcp_socket_path
+
+    @property
     def render_style(self) -> Tuple[str, str]:
         """Retorna o estilo pronto para renderização na UI."""
         color, label = self.style
@@ -386,6 +391,15 @@ class ExecutionProfile:
     def format_stdin_input(self, prompt) -> str:
         """Transforma o prompt antes de enviá-lo ao stdin do CLI."""
         return prompt
+
+    def should_use_warm_pool(self, cmd: list[str]) -> bool:
+        """Decide se uma execução CLI pode reutilizar processo pré-aquecido.
+
+        Subclasses podem sobrescrever a política quando a decisão depender do
+        comando efetivo. O padrão preserva ``supports_warm_pool``.
+        """
+        _ = cmd
+        return bool(self.supports_warm_pool)
 
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna args CLI para conectar no MCP local (default: sem suporte)."""

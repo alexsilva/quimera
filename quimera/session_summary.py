@@ -2,14 +2,16 @@
 import inspect
 import logging
 
+from quimera.agents.capabilities import get_cancel_event, is_user_cancelled
+
 logger = logging.getLogger(__name__)
 
 
 def _is_cancelled(agent_client) -> bool:
     """Indica se houve cancelamento cooperativo do resumo."""
-    if getattr(agent_client, "_user_cancelled", False):
+    if is_user_cancelled(agent_client):
         return True
-    cancel_event = getattr(agent_client, "_cancel_event", None)
+    cancel_event = get_cancel_event(agent_client)
     return bool(cancel_event is not None and cancel_event.is_set())
 
 

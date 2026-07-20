@@ -30,7 +30,7 @@ from ..chat_lifecycle import ChatLifecycle
 from ..chat_round import ChatRoundOrchestrator
 from ..command_router import CommandRouter
 from ..config import logger, set_app_log_file
-from ..dispatch import AppDispatchServices
+from ..dispatch import AppDispatchServices, DispatchDependencies
 from ..display_service import DisplayService
 from ..event_sink import EventSink
 from ..handlers import PromptAwareStderrHandler
@@ -49,7 +49,7 @@ from ..session_metrics import SessionMetricsService
 from ..session_state import SessionStateManager
 from ..staging import merge_staging_to_workspace
 from ..state.session_state import SessionRuntimeState
-from ..system_layer import AppSystemLayer
+from ..system_layer import AppSystemLayer, SystemLayerDependencies
 from ..toolbar import ToolbarManager
 from ..toolbar_coordinator import ToolbarCoordinator
 from ..turn import TurnManager
@@ -374,26 +374,28 @@ class AppAssembler:
             registry=plat.profile_registry,
             normalize=normalize_agent_name,
         )
-        system_layer = AppSystemLayer(
-            display_service=display_service,
-            profile_resolver=profile_resolver,
-            prompt_builder=None,
-            history_getter=session_state_mgr.history_snapshot,
-            shared_state_getter=session_state_mgr.shared_state_snapshot,
-            execution_mode_getter=app.execution_mode_state.get,
-            agent_pool=plat.agent_pool,
-            get_selected_agents=app.get_selected_agents,
-            set_selected_agents=app.set_selected_agents,
-            clear_screen=app.clear_terminal_screen,
-            read_user_input=app.read_user_input,
-            task_command_handler=None,
-            bugs_command_handler=app._handle_bugs_command,
-            session_state_manager=session_state_mgr,
-            approval_handler_getter=app.get_approval_handler,
-            context_manager=context_manager,
-            profile_registry=plat.profile_registry,
-            workspace_policy_getter=app.get_workspace_policy_name,
-            workspace_policy_setter=app.set_workspace_policy_name,
+        system_layer = AppSystemLayer.from_dependencies(
+            SystemLayerDependencies(
+                display_service=display_service,
+                profile_resolver=profile_resolver,
+                prompt_builder=None,
+                history_getter=session_state_mgr.history_snapshot,
+                shared_state_getter=session_state_mgr.shared_state_snapshot,
+                execution_mode_getter=app.execution_mode_state.get,
+                agent_pool=plat.agent_pool,
+                get_selected_agents=app.get_selected_agents,
+                set_selected_agents=app.set_selected_agents,
+                clear_screen=app.clear_terminal_screen,
+                read_user_input=app.read_user_input,
+                task_command_handler=None,
+                bugs_command_handler=app._handle_bugs_command,
+                session_state_manager=session_state_mgr,
+                approval_handler_getter=app.get_approval_handler,
+                context_manager=context_manager,
+                profile_registry=plat.profile_registry,
+                workspace_policy_getter=app.get_workspace_policy_name,
+                workspace_policy_setter=app.set_workspace_policy_name,
+            )
         )
         input_services = AppInputServices(
             ui.renderer,
@@ -686,32 +688,34 @@ class AppAssembler:
             summary_agent_preference=app.summary_agent_preference,
             agent_client=rt.agent_client,
         )
-        dispatch_services = AppDispatchServices(
-            prompt_builder=rt.prompt_builder,
-            renderer=ui.renderer,
-            get_agent_profile=sess.profile_resolver.get,
-            session_state=rt.chat_state,
-            get_execution_mode=app.execution_mode_state.get,
-            refresh_task_state=task_services.refresh_task_shared_state,
-            debug_prompt_metrics=rt.debug_prompt_metrics,
-            redisplay_prompt=app._redisplay_user_prompt_if_needed,
-            output_lock=plat.output_lock,
-            counter_lock=plat.counter_lock,
-            print_response_fn=app.print_response,
-            persist_message_fn=session_services.persist_message,
-            record_session_metric=_make_record_agent_metric(ui.session_metrics, app),
-            record_tool_event_fn=_make_record_tool_event(ui.session_metrics, app),
-            notify_warning=sess.system_layer.show_warning_message,
-            notify_retry=sess.system_layer.notify_agent_retry,
-            notify_error=sess.system_layer.show_error_message,
-            max_retries=app.MAX_RETRIES,
-            retry_backoff=app.RETRY_BACKOFF_SECONDS,
-            rate_limit_backoff=app.RATE_LIMIT_BACKOFF_SECONDS,
-            record_failure=app.record_failure,
-            record_success=app.record_success,
-            get_agent_client=app.get_agent_client_ref,
-            get_tool_executor=app.get_tool_executor,
-            agent_run_sink=ui.agent_run_sink,
+        dispatch_services = AppDispatchServices.from_dependencies(
+            DispatchDependencies(
+                prompt_builder=rt.prompt_builder,
+                renderer=ui.renderer,
+                get_agent_profile=sess.profile_resolver.get,
+                session_state=rt.chat_state,
+                get_execution_mode=app.execution_mode_state.get,
+                refresh_task_state=task_services.refresh_task_shared_state,
+                debug_prompt_metrics=rt.debug_prompt_metrics,
+                redisplay_prompt=app._redisplay_user_prompt_if_needed,
+                output_lock=plat.output_lock,
+                counter_lock=plat.counter_lock,
+                print_response_fn=app.print_response,
+                persist_message_fn=session_services.persist_message,
+                record_session_metric=_make_record_agent_metric(ui.session_metrics, app),
+                record_tool_event_fn=_make_record_tool_event(ui.session_metrics, app),
+                notify_warning=sess.system_layer.show_warning_message,
+                notify_retry=sess.system_layer.notify_agent_retry,
+                notify_error=sess.system_layer.show_error_message,
+                max_retries=app.MAX_RETRIES,
+                retry_backoff=app.RETRY_BACKOFF_SECONDS,
+                rate_limit_backoff=app.RATE_LIMIT_BACKOFF_SECONDS,
+                record_failure=app.record_failure,
+                record_success=app.record_success,
+                get_agent_client=app.get_agent_client_ref,
+                get_tool_executor=app.get_tool_executor,
+                agent_run_sink=ui.agent_run_sink,
+            )
         )
         tool_executor = task_services.build_tool_executor(
             require_approval_for_mutations=not plat.auto_approve_mutations

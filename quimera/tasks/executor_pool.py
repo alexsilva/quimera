@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..agents import AgentClient
-from ..app.dispatch import AppDispatchServices
+from ..agents.capabilities import get_pause_idle_if, is_user_cancelled, share_cancel_event
+from ..app.dispatch import AppDispatchServices, DispatchDependencies
 from ..runtime.approval import ApprovalManager
 from ..runtime.config import ToolRuntimeConfig
 from ..runtime.executor import ToolExecutor
@@ -506,7 +507,7 @@ class TaskExecutorPool:
 
     def _was_user_cancelled(self) -> bool:
         agent_client = self.get_agent_client()
-        return bool(agent_client and agent_client._user_cancelled)
+        return is_user_cancelled(agent_client)
 
     def _background_was_user_cancelled(self) -> bool:
         return False
@@ -556,13 +557,13 @@ class TaskExecutorPool:
             # silêncio aguardando tool longa morre por idle timeout; sem
             # supervisor, seus subprocessos escapam do terminate_all().
             process_supervisor=getattr(chat_agent_client, "process_supervisor", None),
-            pause_idle_if=getattr(chat_agent_client, "_pause_idle_if", None),
+            pause_idle_if=get_pause_idle_if(chat_agent_client),
         )
         background_agent_client.execution_mode = self.get_execution_mode()
         background_agent_client.tool_event_callback = self.get_record_tool_event()
         background_agent_client.tool_executor = self._get_background_tool_executor()
         if cancel_event is not None:
-            background_agent_client._cancel_event = cancel_event
+            share_cancel_event(background_agent_client, cancel_event)
         self._register_background_agent_client(background_agent_client)
 
         def _redisplay_prompt(**kw):
@@ -589,31 +590,33 @@ class TaskExecutorPool:
             if callable(record):
                 record(metrics_view, agent, **kw)
 
-        return AppDispatchServices(
-            agent_client_override=background_agent_client,
-            tool_executor_override=background_agent_client.tool_executor,
-            cancel_checker_override=cancel_checker_override or self._background_was_user_cancelled,
-            prompt_builder=self.get_prompt_builder,
-            renderer=self.get_renderer,
-            get_agent_profile=self.get_agent_profile,
-            get_execution_mode=self.get_execution_mode,
-            refresh_task_state=lambda: None,
-            agent_run_sink=self.get_agent_run_sink,
-            debug_prompt_metrics=self._get_debug_prompt_metrics or (lambda: False),
-            redisplay_prompt=_redisplay_prompt,
-            output_lock=self.get_output_lock,
-            counter_lock=self.get_counter_lock,
-            session_metrics=self.get_session_metrics,
-            print_response_fn=self._background_print_response,
-            persist_message_fn=_persist_message,
-            record_session_metric=_record_session_metric,
-            record_tool_event_fn=_record_tool_event,
-            notify_warning=lambda message: None,
-            notify_error=lambda message: None,
-            max_retries=self._max_retries,
-            retry_backoff=self._retry_backoff_seconds,
-            rate_limit_backoff=self._get_rate_limit_backoff_seconds or (lambda: 30),
-            record_failure=self.get_record_failure(),
+        return AppDispatchServices.from_dependencies(
+            DispatchDependencies(
+                agent_client_override=background_agent_client,
+                tool_executor_override=background_agent_client.tool_executor,
+                cancel_checker_override=cancel_checker_override or self._background_was_user_cancelled,
+                prompt_builder=self.get_prompt_builder,
+                renderer=self.get_renderer,
+                get_agent_profile=self.get_agent_profile,
+                get_execution_mode=self.get_execution_mode,
+                refresh_task_state=lambda: None,
+                agent_run_sink=self.get_agent_run_sink,
+                debug_prompt_metrics=self._get_debug_prompt_metrics or (lambda: False),
+                redisplay_prompt=_redisplay_prompt,
+                output_lock=self.get_output_lock,
+                counter_lock=self.get_counter_lock,
+                session_metrics=self.get_session_metrics,
+                print_response_fn=self._background_print_response,
+                persist_message_fn=_persist_message,
+                record_session_metric=_record_session_metric,
+                record_tool_event_fn=_record_tool_event,
+                notify_warning=lambda message: None,
+                notify_error=lambda message: None,
+                max_retries=self._max_retries,
+                retry_backoff=self._retry_backoff_seconds,
+                rate_limit_backoff=self._get_rate_limit_backoff_seconds or (lambda: 30),
+                record_failure=self.get_record_failure(),
+            )
         )
 
     def _background_print_response(self, agent, response):

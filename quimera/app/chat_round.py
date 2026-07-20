@@ -5,6 +5,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
+from ..agents.capabilities import is_user_cancelled
 from ..constants import MSG_EMPTY_INPUT, USER_ROLE
 from .command_router import RoutingDecision
 from .config import logger
@@ -214,7 +215,7 @@ class ChatRoundOrchestrator:
             )
 
     def _is_cancelled(self) -> bool:
-        return bool(self._agent_client and getattr(self._agent_client, '_user_cancelled', False))
+        return is_user_cancelled(self._agent_client)
 
     def _handle_cancelled(self) -> None:
         if bool(getattr(self._cancel_notice_tls, "shown", False)):

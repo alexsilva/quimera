@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 
+from ..agents.capabilities import mark_user_cancelled
 from ..constants import MSG_MEMORY_FAILED
 from ..domain.session_state import SessionRuntimeState
 from .interfaces import IAgentPool, IRenderer, ISessionStorage
@@ -271,10 +272,7 @@ class AppSessionServices:
             worker.join(timeout=90)
         except KeyboardInterrupt:
             if self._agent_client:
-                self._agent_client._user_cancelled = True
-                cancel_event = getattr(self._agent_client, "_cancel_event", None)
-                if cancel_event is not None and hasattr(cancel_event, "set"):
-                    cancel_event.set()
+                mark_user_cancelled(self._agent_client)
             sys.stdout.write('\r\033[K')
             sys.stdout.flush()
             logger.info(MSG_MEMORY_FAILED)

@@ -228,6 +228,37 @@ class AgentClient:
         self._cancel_event.clear()
         self.reset_cancel_notices()
 
+    @property
+    def user_cancelled(self) -> bool:
+        """Indica cancelamento explícito solicitado pelo usuário."""
+        return self._user_cancelled
+
+    @user_cancelled.setter
+    def user_cancelled(self, value: bool) -> None:
+        self._user_cancelled = bool(value)
+
+    @property
+    def cancel_event(self) -> threading.Event:
+        """Evento cooperativo compartilhado com runners e drivers."""
+        return self._cancel_event
+
+    @property
+    def agent_running(self) -> bool:
+        """Indica se há processo ou driver marcado como em execução."""
+        return self._agent_running
+
+    @property
+    def pause_idle_if(self):
+        """Callback que suspende idle timeout durante operações externas."""
+        return self._pause_idle_if
+
+    def share_cancel_event(self, cancel_event: threading.Event) -> None:
+        """Compartilha um evento de cancelamento com outro fluxo de execução."""
+        if not all(callable(getattr(cancel_event, name, None)) for name in ("set", "clear", "is_set")):
+            raise TypeError("cancel_event deve implementar set(), clear() e is_set()")
+        self._cancel_event = cancel_event
+        self._esc_monitor = EscMonitor(self._cancel_event)
+
     def fork_for_concurrent_run(self) -> "AgentClient":
         """Cria um client isolado para uma execução concorrente.
 
@@ -254,8 +285,7 @@ class AgentClient:
         )
         forked.execution_mode = self.execution_mode
         forked.tool_event_callback = self.tool_event_callback
-        forked._cancel_event = self._cancel_event
-        forked._esc_monitor = EscMonitor(forked._cancel_event)
+        forked.share_cancel_event(self._cancel_event)
         forked._cancel_notice_lock = self._cancel_notice_lock
         forked._cancel_notice_state = self._cancel_notice_state
         forked._active_api_runs = self._active_api_runs
@@ -938,7 +968,11 @@ class AgentClient:
         env_hook = getattr(profile, "env_for_cli", None)
         if callable(env_hook):
             extra_env.update(env_hook())
-        socket_path = getattr(profile, "_mcp_socket_path", None)
+        socket_descriptor = getattr(type(profile), "mcp_socket_path", None)
+        if isinstance(socket_descriptor, property):
+            socket_path = socket_descriptor.__get__(profile, type(profile))
+        else:
+            socket_path = getattr(profile, "_mcp_socket_path", None)
         has_mcp_context = (
             bool(isinstance(socket_path, str) and socket_path.strip())
             or "OPENCODE_CONFIG_CONTENT" in extra_env

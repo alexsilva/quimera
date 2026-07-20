@@ -4,6 +4,8 @@ import queue as _queue_module
 import threading
 import time
 from contextlib import nullcontext
+from dataclasses import dataclass, replace
+from typing import Any, Callable
 
 from ..prompt_kinds import PromptKind
 from .agent_call_service import AgentCallService
@@ -13,12 +15,66 @@ from .config import logger
 from ..domain.session_state import SessionRuntimeState
 
 
+@dataclass(frozen=True, slots=True)
+class DispatchDependencies:
+    """Dependências necessárias para construir ``AppDispatchServices``.
+
+    O objeto é uma alternativa tipada ao construtor histórico extenso. O
+    construtor legado permanece suportado para plugins, testes e integrações
+    externas; novos pontos de composição devem preferir ``from_dependencies``.
+    """
+
+    agent_client_override: Any = None
+    tool_executor_override: Any = None
+    cancel_checker_override: Callable[[], bool] | None = None
+    ui_queue: _queue_module.Queue | None = None
+    prompt_builder: Any = None
+    renderer: Any = None
+    get_agent_profile: Callable | None = None
+    session_state: SessionRuntimeState | None = None
+    get_execution_mode: Callable | None = None
+    refresh_task_state: Callable | None = None
+    debug_prompt_metrics: Any = False
+    redisplay_prompt: Callable | None = None
+    output_lock: Any = None
+    counter_lock: Any = None
+    session_metrics: Any = None
+    print_response_fn: Callable | None = None
+    persist_message_fn: Callable | None = None
+    record_session_metric: Callable | None = None
+    record_tool_event_fn: Callable | None = None
+    max_retries: Any = 2
+    retry_backoff: Any = 1
+    rate_limit_backoff: Any = 1
+    record_failure: Callable | None = None
+    record_success: Callable | None = None
+    get_agent_client: Callable | None = None
+    get_tool_executor: Callable | None = None
+    get_delegate_fn_override: Callable | None = None
+    notify_warning: Callable | None = None
+    notify_retry: Callable | None = None
+    notify_error: Callable | None = None
+    agent_run_sink: Any = None
+
+
 class AppDispatchServices:
     """Coordena AgentGateway e mantém spy telemetry."""
 
     _MAX_SPY_TOOLS = 12
     _MAX_SPY_TEXT_CHARS = 280
     _MAX_SPY_MAP_ITEMS = 6
+
+    @classmethod
+    def from_dependencies(cls, dependencies: DispatchDependencies) -> "AppDispatchServices":
+        """Constrói o serviço a partir de um contrato de dependências único."""
+        if not isinstance(dependencies, DispatchDependencies):
+            raise TypeError("dependencies deve ser uma instância de DispatchDependencies")
+        service = cls(**{
+            field_name: getattr(dependencies, field_name)
+            for field_name in dependencies.__dataclass_fields__
+        })
+        service._dependencies = dependencies
+        return service
 
     def __init__(
         self,
@@ -86,6 +142,39 @@ class AppDispatchServices:
         self._notify_retry = notify_retry
         self._notify_error = notify_error
         self._agent_run_sink = agent_run_sink
+        self._dependencies = DispatchDependencies(
+            agent_client_override=agent_client_override,
+            tool_executor_override=tool_executor_override,
+            cancel_checker_override=cancel_checker_override,
+            ui_queue=ui_queue,
+            prompt_builder=prompt_builder,
+            renderer=renderer,
+            get_agent_profile=get_agent_profile,
+            session_state=session_state,
+            get_execution_mode=get_execution_mode,
+            refresh_task_state=refresh_task_state,
+            debug_prompt_metrics=debug_prompt_metrics,
+            redisplay_prompt=redisplay_prompt,
+            output_lock=output_lock,
+            counter_lock=counter_lock,
+            session_metrics=session_metrics,
+            print_response_fn=print_response_fn,
+            persist_message_fn=persist_message_fn,
+            record_session_metric=record_session_metric,
+            record_tool_event_fn=record_tool_event_fn,
+            max_retries=max_retries,
+            retry_backoff=retry_backoff,
+            rate_limit_backoff=rate_limit_backoff,
+            record_failure=record_failure,
+            record_success=record_success,
+            get_agent_client=get_agent_client,
+            get_tool_executor=get_tool_executor,
+            get_delegate_fn_override=get_delegate_fn_override,
+            notify_warning=notify_warning,
+            notify_retry=notify_retry,
+            notify_error=notify_error,
+            agent_run_sink=agent_run_sink,
+        )
         self._gateway = None
         self._agent_call_service = None
         self._primary_delegate_condition = threading.Condition()
@@ -341,35 +430,12 @@ class AppDispatchServices:
             return None
 
         forked_client = agent_client.fork_for_concurrent_run()
-        return AppDispatchServices(
-            agent_client_override=forked_client,
-            tool_executor_override=getattr(forked_client, "tool_executor", None),
-            cancel_checker_override=self._cancel_checker_override,
-            ui_queue=self._ui_queue,
-            prompt_builder=self._prompt_builder,
-            renderer=self._renderer,
-            get_agent_profile=self._get_agent_profile,
-            session_state=self._session_state,
-            get_execution_mode=self._get_execution_mode,
-            refresh_task_state=self._refresh_task_state,
-            debug_prompt_metrics=self._debug_prompt_metrics,
-            redisplay_prompt=self._redisplay_prompt,
-            output_lock=self._output_lock,
-            counter_lock=self._counter_lock,
-            session_metrics=self._session_metrics,
-            print_response_fn=self._print_response_fn,
-            persist_message_fn=self._persist_message_fn,
-            record_session_metric=self._record_session_metric,
-            record_tool_event_fn=self._record_tool_event_fn,
-            max_retries=self._max_retries,
-            retry_backoff=self._retry_backoff,
-            rate_limit_backoff=self._rate_limit_backoff,
-            record_failure=self._record_failure,
-            record_success=self._record_success,
-            notify_warning=self._notify_warning,
-            notify_retry=self._notify_retry,
-            notify_error=self._notify_error,
-            agent_run_sink=self._agent_run_sink,
+        return AppDispatchServices.from_dependencies(
+            replace(
+                self._dependencies,
+                agent_client_override=forked_client,
+                tool_executor_override=getattr(forked_client, "tool_executor", None),
+            )
         )
 
     def resolve_agent_response(

@@ -4,6 +4,7 @@ import re
 import time
 from contextlib import nullcontext
 
+from ..agents.capabilities import get_cancel_event, is_user_cancelled
 from ..prompt_kinds import PromptKind
 from .agent_run_events import AgentRunEvent, coerce_agent_run_sink
 from .config import logger
@@ -65,11 +66,9 @@ class _ThinkingStreamRelay:
 
 def _is_user_cancelled(agent_client) -> bool:
     """Retorna True quando há sinal explícito de cancelamento do usuário."""
-    if agent_client is None:
-        return False
-    if getattr(agent_client, "_user_cancelled", False) is True:
+    if is_user_cancelled(agent_client):
         return True
-    cancel_event = getattr(agent_client, "_cancel_event", None)
+    cancel_event = get_cancel_event(agent_client)
     is_set = getattr(cancel_event, "is_set", None)
     if callable(is_set):
         try:

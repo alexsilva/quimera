@@ -18,6 +18,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from ..agents.capabilities import is_user_cancelled
 from ..runtime.executor import ToolExecutor
 from .executor import create_executor
 from ..app.dispatch import AppDispatchServices
@@ -520,7 +521,7 @@ class AppTaskServices:
 
     def _was_user_cancelled(self) -> bool:
         agent_client = self._get_agent_client()
-        return bool(agent_client and agent_client._user_cancelled)
+        return is_user_cancelled(agent_client)
 
     def _background_was_user_cancelled(self) -> bool:
         return False

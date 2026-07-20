@@ -9,6 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from ..agents.capabilities import mark_user_cancelled
 from .config import logger
 from .welcome_presenter import WelcomePresenter
 from .lifecycle import AppLifecycle
@@ -296,10 +297,7 @@ def run_chat_loop(
         interrupted_shutdown = True
         agent_client = getattr(app, "agent_client", None)
         if agent_client is not None:
-            agent_client._user_cancelled = True
-            cancel_event = getattr(agent_client, "_cancel_event", None)
-            if cancel_event is not None and hasattr(cancel_event, "set"):
-                cancel_event.set()
+            mark_user_cancelled(agent_client)
         app.system_layer.show_muted_message(MSG_SHUTDOWN)
     finally:
         if _pending_async_slot:

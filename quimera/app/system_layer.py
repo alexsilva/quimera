@@ -1,6 +1,9 @@
 """Componentes de `quimera.app.system_layer`."""
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any, Callable
+
 from .display_service import DisplayService
 from .interfaces import IAgentPool
 
@@ -40,6 +43,44 @@ from ..profiles.base import (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class SystemLayerDependencies:
+    """Dependências de composição do ``AppSystemLayer``.
+
+    O construtor histórico permanece disponível. Este contrato existe para
+    tornar o wiring principal explícito e revisável sem forçar migração de
+    plugins, testes ou integrações externas.
+    """
+
+    agent_pool: IAgentPool
+    renderer: Any = None
+    profile_resolver: Any = None
+    prompt_builder: Any = None
+    history_getter: Callable | None = None
+    shared_state_getter: Callable | None = None
+    execution_mode_getter: Callable | None = None
+    get_selected_agents: Callable | None = None
+    set_selected_agents: Callable | None = None
+    clear_screen: Callable | None = None
+    input_status_getter: Callable | None = None
+    redisplay_prompt: Callable | None = None
+    output_lock: Any = None
+    prompt_owner_thread_id_getter: Callable | None = None
+    run_above_active_prompt: Callable | None = None
+    read_user_input: Callable | None = None
+    task_command_handler: Callable | None = None
+    bugs_command_handler: Callable | None = None
+    session_state_manager: Any = None
+    approval_handler_getter: Callable | None = None
+    context_manager: Any = None
+    profile_registry: Any = None
+    deferred_messages_getter: Callable | None = None
+    max_deferred_messages_getter: Callable | None = None
+    workspace_policy_getter: Callable | None = None
+    workspace_policy_setter: Callable | None = None
+    display_service: DisplayService | None = None
+
+
 class _NullProfileResolver:
     def get(self, name: str):
         return None
@@ -51,6 +92,19 @@ class _NullProfileResolver:
 
 class AppSystemLayer:
     """Encapsula comandos de sistema e delega display para ``DisplayService``."""
+
+    @classmethod
+    def from_dependencies(
+        cls,
+        dependencies: SystemLayerDependencies,
+    ) -> "AppSystemLayer":
+        """Constrói a camada a partir de um contrato único de dependências."""
+        if not isinstance(dependencies, SystemLayerDependencies):
+            raise TypeError("dependencies deve ser uma instância de SystemLayerDependencies")
+        return cls(**{
+            field_name: getattr(dependencies, field_name)
+            for field_name in dependencies.__dataclass_fields__
+        })
 
     def __init__(
         self,
