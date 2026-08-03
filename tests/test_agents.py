@@ -1687,6 +1687,22 @@ def test_agent_client_call_api_fatal_error_raises(renderer):
     assert client.rate_limit_detected is False
 
 
+def test_agent_client_fatal_error_is_not_rendered_before_dispatch(renderer):
+    from quimera.runtime.drivers.openai_compat import FatalAPIError
+
+    reporter = MagicMock()
+    client = AgentClient(renderer, idle_timeout=60, error_reporter=reporter)
+    mock_driver = MagicMock()
+    mock_driver.run.side_effect = FatalAPIError("fatal")
+
+    with patch("quimera.profiles.get", return_value=_make_api_profile()):
+        with patch.object(client, "_api_drivers", {"test-agent": mock_driver}):
+            with pytest.raises(FatalAPIError):
+                client.call("test-agent", "prompt")
+
+    reporter.assert_not_called()
+
+
 def test_parse_stream_json(renderer):
     """Verifica que parse stream json."""
     # Line 223-247: _parse_stream_json
@@ -3295,3 +3311,91 @@ def test_process_runner_pause_idle_if_suppresses_idle_timeout():
             result = runner.watch()
 
     assert result == ProcessRunner.COMPLETED
+
+
+def test_fork_call_does_not_clear_shared_cancel_event(renderer, monkeypatch):
+    """Fork consumidor não pode apagar cancelamento emitido pelo client dono."""
+    owner = AgentClient(renderer)
+    forked = owner.fork_for_concurrent_run()
+    assert forked is not None
+    owner.cancel_event.set()
+    called = []
+    monkeypatch.setattr(forked, "_call_impl", lambda *args, **kwargs: called.append(True) or "ran")
+
+    result = forked.call("agent", "prompt")
+
+    assert result is None
+    assert owner.cancel_event.is_set()
+    assert called == []
+
+
+def test_call_does_not_clear_cancel_arriving_before_backend(renderer, monkeypatch):
+    """Cancelamento entre gateway e call deve impedir o backend, não ser resetado."""
+    client = AgentClient(renderer)
+    called = []
+    monkeypatch.setattr(client, "_call_impl", lambda *args, **kwargs: called.append(True) or "ran")
+    client.cancel_event.set()
+
+    result = client.call("agent", "prompt")
+
+    assert result is None
+    assert client.cancel_event.is_set()
+    assert called == []
+
+
+def test_call_api_wall_timeout_waits_for_driver_completion(renderer, monkeypatch):
+    """Wall timeout sinaliza a chamada e só libera o client após a thread encerrar."""
+    from types import SimpleNamespace
+    import time
+
+    client = AgentClient(renderer)
+    profile = SimpleNamespace(
+        driver="openai_compat",
+        model="test-model",
+        base_url="http://localhost",
+        api_key_env=None,
+        tool_use_reliability="medium",
+        supports_tools=True,
+    )
+    observed = {}
+
+    class Driver:
+        def run(self, **kwargs):
+            observed["cancel_event"] = kwargs["cancel_event"]
+            assert kwargs["cancel_event"].wait(timeout=1)
+            time.sleep(0.05)
+            return "late"
+
+    monkeypatch.setattr("quimera.agents.client.OpenAICompatDriver", lambda **kwargs: Driver())
+    monkeypatch.setattr("quimera.agents.client.MAX_WALL_CLOCK_SECONDS", 0)
+    monkeypatch.setattr(client, "_start_esc_monitor", lambda: None)
+    monkeypatch.setattr(client, "_stop_esc_monitor", lambda: None)
+
+    started = time.monotonic()
+    result = client._call_api("test-agent", profile, "prompt", silent=True, show_status=False)
+    elapsed = time.monotonic() - started
+
+    assert result is None
+    assert observed["cancel_event"].is_set()
+    assert elapsed >= 0.05
+    assert client.has_active_work() is False
+    assert client.agent_running is False
+
+
+def test_tool_preview_metadata_overrides_bound_agent(renderer):
+    """Metadata MCP deve prevalecer sobre o agente fallback ligado ao callback."""
+    from types import SimpleNamespace
+
+    renderer.supports_agent_feed = True
+    client = AgentClient(renderer)
+    executor = SimpleNamespace(set_tool_preview_callback=MagicMock())
+    client.bind_tool_preview_callback(executor, agent="openai-agent")
+    callback = executor.set_tool_preview_callback.call_args.args[0]
+
+    callback(
+        "read_file",
+        {"path": "README.md"},
+        {"trusted_context": SimpleNamespace(agent_name="mcp-agent")},
+    )
+
+    assert renderer.show_feed.call_args.kwargs["agent"] == "mcp-agent"

@@ -385,3 +385,21 @@ class TestCall:
         assert call_fn.call_count == 2
         resolve_fn.assert_called_once_with("agent1", "response")
         record.assert_not_called()
+
+
+def test_rate_limit_uses_server_retry_after_when_longer():
+    service = AgentCallService(
+        rate_limit_backoff=30.0,
+        is_rate_limited=lambda: True,
+        get_retry_after=lambda: 75.0,
+    )
+    assert service._compute_backoff(1) == 75.0
+
+
+def test_rate_limit_keeps_configured_minimum_when_retry_after_is_shorter():
+    service = AgentCallService(
+        rate_limit_backoff=30.0,
+        is_rate_limited=lambda: True,
+        get_retry_after=lambda: 5.0,
+    )
+    assert service._compute_backoff(1) == 30.0

@@ -1418,3 +1418,41 @@ class TestMakeBackgroundDelegateFn:
 
         dispatch_services.delegate.assert_not_called()
         dispatch_services.close.assert_not_called()
+
+
+def test_delegate_deduplicates_target_and_fallback_aliases(tmp_path):
+    dispatched = []
+
+    def dispatch(agent, **kwargs):
+        dispatched.append(agent)
+        return None
+
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    tools = DelegateTools(config)
+    tools.set_delegate_fn(dispatch)
+    tools.set_active_agents_provider(lambda: ["codex", "claude"])
+    result = tools.delegate(_make_call(args={
+        "target_agent": "codex",
+        "request": "faz algo",
+        "fallback_agents": ["/codex", "claude", "/claude", "CLAUDE"],
+    }))
+
+    assert result.ok is False
+    assert dispatched == ["codex", "claude"]
+
+
+def test_delegate_rejects_non_boolean_parallel(tmp_path):
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    tools = DelegateTools(config)
+    tools.set_delegate_fn(MagicMock(return_value="ok"))
+    tools.set_active_agents_provider(lambda: ["codex", "claude"])
+
+    result = tools.delegate(_make_call(args={
+        "target_agent": "codex",
+        "request": "faz algo",
+        "parallel": "false",
+    }))
+
+    assert result.ok is False
+    assert "parallel" in str(result.error)
+    assert "boolean" in str(result.error)

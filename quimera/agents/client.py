@@ -83,6 +83,7 @@ class AgentClient:
         # Modo de execução ativo; quando definido, subprocessos são envolvidos com bwrap.
         self.execution_mode = None
         self._cancel_event = threading.Event()
+        self._owns_cancel_event = True
         self._esc_monitor = EscMonitor(self._cancel_event)
         self._user_cancelled = False
         self._cancel_notice_lock = threading.Lock()
@@ -104,6 +105,7 @@ class AgentClient:
         self._pending_summary_render: tuple | None = None
         self.rate_limit_detected = False
         self.rate_limit_detected_at: float | None = None
+        self.rate_limit_retry_after: float | None = None
         self._warm_pool = WarmPool()
         self.process_supervisor: ProcessSupervisor | None = process_supervisor
 
@@ -194,7 +196,7 @@ class AgentClient:
             set_tool_preview(
                 lambda name, args, metadata=None: self._show_tool_preview(
                     ToolPreview.build(name, args),
-                    agent=agent or self._agent_from_tool_metadata(metadata),
+                    agent=self._agent_from_tool_metadata(metadata) or agent,
                 )
             )
 
@@ -228,12 +230,16 @@ class AgentClient:
             self._cancel_notice_state["shown"] = False
 
     def reset_cancel_state(self) -> None:
-        """Limpa estado de cancelamento antes de uma nova rodada.
+        """Limpa cancelamento somente quando este client é dono da rodada.
 
-        Limpa apenas o estado no nível do client. Execuções API já em curso
-        possuem ``cancel_event`` próprio (``_active_api_runs``) que permanece
-        acionado, de modo que um novo prompt não revive trabalho cancelado.
+        Clients que receberam um evento externo por ``share_cancel_event`` são
+        consumidores: limpar esse evento permitiria que um fork ou delegate
+        revivesse trabalho cancelado por outro fluxo. O dono da rodada continua
+        responsável por limpar o evento antes de aceitar uma nova mensagem.
         """
+        if not self._owns_cancel_event:
+            self._user_cancelled = self._cancel_event.is_set()
+            return
         self._user_cancelled = False
         self._cancel_event.clear()
         self.reset_cancel_notices()
@@ -267,6 +273,7 @@ class AgentClient:
         if not all(callable(getattr(cancel_event, name, None)) for name in ("set", "clear", "is_set")):
             raise TypeError("cancel_event deve implementar set(), clear() e is_set()")
         self._cancel_event = cancel_event
+        self._owns_cancel_event = False
         self._esc_monitor = EscMonitor(self._cancel_event)
 
     def _fork_tool_executor(self):
@@ -538,10 +545,14 @@ class AgentClient:
                 self._running_agent or "?",
             )
             return None
-        self._cancel_event.clear()
+        if self._cancel_event.is_set():
+            self._user_cancelled = True
+            self._show_cancelled_once()
+            return None
         self._user_cancelled = False
         self.rate_limit_detected = False
         self.rate_limit_detected_at = None
+        self.rate_limit_retry_after = None
         self._agent_running = True
         self._running_agent = agent or (cmd[0] if cmd else None)
         self._start_esc_monitor()
@@ -980,9 +991,17 @@ class AgentClient:
         progress_callback=None,
         from_agent=None,
     ):
-        """Executa um agente de forma serializada neste client."""
+        """Executa um agente de forma serializada neste client.
+
+        O cancelamento é limpo no início da rodada pelo chamador proprietário
+        (por exemplo, ``ChatLifecycle``), nunca aqui. Assim um cancelamento que
+        ocorre entre o precheck do gateway e esta chamada não é apagado.
+        """
         with self._call_lock:
-            self.reset_cancel_state()
+            if self._cancel_event.is_set():
+                self._user_cancelled = True
+                self._show_cancelled_once()
+                return None
             return self._call_impl(
                 agent,
                 prompt,
@@ -1150,9 +1169,13 @@ class AgentClient:
             self._api_driver_signatures[agent] = signature
 
         driver_instance = self._api_drivers[agent]
-        self._cancel_event.clear()
+        if self._cancel_event.is_set():
+            self._user_cancelled = True
+            self._show_cancelled_once()
+            return None
         self.rate_limit_detected = False
         self.rate_limit_detected_at = None
+        self.rate_limit_retry_after = None
         self._agent_running = True
         self._running_agent = agent
         self._start_esc_monitor()
@@ -1173,6 +1196,9 @@ class AgentClient:
                     if callable(get_approval_scope):
                         approval_scope = get_approval_scope()
                 if effective_tool_executor is not None:
+                    # O driver sempre inclui o agente em trusted_context. Manter
+                    # o callback baseado em metadata evita fixar o executor no
+                    # último agente OpenAI e contaminar chamadas MCP posteriores.
                     self.bind_tool_preview_callback(effective_tool_executor, agent=agent)
                 # Injeta callbacks de spinner no executor para que o approval handler
                 # possa pausar o Live do Rich antes de input() bloqueante, evitando
@@ -1212,7 +1238,7 @@ class AgentClient:
                                 None,
                             )
                             if callable(bind_cancel_event):
-                                previous_cancel_event = bind_cancel_event(self._cancel_event)
+                                previous_cancel_event = bind_cancel_event(api_cancel_event)
 
                         guarded_on_text_chunk = None
                         if on_text_chunk is not None:
@@ -1263,6 +1289,7 @@ class AgentClient:
 
                 _api_start = time.time()
                 cancellation_announced = False
+                timed_out = False
                 while t.is_alive():
                     if effective_tool_executor is not None:
                         process_input = getattr(
@@ -1275,7 +1302,7 @@ class AgentClient:
                     if self._cancel_event.is_set() and not api_cancel_event.is_set():
                         api_cancel_event.set()
                     if api_cancel_event.is_set():
-                        if not cancellation_announced:
+                        if not timed_out and not cancellation_announced:
                             self._show_cancelled_once()
                             cancellation_announced = True
                         # A chamada HTTP do SDK pode permanecer bloqueada até o
@@ -1291,11 +1318,18 @@ class AgentClient:
                     if progress_callback:
                         progress_callback(f"aguardando resposta da API ({connection.model})... {int(_api_elapsed)}s")
 
-                    if _api_elapsed > MAX_WALL_CLOCK_SECONDS:
+                    if _api_elapsed > MAX_WALL_CLOCK_SECONDS and not timed_out:
+                        timed_out = True
                         api_cancel_event.set()
                         self._show_error(
                             f"[erro] wall-clock timeout after {MAX_WALL_CLOCK_SECONDS}s em driver API")
-                        return None
+                        # Não libere o client enquanto o driver ainda usa executor,
+                        # approval callbacks e semáforo do backend. O timeout do
+                        # transporte limita a espera pelo encerramento cooperativo.
+                        continue
+
+                if timed_out:
+                    return None
 
                 if api_cancel_event.is_set():
                     # O próprio driver pode concluir imediatamente após
@@ -1311,6 +1345,7 @@ class AgentClient:
                     if isinstance(error, _TransientAPIError):
                         if error.rate_limited:
                             self.rate_limit_detected = True
+                            self.rate_limit_retry_after = error.retry_after
                             if self.rate_limit_detected_at is None:
                                 self.rate_limit_detected_at = time.time()
                         _cmd = getattr(profile, "cmd", None)
@@ -1321,9 +1356,8 @@ class AgentClient:
                         self._show_error(f"[erro] falha ao comunicar com {_name}: {error}")
                         return None
                     if isinstance(error, _FatalAPIError):
-                        # Erro fatal (modelo/chave/requisição inválidos) não é
-                        # retryado nem tratado como resposta — apenas exibido.
-                        self._show_error(f"[erro] {error}")
+                        # A camada de dispatch é a única responsável por exibir
+                        # erros fatais, evitando duas mensagens idênticas.
                         raise error
                     if _is_rate_limit_signal(str(error)):
                         self.rate_limit_detected = True

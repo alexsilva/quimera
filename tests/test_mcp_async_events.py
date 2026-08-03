@@ -743,3 +743,18 @@ class TestBatchHTTP:
                 conn.close()
         finally:
             httpd.shutdown()
+
+
+def test_same_request_id_is_isolated_per_connection():
+    server = _make_server(_make_executor())
+    out_a = io.StringIO()
+    out_b = io.StringIO()
+    call_a = {"msg_id": 1, "out": out_a}
+    call_b = {"msg_id": 1, "out": out_b}
+    call_a["request_key"] = server._request_key(out_a, 1)
+    call_b["request_key"] = server._request_key(out_b, 1)
+    server._pending_calls.extend([call_a, call_b])
+
+    server._discard_pending_call(call_a)
+
+    assert server._pending_calls == [call_b]

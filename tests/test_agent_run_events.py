@@ -186,3 +186,35 @@ def test_input_broker_human_action_request_commits_agent_before_answer():
     broker._process_request(req, allow_direct_gate=True)
 
     assert order == [("commit", "codex"), ("answer", "codex")]
+
+
+def test_agent_gateway_emits_failed_when_prompt_build_raises():
+    sink = RecordingSink()
+    gateway = make_gateway(FakeAgentClient(), sink=sink)
+    gateway._prompt_builder.build = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("prompt boom"))
+
+    try:
+        gateway.call("codex")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("expected prompt exception")
+
+    assert [event.kind for event in sink.events] == ["started", "failed"]
+    assert sink.events[-1].metadata["error"] == "prompt boom"
+
+
+def test_agent_gateway_emits_cancelled_before_backend_call():
+    sink = RecordingSink()
+    client = FakeAgentClient()
+    gateway = make_gateway(client, sink=sink)
+
+    def build_and_cancel(*args, **kwargs):
+        client._user_cancelled = True
+        return "prompt"
+
+    gateway._prompt_builder.build = build_and_cancel
+    result = gateway.call("codex")
+
+    assert result is None
+    assert [event.kind for event in sink.events] == ["started", "cancelled"]

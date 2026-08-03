@@ -24,6 +24,7 @@ class AgentCallService:
         record_failure=None,
         record_success=None,
         is_rate_limited=None,
+        get_retry_after=None,
         before_retry=None,
         notify_warning=None,
         notify_retry=None,
@@ -35,6 +36,7 @@ class AgentCallService:
         self._record_failure = record_failure or (lambda agent: None)
         self._record_success = record_success or (lambda agent: None)
         self._is_rate_limited = is_rate_limited or (lambda: False)
+        self._get_retry_after = get_retry_after or (lambda: None)
         self._before_retry = before_retry or (lambda agent, attempt, reason: None)
         self._notify_warning = notify_warning or (lambda msg: None)
         self._notify_retry = notify_retry or (lambda *args, **kwargs: None)
@@ -166,5 +168,8 @@ class AgentCallService:
 
     def _compute_backoff(self, attempt: int) -> float:
         if self._is_rate_limited():
+            retry_after = self._get_retry_after()
+            if isinstance(retry_after, (int, float)) and retry_after > 0:
+                return max(self._rate_limit_backoff, float(retry_after))
             return self._rate_limit_backoff
         return self._retry_backoff * attempt

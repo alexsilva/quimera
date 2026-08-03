@@ -772,6 +772,9 @@ class DelegateTools(ToolBase):
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
         fallback_agents: list[str] = []
+        fallback_identities = {self._normalize_agent_identity(target_agent)}
+        if calling_agent:
+            fallback_identities.add(calling_agent)
         if fallback_agents_raw is not None:
             if not isinstance(fallback_agents_raw, list):
                 return ToolResult(
@@ -786,8 +789,10 @@ class DelegateTools(ToolBase):
                         tool_name=call.name,
                         error="'fallback_agents' must contain only non-empty strings",
                     )
-                if calling_agent and self._normalize_agent_identity(item) == calling_agent:
+                normalized_item = self._normalize_agent_identity(item)
+                if normalized_item in fallback_identities:
                     continue
+                fallback_identities.add(normalized_item)
                 fallback_agents.append(item.strip())
 
         if not target_agent or not request:
@@ -880,6 +885,9 @@ class DelegateTools(ToolBase):
                         error=f"steps[{idx}].fallback_agents must be a list",
                     )
                 normalized_extra_fallback: list[str] = []
+                extra_fallback_identities = {self._normalize_agent_identity(extra_agent)}
+                if calling_agent:
+                    extra_fallback_identities.add(calling_agent)
                 for fb_idx, fb in enumerate(extra_fallback):
                     if not isinstance(fb, str) or not fb.strip():
                         return ToolResult(
@@ -890,8 +898,10 @@ class DelegateTools(ToolBase):
                                 "must be a non-empty string"
                             ),
                         )
-                    if calling_agent and self._normalize_agent_identity(fb) == calling_agent:
+                    normalized_fb = self._normalize_agent_identity(fb)
+                    if normalized_fb in extra_fallback_identities:
                         continue
+                    extra_fallback_identities.add(normalized_fb)
                     normalized_extra_fallback.append(fb.strip())
 
                 normalized_context = extra_context.strip() if isinstance(extra_context, str) else ""
@@ -914,7 +924,13 @@ class DelegateTools(ToolBase):
                 )
 
         parallel_raw = arguments.get("parallel")
-        parallel = bool(parallel_raw) if parallel_raw is not None else False
+        if parallel_raw is not None and not isinstance(parallel_raw, bool):
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="'parallel' must be a boolean when provided",
+            )
+        parallel = bool(parallel_raw)
 
         transport = self._get_transport(call)
 

@@ -194,48 +194,61 @@ class AgentGateway:
         shared_state = self._get_shared_state()
         active_execution_mode = self._get_execution_mode()
 
-        if self._debug_prompt_metrics:
-            prompt, metrics = self._prompt_builder.build(
-                agent,
-                history,
-                is_first_speaker,
-                delegation,
-                debug=True,
-                primary=primary,
-                shared_state=shared_state,
-                delegation_only=delegation_only,
-                from_agent=from_agent,
-                skip_tool_prompt=True,
-                execution_mode=active_execution_mode,
-                prompt_kind=prompt_kind,
-                request_override=request_override,
+        try:
+            if self._debug_prompt_metrics:
+                prompt, metrics = self._prompt_builder.build(
+                    agent,
+                    history,
+                    is_first_speaker,
+                    delegation,
+                    debug=True,
+                    primary=primary,
+                    shared_state=shared_state,
+                    delegation_only=delegation_only,
+                    from_agent=from_agent,
+                    skip_tool_prompt=True,
+                    execution_mode=active_execution_mode,
+                    prompt_kind=prompt_kind,
+                    request_override=request_override,
+                )
+                agent_client.log_prompt_metrics(
+                    agent,
+                    metrics,
+                    session_id=self._session_state.get("session_id") if self._session_state else None,
+                    round_index=self._get_round_index(),
+                    session_call_index=call_index_snapshot,
+                    history_window=self._prompt_builder.history_window,
+                    protocol_mode=protocol_mode,
+                )
+            else:
+                prompt = self._prompt_builder.build(
+                    agent,
+                    history,
+                    is_first_speaker,
+                    delegation,
+                    primary=primary,
+                    shared_state=shared_state,
+                    delegation_only=delegation_only,
+                    from_agent=from_agent,
+                    skip_tool_prompt=True,
+                    execution_mode=active_execution_mode,
+                    prompt_kind=prompt_kind,
+                    request_override=request_override,
+                )
+        except Exception as exc:
+            fail_metadata = dict(event_metadata)
+            fail_metadata["error"] = str(exc)
+            self._agent_run_sink.emit(
+                AgentRunEvent("failed", str(agent), metadata=fail_metadata)
             )
-            agent_client.log_prompt_metrics(
-                agent,
-                metrics,
-                session_id=self._session_state.get("session_id") if self._session_state else None,
-                round_index=self._get_round_index(),
-                session_call_index=call_index_snapshot,
-                history_window=self._prompt_builder.history_window,
-                protocol_mode=protocol_mode,
-            )
-        else:
-            prompt = self._prompt_builder.build(
-                agent,
-                history,
-                is_first_speaker,
-                delegation,
-                primary=primary,
-                shared_state=shared_state,
-                delegation_only=delegation_only,
-                from_agent=from_agent,
-                skip_tool_prompt=True,
-                execution_mode=active_execution_mode,
-                prompt_kind=prompt_kind,
-                request_override=request_override,
-            )
+            raise
 
         if _is_user_cancelled(agent_client):
+            cancel_metadata = dict(event_metadata)
+            cancel_metadata["elapsed"] = time.time() - start
+            self._agent_run_sink.emit(
+                AgentRunEvent("cancelled", str(agent), metadata=cancel_metadata)
+            )
             logger.debug("[GATEWAY] agent=%s cancelled by user before backend call, aborting", agent)
             return None
 

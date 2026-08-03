@@ -325,6 +325,9 @@ class AppDispatchServices:
         def _is_rate_limited():
             return bool(agent_client and getattr(agent_client, 'rate_limit_detected', False))
 
+        def _get_retry_after():
+            return getattr(agent_client, "rate_limit_retry_after", None) if agent_client else None
+
         def _before_retry(agent: str, attempt: int, reason: str) -> None:
             del agent, attempt, reason
             if renderer is None:
@@ -341,6 +344,7 @@ class AppDispatchServices:
             record_failure=self._record_failure,
             record_success=self._record_success,
             is_rate_limited=_is_rate_limited,
+            get_retry_after=_get_retry_after,
             before_retry=_before_retry,
             notify_warning=self._notify_warning,
             notify_retry=self._notify_retry,

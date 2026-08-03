@@ -257,7 +257,7 @@ class MCPServer:
             return None
 
         if method == "notifications/cancelled":
-            self._handle_cancelled(params)
+            self._handle_cancelled(params, out)
             return None
 
         if method == "ping":
@@ -503,12 +503,18 @@ class MCPServer:
         values = [c for c in candidates if value in c.lower()][:100]
         return self._ok(msg_id, {"completion": {"values": values, "total": len(values), "hasMore": False}})
 
-    def _handle_cancelled(self, params: dict) -> None:
+    @staticmethod
+    def _request_key(out: IO, msg_id: Any) -> tuple[int, Any]:
+        """Identifica request JSON-RPC dentro da conexão que originou o ID."""
+        return id(out), msg_id
+
+    def _handle_cancelled(self, params: dict, out: IO | None = None) -> None:
         cancel_id = params.get("requestId")
         if cancel_id is None:
             return
+        request_key = self._request_key(out, cancel_id) if out is not None else cancel_id
         with self._cancel_lock:
-            event = self._cancel_events.pop(cancel_id, None)
+            event = self._cancel_events.pop(request_key, None)
         if event is not None:
             event.set()
             _logger.debug("MCP cancel event set for id=%s", cancel_id)
@@ -626,8 +632,9 @@ class MCPServer:
                 }, out)
 
         cancel_event = threading.Event()
+        request_key = self._request_key(out, msg_id)
         with self._cancel_lock:
-            self._cancel_events[msg_id] = cancel_event
+            self._cancel_events[request_key] = cancel_event
 
         future = self._thread_pool.submit(
             self._executor.execute,
@@ -637,6 +644,7 @@ class MCPServer:
 
         call_info = {
             "msg_id": msg_id,
+            "request_key": request_key,
             "future": future,
             "out": out,
             "started_at": started_at,
@@ -678,10 +686,14 @@ class MCPServer:
         return deadline
 
     def _discard_pending_call(self, call: dict) -> None:
-        """Remove uma chamada (e homônimas por ``msg_id``) do tracking pendente."""
-        msg_id = call["msg_id"]
+        """Remove somente a chamada da mesma conexão e request JSON-RPC."""
+        request_key = call.get("request_key") or self._request_key(call["out"], call["msg_id"])
         with self._pending_lock:
-            stale = [c for c in self._pending_calls if c is call or c["msg_id"] == msg_id]
+            stale = [
+                c for c in self._pending_calls
+                if c is call
+                or (c.get("request_key") or self._request_key(c["out"], c["msg_id"])) == request_key
+            ]
             for c in stale:
                 try:
                     self._pending_calls.remove(c)
@@ -691,9 +703,11 @@ class MCPServer:
     def _expire_pending_call(self, call: dict) -> dict:
         """Expira uma tool call: cancela, limpa tracking e monta o erro de timeout."""
         msg_id = call["msg_id"]
+        request_key = call.get("request_key") or self._request_key(call["out"], msg_id)
         _logger.debug("MCP tools/call timeout tool=%s", call["tool_name"])
         call["cancel_event"].set()
         with self._cancel_lock:
+            self._cancel_events.pop(request_key, None)
             self._cancel_events.pop(msg_id, None)
         self._discard_pending_call(call)
         return self._err(msg_id, -32603, "Tool execution timed out")
@@ -711,6 +725,7 @@ class MCPServer:
         """
         future = call["future"]
         msg_id = call["msg_id"]
+        request_key = call.get("request_key") or self._request_key(call["out"], msg_id)
         tool_name = call["tool_name"]
         started_at = call["started_at"]
         cancel_event = call["cancel_event"]
@@ -726,20 +741,20 @@ class MCPServer:
         if cancel_event.is_set():
             _logger.debug("MCP tools/call cancelled tool=%s — no response sent", tool_name)
             with self._cancel_lock:
-                self._cancel_events.pop(msg_id, None)
+                self._cancel_events.pop(request_key, None)
             return None
 
         try:
             result = future.result(timeout=0)
         except Exception as exc:
             with self._cancel_lock:
-                self._cancel_events.pop(msg_id, None)
+                self._cancel_events.pop(request_key, None)
             duration_ms = int((time.perf_counter() - started_at) * 1000)
             _logger.debug("MCP tools/call error tool=%s duration_ms=%d", tool_name, duration_ms, exc_info=True)
             return self._err(msg_id, -32603, f"Internal error: {exc}")
 
         with self._cancel_lock:
-            self._cancel_events.pop(msg_id, None)
+            self._cancel_events.pop(request_key, None)
 
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         _log = _logger.info if (not result.ok or duration_ms > 500) else _logger.debug
