@@ -1196,6 +1196,150 @@ def test_run_api_error_returns_none():
     assert result is None
 
 
+def test_run_rate_limit_raises_transient_error():
+    """RateLimitError do SDK é propagado como TransientAPIError com rate_limited e retry_after."""
+    openai = pytest.importorskip("openai")
+    import httpx
+    from quimera.runtime.drivers.openai_compat import TransientAPIError
+
+    driver, mock_client = _make_driver()
+    request = httpx.Request("POST", "http://localhost/v1/chat/completions")
+    response = httpx.Response(429, request=request, headers={"retry-after": "15"})
+    mock_client.chat.completions.create.side_effect = openai.RateLimitError(
+        "rate limit exceeded", response=response, body={"error": {"message": "rl"}}
+    )
+
+    with pytest.raises(TransientAPIError) as exc_info:
+        driver.run(_prompt(), tool_executor=None)
+    error = exc_info.value
+    assert error.rate_limited is True
+    assert error.retry_after == 15.0
+    assert error.retryable is True
+
+
+def test_run_connection_error_raises_transient_error():
+    """APIConnectionError é transitório e não marca rate_limited."""
+    openai = pytest.importorskip("openai")
+    import httpx
+    from quimera.runtime.drivers.openai_compat import TransientAPIError
+
+    driver, mock_client = _make_driver()
+    request = httpx.Request("POST", "http://localhost/v1/chat/completions")
+    mock_client.chat.completions.create.side_effect = openai.APIConnectionError(
+        message="connection refused", request=request
+    )
+
+    with pytest.raises(TransientAPIError) as exc_info:
+        driver.run(_prompt(), tool_executor=None)
+    assert exc_info.value.rate_limited is False
+    assert exc_info.value.retryable is True
+
+
+def test_run_timeout_raises_transient_error():
+    """APITimeoutError é transitório e seguro para retry."""
+    openai = pytest.importorskip("openai")
+    import httpx
+    from quimera.runtime.drivers.openai_compat import TransientAPIError
+
+    driver, mock_client = _make_driver()
+    request = httpx.Request("POST", "http://localhost/v1/chat/completions")
+    mock_client.chat.completions.create.side_effect = openai.APITimeoutError(request=request)
+
+    with pytest.raises(TransientAPIError) as exc_info:
+        driver.run(_prompt(), tool_executor=None)
+    assert exc_info.value.rate_limited is False
+    assert exc_info.value.retryable is True
+
+
+def test_run_internal_server_error_raises_transient_error():
+    """Erro 5xx do backend é transitório (pode se resolver)."""
+    openai = pytest.importorskip("openai")
+    import httpx
+    from quimera.runtime.drivers.openai_compat import TransientAPIError
+
+    driver, mock_client = _make_driver()
+    request = httpx.Request("POST", "http://localhost/v1/chat/completions")
+    mock_client.chat.completions.create.side_effect = openai.InternalServerError(
+        "internal error", response=httpx.Response(500, request=request), body=None
+    )
+
+    with pytest.raises(TransientAPIError) as exc_info:
+        driver.run(_prompt(), tool_executor=None)
+    assert exc_info.value.rate_limited is False
+    assert exc_info.value.retryable is True
+
+
+def test_run_fatal_auth_raises_fatal_error():
+    """AuthenticationError é fatal, sem retry, com mensagem amigável."""
+    openai = pytest.importorskip("openai")
+    import httpx
+    from quimera.runtime.drivers.openai_compat import FatalAPIError
+
+    driver, mock_client = _make_driver()
+    request = httpx.Request("POST", "http://localhost/v1/chat/completions")
+    mock_client.chat.completions.create.side_effect = openai.AuthenticationError(
+        "invalid api key", response=httpx.Response(401, request=request), body=None
+    )
+
+    with pytest.raises(FatalAPIError) as exc_info:
+        driver.run(_prompt(), tool_executor=None)
+    error = exc_info.value
+    assert error.retryable is False
+    assert "autenticação" in str(error)
+
+
+def test_run_fatal_not_found_raises_fatal_error():
+    """NotFoundError (modelo inexistente) é fatal, sem retry."""
+    openai = pytest.importorskip("openai")
+    import httpx
+    from quimera.runtime.drivers.openai_compat import FatalAPIError
+
+    driver, mock_client = _make_driver()
+    request = httpx.Request("POST", "http://localhost/v1/chat/completions")
+    mock_client.chat.completions.create.side_effect = openai.NotFoundError(
+        "model not found", response=httpx.Response(404, request=request), body=None
+    )
+
+    with pytest.raises(FatalAPIError) as exc_info:
+        driver.run(_prompt(), tool_executor=None)
+    assert exc_info.value.retryable is False
+    assert "modelo não encontrado" in str(exc_info.value)
+
+
+def test_run_fatal_bad_request_raises_fatal_error():
+    """BadRequestError é fatal, sem retry."""
+    openai = pytest.importorskip("openai")
+    import httpx
+    from quimera.runtime.drivers.openai_compat import FatalAPIError
+
+    driver, mock_client = _make_driver()
+    request = httpx.Request("POST", "http://localhost/v1/chat/completions")
+    mock_client.chat.completions.create.side_effect = openai.BadRequestError(
+        "invalid request", response=httpx.Response(400, request=request), body=None
+    )
+
+    with pytest.raises(FatalAPIError) as exc_info:
+        driver.run(_prompt(), tool_executor=None)
+    assert exc_info.value.retryable is False
+
+
+def test_run_permission_denied_raises_fatal_error():
+    """Erro 403 também é tratado como fatal (sem retry)."""
+    openai = pytest.importorskip("openai")
+    import httpx
+    from quimera.runtime.drivers.openai_compat import FatalAPIError
+
+    driver, mock_client = _make_driver()
+    request = httpx.Request("POST", "http://localhost/v1/chat/completions")
+    mock_client.chat.completions.create.side_effect = openai.PermissionDeniedError(
+        "forbidden", response=httpx.Response(403, request=request), body=None
+    )
+
+    with pytest.raises(FatalAPIError) as exc_info:
+        driver.run(_prompt(), tool_executor=None)
+    assert exc_info.value.retryable is False
+
+
 def test_driver_repl_probe_backend_success():
     """Verifica que Test driver repl probe backend success."""
     fake_profile = SimpleNamespace(

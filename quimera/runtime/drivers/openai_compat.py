@@ -44,12 +44,100 @@ try:
         BadRequestError as _OAIBadRequestError,
         RateLimitError as _OAIRateLimitError,
     )
+    from openai import (
+        APIConnectionError as _OAIConnectionError,
+        APITimeoutError as _OAITimeoutError,
+        APIStatusError as _OAIStatusError,
+    )
 except ImportError:
     OpenAI = None  # type: ignore[assignment,misc]
     _OAIAuthError = Exception  # type: ignore[assignment,misc]
     _OAINotFoundError = Exception  # type: ignore[assignment,misc]
     _OAIBadRequestError = Exception  # type: ignore[assignment,misc]
     _OAIRateLimitError = Exception  # type: ignore[assignment,misc]
+    _OAIConnectionError = Exception  # type: ignore[assignment,misc]
+    _OAITimeoutError = Exception  # type: ignore[assignment,misc]
+    _OAIStatusError = Exception  # type: ignore[assignment,misc]
+
+
+class TransientAPIError(Exception):
+    """Erro transitório da API OpenAI-compatible; seguro para retry com backoff.
+
+    ``rate_limited=True`` indica rate limit explícito (HTTP 429) e ativa
+    ``rate_limit_detected`` no AgentClient, usando backoff dedicado.
+    ``retry_after`` opcional vem do header ``retry-after`` do backend.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        rate_limited: bool = False,
+        retry_after: float | None = None,
+    ):
+        super().__init__(message)
+        self.rate_limited = bool(rate_limited)
+        self.retry_after = retry_after
+        self.retryable = True
+
+
+class FatalAPIError(Exception):
+    """Erro fatal da API OpenAI-compatible.
+
+    Não deve ser retryado nem tratado como resposta válida — o modelo,
+    a chave ou a requisição são inválidos e o retry não mudaria o resultado.
+    """
+
+    def __init__(self, message: str, *, cause: Exception | None = None):
+        super().__init__(message)
+        self.cause = cause
+        self.retryable = False
+
+
+def _api_retry_after(exc: Exception) -> float | None:
+    """Lê o header ``retry-after`` da resposta HTTP quando disponível."""
+    headers = getattr(exc, "headers", None)
+    if headers is None:
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    get = getattr(headers, "get", None)
+    if not callable(get):
+        return None
+    raw = get("retry-after") or get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _categorize_api_exception(exc: Exception) -> tuple[str, float | None] | None:
+    """Classifica uma exceção do SDK em rate_limit/transient/fatal.
+
+    Retorna ``("rate_limit", retry_after)``, ``("transient", None)``,
+    ``("fatal", None)`` ou ``None`` para erros não reconhecidos.
+    """
+    if _OAIRateLimitError is not Exception and isinstance(exc, _OAIRateLimitError):
+        return "rate_limit", _api_retry_after(exc)
+    if _OAIAuthError is not Exception and isinstance(exc, _OAIAuthError):
+        return "fatal", None
+    if _OAINotFoundError is not Exception and isinstance(exc, _OAINotFoundError):
+        return "fatal", None
+    if _OAIBadRequestError is not Exception and isinstance(exc, _OAIBadRequestError):
+        return "fatal", None
+    if _OAIConnectionError is not Exception and isinstance(exc, _OAIConnectionError):
+        return "transient", None
+    if _OAITimeoutError is not Exception and isinstance(exc, _OAITimeoutError):
+        return "transient", None
+    if _OAIStatusError is not Exception and isinstance(exc, _OAIStatusError):
+        status = getattr(exc, "status_code", None)
+        if isinstance(status, int) and 500 <= status < 600:
+            return "transient", None
+        return "fatal", None
+    return None
 
 
 def _fatal_api_error_message(exc: Exception) -> str | None:
@@ -549,9 +637,21 @@ class OpenAICompatDriver:
                         )
                     except Exception as exc:
                         _logger.error("OpenAICompatDriver: API error on hop %d: %s", hop, exc)
-                        fatal_msg = _fatal_api_error_message(exc)
-                        if fatal_msg is not None:
-                            return fatal_msg
+                        categorization = _categorize_api_exception(exc)
+                        if categorization is None:
+                            return None
+                        category, retry_after = categorization
+                        if category == "fatal":
+                            raise FatalAPIError(
+                                _fatal_api_error_message(exc) or f"Erro fatal da API ({self.model}): {exc}",
+                                cause=exc,
+                            ) from exc
+                        if category in ("rate_limit", "transient"):
+                            raise TransientAPIError(
+                                f"Erro transitório da API ({self.model}): {exc}",
+                                rate_limited=(category == "rate_limit"),
+                                retry_after=retry_after,
+                            ) from exc
                         return None
 
                     if cancel_event is not None and cancel_event.is_set():

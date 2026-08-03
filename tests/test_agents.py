@@ -1624,6 +1624,69 @@ def test_agent_client_call_api_driver(renderer):
             mock_driver_cls.assert_called()
 
 
+def _make_api_profile(agent="test-agent"):
+    """Profile OpenAI-compatible mínimo para exercitar o caminho _call_api."""
+    return SimpleNamespace(
+        driver="openai_compat",
+        model="qwen3-coder:30b",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+        supports_tools=True,
+        tool_use_reliability="medium",
+        cmd=None,
+    )
+
+
+def test_agent_client_call_api_rate_limit_marks_flag(renderer):
+    """TransientAPIError rate_limited=True ativa rate_limit_detected no client."""
+    from quimera.runtime.drivers.openai_compat import TransientAPIError
+
+    client = AgentClient(renderer, idle_timeout=60)
+    mock_driver = MagicMock()
+    mock_driver.run.side_effect = TransientAPIError("rate limited", rate_limited=True, retry_after=30.0)
+
+    with patch("quimera.profiles.get", return_value=_make_api_profile()):
+        with patch.object(client, "_api_drivers", {"test-agent": mock_driver}):
+            result = client.call("test-agent", "prompt")
+
+    assert result is None
+    assert client.rate_limit_detected is True
+    assert client.rate_limit_detected_at is not None
+
+
+def test_agent_client_call_api_transient_without_rate_limit(renderer):
+    """TransientAPIError sem rate limit retorna None sem ativar rate_limit_detected."""
+    from quimera.runtime.drivers.openai_compat import TransientAPIError
+
+    client = AgentClient(renderer, idle_timeout=60)
+    mock_driver = MagicMock()
+    mock_driver.run.side_effect = TransientAPIError("connection error")
+
+    with patch("quimera.profiles.get", return_value=_make_api_profile()):
+        with patch.object(client, "_api_drivers", {"test-agent": mock_driver}):
+            result = client.call("test-agent", "prompt")
+
+    assert result is None
+    assert client.rate_limit_detected is False
+    assert client.rate_limit_detected_at is None
+
+
+def test_agent_client_call_api_fatal_error_raises(renderer):
+    """FatalAPIError é propagado pelo client sem ativar rate limit."""
+    from quimera.runtime.drivers.openai_compat import FatalAPIError
+
+    client = AgentClient(renderer, idle_timeout=60)
+    mock_driver = MagicMock()
+    mock_driver.run.side_effect = FatalAPIError("Erro fatal: falha de autenticação na API.")
+
+    with patch("quimera.profiles.get", return_value=_make_api_profile()):
+        with patch.object(client, "_api_drivers", {"test-agent": mock_driver}):
+            with pytest.raises(FatalAPIError, match="autenticação"):
+                client.call("test-agent", "prompt")
+
+    assert client.rate_limit_detected is False
+
+
 def test_parse_stream_json(renderer):
     """Verifica que parse stream json."""
     # Line 223-247: _parse_stream_json

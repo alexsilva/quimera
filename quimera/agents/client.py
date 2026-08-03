@@ -35,6 +35,10 @@ from quimera.agents.text_filters import (
     _filter_stderr_lines,
     _is_rate_limit_signal,
 )
+from quimera.runtime.drivers.openai_compat import (
+    FatalAPIError as _FatalAPIError,
+    TransientAPIError as _TransientAPIError,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -1302,7 +1306,25 @@ class AgentClient:
                     return None
 
                 if result_holder["error"]:
-                    if _is_rate_limit_signal(str(result_holder["error"])):
+                    error = result_holder["error"]
+                    if isinstance(error, _TransientAPIError):
+                        if error.rate_limited:
+                            self.rate_limit_detected = True
+                            if self.rate_limit_detected_at is None:
+                                self.rate_limit_detected_at = time.time()
+                        _cmd = getattr(profile, "cmd", None)
+                        _name = (
+                            (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None)
+                            or connection.model or "driver"
+                        )
+                        self._show_error(f"[erro] falha ao comunicar com {_name}: {error}")
+                        return None
+                    if isinstance(error, _FatalAPIError):
+                        # Erro fatal (modelo/chave/requisição inválidos) não é
+                        # retryado nem tratado como resposta — apenas exibido.
+                        self._show_error(f"[erro] {error}")
+                        raise error
+                    if _is_rate_limit_signal(str(error)):
                         self.rate_limit_detected = True
                         if self.rate_limit_detected_at is None:
                             self.rate_limit_detected_at = time.time()
@@ -1311,7 +1333,7 @@ class AgentClient:
                         (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None)
                         or connection.model or "driver"
                     )
-                    self._show_error(f"[erro] falha ao comunicar com {_name}: {result_holder['error']}")
+                    self._show_error(f"[erro] falha ao comunicar com {_name}: {error}")
                     return None
 
                 return result_holder["result"]

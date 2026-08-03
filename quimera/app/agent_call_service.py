@@ -47,6 +47,7 @@ class AgentCallService:
         resolve_fn,
         is_user_cancelled,
         max_retries: int | None = None,
+        is_fatal_error=None,
     ):
         """Executa chamada com retry.
 
@@ -55,6 +56,9 @@ class AgentCallService:
             call_fn: Callable(agent) → response str | None (chamada bruta).
             resolve_fn: Callable(agent, response) → result str | None (tool loop).
             is_user_cancelled: Callable() → bool (cancelamento do usuário).
+            is_fatal_error: Callable(exc) → bool opcional. Quando verdadeiro, a
+                exceção é registrada como falha sem retry — erros fatais não
+                mudam com tentativas adicionais.
         """
         last_error = None
 
@@ -122,6 +126,15 @@ class AgentCallService:
             except Exception as exc:
                 if is_user_cancelled():
                     logger.debug("[AGENT_CALL] agent=%s cancelled by user, aborting", agent)
+                    return None
+                if callable(is_fatal_error) and is_fatal_error(exc):
+                    last_error = exc
+                    self._record_failure(agent)
+                    self._notify_error(f"{agent}: erro fatal, sem retry: {exc}")
+                    logger.debug(
+                        "agent=%s fatal error, aborting without retry: %s",
+                        agent, exc,
+                    )
                     return None
                 last_error = exc
                 if attempt < effective_max_retries:

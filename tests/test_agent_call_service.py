@@ -181,6 +181,42 @@ class TestCall:
         assert call_fn.call_count == 2
         record.assert_called_once_with("agent1")
 
+    def test_fatal_error_aborts_without_retry(self):
+        """Verifica que erro fatal reconhecido por is_fatal_error não é retryado."""
+        record = MagicMock()
+        notify_error = MagicMock()
+        service = AgentCallService(max_retries=3, retry_backoff=0.01,
+                                   record_failure=record, notify_error=notify_error)
+        fatal = RuntimeError("chave de API inválida")
+        call_fn = MagicMock(side_effect=fatal)
+        with patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
+            result = service.call(
+                "agent1", call_fn, MagicMock(), lambda: False,
+                is_fatal_error=lambda exc: exc is fatal,
+            )
+        assert result is None
+        assert call_fn.call_count == 1
+        mock_sleep.assert_not_called()
+        record.assert_called_once_with("agent1")
+        notify_error.assert_called_once()
+        assert "fatal" in notify_error.call_args[0][0]
+
+    def test_fatal_error_predicate_applies_to_raise_before_retry(self):
+        """Verifica que a predicação classifica a exceção antes de decidir retry."""
+        record = MagicMock()
+        service = AgentCallService(max_retries=2, retry_backoff=0.01, record_failure=record)
+        class Fatal(Exception):
+            pass
+        call_fn = MagicMock(side_effect=Fatal("boom"))
+        with patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
+            result = service.call(
+                "agent1", call_fn, MagicMock(), lambda: False,
+                is_fatal_error=lambda exc: isinstance(exc, Fatal),
+            )
+        assert result is None
+        assert call_fn.call_count == 1
+        mock_sleep.assert_not_called()
+
     def test_exception_during_call_then_succeeds(self):
         """Verifica que call() retorna sucesso após exceções transitórias em call_fn."""
         service = AgentCallService(max_retries=3, retry_backoff=0.01)
