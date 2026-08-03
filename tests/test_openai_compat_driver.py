@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
@@ -1808,6 +1809,59 @@ def test_concurrent_runs_block_at_max_connections():
     # A segunda thread levou pelo menos 0.2s (esperou no semáforo)
     elapsed = time.monotonic() - t2_start
     assert elapsed >= 0.15, f"Segunda thread não deveria ter sido bloqueada no semáforo ({elapsed:.2f}s)"
+
+
+def test_run_cancel_event_during_semaphore_wait_returns_none_without_leaking_permit():
+    """cancel_event sinalizado enquanto run() espera o semáforo deve interromper a espera.
+
+    Não deve haver chamada à API (a fila nunca chegou a ser adquirida) nem
+    vazamento de permit: ao liberar o slot ocupado externamente, o valor do
+    semáforo deve voltar ao original.
+    """
+    driver, mock_client = _make_driver()
+    driver._semaphore = threading.Semaphore(1)
+
+    # Ocupa o único slot, simulando outra execução em andamento.
+    driver._semaphore.acquire()
+
+    cancel_event = threading.Event()
+    result_holder = {}
+
+    def run_in_thread():
+        result_holder["result"] = driver.run(
+            _prompt(), tool_executor=None, cancel_event=cancel_event
+        )
+
+    thread = threading.Thread(target=run_in_thread)
+    started_at = time.monotonic()
+    thread.start()
+
+    # Dá tempo do run() entrar no polling de espera do semáforo.
+    time.sleep(0.2)
+    cancel_event.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive(), "run() não retornou após cancel_event ser sinalizado"
+    assert result_holder["result"] is None
+    assert time.monotonic() - started_at < 5
+    mock_client.chat.completions.create.assert_not_called()
+
+    # Libera o slot ocupado externamente; nenhum release extra deve ter ocorrido.
+    driver._semaphore.release()
+    assert driver._semaphore._value == 1
+
+
+def test_run_normal_execution_with_cancel_event_acquires_and_releases_semaphore():
+    """Com cancel_event não sinalizado, run() adquire e libera o semáforo normalmente."""
+    driver, mock_client = _make_driver()
+    driver._semaphore = threading.Semaphore(1)
+    _setup_stream(mock_client, [_make_chunk(content="ok")])
+
+    cancel_event = threading.Event()
+    result = driver.run(_prompt(), tool_executor=None, cancel_event=cancel_event)
+
+    assert result == "ok"
+    assert driver._semaphore._value == 1
 
 
 def test_semaphore_is_shared_for_same_backend():

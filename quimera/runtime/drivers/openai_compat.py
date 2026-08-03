@@ -121,6 +121,26 @@ class _BackendSemaphore(threading.Semaphore):
                 self._value += 1
                 self._cond.notify()
 
+# Intervalo de polling ao aguardar slot no semáforo global, permitindo
+# checar cancel_event periodicamente em vez de bloquear indefinidamente.
+_SEMAPHORE_POLL_INTERVAL = 0.1
+
+
+def _acquire_semaphore_cancelable(semaphore: threading.Semaphore, cancel_event) -> bool:
+    """Adquire `semaphore` com espera cancelável via polling.
+
+    Usa `acquire(timeout=...)` em vez de bloquear indefinidamente, permitindo
+    checar `cancel_event` periodicamente sem busy-wait. Retorna True se o
+    semáforo foi adquirido (chamador deve liberar exatamente uma vez) ou
+    False se `cancel_event` foi sinalizado antes de um slot ficar disponível
+    (nenhuma aquisição pendente nesse caso).
+    """
+    while True:
+        if semaphore.acquire(timeout=_SEMAPHORE_POLL_INTERVAL):
+            return True
+        if cancel_event is not None and cancel_event.is_set():
+            return False
+
 
 def _normalize_max_connections(max_connections: int) -> int:
     try:
@@ -373,8 +393,11 @@ class OpenAICompatDriver:
         if cancel_event is not None and cancel_event.is_set():
             return None
 
-        # Aguarda slot disponível para evitar estouro de rate-limit no backend
-        with self._semaphore:
+        # Aguarda slot disponível para evitar estouro de rate-limit no backend,
+        # de forma cancelável (cancel_event interrompe a espera na fila).
+        if not _acquire_semaphore_cancelable(self._semaphore, cancel_event):
+            return None
+        try:
             if cancel_event is not None and cancel_event.is_set():
                 return None
 
@@ -540,6 +563,8 @@ class OpenAICompatDriver:
                 # Reseta approve-all (não-permanente) ao fim do ciclo de tool hops.
                 if tool_executor is not None:
                     tool_executor.reset_approval_cycle()
+        finally:
+            self._semaphore.release()
 
     def _is_invalid_tool_result(self, result: ToolResult) -> bool:
         """Indica se o resultado representa uso de ferramenta fora do contrato conhecido."""
