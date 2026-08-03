@@ -142,6 +142,8 @@ class MCPServer:
     SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
     SERVER_NAME = "quimera"
     SERVER_VERSION = __version__
+    #: Margem extra, após o deadline da última pendência, antes de forçar timeout no shutdown.
+    _DRAIN_GRACE_SECONDS: float = 5.0
 
     def __init__(
         self,
@@ -638,6 +640,7 @@ class MCPServer:
             "future": future,
             "out": out,
             "started_at": started_at,
+            "deadline_at": started_at + self._configured_tool_timeout(),
             "tool_name": tool_name,
             "cancel_event": cancel_event,
         }
@@ -662,47 +665,69 @@ class MCPServer:
             timeout = 600.0
         return max(1.0, timeout)
 
+    def _call_deadline(self, call: dict) -> float:
+        """Retorna (memoizando) o instante limite de uma tool call pendente.
+
+        Chamadas montadas antes da introdução de ``deadline_at`` derivam o
+        limite de ``started_at`` mais o timeout configurado.
+        """
+        deadline = call.get("deadline_at")
+        if deadline is None:
+            deadline = call["started_at"] + self._configured_tool_timeout()
+            call["deadline_at"] = deadline
+        return deadline
+
+    def _discard_pending_call(self, call: dict) -> None:
+        """Remove uma chamada (e homônimas por ``msg_id``) do tracking pendente."""
+        msg_id = call["msg_id"]
+        with self._pending_lock:
+            stale = [c for c in self._pending_calls if c is call or c["msg_id"] == msg_id]
+            for c in stale:
+                try:
+                    self._pending_calls.remove(c)
+                except ValueError:
+                    pass
+
+    def _expire_pending_call(self, call: dict) -> dict:
+        """Expira uma tool call: cancela, limpa tracking e monta o erro de timeout."""
+        msg_id = call["msg_id"]
+        _logger.debug("MCP tools/call timeout tool=%s", call["tool_name"])
+        call["cancel_event"].set()
+        with self._cancel_lock:
+            self._cancel_events.pop(msg_id, None)
+        self._discard_pending_call(call)
+        return self._err(msg_id, -32603, "Tool execution timed out")
+
     def _resolve_tool_response(
         self, call: dict, wait_timeout: float | None = None
     ) -> dict | None:
-        """Resolve a resposta de uma tool call (bloqueante). Retorna o dict de resposta ou None se não concluída."""
+        """Aguarda uma tool pendente e serializa seu resultado.
+
+        ``wait_timeout`` limita somente o tempo gasto aguardando um future que
+        ainda não terminou; quando omitido, usa o tempo restante até
+        ``deadline_at``. Um resultado já concluído nunca é descartado apenas
+        pela idade da chamada: no fluxo assíncrono o servidor pode só chegar a
+        este método depois que a execução longa terminou.
+        """
         future = call["future"]
         msg_id = call["msg_id"]
         tool_name = call["tool_name"]
         started_at = call["started_at"]
         cancel_event = call["cancel_event"]
         if wait_timeout is None:
-            wait_timeout = self._configured_tool_timeout()
+            wait_timeout = max(0.0, self._call_deadline(call) - time.perf_counter())
 
         if not future.done():
             try:
                 future.result(timeout=wait_timeout)
             except concurrent.futures.TimeoutError:
-                cancel_event.set()
-                with self._cancel_lock:
-                    self._cancel_events.pop(msg_id, None)
-                with self._pending_lock:
-                    owned = [c for c in self._pending_calls if c["msg_id"] == msg_id]
-                    for c in owned:
-                        try:
-                            self._pending_calls.remove(c)
-                        except ValueError:
-                            pass
-                return self._err(msg_id, -32603, "Tool execution timed out")
+                return self._expire_pending_call(call)
 
         if cancel_event.is_set():
             _logger.debug("MCP tools/call cancelled tool=%s — no response sent", tool_name)
             with self._cancel_lock:
                 self._cancel_events.pop(msg_id, None)
             return None
-
-        elapsed = time.perf_counter() - started_at
-        if elapsed >= wait_timeout:
-            _logger.debug("MCP tools/call timeout tool=%s", tool_name)
-            with self._cancel_lock:
-                self._cancel_events.pop(msg_id, None)
-            cancel_event.set()
-            return self._err(msg_id, -32603, "Tool execution timed out")
 
         try:
             result = future.result(timeout=0)
@@ -761,17 +786,24 @@ class MCPServer:
         if not owned:
             return
 
+        now = time.perf_counter()
         to_remove = []
         for call in owned:
+            expired = False
             if not call["future"].done():
-                continue
+                if now < self._call_deadline(call):
+                    continue
+                expired = True
             # Marca atomicamente como "em resolução" para evitar double-write
             # quando background flush e _drain_all_pending rodam concorrentemente.
             with self._pending_lock:
                 if call.get("_resolving"):
                     continue
                 call["_resolving"] = True
-            response = self._resolve_tool_response(call)
+            if expired:
+                response = self._expire_pending_call(call)
+            else:
+                response = self._resolve_tool_response(call)
             if response is not None:
                 self._write(response, call["out"])
             to_remove.append(call)
@@ -820,14 +852,33 @@ class MCPServer:
         self._bg_flush_active = False
 
     def _drain_all_pending(self, out: IO) -> None:
-        deadline = time.perf_counter() + 610
-        while time.perf_counter() < deadline:
+        """Entrega ou expira todas as pendências de ``out`` antes do shutdown.
+
+        O laço termina quando nada mais está pendente; ``_flush_pending`` já
+        expira chamadas que passaram do próprio ``deadline_at``. A margem extra
+        cobre chamadas presas em resolução por outra thread.
+        """
+        while True:
             self._flush_pending(out)
             with self._pending_lock:
-                remaining = any(c["out"] is out for c in self._pending_calls)
-            if not remaining:
+                owned = [c for c in self._pending_calls if c["out"] is out]
+            if not owned:
+                break
+            hard_deadline = max(self._call_deadline(c) for c in owned) + self._DRAIN_GRACE_SECONDS
+            if time.perf_counter() >= hard_deadline:
+                self._force_expire_pending(owned, out)
                 break
             time.sleep(0.05)
+
+    def _force_expire_pending(self, calls: list[dict], out: IO) -> None:
+        """Expira pendências travadas no shutdown, sem duplicar respostas."""
+        for call in calls:
+            with self._pending_lock:
+                already_resolving = bool(call.get("_resolving"))
+                call["_resolving"] = True
+            response = self._expire_pending_call(call)
+            if not already_resolving:
+                self._write(response, out)
 
     # ------------------------------------------------------------------
     # Helpers de resposta JSON-RPC 2.0

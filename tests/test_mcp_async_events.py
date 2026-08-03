@@ -368,8 +368,8 @@ class TestBatchAsync:
 class TestTimeout:
     """Testa timeout de execução de ferramentas."""
 
-    def test_tool_timeout_returns_error(self):
-        """Tool que excede timeout (>=600s) retorna erro."""
+    def test_completed_tool_result_is_not_discarded_by_call_age(self):
+        """Resultado concluído não deve virar timeout por idade da chamada."""
         executor = _make_executor()
         executor.execute.side_effect = lambda *a, **kw: (
             ToolResult(ok=True, tool_name="read_file", content="ok")
@@ -390,8 +390,8 @@ class TestTimeout:
         raw = out.getvalue()
         responses = [json.loads(l) for l in raw.splitlines() if l.strip()]
         assert len(responses) == 1
-        assert "error" in responses[0]
-        assert "timed out" in responses[0]["error"]["message"].lower()
+        assert responses[0]["result"]["isError"] is False
+        assert responses[0]["result"]["content"][0]["text"] == "ok"
 
     def test_blocking_timeout_signals_cancel_and_removes_tracking(self):
         """Timeout bloqueante deve solicitar cancelamento da execução real."""
@@ -444,41 +444,168 @@ class TestTimeout:
 
     def test_timeout_does_not_crash_server(self):
         """Timeout não crasha o servidor — chamadas seguintes funcionam."""
+        server = _make_server(_make_executor())
+
+        pending = concurrent.futures.Future()
+        first_call = {
+            "msg_id": 89,
+            "future": pending,
+            "out": io.StringIO(),
+            "started_at": time.perf_counter(),
+            "tool_name": "read_file",
+            "cancel_event": threading.Event(),
+        }
+        first_response = server._resolve_tool_response(first_call, wait_timeout=0.01)
+
+        completed = concurrent.futures.Future()
+        completed.set_result(
+            ToolResult(ok=True, tool_name="read_file", content="second")
+        )
+        second_call = {
+            "msg_id": 90,
+            "future": completed,
+            "out": io.StringIO(),
+            "started_at": time.perf_counter(),
+            "tool_name": "read_file",
+            "cancel_event": threading.Event(),
+        }
+        second_response = server._resolve_tool_response(
+            second_call, wait_timeout=0.01
+        )
+
+        assert first_response["error"]["message"] == "Tool execution timed out"
+        assert second_response["result"]["content"][0]["text"] == "second"
+
+    def test_flush_pending_expires_stalled_call(self):
+        """_flush_pending deve expirar tool call que nunca conclui."""
+        release = threading.Event()
         executor = _make_executor()
+        executor.config.mcp_tool_timeout_seconds = 1.0
 
-        results = [
-            ToolResult(ok=True, tool_name="read_file", content="first"),
-            ToolResult(ok=True, tool_name="read_file", content="second"),
-        ]
-        executor.execute.side_effect = lambda *a, **kw: results.pop(0)
+        def _blocking_execute(call, progress=None):
+            release.wait(10)
+            return ToolResult(ok=True, tool_name="read_file", content="late")
 
+        executor.execute.side_effect = _blocking_execute
         server = _make_server(executor)
         out = io.StringIO()
 
-        server._handle_tools_call(1, {"name": "read_file", "arguments": {}}, out=out)
+        try:
+            server._handle_tools_call(11, {"name": "read_file", "arguments": {}}, out=out)
+            with server._pending_lock:
+                call = next(c for c in server._pending_calls if c["msg_id"] == 11)
+
+            server._flush_pending(out)
+            assert out.getvalue() == ""  # ainda dentro do deadline
+
+            with server._pending_lock:
+                call["deadline_at"] = time.perf_counter() - 0.01
+            server._flush_pending(out)
+
+            responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+            assert len(responses) == 1
+            assert responses[0]["id"] == 11
+            assert responses[0]["error"]["message"] == "Tool execution timed out"
+            assert call["cancel_event"].is_set()
+            with server._pending_lock:
+                assert all(c["msg_id"] != 11 for c in server._pending_calls)
+            assert 11 not in server._cancel_events
+
+            # Não reemite a resposta em flushes posteriores.
+            server._flush_pending(out)
+            responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+            assert len(responses) == 1
+        finally:
+            release.set()
+
+    def test_flush_pending_delivers_completed_call_past_deadline(self):
+        """Chamada concluída após o deadline ainda entrega o resultado real."""
+        executor = _make_executor()
+        executor.config.mcp_tool_timeout_seconds = 1.0
+        executor.execute.side_effect = lambda *a, **kw: ToolResult(
+            ok=True, tool_name="read_file", content="ok-late"
+        )
+        server = _make_server(executor)
+        out = io.StringIO()
+
+        server._handle_tools_call(12, {"name": "read_file", "arguments": {}}, out=out)
         with server._pending_lock:
-            for c in server._pending_calls:
-                if c["msg_id"] == 1:
-                    c["started_at"] = time.perf_counter() - 601
+            call = next(c for c in server._pending_calls if c["msg_id"] == 12)
+        call["future"].result(timeout=5)
+        with server._pending_lock:
+            call["deadline_at"] = time.perf_counter() - 0.01
 
-        server._handle_tools_call(2, {"name": "read_file", "arguments": {}}, out=out)
-
-        time.sleep(0.1)
         server._flush_pending(out)
 
-        raw = out.getvalue()
-        responses = [json.loads(l) for l in raw.splitlines() if l.strip()]
-        assert len(responses) == 2
-        has_timeout = any(
-            "error" in r and "timed out" in r["error"]["message"].lower()
-            for r in responses
-        )
-        has_ok = any(
-            "result" in r and r.get("result", {}).get("content", [{}])[0].get("text") == "second"
-            for r in responses
-        )
-        assert has_timeout
-        assert has_ok
+        responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+        assert len(responses) == 1
+        assert responses[0]["result"]["isError"] is False
+        assert responses[0]["result"]["content"][0]["text"] == "ok-late"
+        assert not call["cancel_event"].is_set()
+
+    def test_drain_all_pending_expires_stalled_call(self):
+        """_drain_all_pending não bloqueia indefinidamente em tool travada."""
+        release = threading.Event()
+        executor = _make_executor()
+        executor.config.mcp_tool_timeout_seconds = 1.0
+
+        def _blocking_execute(call, progress=None):
+            release.wait(10)
+            return ToolResult(ok=True, tool_name="read_file", content="late")
+
+        executor.execute.side_effect = _blocking_execute
+        server = _make_server(executor)
+        out = io.StringIO()
+
+        try:
+            server._handle_tools_call(13, {"name": "read_file", "arguments": {}}, out=out)
+            with server._pending_lock:
+                call = next(c for c in server._pending_calls if c["msg_id"] == 13)
+                call["deadline_at"] = time.perf_counter() + 0.2
+
+            started = time.perf_counter()
+            server._drain_all_pending(out)
+            elapsed = time.perf_counter() - started
+
+            assert elapsed < 3
+            responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+            assert len(responses) == 1
+            assert responses[0]["error"]["message"] == "Tool execution timed out"
+            assert call["cancel_event"].is_set()
+            with server._pending_lock:
+                assert server._pending_calls == []
+        finally:
+            release.set()
+
+    def test_serve_expires_stalled_call_before_returning(self):
+        """Fluxo real de serve(): tool travada expira e o cliente recebe erro."""
+        release = threading.Event()
+        executor = _make_executor()
+        executor.config.mcp_tool_timeout_seconds = 1.0
+
+        def _blocking_execute(call, progress=None):
+            release.wait(10)
+            return ToolResult(ok=True, tool_name="read_file", content="late")
+
+        executor.execute.side_effect = _blocking_execute
+        server = _make_server(executor)
+
+        try:
+            started = time.perf_counter()
+            responses = _exchange(server, {
+                "jsonrpc": "2.0", "id": 14, "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {}},
+            })
+            elapsed = time.perf_counter() - started
+
+            assert elapsed < 5
+            assert len(responses) == 1
+            assert responses[0]["id"] == 14
+            assert responses[0]["error"]["message"] == "Tool execution timed out"
+            with server._pending_lock:
+                assert server._pending_calls == []
+        finally:
+            release.set()
 
 
 class TestHighThroughput:
