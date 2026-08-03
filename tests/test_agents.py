@@ -29,6 +29,18 @@ from quimera.profiles.spy_utils import format_command_output_preview
 from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.evidence import EvidenceStore
 from quimera.ui.base import RendererBase
+from quimera.runtime.approval import AutoApprovalHandler
+from quimera.runtime.config import ToolRuntimeConfig
+from quimera.runtime.executor import ToolExecutor
+
+
+def _build_tool_executor(workspace_root):
+    """Constrói um ToolExecutor real e auto-aprovado para os testes de fork."""
+    config = ToolRuntimeConfig(
+        workspace_root=Path(workspace_root),
+        require_approval_for_mutations=False,
+    )
+    return ToolExecutor(config, AutoApprovalHandler())
 
 
 @pytest.fixture
@@ -477,7 +489,7 @@ def test_agent_client_fork_for_concurrent_run_isolates_process_state(renderer):
         working_dir="/workspace",
         session_id="session-test",
     )
-    tool_executor = object()
+    tool_executor = _build_tool_executor(client.working_dir)
     callback = object()
     client.tool_executor = tool_executor
     client.tool_event_callback = callback
@@ -492,7 +504,7 @@ def test_agent_client_fork_for_concurrent_run_isolates_process_state(renderer):
     assert forked.metrics_file == client.metrics_file
     assert forked.idle_timeout == client.idle_timeout
     assert forked.working_dir == client.working_dir
-    assert forked.tool_executor is tool_executor
+    assert forked.tool_executor is not tool_executor
     assert forked.tool_event_callback is callback
     assert forked.execution_mode == "sandbox"
     assert forked._cancel_event is client._cancel_event

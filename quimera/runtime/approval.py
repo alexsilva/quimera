@@ -144,6 +144,37 @@ class ConsoleApprovalHandler(ApprovalHandler):
         if callable(broker_setter):
             broker_setter(suspend_spinner_fn, resume_spinner_fn)
 
+    @property
+    def input_broker(self):
+        """InputBroker central que serializa aprovações entre execuções."""
+        return self._input_broker
+
+    def fork_for_concurrent_run(self) -> "ConsoleApprovalHandler":
+        """Cria um handler isolado para uma execução concorrente.
+
+        As dependências injetadas (renderer, input, suspend/resume, gate) são
+        reaproveitadas porque descrevem o terminal único da sessão. O estado
+        mutável por execução — spinner por thread, cancel_event e callback de
+        approve-all — nasce limpo, evitando que o fim de um fork desligue o
+        spinner ou o cancelamento de outra execução em curso.
+
+        O ``InputBroker`` e o lock interativo são compartilhados de propósito:
+        são os pontos de serialização do terminal. A atribuição é direta (e não
+        via ``set_input_broker``) para não empurrar callbacks de spinner vazios
+        para o broker enquanto outra execução ainda depende deles.
+        """
+        forked = ConsoleApprovalHandler(
+            input_fn=self._input_fn,
+            renderer=self._renderer,
+            suspend_fn=self._suspend_fn,
+            resume_fn=self._resume_fn,
+            cancel_poll_interval=self._cancel_poll_interval,
+            input_gate=self._input_gate,
+        )
+        forked._input_broker = self._input_broker
+        forked._interactive_lock = self._interactive_lock
+        return forked
+
     def set_approve_all_callback(self, callback):
         """Define callback chamado quando o usuário digita 'a' (approve all).
 
@@ -159,6 +190,10 @@ class ConsoleApprovalHandler(ApprovalHandler):
     def set_input_broker(self, broker) -> None:
         """Conecta ao InputBroker centralizado para serializar aprovações."""
         self._input_broker = broker
+        # Sem callbacks próprios não há o que propagar: sobrescrever com None
+        # desligaria o spinner de uma execução concorrente que já os registrou.
+        if self._suspend_spinner_fn_default is None and self._resume_spinner_fn_default is None:
+            return
         broker_setter = getattr(broker, "set_spinner_callbacks", None)
         if callable(broker_setter):
             broker_setter(
@@ -726,6 +761,25 @@ class ApprovalManager(ApprovalHandler):
             setter(lambda: self._pre_handler.set_approve_all(True))
 
         self._broker = ApprovalBroker(config, self._pre_handler)
+
+    def fork_for_concurrent_run(self) -> "ApprovalManager":
+        """Cria um manager isolado para uma execução concorrente.
+
+        O pipeline local (``PreApprovalHandler`` + ``ApprovalBroker``) é
+        reconstruído para que approve-all, escopos e guardas de execução de um
+        fork não vazem para o chat. O handler de console é forkado quando sabe
+        se forkar; handlers sem estado mutável (ex.: ``AutoApprovalHandler``)
+        são reaproveitados como estão.
+        """
+        base_handler = self._console_handler
+        fork_handler = _static_callable_attr(base_handler, "fork_for_concurrent_run")
+        forked_handler = fork_handler() if fork_handler is not None else base_handler
+        return ApprovalManager(
+            self.config,
+            base_handler=forked_handler,
+            renderer=self._renderer,
+            input_broker=getattr(base_handler, "input_broker", None),
+        )
 
     # ── Handler mode (interface ApprovalHandler) ────────────────────
 

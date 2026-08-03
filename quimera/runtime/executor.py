@@ -1,7 +1,8 @@
 """Componentes de `quimera.runtime.executor`."""
 from __future__ import annotations
 
-from typing import Callable
+from dataclasses import dataclass
+from typing import Callable, ClassVar
 
 from .config import ToolRuntimeConfig
 from .models import ToolCall, ToolResult
@@ -21,6 +22,51 @@ from .tools import todo as todo_tools
 from .tools import web as web_tools
 from .tools import browser as browser_tools
 from .approval import ApprovalHandler, ApprovalManager
+
+
+@dataclass
+class ToolExecutorWiring:
+    """Guarda as injeções aplicadas a um ToolExecutor para replay em forks.
+
+    Cada campo corresponde a um ponto de injeção nomeado e público do executor.
+    Registrar as dependências explicitamente permite reconstruir a fiação de um
+    executor isolado sem copiar estado mutável interno (registry, tools,
+    callbacks de spinner, escopos de aprovação), que é justamente o que torna o
+    compartilhamento entre execuções concorrentes inseguro.
+    """
+
+    _SETTERS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("delegate_fn", "set_delegate_fn"),
+        ("background_delegate_fn", "set_background_delegate_fn"),
+        ("task_create_fn", "set_task_create_fn"),
+        ("active_agents_provider", "set_active_agents_provider"),
+        ("orchestrator_provider", "set_orchestrator_provider"),
+        ("cancel_checker", "set_cancel_checker"),
+        ("agent_cleanup_callback", "set_agent_cleanup_callback"),
+        ("ask_user_fn", "set_ask_user_fn"),
+        ("update_state_fn", "set_update_state_fn"),
+        ("tool_preview_callback", "set_tool_preview_callback"),
+        ("tool_progress_callback", "set_tool_progress_callback"),
+    )
+
+    delegate_fn: Callable | None = None
+    background_delegate_fn: Callable | None = None
+    task_create_fn: Callable | None = None
+    active_agents_provider: Callable | None = None
+    orchestrator_provider: Callable | None = None
+    cancel_checker: Callable | None = None
+    agent_cleanup_callback: Callable | None = None
+    ask_user_fn: Callable | None = None
+    update_state_fn: Callable | None = None
+    tool_preview_callback: Callable | None = None
+    tool_progress_callback: Callable | None = None
+
+    def apply_to(self, executor: "ToolExecutor") -> None:
+        """Reaplica as injeções registradas em outro executor."""
+        for attribute, setter_name in self._SETTERS:
+            value = getattr(self, attribute)
+            if value is not None:
+                getattr(executor, setter_name)(value)
 
 
 class ToolExecutor:
@@ -49,6 +95,7 @@ class ToolExecutor:
         self.approval_governance = self.approval_manager.governance
         self.registry = registry or ToolRegistry()
         self.policy = policy or ToolPolicy(config)
+        self._wiring = ToolExecutorWiring()
         self._tool_preview_callback = None
         self._tool_progress_callback = None
         self._delegate_tools = None
@@ -71,6 +118,7 @@ class ToolExecutor:
         """Registra um callback para reporte de progresso durante a execução de tools.
         Assinatura esperada: fn(message: str) -> None
         """
+        self._wiring.tool_progress_callback = fn
         self._tool_progress_callback = fn
         self._delegate_tools.set_progress_callback(fn)
 
@@ -89,6 +137,30 @@ class ToolExecutor:
         self._state_tools = state_tools.register(self.registry, self.policy, self.config)
         git.register(self.registry, self.policy, self.config)
         mcp_clients_tools.register(self.registry, self.policy, self.config)
+
+    def fork_for_concurrent_run(self) -> "ToolExecutor":
+        """Cria um executor isolado para uma execução concorrente.
+
+        ``ToolExecutor`` não é reentrante: ``execute()`` reconfigura o callback
+        de progresso das tools, ``set_spinner_callbacks`` e
+        ``set_approval_cancel_event`` são reescritos a cada chamada de API e o
+        ``PreApprovalHandler`` guarda approve-all por ciclo. Compartilhar a
+        mesma instância entre execuções paralelas faz o término de uma desligar
+        aprovação e spinner das outras.
+
+        O fork reconstrói registry, policy e tools do zero (sem cópia rasa de
+        estado mutável) e reaplica apenas as injeções nomeadas guardadas em
+        ``ToolExecutorWiring``, preservando delegate, cancelamento, ask_user e
+        demais integrações. ``blocked_tools`` é copiado por valor para manter o
+        modo de execução vigente no momento do fork.
+        """
+        forked = ToolExecutor(
+            config=self.config,
+            approval_handler=self.approval_manager.fork_for_concurrent_run(),
+        )
+        forked.policy.blocked_tools = list(self.policy.blocked_tools)
+        self._wiring.apply_to(forked)
+        return forked
 
     @property
     def approval_handler(self):
@@ -151,6 +223,7 @@ class ToolExecutor:
         """Registra um callback chamado antes de executar tools que NÃO passam por approval.
         Assinatura esperada: fn(tool_name: str, arguments: dict) -> None
         """
+        self._wiring.tool_preview_callback = fn
         self._tool_preview_callback = fn
 
     def set_delegate_fn(self, fn) -> None:
@@ -158,10 +231,12 @@ class ToolExecutor:
 
         Assinatura esperada: fn(agent_name: str, **options) -> str | None
         """
+        self._wiring.delegate_fn = fn
         self._delegate_tools.set_delegate_fn(fn)
 
     def set_task_create_fn(self, fn) -> None:
         """Injeta o serviço de criação usado pela tool tasks."""
+        self._wiring.task_create_fn = fn
         self._task_tools.set_create_task_fn(fn)
 
     def is_tasks_available(self) -> bool:
@@ -174,18 +249,22 @@ class ToolExecutor:
         Deve usar dispatch services com AgentClient próprio para isolar
         cancelamentos do fluxo do chat das execuções assíncronas.
         """
+        self._wiring.background_delegate_fn = fn
         self._delegate_tools.set_background_delegate_fn(fn)
 
     def set_active_agents_provider(self, fn) -> None:
         """Injeta provider que retorna agentes ativos no momento da delegação."""
+        self._wiring.active_agents_provider = fn
         self._delegate_tools.set_active_agents_provider(fn)
 
     def set_orchestrator_provider(self, fn) -> None:
         """Injeta provider que retorna o agente orquestrador ativo (ou None)."""
+        self._wiring.orchestrator_provider = fn
         self._delegate_tools.set_orchestrator_provider(fn)
 
     def set_cancel_checker(self, fn) -> None:
         """Injeta checker de cancelamento para tools longas como delegate."""
+        self._wiring.cancel_checker = fn
         self._delegate_tools.set_cancel_checker(fn)
 
     def set_agent_cleanup_callback(self, fn) -> None:
@@ -194,6 +273,7 @@ class ToolExecutor:
         Assinatura esperada: fn(agent_name: str) -> None
         Chamado após cada step de delegate para limpar streams transitórios.
         """
+        self._wiring.agent_cleanup_callback = fn
         self._delegate_tools.set_cleanup_callback(fn)
 
     def is_delegate_available(self) -> bool:
@@ -205,6 +285,7 @@ class ToolExecutor:
 
         Assinatura esperada: fn(question: str, options: list[str]) -> (index: int, value: str)
         """
+        self._wiring.ask_user_fn = fn
         self._interaction_tools.set_ask_user_fn(fn)
 
     def is_ask_user_available(self) -> bool:
@@ -216,6 +297,7 @@ class ToolExecutor:
 
         Assinatura esperada: fn(payload: dict) -> bool
         """
+        self._wiring.update_state_fn = fn
         self._state_tools.set_update_state_fn(fn)
 
     def is_update_state_available(self) -> bool:

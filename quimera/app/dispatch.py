@@ -430,6 +430,11 @@ class AppDispatchServices:
             return None
 
         forked_client = agent_client.fork_for_concurrent_run()
+        if forked_client is None:
+            # O client recusou o fork (ex.: ToolExecutor que não sabe se
+            # isolar). Serializar no primário é preferível a compartilhar
+            # estado mutável entre execuções concorrentes.
+            return None
         return AppDispatchServices.from_dependencies(
             replace(
                 self._dependencies,

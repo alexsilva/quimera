@@ -265,23 +265,48 @@ class AgentClient:
         self._cancel_event = cancel_event
         self._esc_monitor = EscMonitor(self._cancel_event)
 
-    def fork_for_concurrent_run(self) -> "AgentClient":
+    def _fork_tool_executor(self):
+        """Cria o ToolExecutor isolado do fork, ou None se não for possível.
+
+        Compartilhar o executor do chat com uma execução concorrente é inseguro:
+        cancelamento de approval, spinner e callbacks de tool são reescritos por
+        execução. Quando o executor injetado não sabe se isolar, devolvemos None
+        em vez de reintroduzir o compartilhamento — o chamador então serializa
+        no client primário, que continua correto.
+        """
+        tool_executor = self.tool_executor
+        if tool_executor is None:
+            return None
+        fork_executor = getattr(tool_executor, "fork_for_concurrent_run", None)
+        if not callable(fork_executor):
+            return None
+        return fork_executor()
+
+    def fork_for_concurrent_run(self) -> "AgentClient | None":
         """Cria um client isolado para uma execução concorrente.
 
         ``AgentClient.run`` deliberadamente não é reentrante porque mantém estado
         mutável por processo (``_current_proc``, ``_agent_running``, warm pool e
         drivers de API). O fork preserva a configuração operacional do client do
-        chat, mas recebe estado de execução próprio. O evento de cancelamento é
-        compartilhado para que Ctrl+C continue cancelando todas as execuções da
-        rodada, inclusive as que usam clients isolados.
+        chat, mas recebe estado de execução próprio — inclusive um
+        ``ToolExecutor`` isolado. O evento de cancelamento é compartilhado para
+        que Ctrl+C continue cancelando todas as execuções da rodada, inclusive as
+        que usam clients isolados.
+
+        Retorna ``None`` quando há um ``tool_executor`` injetado que não sabe se
+        isolar: sem executor próprio o fork não é seguro, e o chamador deve
+        serializar no client primário.
         """
+        forked_tool_executor = self._fork_tool_executor()
+        if self.tool_executor is not None and forked_tool_executor is None:
+            return None
         forked = AgentClient(
             self.renderer,
             metrics_file=self.metrics_file,
             idle_timeout=self.idle_timeout,
             visibility=self.visibility,
             working_dir=self.working_dir,
-            tool_executor=self.tool_executor,
+            tool_executor=forked_tool_executor,
             error_reporter=self.error_reporter,
             muted_reporter=self.muted_reporter,
             session_id=self.session_id,
