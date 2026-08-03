@@ -31,6 +31,7 @@ from .prompt_adapter import (
     _build_tool_budget_prompt,
     _build_tool_system_prompt,
 )
+from ..errors import ToolValidationError
 from ..models import ToolCall, ToolResult
 
 MAX_TOOL_HOPS = DEFAULT_MAX_TOOL_HOPS
@@ -220,11 +221,49 @@ def _sanitize_assistant_text(
 
 
 def _invalid_tool_signature(result: ToolResult) -> tuple[str, str, str]:
-    """Gera assinatura estável para detectar repetição do mesmo erro de policy."""
+    """Gera assinatura estavel para detectar repeticao do mesmo erro invalido."""
     error_text = re.sub(r"\s+", " ", str(result.error or "").strip().lower())
     if len(error_text) > 256:
         error_text = error_text[:256]
     return result.error_type, result.tool_name, error_text
+
+
+def _parse_tool_arguments(
+    tool_name: str,
+    raw_arguments,
+) -> tuple[dict, ToolValidationError | None]:
+    """Converte argumentos OpenAI sem mascarar JSON invalido como objeto vazio."""
+    if raw_arguments in (None, ""):
+        return {}, None
+    if isinstance(raw_arguments, dict):
+        return raw_arguments, None
+    try:
+        arguments = json.loads(raw_arguments)
+    except (json.JSONDecodeError, TypeError):
+        _logger.warning(
+            "OpenAICompatDriver: falha ao parsear argumentos da tool '%s': %r",
+            tool_name,
+            raw_arguments,
+        )
+        return {}, ToolValidationError(
+            f"Argumentos JSON invalidos para a ferramenta '{tool_name}'.",
+            field="arguments",
+            hint="Envie os argumentos como um objeto JSON valido e tente novamente.",
+        )
+    if not isinstance(arguments, dict):
+        return {}, ToolValidationError(
+            f"Argumentos da ferramenta '{tool_name}' devem ser um objeto JSON.",
+            field="arguments",
+            hint="Envie os argumentos como um objeto JSON valido e tente novamente.",
+        )
+    return arguments, None
+
+
+def _tool_arguments_message(tc: dict) -> str:
+    """Preserva os argumentos emitidos pelo modelo no turno assistant."""
+    if tc.get("argument_error") is not None:
+        return str(tc.get("raw_arguments") or "")
+    return json.dumps(tc["arguments"], ensure_ascii=False)
 
 
 def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
@@ -495,7 +534,7 @@ class OpenAICompatDriver:
                                 "type": "function",
                                 "function": {
                                     "name": tc["name"],
-                                    "arguments": json.dumps(tc["arguments"], ensure_ascii=False),
+                                    "arguments": _tool_arguments_message(tc),
                                 },
                             }
                             for tc in tool_calls
@@ -504,20 +543,31 @@ class OpenAICompatDriver:
                     messages.append(assistant_msg)
 
                     # Executa cada ferramenta e adiciona os resultados
+                    abort_invalid_loop = False
+                    saw_invalid_result = False
                     for tc in tool_calls:
                         if cancel_event is not None and cancel_event.is_set():
                             return None
-                        if on_tool_call is not None:
-                            on_tool_call(tc["name"], tc["arguments"])
-                        if cancel_event is not None and cancel_event.is_set():
-                            return None
-                        result = self._execute_tool(
-                            tc,
-                            tool_executor,
-                            agent_name=agent_name,
-                            parent_agent=parent_agent,
-                            progress_callback=progress_callback,
-                        )
+                        argument_error = tc.get("argument_error")
+                        if argument_error is not None:
+                            result = ToolResult(
+                                ok=False,
+                                tool_name=tc["name"],
+                                error=argument_error,
+                                data={"tool_call_id": tc["id"]},
+                            )
+                        else:
+                            if on_tool_call is not None:
+                                on_tool_call(tc["name"], tc["arguments"])
+                            if cancel_event is not None and cancel_event.is_set():
+                                return None
+                            result = self._execute_tool(
+                                tc,
+                                tool_executor,
+                                agent_name=agent_name,
+                                parent_agent=parent_agent,
+                                progress_callback=progress_callback,
+                            )
                         if cancel_event is not None and cancel_event.is_set():
                             return None
                         _logger.info(
@@ -535,6 +585,7 @@ class OpenAICompatDriver:
                             ),
                         })
                         if self._is_invalid_tool_result(result):
+                            saw_invalid_result = True
                             invalid_signature = _invalid_tool_signature(result)
                             if last_invalid_signature == invalid_signature:
                                 consecutive_invalid_signature_count += 1
@@ -543,19 +594,21 @@ class OpenAICompatDriver:
                                 consecutive_invalid_signature_count = 1
                             if consecutive_invalid_signature_count >= max_consecutive_invalid_signatures:
                                 _logger.warning(
-                                    "OpenAICompatDriver: repeated invalid policy error_type=%s tool=%s hop=%d count=%d/%d",
+                                    "OpenAICompatDriver: repeated invalid tool error_type=%s tool=%s hop=%d count=%d/%d",
                                     result.error_type,
                                     tc["name"],
                                     hop,
                                     consecutive_invalid_signature_count,
                                     max_consecutive_invalid_signatures,
                                 )
-                                if on_tool_abort is not None:
-                                    on_tool_abort("invalid_tool_loop")
-                                return "Falha: loop de ferramenta inválida detectado."
-                        else:
-                            last_invalid_signature = None
-                            consecutive_invalid_signature_count = 0
+                                abort_invalid_loop = True
+                    if not saw_invalid_result:
+                        last_invalid_signature = None
+                        consecutive_invalid_signature_count = 0
+                    if abort_invalid_loop:
+                        if on_tool_abort is not None:
+                            on_tool_abort("invalid_tool_loop")
+                        return "Falha: loop de ferramenta inválida detectado."
                     messages = _prune_tool_loop_messages(messages)
 
                 return None
@@ -568,7 +621,7 @@ class OpenAICompatDriver:
 
     def _is_invalid_tool_result(self, result: ToolResult) -> bool:
         """Indica se o resultado representa uso de ferramenta fora do contrato conhecido."""
-        return (not result.ok) and result.error_type == "policy"
+        return (not result.ok) and result.error_type in {"policy", "validation"}
 
     def _chat(self, messages: list[dict], tools: list[dict], cancel_event=None, on_text_chunk=None) -> tuple[str, list[dict]]:
         """Despacha para o modo correto conforme presença de ferramentas.
@@ -630,15 +683,18 @@ class OpenAICompatDriver:
         tool_calls: list[dict] = []
         if choice.message.tool_calls:
             for tc in choice.message.tool_calls:
-                try:
-                    arguments = json.loads(tc.function.arguments) if tc.function.arguments else {}
-                except json.JSONDecodeError:
-                    _logger.warning(
-                        "OpenAICompatDriver: falha ao parsear argumentos da tool '%s': %r",
-                        tc.function.name, tc.function.arguments,
-                    )
-                    arguments = {}
-                tool_calls.append({"id": tc.id, "name": tc.function.name, "arguments": arguments})
+                raw_arguments = tc.function.arguments
+                arguments, argument_error = _parse_tool_arguments(
+                    tc.function.name,
+                    raw_arguments,
+                )
+                tool_calls.append({
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": arguments,
+                    "raw_arguments": raw_arguments,
+                    "argument_error": argument_error,
+                })
 
 
         return _sanitize_assistant_text(text), tool_calls

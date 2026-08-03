@@ -33,7 +33,7 @@ from quimera.runtime.drivers.repl import (
     _resolve_profile_driver,
 )
 from quimera.runtime.drivers.tool_schemas import TOOL_SCHEMAS, resolve_tool_schemas
-from quimera.runtime.errors import ToolPolicyViolationError
+from quimera.runtime.errors import ToolPolicyViolationError, ToolValidationError
 from quimera.runtime.models import ToolCall, ToolResult
 from quimera.profiles.base import OpenAIConnection
 from quimera.prompt_templates import PromptText
@@ -517,8 +517,8 @@ def test_chat_with_tools_returns_structured_tool_calls():
     assert tool_calls[0]["arguments"] == {"path": "app.py"}
 
 
-def test_chat_with_tools_invalid_json_returns_empty_dict():
-    """Verifica que Test chat with tools invalid json returns empty dict."""
+def test_chat_with_tools_invalid_json_records_validation_error():
+    """JSON invalido permanece marcado para impedir execucao com argumentos vazios."""
     driver, mock_client = _make_driver()
     tc = _make_tool_call("x", "run_shell", "NOT_JSON")
     mock_client.chat.completions.create.return_value = _make_non_streaming_response(
@@ -527,6 +527,8 @@ def test_chat_with_tools_invalid_json_returns_empty_dict():
 
     _, tool_calls = driver._chat([], tools=TOOL_SCHEMAS)
     assert tool_calls[0]["arguments"] == {}
+    assert tool_calls[0]["raw_arguments"] == "NOT_JSON"
+    assert isinstance(tool_calls[0]["argument_error"], ToolValidationError)
 
 
 def test_chat_with_tools_no_tool_calls_in_response():
@@ -766,6 +768,108 @@ def test_run_tool_loop_sends_tool_result_message():
     payload = json.loads(tool_result_msg["content"])
     assert payload["ok"] is True
     assert payload["content"] == "file.py"
+
+
+def test_run_invalid_json_returns_tool_error_and_allows_model_correction():
+    """Erro de JSON retorna ao modelo sem executar a tool e permite nova tentativa."""
+    driver, mock_client = _make_driver()
+    invalid_call = _make_tool_call("call_invalid", "read_file", '{"path":')
+    corrected_call = _make_tool_call("call_corrected", "read_file", '{"path":"app.py"}')
+    mock_client.chat.completions.create.side_effect = [
+        _make_non_streaming_response(content="", tool_calls=[invalid_call]),
+        _make_non_streaming_response(content="", tool_calls=[corrected_call]),
+        _make_non_streaming_response(content="corrigido", tool_calls=None),
+    ]
+
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(
+        db_path="/tmp/tasks.db",
+        workspace_root="/tmp/workspace",
+    )
+    mock_executor.registry.names.return_value = [
+        schema["function"]["name"] for schema in TOOL_SCHEMAS
+    ]
+    mock_executor.execute.return_value = ToolResult(
+        ok=True,
+        tool_name="read_file",
+        content="conteudo",
+    )
+    observed_results = []
+
+    result = driver.run(
+        _prompt("leia app.py"),
+        tool_executor=mock_executor,
+        on_tool_result=observed_results.append,
+    )
+
+    assert result == "corrigido"
+    mock_executor.execute.assert_called_once()
+    executed_call = mock_executor.execute.call_args.args[0]
+    assert executed_call.call_id == "call_corrected"
+    assert executed_call.arguments == {"path": "app.py"}
+    assert [item.error_type for item in observed_results] == ["validation", "none"]
+    assert observed_results[0].data == {"tool_call_id": "call_invalid"}
+
+    correction_messages = mock_client.chat.completions.create.call_args_list[1].kwargs["messages"]
+    invalid_assistant = next(
+        message
+        for message in correction_messages
+        if message.get("role") == "assistant" and message.get("tool_calls")
+    )
+    assert invalid_assistant["tool_calls"][0]["function"]["arguments"] == '{"path":'
+    invalid_result = next(
+        message
+        for message in correction_messages
+        if message.get("tool_call_id") == "call_invalid"
+    )
+    payload = json.loads(invalid_result["content"])
+    assert payload["ok"] is False
+    assert payload["error_type"] == "validation"
+    assert "objeto JSON valido" in payload["hint"]
+
+
+def test_run_invalid_json_preserves_valid_calls_from_same_turn():
+    """Uma call malformada nao impede calls validas do mesmo turno."""
+    driver, mock_client = _make_driver()
+    invalid_call = _make_tool_call("call_bad", "read_file", "NOT_JSON")
+    valid_call = _make_tool_call("call_good", "read_file", '{"path":"ok.py"}')
+    mock_client.chat.completions.create.side_effect = [
+        _make_non_streaming_response(
+            content="",
+            tool_calls=[invalid_call, valid_call],
+        ),
+        _make_non_streaming_response(content="final", tool_calls=None),
+    ]
+
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(
+        db_path="/tmp/tasks.db",
+        workspace_root="/tmp/workspace",
+    )
+    mock_executor.registry.names.return_value = [
+        schema["function"]["name"] for schema in TOOL_SCHEMAS
+    ]
+    mock_executor.execute.return_value = ToolResult(
+        ok=True,
+        tool_name="read_file",
+        content="ok",
+    )
+
+    assert driver.run(_prompt(), tool_executor=mock_executor) == "final"
+    mock_executor.execute.assert_called_once()
+    assert mock_executor.execute.call_args.args[0].call_id == "call_good"
+
+    follow_up_messages = mock_client.chat.completions.create.call_args_list[1].kwargs["messages"]
+    assistant = next(
+        message
+        for message in follow_up_messages
+        if message.get("role") == "assistant" and message.get("tool_calls")
+    )
+    assert [call["id"] for call in assistant["tool_calls"]] == ["call_bad", "call_good"]
+    tool_messages = [message for message in follow_up_messages if message.get("role") == "tool"]
+    assert [message["tool_call_id"] for message in tool_messages] == ["call_bad", "call_good"]
+    assert json.loads(tool_messages[0]["content"])["error_type"] == "validation"
+    assert json.loads(tool_messages[1]["content"])["ok"] is True
 
 
 def test_run_tool_loop_updates_remaining_budget_each_hop():
@@ -1388,6 +1492,47 @@ def test_run_aborts_on_repeated_policy_error_for_all_reliabilities():
         result = driver.run(_prompt(), tool_executor=mock_executor)
         assert result == "Falha: loop de ferramenta inválida detectado."
         assert mock_client.chat.completions.create.call_count == threshold
+
+
+def test_run_aborts_repeated_invalid_json_without_executing_tools():
+    """JSON malformado repetido consome o limite de loop invalido."""
+    from quimera.runtime.tool_hops import get_invalid_tool_loop_threshold
+
+    driver, mock_client = _make_driver()
+    driver.tool_use_reliability = "medium"
+    threshold = get_invalid_tool_loop_threshold("medium")
+    mock_client.chat.completions.create.side_effect = [
+        _make_non_streaming_response(
+            content="",
+            tool_calls=[_make_tool_call(f"bad_{index}", "read_file", '{"path":')],
+        )
+        for index in range(threshold)
+    ]
+
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(
+        db_path="/tmp/tasks.db",
+        workspace_root="/tmp/workspace",
+    )
+    mock_executor.registry.names.return_value = [
+        schema["function"]["name"] for schema in TOOL_SCHEMAS
+    ]
+    observed_results = []
+    aborts = []
+
+    result = driver.run(
+        _prompt(),
+        tool_executor=mock_executor,
+        on_tool_result=observed_results.append,
+        on_tool_abort=aborts.append,
+    )
+
+    assert result == "Falha: loop de ferramenta inválida detectado."
+    mock_executor.execute.assert_not_called()
+    assert len(observed_results) == threshold
+    assert all(item.error_type == "validation" for item in observed_results)
+    assert mock_client.chat.completions.create.call_count == threshold
+    assert aborts == ["invalid_tool_loop"]
 
 
 def test_run_does_not_abort_on_different_policy_error_signatures():
