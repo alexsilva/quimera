@@ -2103,12 +2103,18 @@ def test_call_api_starts_and_stops_esc_monitor(renderer):
             patch.object(client, "_start_esc_monitor") as mock_start, \
             patch.object(client, "_stop_esc_monitor") as mock_stop:
         mock_driver = MagicMock()
-        mock_driver.run.return_value = "ok"
+
+        def run_driver(**_kwargs):
+            assert client._running_agent == "test-agent"
+            return "ok"
+
+        mock_driver.run.side_effect = run_driver
         mock_driver_cls.return_value = mock_driver
 
         result = client._call_api("test-agent", profile, "prompt")
 
         assert result == "ok"
+        assert client._running_agent is None
         mock_start.assert_called_once()
         mock_stop.assert_called_once()
 
@@ -2591,6 +2597,7 @@ def test_call_api_cancel_waits_for_driver_thread_before_releasing_run(renderer):
         api_thread = _threading.Thread(target=call_api)
         api_thread.start()
         assert driver_started.wait(timeout=2)
+        assert client._running_agent == "test-agent"
 
         client._cancel_event.set()
         _threading.Event().wait(0.4)
@@ -2601,6 +2608,7 @@ def test_call_api_cancel_waits_for_driver_thread_before_releasing_run(renderer):
 
     assert not api_thread.is_alive()
     assert result_holder["result"] is None
+    assert client._running_agent is None
     renderer.show_execution_control.assert_called_once()
     event = renderer.show_execution_control.call_args.args[0]
     assert event.status.value == "cancelled"
@@ -2922,6 +2930,7 @@ def test_call_api_stop_monitor_called_on_error(renderer):
         result = client._call_api("test-agent", profile, "prompt")
 
         assert result is None
+        assert client._running_agent is None
         mock_stop.assert_called_once()
         renderer.show_error.assert_called()
 

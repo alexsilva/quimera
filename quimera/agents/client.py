@@ -1154,6 +1154,7 @@ class AgentClient:
         self.rate_limit_detected = False
         self.rate_limit_detected_at = None
         self._agent_running = True
+        self._running_agent = agent
         self._start_esc_monitor()
         status_cm = self.renderer.running_status("", agent=agent) if (
                 show_status and not silent and not quiet) else nullcontext(None)
@@ -1344,6 +1345,7 @@ class AgentClient:
                 if callable(clear_spinner):
                     clear_spinner(None, None)
             self._agent_running = False
+            self._running_agent = None
             self._stop_esc_monitor()
 
     def flush_pending_summary(self) -> None:
