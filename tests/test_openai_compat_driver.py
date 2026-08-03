@@ -12,6 +12,7 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from quimera.evidence import EvidenceStore
+from quimera.runtime.drivers import openai_compat as openai_compat_module
 from quimera.runtime.drivers.openai_compat import (
      _MAX_TOOL_LOOP_MESSAGES,
      _MAX_TOOL_RESULT_CHARS,
@@ -87,6 +88,15 @@ def _prompt(text="prompt"):
 
 def _rendered(text="", kind="chat"):
     return PromptText(text, kind)
+
+
+@pytest.fixture(autouse=True)
+def _clear_backend_semaphore_registry():
+    with openai_compat_module._BACKEND_SEMAPHORE_LOCK:
+        openai_compat_module._BACKEND_SEMAPHORES.clear()
+    yield
+    with openai_compat_module._BACKEND_SEMAPHORE_LOCK:
+        openai_compat_module._BACKEND_SEMAPHORES.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -1822,6 +1832,69 @@ def test_semaphore_is_shared_for_same_backend_even_with_different_limits():
     driver2, _ = _make_driver(model="model-a", base_url="http://localhost:1/v1", max_connections=8)
 
     assert driver1._semaphore is driver2._semaphore
+    assert driver1._semaphore._value == 1
+
+
+def test_semaphore_uses_most_restrictive_limit_independent_of_creation_order():
+    """Criar primeiro com limite alto e depois com baixo ainda deve apertar para o menor."""
+    driver1, _ = _make_driver(model="model-a", base_url="http://localhost:1/v1", max_connections=8)
+    driver2, _ = _make_driver(model="model-a", base_url="http://localhost:1/v1", max_connections=1)
+
+    assert driver1._semaphore is driver2._semaphore
+    assert driver1._semaphore._value == 1
+
+
+def test_semaphore_registry_does_not_store_raw_api_key():
+    """A chave do registro global não deve conter a API key em claro."""
+    driver, _ = _make_driver(
+        model="model-a",
+        base_url="http://localhost:secret/v1",
+        max_connections=2,
+    )
+
+    assert driver._semaphore._value == 2
+    with openai_compat_module._BACKEND_SEMAPHORE_LOCK:
+        [(base_url, key_fingerprint)] = openai_compat_module._BACKEND_SEMAPHORES.keys()
+    assert base_url == "http://localhost:secret/v1"
+    assert key_fingerprint != "ollama"
+    assert len(key_fingerprint) == 64
+
+
+def test_concurrent_registration_uses_most_restrictive_limit():
+    """Registro concorrente do mesmo backend converge para o menor limite."""
+    created = []
+    errors = []
+    lock = threading.Lock()
+    barrier = threading.Barrier(3)
+
+    def _create(limit):
+        try:
+            barrier.wait(timeout=2)
+            driver, _ = _make_driver(
+                model="model-a",
+                base_url="http://localhost:concurrent/v1",
+                max_connections=limit,
+            )
+            with lock:
+                created.append(driver)
+        except Exception as exc:  # pragma: no cover - caminho de falha do teste
+            with lock:
+                errors.append(exc)
+
+    threads = [
+        threading.Thread(target=_create, args=(8,)),
+        threading.Thread(target=_create, args=(1,)),
+    ]
+    for thread in threads:
+        thread.start()
+    barrier.wait(timeout=2)
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert errors == []
+    assert len(created) == 2
+    assert created[0]._semaphore is created[1]._semaphore
+    assert created[0]._semaphore._value == 1
 
 
 def test_semaphore_is_independent_for_different_backend():

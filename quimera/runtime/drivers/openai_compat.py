@@ -7,6 +7,7 @@ A exibição da resposta final segue o pipeline normal do app (show_message).
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import re
 import threading
@@ -84,7 +85,41 @@ _MAX_TOOL_LOOP_MESSAGES = 24
 # Evita estouro de rate-limit quando múltiplos agentes chamam a API em paralelo.
 DEFAULT_MAX_CONNECTIONS = 4
 _BACKEND_SEMAPHORE_LOCK = threading.Lock()
-_BACKEND_SEMAPHORES: dict[tuple[str, str], threading.Semaphore] = {}
+_BACKEND_SEMAPHORES: dict[tuple[str, str], "_BackendSemaphore"] = {}
+
+
+class _BackendSemaphore(threading.Semaphore):
+    """Semáforo compartilhado por backend que só aceita limites mais restritivos."""
+
+    def __init__(self, max_connections: int) -> None:
+        normalized = _normalize_max_connections(max_connections)
+        super().__init__(normalized)
+        self._limit = normalized
+        self._release_debt = 0
+
+    def tighten_limit(self, max_connections: int) -> None:
+        """Aplica o menor limite visto sem liberar capacidade extra."""
+        normalized = _normalize_max_connections(max_connections)
+        with self._cond:
+            if normalized >= self._limit:
+                return
+            active_holders = self._limit - self._value + self._release_debt
+            self._limit = normalized
+            self._release_debt = max(active_holders - normalized, 0)
+            self._value = max(normalized - active_holders, 0)
+            if self._value > 0:
+                self._cond.notify(self._value)
+
+    def release(self, n: int = 1) -> None:
+        if n < 1:
+            raise ValueError("n must be one or more")
+        with self._cond:
+            for _ in range(n):
+                if self._release_debt > 0:
+                    self._release_debt -= 1
+                    continue
+                self._value += 1
+                self._cond.notify()
 
 
 def _normalize_max_connections(max_connections: int) -> int:
@@ -96,9 +131,10 @@ def _normalize_max_connections(max_connections: int) -> int:
 
 
 def _backend_semaphore_key(base_url: str, api_key: str) -> tuple[str, str]:
+    api_key_fingerprint = hashlib.sha256(str(api_key or "").encode("utf-8")).hexdigest()
     return (
         str(base_url or ""),
-        str(api_key or ""),
+        api_key_fingerprint,
     )
 
 
@@ -106,14 +142,16 @@ def _backend_semaphore(
     base_url: str,
     api_key: str,
     max_connections: int,
-) -> threading.Semaphore:
+) -> _BackendSemaphore:
     max_connections = _normalize_max_connections(max_connections)
     key = _backend_semaphore_key(base_url, api_key)
     with _BACKEND_SEMAPHORE_LOCK:
         semaphore = _BACKEND_SEMAPHORES.get(key)
         if semaphore is None:
-            semaphore = threading.Semaphore(max_connections)
+            semaphore = _BackendSemaphore(max_connections)
             _BACKEND_SEMAPHORES[key] = semaphore
+        else:
+            semaphore.tighten_limit(max_connections)
         return semaphore
 
 
