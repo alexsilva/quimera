@@ -707,6 +707,7 @@ class OpenAICompatDriver:
         stream = self._client.chat.completions.create(
             model=self.model,
             messages=messages,
+            **({"extra_body": self.extra_body} if self.extra_body else {}),
             stream=True,
         )
         text = ""

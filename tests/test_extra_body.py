@@ -243,6 +243,31 @@ def test_chat_with_tools_no_extra_body_when_none():
     assert "extra_body" not in call_kwargs
 
 
+def test_chat_streaming_passes_extra_body():
+    """Verifica que extra_body é passado na chamada streaming."""
+    extra = {"thinking": {"type": "disabled"}}
+    driver, mock_client = _make_driver_extra(extra_body=extra)
+    mock_client.chat.completions.create.return_value = []
+
+    driver._chat_streaming([{"role": "user", "content": "x"}])
+
+    call_kwargs = mock_client.chat.completions.create.call_args[1]
+    assert call_kwargs["extra_body"] == extra
+    assert call_kwargs["stream"] is True
+
+
+def test_chat_streaming_omits_extra_body_when_none():
+    """Verifica que streaming não envia extra_body quando não configurado."""
+    driver, mock_client = _make_driver_extra(extra_body=None)
+    mock_client.chat.completions.create.return_value = []
+
+    driver._chat_streaming([{"role": "user", "content": "x"}])
+
+    call_kwargs = mock_client.chat.completions.create.call_args[1]
+    assert "extra_body" not in call_kwargs
+    assert call_kwargs["stream"] is True
+
+
 # ---------------------------------------------------------------------------
 # Testes de _build_connection_from_args com --extra-body
 # ---------------------------------------------------------------------------
