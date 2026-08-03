@@ -2266,6 +2266,91 @@ def test_agent_client_can_invalidate_api_driver_explicitly(renderer):
     assert "outro" in client._api_drivers
 
 
+def test_invalidate_api_driver_closes_removed_driver(renderer):
+    client = AgentClient(renderer)
+    driver = MagicMock()
+    client._api_drivers["openai"] = driver
+    client._api_driver_signatures["openai"] = ("modelo",)
+
+    client.invalidate_api_driver("openai")
+
+    driver.close.assert_called_once_with()
+
+
+def test_agent_client_close_closes_all_cached_api_drivers(renderer):
+    client = AgentClient(renderer)
+    first = MagicMock()
+    second = MagicMock()
+    client._api_drivers.update({"a": first, "b": second})
+    client._api_driver_signatures.update({"a": ("a",), "b": ("b",)})
+
+    client.close()
+
+    first.close.assert_called_once_with()
+    second.close.assert_called_once_with()
+    assert client._api_drivers == {}
+    assert client._api_driver_signatures == {}
+
+
+def test_call_api_rotated_key_recreates_and_closes_cached_driver(renderer, monkeypatch):
+    connection = OpenAIConnection(
+        model="test-model",
+        base_url="https://api.example/v1",
+        api_key_env="QUIMERA_ROTATING_KEY",
+    )
+    profile = SimpleNamespace(
+        driver="openai_compat",
+        supports_tools=False,
+        tool_use_reliability="medium",
+        effective_connection=lambda: connection,
+    )
+    client = AgentClient(renderer)
+    first = MagicMock()
+    first.run.return_value = "first"
+    second = MagicMock()
+    second.run.return_value = "second"
+
+    with patch("quimera.agents.client.OpenAICompatDriver", side_effect=[first, second]) as driver_cls, \
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"):
+        monkeypatch.setenv("QUIMERA_ROTATING_KEY", "key-one")
+        assert client._call_api("openai", profile, "prompt") == "first"
+
+        monkeypatch.setenv("QUIMERA_ROTATING_KEY", "key-two")
+        assert client._call_api("openai", profile, "prompt") == "second"
+
+    assert driver_cls.call_count == 2
+    first.close.assert_called_once_with()
+    assert driver_cls.call_args_list[0].kwargs["api_key"] == "key-one"
+    assert driver_cls.call_args_list[1].kwargs["api_key"] == "key-two"
+
+
+def test_call_api_uses_connection_request_timeout(renderer):
+    connection = OpenAIConnection(
+        model="test-model",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+        request_timeout=777.0,
+    )
+    profile = SimpleNamespace(
+        driver="openai_compat",
+        supports_tools=False,
+        tool_use_reliability="medium",
+        effective_connection=lambda: connection,
+    )
+    client = AgentClient(renderer, idle_timeout=12)
+
+    with patch("quimera.agents.client.OpenAICompatDriver") as driver_cls, \
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"):
+        driver = MagicMock()
+        driver.run.return_value = "ok"
+        driver_cls.return_value = driver
+        assert client._call_api("openai", profile, "prompt") == "ok"
+
+    assert driver_cls.call_args.kwargs["timeout"] == 777.0
+
+
 def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
     """No driver OpenAI, o set_tool_preview_callback deve chamar _show_muted com o ToolPreview."""
     from types import SimpleNamespace

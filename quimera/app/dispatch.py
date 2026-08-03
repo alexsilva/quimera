@@ -13,7 +13,10 @@ from .agent_gateway import AgentGateway, _is_user_cancelled
 from .render_event import RenderEvent
 from .config import logger
 from ..domain.session_state import SessionRuntimeState
-from ..runtime.drivers.openai_compat import FatalAPIError as _FatalAPIError
+from ..runtime.drivers.openai_compat import (
+    APIExecutionError as _APIExecutionError,
+    FatalAPIError as _FatalAPIError,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -560,7 +563,7 @@ class AppDispatchServices:
                 else (lambda: _is_user_cancelled(agent_client))
             ),
             max_retries=max_retries_override,
-            is_fatal_error=lambda exc: isinstance(exc, _FatalAPIError),
+            is_fatal_error=lambda exc: isinstance(exc, (_FatalAPIError, _APIExecutionError)),
         )
 
     def delegate_low_level(

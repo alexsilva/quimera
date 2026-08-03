@@ -15,7 +15,9 @@ import pytest
 from quimera.evidence import EvidenceStore
 from quimera.runtime.drivers import openai_compat as openai_compat_module
 from quimera.runtime.drivers.openai_compat import (
+     APIExecutionError,
      _MAX_TOOL_LOOP_MESSAGES,
+     _MAX_TOOL_LOOP_CHARS,
      _MAX_TOOL_RESULT_CHARS,
      DEFAULT_MAX_CONNECTIONS,
      MAX_TOOL_HOPS_BY_RELIABILITY,
@@ -607,6 +609,48 @@ def test_prune_tool_loop_messages_preserves_invariant_every_tool_call_has_result
             assert tcid in result_ids, f"Assistant tool_call {tcid} has no tool result"
 
 
+def test_prune_tool_loop_messages_caps_aggregate_characters_without_orphans():
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+    ]
+    for index in range(12):
+        call_id = f"call_{index}"
+        messages.extend([
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": "x" * 30_000,
+            },
+        ])
+
+    pruned = _prune_tool_loop_messages(messages)
+
+    serialized_size = sum(
+        len(json.dumps(message, ensure_ascii=False, default=str))
+        for message in pruned
+    )
+    assert serialized_size <= _MAX_TOOL_LOOP_CHARS
+    assert len(pruned) < len(messages)
+    for index, message in enumerate(pruned):
+        if message.get("role") != "tool":
+            continue
+        assistant = pruned[index - 1]
+        assert assistant["role"] == "assistant"
+        assert message["tool_call_id"] in {
+            call["id"] for call in assistant["tool_calls"]
+        }
+
+
 # ---------------------------------------------------------------------------
 # Testes de OpenAICompatDriver.__init__
 # ---------------------------------------------------------------------------
@@ -1194,12 +1238,12 @@ def test_run_tool_loop_prunes_messages_between_hops():
 
 
 def test_run_api_error_returns_none():
-    """Verifica que Test run api error returns none."""
+    """Erro inesperado não é mascarado como resposta ausente."""
     driver, mock_client = _make_driver()
     mock_client.chat.completions.create.side_effect = RuntimeError("connection refused")
 
-    result = driver.run(_prompt(), tool_executor=None)
-    assert result is None
+    with pytest.raises(APIExecutionError, match="connection refused"):
+        driver.run(_prompt(), tool_executor=None)
 
 
 def test_run_rate_limit_raises_transient_error():
@@ -1344,6 +1388,31 @@ def test_run_permission_denied_raises_fatal_error():
     with pytest.raises(FatalAPIError) as exc_info:
         driver.run(_prompt(), tool_executor=None)
     assert exc_info.value.retryable is False
+
+
+def test_run_unexpected_sdk_error_raises_structured_execution_error():
+    driver, mock_client = _make_driver(model="model-x")
+    original = RuntimeError("broken response decoder")
+    mock_client.chat.completions.create.side_effect = original
+
+    with pytest.raises(APIExecutionError) as exc_info:
+        driver.run(_prompt(), tool_executor=None)
+
+    error = exc_info.value
+    assert error.model == "model-x"
+    assert error.hop == 0
+    assert error.operation == "chat_completion"
+    assert error.cause is original
+    assert error.retryable is False
+
+
+def test_driver_close_closes_sdk_client_once():
+    driver, mock_client = _make_driver()
+
+    driver.close()
+    driver.close()
+
+    mock_client.close.assert_called_once_with()
 
 
 def test_driver_repl_probe_backend_success():
@@ -2265,7 +2334,8 @@ def test_concurrent_runs_block_at_max_connections():
 
     def slow_create(*args, **kwargs):
         first_can_finish.wait(timeout=5)
-        # Retorna resposta simples fora do semaphore (já liberado)
+        if kwargs.get("stream") is True:
+            return iter([_make_chunk(content="ok")])
         return _make_non_streaming_response(content="ok", tool_calls=None)
 
     mock_client.chat.completions.create.side_effect = slow_create

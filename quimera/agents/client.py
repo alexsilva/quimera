@@ -1,5 +1,6 @@
 """AgentClient: orquestra chamadas a agentes externos (CLI e API)."""
 import json
+import hashlib
 import logging
 import os
 import queue
@@ -36,6 +37,7 @@ from quimera.agents.text_filters import (
     _is_rate_limit_signal,
 )
 from quimera.runtime.drivers.openai_compat import (
+    APIExecutionError as _APIExecutionError,
     FatalAPIError as _FatalAPIError,
     TransientAPIError as _TransientAPIError,
 )
@@ -956,6 +958,13 @@ class AgentClient:
             extra_body_sig = tuple(sorted(extra_body.items()))
         else:
             extra_body_sig = extra_body
+        api_key_env = getattr(connection, "api_key_env", None)
+        api_key_value = os.environ.get(api_key_env) if api_key_env else "ollama"
+        api_key_fingerprint = (
+            hashlib.sha256(api_key_value.encode("utf-8")).hexdigest()
+            if api_key_value
+            else None
+        )
         return (
             getattr(connection, "model", None),
             getattr(connection, "base_url", None),
@@ -964,17 +973,34 @@ class AgentClient:
             getattr(connection, "supports_native_tools", None),
             getattr(connection, "max_connections", None),
             getattr(connection, "max_model_requests", None),
+            getattr(connection, "request_timeout", 300.0),
+            api_key_fingerprint,
             extra_body_sig,
         )
+
+    @staticmethod
+    def _close_api_driver(driver) -> None:
+        close = getattr(driver, "close", None)
+        if not callable(close):
+            return
+        try:
+            close()
+        except Exception:
+            _logger.exception("falha ao fechar driver OpenAI-compatible")
 
     def invalidate_api_driver(self, agent: str | None = None) -> None:
         """Invalida driver OpenAI-compatible cacheado para um agente ou todos."""
         if agent is None:
+            drivers = list({id(driver): driver for driver in self._api_drivers.values()}.values())
             self._api_drivers.clear()
             self._api_driver_signatures.clear()
+            for driver in drivers:
+                self._close_api_driver(driver)
             return
-        self._api_drivers.pop(agent, None)
+        driver = self._api_drivers.pop(agent, None)
         self._api_driver_signatures.pop(agent, None)
+        if driver is not None:
+            self._close_api_driver(driver)
 
     # ------------------------------------------------------------------
     # call() — ponto de entrada principal
@@ -1170,7 +1196,7 @@ class AgentClient:
                 model=connection.model,
                 base_url=connection.base_url,
                 api_key=api_key,
-                timeout=self.idle_timeout,
+                timeout=getattr(connection, "request_timeout", 300.0),
                 tool_use_reliability=getattr(profile, "tool_use_reliability", "medium"),
                 extra_body=connection.extra_body,
                 max_connections=getattr(connection, "max_connections", 4),
@@ -1369,9 +1395,9 @@ class AgentClient:
                         )
                         self._show_error(f"[erro] falha ao comunicar com {_name}: {error}")
                         return None
-                    if isinstance(error, _FatalAPIError):
+                    if isinstance(error, (_FatalAPIError, _APIExecutionError)):
                         # A camada de dispatch é a única responsável por exibir
-                        # erros fatais, evitando duas mensagens idênticas.
+                        # erros não-retryable, evitando mensagens duplicadas.
                         raise error
                     if _is_rate_limit_signal(str(error)):
                         self.rate_limit_detected = True
@@ -1408,6 +1434,7 @@ class AgentClient:
 
     def close(self) -> None:
         """Encerra o cliente, liberando processos pré-aquecidos pendentes."""
+        self.invalidate_api_driver()
         self._warm_pool.shutdown()
 
     # ------------------------------------------------------------------

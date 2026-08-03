@@ -112,6 +112,10 @@ def test_register_connection_profile_with_connection():
     assert profile.effective_connection() == conn
 
 
+def test_openai_connection_request_timeout_defaults_to_five_minutes():
+    assert OpenAIConnection().request_timeout == 300.0
+
+
 def test_register_connection_profile_invalid_name():
     with pytest.raises(ValueError):
         register_connection_profile("INVALID NAME!")

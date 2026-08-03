@@ -96,6 +96,28 @@ class FatalAPIError(Exception):
         self.retryable = False
 
 
+class APIExecutionError(Exception):
+    """Falha inesperada durante uma operação do driver OpenAI-compatible."""
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        hop: int,
+        operation: str,
+        cause: Exception,
+    ) -> None:
+        super().__init__(
+            f"Erro inesperado no driver OpenAI-compatible "
+            f"(model={model}, hop={hop}, operation={operation}): {cause}"
+        )
+        self.model = model
+        self.hop = hop
+        self.operation = operation
+        self.cause = cause
+        self.retryable = False
+
+
 def _api_retry_after(exc: Exception) -> float | None:
     """Lê o header ``retry-after`` da resposta HTTP quando disponível."""
     headers = getattr(exc, "headers", None)
@@ -171,6 +193,7 @@ _THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
 # Trunca tool results para evitar explosão de memória no array messages.
 _MAX_TOOL_RESULT_CHARS = 32_000
 _MAX_TOOL_LOOP_MESSAGES = 24
+_MAX_TOOL_LOOP_CHARS = 192_000
 
 # Limite padrão de conexões concorrentes ao backend OpenAI-compatible.
 # Evita estouro de rate-limit quando múltiplos agentes chamam a API em paralelo.
@@ -356,6 +379,15 @@ def _tool_arguments_message(tc: dict) -> str:
     return json.dumps(tc["arguments"], ensure_ascii=False)
 
 
+def _message_size(message: dict) -> int:
+    """Estima tamanho serializado de uma mensagem sem depender de tokenizer."""
+    return len(json.dumps(message, ensure_ascii=False, default=str))
+
+
+def _messages_size(messages: list[dict]) -> int:
+    return sum(_message_size(message) for message in messages)
+
+
 def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
     """Limita o histórico do loop de tools preservando system/user e a cauda recente.
 
@@ -364,9 +396,15 @@ def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
     - Every tool_call in an 'assistant' must have a corresponding 'tool' result.
     - System/user messages at the head are always preserved.
     - Total messages never exceed _MAX_TOOL_LOOP_MESSAGES.
+    - The preserved tool-loop tail stays within _MAX_TOOL_LOOP_CHARS when the
+      immutable system/user head itself fits in that budget.
     """
-    if len(messages) <= _MAX_TOOL_LOOP_MESSAGES:
-        return _clean_message_sequence(messages)
+    messages = _clean_message_sequence(messages)
+    if (
+        len(messages) <= _MAX_TOOL_LOOP_MESSAGES
+        and _messages_size(messages) <= _MAX_TOOL_LOOP_CHARS
+    ):
+        return messages
 
     head_end = 0
     for msg in messages:
@@ -378,6 +416,7 @@ def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
         head_end = min(2, len(messages))
     head = messages[:head_end]
     available = max(_MAX_TOOL_LOOP_MESSAGES - len(head), 0)
+    available_chars = max(_MAX_TOOL_LOOP_CHARS - _messages_size(head), 0)
     tail = messages[len(head):]
 
     # Build valid (assistant, tool_results) pairs from tail, enforcing invariants.
@@ -412,24 +451,56 @@ def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
     # Each pair contributes 1 (assistant) + N (tool results) messages.
     kept_pairs: list[tuple[dict, list[dict]]] = []
     used = 0
+    used_chars = 0
     for assistant, tools in reversed(pairs):
         pair_len = 1 + len(tools)
-        if kept_pairs and used + pair_len > available:
+        pair_messages = [assistant, *tools]
+        pair_chars = _messages_size(pair_messages)
+        if kept_pairs and (
+            used + pair_len > available
+            or used_chars + pair_chars > available_chars
+        ):
             break
-        if not kept_pairs and pair_len > available:
-            # Boundary case: truncate the oldest kept pair to fit.
+        if not kept_pairs and (
+            pair_len > available
+            or pair_chars > available_chars
+        ):
+            # Boundary case: truncate the newest pair to the most recent tool
+            # results that fit both message and aggregate character budgets.
             if available >= 2:
-                max_tools = available - 1
-                kept_tools = tools[-max_tools:]
-                kept_ids = {t.get("tool_call_id") for t in kept_tools}
-                matched_calls = [call for call in assistant.get("tool_calls", []) if call.get("id") in kept_ids]
-                if matched_calls:
+                kept_tools: list[dict] = []
+                for tool in reversed(tools):
+                    candidate_tools = [tool, *kept_tools]
+                    kept_ids = {t.get("tool_call_id") for t in candidate_tools}
+                    matched_calls = [
+                        call
+                        for call in assistant.get("tool_calls", [])
+                        if call.get("id") in kept_ids
+                    ]
+                    if not matched_calls:
+                        continue
                     clean_assistant = dict(assistant)
                     clean_assistant["tool_calls"] = matched_calls
+                    candidate_messages = [clean_assistant, *candidate_tools]
+                    if (
+                        len(candidate_messages) > available
+                        or _messages_size(candidate_messages) > available_chars
+                    ):
+                        break
+                    kept_tools = candidate_tools
+                if kept_tools:
+                    kept_ids = {t.get("tool_call_id") for t in kept_tools}
+                    clean_assistant = dict(assistant)
+                    clean_assistant["tool_calls"] = [
+                        call
+                        for call in assistant.get("tool_calls", [])
+                        if call.get("id") in kept_ids
+                    ]
                     kept_pairs.append((clean_assistant, kept_tools))
             break
         kept_pairs.append((assistant, tools))
         used += pair_len
+        used_chars += pair_chars
 
     # Reconstruct tail from kept pairs (oldest first).
     pruned_tail: list[dict] = []
@@ -549,6 +620,8 @@ class OpenAICompatDriver:
             api_key=self._api_key.get_secret_value(),
             timeout=float(timeout) if timeout else 300.0,
         )
+        self._close_lock = threading.Lock()
+        self._closed = False
         self.tool_use_reliability = str(tool_use_reliability or "medium").lower()
         default_request_budget = get_max_model_requests(self.tool_use_reliability)
         try:
@@ -665,7 +738,12 @@ class OpenAICompatDriver:
                         _logger.error("OpenAICompatDriver: API error on hop %d: %s", hop, exc)
                         categorization = _categorize_api_exception(exc)
                         if categorization is None:
-                            return None
+                            raise APIExecutionError(
+                                model=self.model,
+                                hop=hop,
+                                operation="chat_completion",
+                                cause=exc,
+                            ) from exc
                         category, retry_after = categorization
                         if category == "fatal":
                             raise FatalAPIError(
@@ -807,6 +885,16 @@ class OpenAICompatDriver:
                     tool_executor.reset_approval_cycle()
         finally:
             _logger.debug("OpenAICompatDriver: run finished model=%s", self.model)
+
+    def close(self) -> None:
+        """Fecha recursos HTTP do SDK de forma idempotente."""
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        close = getattr(self._client, "close", None)
+        if callable(close):
+            close()
 
     def _is_invalid_tool_result(self, result: ToolResult) -> bool:
         """Indica se o resultado representa uso de ferramenta fora do contrato conhecido."""
