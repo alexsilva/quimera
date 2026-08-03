@@ -334,6 +334,7 @@ class TaskExecutorPool:
         staging_root: Path,
         index: int,
         cancel_event: threading.Event | None = None,
+        cancel_handle=None,
     ):
         """Executa chamada de agente em paralelo com staging isolado por worker."""
         background_dispatch = self._create_background_dispatch_services(
@@ -346,6 +347,7 @@ class TaskExecutorPool:
         )
         if background_dispatch is None:
             raise RuntimeError("dispatch de background indisponível para delegate paralelo")
+        self._register_parallel_cancel_handle(background_dispatch, cancel_handle)
         delegate = background_dispatch.delegate
         try:
             return delegate_for_parallel_with_client(
@@ -356,11 +358,24 @@ class TaskExecutorPool:
                 protocol_mode,
                 staging_root,
                 index,
+                cancel_handle=cancel_handle,
             )
         finally:
             close = getattr(background_dispatch, "close", None)
             if callable(close):
                 close()
+
+    @staticmethod
+    def _register_parallel_cancel_handle(background_dispatch, cancel_handle) -> None:
+        """Vincula timeout do step ao AgentClient de background, quando suportado."""
+        register = getattr(cancel_handle, "register", None)
+        if not callable(register):
+            return
+        get_agent_client = getattr(background_dispatch, "_get_agent_client", None)
+        agent_client = get_agent_client() if callable(get_agent_client) else None
+        cancel = getattr(agent_client, "cancel_active_work", None)
+        if callable(cancel):
+            register(cancel)
 
     # ── Bind methods ───────────────────────────────────────────────────
 
@@ -752,8 +767,10 @@ def delegate_for_parallel_with_client(
     protocol_mode,
     staging_root: Path,
     index: int,
+    cancel_handle=None,
 ):
     """Executa chamada paralela de agente com staging isolado por thread."""
+    del cancel_handle
     set_staging_root(staging_root / str(index))
     try:
         raw = delegate(agent, delegation=delegation, primary=False, protocol_mode=protocol_mode, silent=True, show_output=False)

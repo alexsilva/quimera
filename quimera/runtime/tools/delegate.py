@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import inspect
 import threading
 import time
 import uuid
@@ -26,6 +27,41 @@ logger = logging.getLogger(__name__)
 
 _DELEGATE_TOOL_NAMES = ["delegate", "list_agents"]
 _DELEGATE_ROLES = frozenset({"planner", "executor", "reviewer", "verifier", "synthesizer"})
+_DELEGATE_TIMEOUT_CANCEL_JOIN_SECONDS = 2.0
+
+
+class _DelegateStepCancelHandle:
+    """Handle cooperativo para cancelar um step paralelo em execução."""
+
+    def __init__(self) -> None:
+        self._callbacks: list[Callable[[], None]] = []
+        self._cancelled = False
+        self._lock = threading.Lock()
+
+    def register(self, callback: Callable[[], None]) -> None:
+        """Registra callback de cancelamento, disparando imediatamente se vencido."""
+        should_call = False
+        with self._lock:
+            if self._cancelled:
+                should_call = True
+            else:
+                self._callbacks.append(callback)
+        if should_call:
+            callback()
+
+    def cancel(self) -> None:
+        """Aciona cancelamento uma única vez."""
+        with self._lock:
+            if self._cancelled:
+                return
+            self._cancelled = True
+            callbacks = list(self._callbacks)
+            self._callbacks.clear()
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                logger.warning("delegate cancel callback failed", exc_info=True)
 
 
 class _DelegateFnProto(Protocol):
@@ -46,6 +82,7 @@ class _DelegateFnProto(Protocol):
         max_retries: int = 1,
         from_agent: str | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        cancel_handle: _DelegateStepCancelHandle | None = None,
     ) -> str | None: ...
 
 
@@ -98,6 +135,23 @@ class DelegateTools(ToolBase):
     def set_cancel_checker(self, fn: Callable[[], bool] | None) -> None:
         """Injeta checker de cancelamento do usuário."""
         self._cancel_checker = fn
+
+    @staticmethod
+    def _accepts_keyword(fn: Callable[..., object], keyword: str) -> bool:
+        """Retorna se callable aceita um kwarg específico sem invocar a função."""
+        try:
+            signature = inspect.signature(fn)
+        except (TypeError, ValueError):
+            return False
+        for parameter in signature.parameters.values():
+            if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+                return True
+            if parameter.name == keyword and parameter.kind in {
+                inspect.Parameter.KEYWORD_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            }:
+                return True
+        return False
 
     def is_delegate_available(self) -> bool:
         """Indica se a tool delegate está operável no contexto atual."""
@@ -342,6 +396,7 @@ class DelegateTools(ToolBase):
         normalize_agent_fn: Callable[[str | None], str],
         cleanup_callback: Callable[[str], None] | None = None,
         cancel_checker: Callable[[], bool] | None = None,
+        cancel_handle: _DelegateStepCancelHandle | None = None,
     ) -> tuple[str | None, str | None, str | None]:
         """Executa um único step. Retorna (selected_agent, result_str, error_str)."""
         attempt_targets = [step["target_agent"], *step["fallback_agents"]]
@@ -368,20 +423,25 @@ class DelegateTools(ToolBase):
             if access_list:
                 delegation["access_list"] = list(access_list)
             try:
-                result = delegate_fn(
-                    normalized_target_agent,
-                    delegation=delegation,
-                    delegation_only=True,
-                    protocol_mode="delegation",
-                    primary=False,
-                    silent=False,
-                    show_output=False,
-                    persist_history=True,
-                    history_snapshot=[],
-                    max_retries=3,
-                    from_agent=source_agent,
-                    progress_callback=progress_callback,
-                )
+                delegate_options = {
+                    "delegation": delegation,
+                    "delegation_only": True,
+                    "protocol_mode": "delegation",
+                    "primary": False,
+                    "silent": False,
+                    "show_output": False,
+                    "persist_history": True,
+                    "history_snapshot": [],
+                    "max_retries": 3,
+                    "from_agent": source_agent,
+                    "progress_callback": progress_callback,
+                }
+                if cancel_handle is not None and DelegateTools._accepts_keyword(
+                    delegate_fn,
+                    "cancel_handle",
+                ):
+                    delegate_options["cancel_handle"] = cancel_handle
+                result = delegate_fn(normalized_target_agent, **delegate_options)
             except Exception as dispatch_error:
                 if callable(cancel_checker) and cancel_checker():
                     return None, None, "Execução cancelada pelo usuário"
@@ -539,11 +599,12 @@ class DelegateTools(ToolBase):
         ] * n
         results_lock = threading.Lock()
         timed_out_indexes: set[int] = set()
+        cancel_handles = [_DelegateStepCancelHandle() for _ in steps]
 
         def run_step(idx: int, step: dict) -> None:
             step_result = DelegateTools._execute_single_step(
                 step, delegate_fn, progress_callback, normalize_agent_fn,
-                cleanup_callback, is_cancelled,
+                cleanup_callback, is_cancelled, cancel_handles[idx],
             )
             with results_lock:
                 if idx not in timed_out_indexes:
@@ -572,9 +633,11 @@ class DelegateTools(ToolBase):
                         None,
                         f"Delegação paralela excedeu o limite de {timeout_seconds}s",
                     )
+                timeout_cancelled.set()
+                cancel_handles[index].cancel()
+                thread.join(timeout=_DELEGATE_TIMEOUT_CANCEL_JOIN_SECONDS)
 
         if timed_out_indexes:
-            timeout_cancelled.set()
             if cleanup_callback:
                 for index in timed_out_indexes:
                     targets = (

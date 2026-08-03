@@ -105,9 +105,11 @@ def _make_background_delegate_fn(task_services, dispatch_services):
     # um client compartilhado corromperia cancel_event/_current_proc quando
     # delegações concorrem (delegate paralelo, task runner + delegate).
     def _fn(agent, **opts):
+        cancel_handle = opts.pop("cancel_handle", None)
         bg = task_services._create_background_dispatch_services()
         if bg is None or bg is dispatch_services:
             raise RuntimeError("dispatch de background indisponível para delegate")
+        task_services._executor_pool._register_parallel_cancel_handle(bg, cancel_handle)
         try:
             return bg.delegate(agent, **opts)
         finally:

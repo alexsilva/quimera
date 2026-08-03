@@ -859,6 +859,94 @@ def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_pa
     assert created[1].kwargs["cancel_event"] is second_cancel
 
 
+def test_parallel_call_cancel_handle_reaches_background_agent_client(tmp_path, monkeypatch):
+    """Timeout externo deve cancelar o AgentClient real do dispatch de background."""
+    class AppStub:
+        pass
+
+    class CancelHandle:
+        def __init__(self):
+            self._callbacks = []
+
+        def register(self, callback):
+            self._callbacks.append(callback)
+
+        def cancel(self):
+            for callback in list(self._callbacks):
+                callback()
+
+    class AgentClientStub:
+        def __init__(self):
+            self.cancelled = threading.Event()
+
+        def cancel_active_work(self):
+            self.cancelled.set()
+
+    class BlockingDispatch(DispatchStub):
+        def __init__(self, agent_client):
+            super().__init__(response="late-response")
+            self._agent_client = agent_client
+            self.entered = threading.Event()
+
+        def _get_agent_client(self):
+            return self._agent_client
+
+        def delegate(self, agent_name, **kwargs):
+            self.calls.append((agent_name, kwargs))
+            self.entered.set()
+            assert self._agent_client.cancelled.wait(timeout=4)
+            return self.response
+
+        def close(self):
+            self.closed = True
+
+    app = AppStub()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
+    app.visibility = "summary"
+    app.auto_approve_mutations = False
+    app.parse_response = lambda raw: (raw, None, None, None)
+
+    services = build_task_services(app)
+    background_client = AgentClientStub()
+    dispatch = BlockingDispatch(background_client)
+    monkeypatch.setattr(
+        services,
+        "_create_background_dispatch_services",
+        lambda **kwargs: dispatch,
+    )
+    cancel_handle = CancelHandle()
+    result_holder = {}
+    worker = threading.Thread(
+        target=lambda: result_holder.setdefault(
+            "result",
+            services.delegate_for_parallel(
+                "codex",
+                None,
+                "standard",
+                tmp_path / "staging",
+                0,
+                cancel_handle=cancel_handle,
+            ),
+        )
+    )
+
+    worker.start()
+    assert dispatch.entered.wait(timeout=2)
+    cancel_handle.cancel()
+    worker.join(timeout=3)
+
+    assert worker.is_alive() is False
+    assert background_client.cancelled.is_set()
+    assert result_holder["result"] == ("codex", "late-response")
+    assert getattr(dispatch, "closed", False) is True
+
+
 def test_parallel_calls_fail_when_background_dispatch_is_unavailable(tmp_path, monkeypatch):
     """Delegate paralelo não deve voltar ao delegate principal quando background falha."""
     class AppStub:

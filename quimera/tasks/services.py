@@ -586,6 +586,7 @@ class AppTaskServices:
         staging_root: Path,
         index: int,
         cancel_event: threading.Event | None = None,
+        cancel_handle=None,
     ):
         """Executa chamada de agente em paralelo com staging isolado por worker."""
         background_dispatch = self._create_background_dispatch_services(
@@ -598,6 +599,7 @@ class AppTaskServices:
         )
         if background_dispatch is None:
             raise RuntimeError("dispatch de background indisponível para delegate paralelo")
+        self._executor_pool._register_parallel_cancel_handle(background_dispatch, cancel_handle)
         delegate = background_dispatch.delegate
         try:
             return delegate_for_parallel_with_client(
@@ -717,7 +719,15 @@ class AppTaskServices:
         return self._executor_pool._task_approval_handlers(approval_handler)
 
 
-def delegate_for_parallel(app, agent, delegation, protocol_mode, staging_root: Path, index: int):
+def delegate_for_parallel(
+    app,
+    agent,
+    delegation,
+    protocol_mode,
+    staging_root: Path,
+    index: int,
+    cancel_handle=None,
+):
     """Executa chamada paralela do agente isolando staging por thread."""
     return delegate_for_parallel_with_client(
         app.delegate,
@@ -727,4 +737,5 @@ def delegate_for_parallel(app, agent, delegation, protocol_mode, staging_root: P
         protocol_mode,
         staging_root,
         index,
+        cancel_handle=cancel_handle,
     )

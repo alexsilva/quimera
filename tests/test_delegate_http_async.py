@@ -974,6 +974,59 @@ class TestCallAgentAutoReferencia:
         assert "excedeu o limite" in str(result.error)
         assert "late success" not in result.content
 
+    def test_parallel_delegate_timeout_cancels_blocked_step_and_discards_late_result(
+        self,
+        tmp_path,
+    ):
+        """Timeout cancela a execução real do step bloqueado e ignora retorno tardio."""
+        config = ToolRuntimeConfig(
+            workspace_root=tmp_path,
+            delegate_parallel_timeout_seconds=1,
+        )
+        tools = DelegateTools(config)
+        cancel_seen = threading.Event()
+        blocked_finished = threading.Event()
+
+        def dispatch(agent, **kwargs):
+            if agent == "blocked":
+                kwargs["cancel_handle"].register(cancel_seen.set)
+                assert cancel_seen.wait(timeout=4)
+                blocked_finished.set()
+                return "late blocked result"
+            return "fast result"
+
+        steps = [
+            {
+                "target_agent": "blocked",
+                "fallback_agents": [],
+                "request": "bloquear",
+                "context": "",
+                "source_agent": "",
+            },
+            {
+                "target_agent": "fast",
+                "fallback_agents": [],
+                "request": "rapido",
+                "context": "",
+                "source_agent": "",
+            },
+        ]
+
+        result = tools._execute_steps_parallel(
+            steps,
+            dispatch,
+            None,
+            lambda: {"blocked", "fast"},
+            lambda value: str(value or ""),
+        )
+
+        assert result.ok is False
+        assert "excedeu o limite" in str(result.error)
+        assert cancel_seen.is_set()
+        assert blocked_finished.is_set()
+        assert "[fast] fast result" in result.content
+        assert "late blocked result" not in result.content
+
     def test_bloqueia_main_step_case_insensitive(self, tmp_path):
         """Comparação de auto-referência é case-insensitive."""
         tools = self._make_tools(tmp_path)
