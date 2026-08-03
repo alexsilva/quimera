@@ -119,6 +119,8 @@ class ConsoleApprovalHandler(ApprovalHandler):
         self._resume_spinner_fn_default = None
         self._approve_all_callback = None
         self._cancel_event = cancel_event
+        self._cancel_events: dict[int, object] = {}
+        self._cancel_events_lock = threading.Lock()
         self._cancel_poll_interval = max(float(cancel_poll_interval), 0.01)
         self._input_gate = input_gate
         self._input_broker = None
@@ -184,8 +186,42 @@ class ConsoleApprovalHandler(ApprovalHandler):
         self._approve_all_callback = callback
 
     def set_cancel_event(self, cancel_event) -> None:
-        """Define um cancel_event opcional para interromper input bloqueante."""
+        """Define um cancel_event opcional para interromper input bloqueante.
+
+        Legado global mantido para compatibilidade. Clients concorrentes
+        devem preferir ``bind_cancel_event``, que isola o evento por thread.
+        """
         self._cancel_event = cancel_event
+
+    def bind_cancel_event(self, cancel_event) -> object | None:
+        """Associa um cancel_event à thread atual com restauração segura.
+
+        Retorna o valor anterior vinculado à thread (ou None). Assim, clients
+        concorrentes que compartilham este handler usam cancel_events próprios
+        sem sobrescrever o do outro: cada thread de driver mantém o seu
+        durante toda a execução e restaura o anterior ao sair.
+        """
+        thread_id = threading.get_ident()
+        with self._cancel_events_lock:
+            previous = self._cancel_events.get(thread_id)
+            if cancel_event is None:
+                self._cancel_events.pop(thread_id, None)
+            else:
+                self._cancel_events[thread_id] = cancel_event
+            return previous
+
+    def get_thread_cancel_event(self) -> object | None:
+        """Retorna o cancel_event vinculado à thread atual, se houver."""
+        thread_id = threading.get_ident()
+        with self._cancel_events_lock:
+            return self._cancel_events.get(thread_id)
+
+    def _get_effective_cancel_event(self) -> object | None:
+        """Resolve o cancel_event efetivo: thread-bound primeiro, legado depois."""
+        event = self.get_thread_cancel_event()
+        if event is None:
+            event = self._cancel_event
+        return event
 
     def set_input_broker(self, broker) -> None:
         """Conecta ao InputBroker centralizado para serializar aprovações."""
@@ -254,7 +290,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
         self._interactive_lock.acquire(blocking=True)
 
         try:
-            if self._cancel_event and self._cancel_event.is_set():
+            if self._is_cancelled():
                 return False
             question = format_approval_question(tool_name, summary)
             self._show(question)
@@ -294,7 +330,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
             )
 
             if use_input_gate:
-                if self._cancel_event and self._cancel_event.is_set():
+                if self._is_cancelled():
                     return False
                 thread_id = threading.get_ident()
                 suspend_fn = (
@@ -355,7 +391,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     if suspend_fn:
                         suspend_fn()
                     try:
-                        if self._input_fn is None and self._cancel_event is not None:
+                        if self._input_fn is None and self._get_effective_cancel_event() is not None:
                             answer = self._read_builtin_input_with_cancel(
                                 "  Executar? [y/N/a=todas]: "
                             ).strip().lower()
@@ -392,7 +428,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
         _emit_approval_message(self._renderer, message)
 
     def _is_cancelled(self) -> bool:
-        event = self._cancel_event
+        event = self._get_effective_cancel_event()
         if event is None:
             return False
         is_set = getattr(event, "is_set", None)
@@ -983,6 +1019,24 @@ class ApprovalManager(ApprovalHandler):
         setter = getattr(self._console_handler, "set_cancel_event", None)
         if callable(setter):
             setter(cancel_event)
+
+    def bind_cancel_event(self, cancel_event) -> object | None:
+        """Associa temporariamente um cancel_event à thread atual.
+
+        Retorna o valor anterior para restauração segura. Uso concorrente
+        recomendado em substituição a ``set_cancel_event``.
+        """
+        binder = getattr(self._console_handler, "bind_cancel_event", None)
+        if callable(binder):
+            return binder(cancel_event)
+        return None
+
+    def get_thread_cancel_event(self) -> object | None:
+        """Retorna o cancel_event de aprovação vinculado à thread atual."""
+        getter = getattr(self._console_handler, "get_thread_cancel_event", None)
+        if callable(getter):
+            return getter()
+        return None
 
     def set_input_broker(self, broker) -> None:
         """Conecta ao InputBroker centralizado para serializar aprovações."""

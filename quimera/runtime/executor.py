@@ -175,6 +175,25 @@ class ToolExecutor:
         """Define evento de cancelamento para interromper prompts de aprovação."""
         self.approval_manager.set_cancel_event(cancel_event)
 
+    def bind_approval_cancel_event(self, cancel_event) -> object | None:
+        """Associa um cancel_event de aprovação à thread atual com restauração segura.
+
+        Retorna o valor anterior vinculado à thread (ou None). Permite que
+        clients concorrentes compartilhando este executor usem cancel_events
+        próprios sem sobrescrever o cancel_event uns dos outros.
+        """
+        binder = getattr(self.approval_manager, "bind_cancel_event", None)
+        if callable(binder):
+            return binder(cancel_event)
+        return None
+
+    def get_thread_approval_cancel_event(self) -> object | None:
+        """Lê o cancel_event de aprovação vinculado à thread atual."""
+        getter = getattr(self.approval_manager, "get_thread_cancel_event", None)
+        if callable(getter):
+            return getter()
+        return None
+
     def process_pending_input_once(self) -> bool:
         """Processa uma pergunta pendente do InputBroker na thread atual."""
         process = getattr(self.approval_manager, "process_pending_input_once", None)

@@ -1162,10 +1162,6 @@ class AgentClient:
                     status.update(status_label)
                 if allow_tools and getattr(profile, "supports_tools", True):
                     effective_tool_executor = self.tool_executor
-                if effective_tool_executor is not None:
-                    set_cancel_event = getattr(effective_tool_executor, "set_approval_cancel_event", None)
-                    if callable(set_cancel_event):
-                        set_cancel_event(self._cancel_event)
                 approval_scope = None
                 if effective_tool_executor is not None:
                     get_approval_scope = getattr(effective_tool_executor, "get_thread_approval_scope", None)
@@ -1191,6 +1187,7 @@ class AgentClient:
 
                 def _run_driver():
                     previous_scope = None
+                    previous_cancel_event = None
                     try:
                         if effective_tool_executor is not None:
                             bind_approval_scope = getattr(
@@ -1200,6 +1197,17 @@ class AgentClient:
                             )
                             if callable(bind_approval_scope):
                                 previous_scope = bind_approval_scope(approval_scope)
+                            # Vincula o cancel_event à thread do driver com
+                            # restauração segura, em vez de gravar num slot global
+                            # do handler compartilhado (evita corrida entre
+                            # clients concorrentes usando o mesmo executor).
+                            bind_cancel_event = getattr(
+                                effective_tool_executor,
+                                "bind_approval_cancel_event",
+                                None,
+                            )
+                            if callable(bind_cancel_event):
+                                previous_cancel_event = bind_cancel_event(self._cancel_event)
 
                         guarded_on_text_chunk = None
                         if on_text_chunk is not None:
@@ -1235,6 +1243,13 @@ class AgentClient:
                             )
                             if callable(bind_approval_scope):
                                 bind_approval_scope(previous_scope)
+                            bind_cancel_event = getattr(
+                                effective_tool_executor,
+                                "bind_approval_cancel_event",
+                                None,
+                            )
+                            if callable(bind_cancel_event):
+                                bind_cancel_event(previous_cancel_event)
                         self._unregister_api_run(api_run_token)
 
                 t = threading.Thread(target=_run_driver, daemon=True)
@@ -1302,9 +1317,6 @@ class AgentClient:
                 return result_holder["result"]
         finally:
             if effective_tool_executor is not None:
-                set_cancel_event = getattr(effective_tool_executor, "set_approval_cancel_event", None)
-                if callable(set_cancel_event):
-                    set_cancel_event(None)
                 # Limpa callbacks de spinner para não manter referência a Live encerrado
                 clear_spinner = getattr(effective_tool_executor, "set_spinner_callbacks", None)
                 if callable(clear_spinner):

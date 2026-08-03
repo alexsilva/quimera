@@ -1,6 +1,7 @@
 from pathlib import Path
 import tempfile
 import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -302,6 +303,100 @@ def test_set_approval_cancel_event_injects_into_approval_manager():
     executor.set_approval_cancel_event(cancel_event)
 
     assert handler._console_handler._cancel_event is cancel_event
+
+
+def test_bind_approval_cancel_event_is_thread_isolated_with_restore():
+    """Binding de cancel_event é por thread e restaura o valor anterior.
+
+    Dois 'drivers' concorrentes usando o mesmo executor compartilhado
+    devem ver apenas os seus próprios cancel_events. Depois que cada um
+    termina, a thread fica sem binding (restauração segura).
+    """
+    executor = ToolExecutor(
+        ToolRuntimeConfig(workspace_root=Path("/tmp")),
+        ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y"),
+    )
+    event_a = threading.Event()
+    event_b = threading.Event()
+    results = {}
+    errors = {}
+
+    def driver(name, event):
+        try:
+            previous = executor.bind_approval_cancel_event(event)
+            try:
+                results[name] = executor.get_thread_approval_cancel_event()
+            finally:
+                executor.bind_approval_cancel_event(previous)
+        except Exception as exc:  # noqa: BLE001
+            errors[name] = exc
+
+    threads = [
+        threading.Thread(target=driver, args=("a", event_a), daemon=True),
+        threading.Thread(target=driver, args=("b", event_b), daemon=True),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(3)
+
+    assert errors == {}, f"erros: {errors}"
+    assert results == {"a": event_a, "b": event_b}
+    # Restauração: thread atual não herda binding de outra thread
+    assert executor.get_thread_approval_cancel_event() is None
+
+
+def test_shared_approval_manager_cancel_event_is_thread_scoped_during_prompt():
+    """Cancelar a thread B não cancela o prompt ativo da thread A.
+
+    Com o slot global legado, o cancel_event de B sobrescrevia o de A no
+    handler compartilhado; aqui, o cancel de B só afeta a própria B.
+    """
+    started = threading.Event()
+    can_proceed = threading.Event()
+
+    def blocking_input(prompt):
+        started.set()
+        can_proceed.wait(5)
+        return "y"
+
+    manager = ApprovalManager(None, input_fn=blocking_input)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), manager)
+    event_a = threading.Event()
+    event_b = threading.Event()
+    results = {}
+    errors = {}
+
+    def driver(name, event):
+        try:
+            previous = executor.bind_approval_cancel_event(event)
+            try:
+                results[name] = manager.approve(tool_name="shell", summary="ls")
+            finally:
+                executor.bind_approval_cancel_event(previous)
+        except Exception as exc:  # noqa: BLE001
+            errors[name] = exc
+
+    t_a = threading.Thread(target=driver, args=("a", event_a), daemon=True)
+    t_a.start()
+    assert started.wait(3), "thread A deve entrar no prompt bloqueante"
+
+    t_b = threading.Thread(target=driver, args=("b", event_b), daemon=True)
+    t_b.start()
+
+    # B cancela a si mesma; A continua presa no prompt sem ser afetada.
+    event_b.set()
+    time.sleep(0.2)
+    can_proceed.set()
+
+    t_a.join(3)
+    t_b.join(3)
+
+    assert errors == {}, f"erros: {errors}"
+    # A: prompt não cancelado pelo evento de B → respondeu 'y'
+    assert results.get("a") is True
+    # B: entrou após A liberar o lock e viu o próprio evento setado
+    assert results.get("b") is False
 
 
 # ── Fluxo unificado de aprovação ────────────────────────────
