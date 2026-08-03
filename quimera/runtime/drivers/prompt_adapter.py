@@ -110,10 +110,23 @@ def _build_tool_system_prompt(
     return TOOL_SYSTEM_PROMPT
 
 
-def _build_tool_budget_prompt(max_tool_hops: int, remaining_tool_hops: int) -> str:
+def _build_tool_budget_prompt(
+    max_tool_hops: int,
+    remaining_tool_hops: int,
+    *,
+    max_model_requests: int | None = None,
+    remaining_model_requests: int | None = None,
+) -> str:
     """Monta contexto explícito de orçamento de tools para a iteração atual."""
+    request_budget = ""
+    if max_model_requests is not None and remaining_model_requests is not None:
+        request_budget = (
+            f", max_model_requests={max_model_requests}, "
+            f"remaining_model_requests={remaining_model_requests}"
+        )
     return (
         "Orçamento de ferramentas desta execução: "
-        f"max_tool_hops={max_tool_hops}, remaining_tool_hops={remaining_tool_hops}. "
+        f"max_tool_hops={max_tool_hops}, remaining_tool_hops={remaining_tool_hops}"
+        f"{request_budget}. "
         "Evite chamadas desnecessárias e finalize quando tiver evidência suficiente."
     )

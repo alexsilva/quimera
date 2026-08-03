@@ -21,8 +21,10 @@ from ...prompt_templates import PromptText
 from ..streaming import apply_stream_diff, normalize_stream_diff
 from ..tool_hops import (
     DEFAULT_MAX_TOOL_HOPS,
+    MAX_MODEL_REQUESTS_BY_RELIABILITY,  # noqa: F401
     MAX_TOOL_HOPS_BY_RELIABILITY,  # noqa: F401
     get_invalid_tool_loop_threshold,
+    get_max_model_requests,
     get_max_tool_hops,
 )
 from .tool_schemas import resolve_tool_schemas
@@ -527,10 +529,13 @@ class OpenAICompatDriver:
         tool_use_reliability: str = "medium",
         extra_body: Optional[dict] = None,
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        max_model_requests: int | None = None,
     ) -> None:
         """Inicializa uma instância de OpenAICompatDriver.
         extra_body: dicionário opcional mesclado no corpo da requisição (ex: {"thinking": {"type": "enabled"}}).
-        max_connections: limite de chamadas concorrentes ao backend (padrão: 4)."""
+        max_connections: limite de chamadas concorrentes ao backend (padrão: 4).
+        max_model_requests: orçamento de requests por execução; None preserva
+            o limite histórico associado a tool_use_reliability."""
         self._semaphore = _backend_semaphore(base_url, api_key, max_connections)
         if OpenAI is None:
             raise ImportError(
@@ -545,6 +550,16 @@ class OpenAICompatDriver:
             timeout=float(timeout) if timeout else 300.0,
         )
         self.tool_use_reliability = str(tool_use_reliability or "medium").lower()
+        default_request_budget = get_max_model_requests(self.tool_use_reliability)
+        try:
+            normalized_request_budget = int(max_model_requests)
+        except (TypeError, ValueError):
+            normalized_request_budget = default_request_budget
+        self.max_model_requests = (
+            normalized_request_budget
+            if normalized_request_budget > 0
+            else default_request_budget
+        )
         self.extra_body = dict(extra_body) if extra_body else None
 
     def run(
@@ -583,10 +598,8 @@ class OpenAICompatDriver:
         if cancel_event is not None and cancel_event.is_set():
             return None
 
-        # Aguarda slot disponível para evitar estouro de rate-limit no backend,
-        # de forma cancelável (cancel_event interrompe a espera na fila).
-        if not _acquire_semaphore_cancelable(self._semaphore, cancel_event):
-            return None
+        # O semáforo é adquirido por _chat apenas durante cada request HTTP.
+        # Tools locais e aprovações não consomem slots do backend.
         try:
             if cancel_event is not None and cancel_event.is_set():
                 return None
@@ -607,6 +620,8 @@ class OpenAICompatDriver:
                     "content": _build_tool_budget_prompt(
                         max_tool_hops=max_tool_hops,
                         remaining_tool_hops=max_tool_hops,
+                        max_model_requests=self.max_model_requests,
+                        remaining_model_requests=self.max_model_requests,
                     ),
                 })
                 tool_budget_index = len(messages) - 1
@@ -622,11 +637,22 @@ class OpenAICompatDriver:
                 for hop in range(max_tool_hops + 1):
                     if cancel_event is not None and cancel_event.is_set():
                         return None
+                    if hop >= self.max_model_requests:
+                        _logger.warning(
+                            "OpenAICompatDriver: max model requests (%d) reached",
+                            self.max_model_requests,
+                        )
+                        if on_tool_abort is not None:
+                            on_tool_abort("max_model_requests")
+                        return "Limite de chamadas ao modelo atingido."
                     if tool_budget_index is not None:
                         remaining_tool_hops = max(max_tool_hops - hop, 0)
+                        remaining_model_requests = max(self.max_model_requests - hop, 0)
                         messages[tool_budget_index]["content"] = _build_tool_budget_prompt(
                             max_tool_hops=max_tool_hops,
                             remaining_tool_hops=remaining_tool_hops,
+                            max_model_requests=self.max_model_requests,
+                            remaining_model_requests=remaining_model_requests,
                         )
                     try:
                         response_text, tool_calls = self._chat(
@@ -780,26 +806,33 @@ class OpenAICompatDriver:
                 if tool_executor is not None:
                     tool_executor.reset_approval_cycle()
         finally:
-            self._semaphore.release()
+            _logger.debug("OpenAICompatDriver: run finished model=%s", self.model)
 
     def _is_invalid_tool_result(self, result: ToolResult) -> bool:
         """Indica se o resultado representa uso de ferramenta fora do contrato conhecido."""
         return (not result.ok) and result.error_type in {"policy", "validation"}
 
     def _chat(self, messages: list[dict], tools: list[dict], cancel_event=None, on_text_chunk=None) -> tuple[str, list[dict]]:
-        """Despacha para o modo correto conforme presença de ferramentas.
-        extra_body é repassado para permitir que o profile controle parâmetros como 'thinking'."""
-        # Cancelamento cooperativo: se já foi solicitado, não iniciar nova interação
-        if cancel_event is not None and cancel_event.is_set():
+        """Executa um request ao backend respeitando limite e cancelamento."""
+        if not _acquire_semaphore_cancelable(self._semaphore, cancel_event):
             return "", []
-        if tools:
-            return self._chat_with_tools(
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                return "", []
+            if tools:
+                return self._chat_with_tools(
+                    messages,
+                    tools,
+                    cancel_event=cancel_event,
+                    on_text_chunk=on_text_chunk,
+                )
+            return self._chat_streaming(
                 messages,
-                tools,
                 cancel_event=cancel_event,
                 on_text_chunk=on_text_chunk,
             )
-        return self._chat_streaming(messages, cancel_event=cancel_event, on_text_chunk=on_text_chunk)
+        finally:
+            self._semaphore.release()
 
     def _chat_with_tools(
         self,

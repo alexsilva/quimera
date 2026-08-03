@@ -34,6 +34,7 @@ class OpenAIConnection:
     supports_native_tools: bool = True
     extra_body: Optional[dict] = None
     max_connections: int = 4
+    max_model_requests: Optional[int] = None
     """Número máximo de conexões concorrentes ao backend para este agente.
     Evita estouro de rate-limit quando múltiplos agentes chamam a API em paralelo."""
     """Parâmetros extras mesclados no corpo da requisição à API.
@@ -119,6 +120,7 @@ def _connection_from_dict(data: dict) -> Connection:
         supports_native_tools=data.get("supports_native_tools", True),
         extra_body=data.get("extra_body"),
         max_connections=data.get("max_connections", 4),
+        max_model_requests=data.get("max_model_requests"),
     )
 
 

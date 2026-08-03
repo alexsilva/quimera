@@ -67,12 +67,18 @@ def _make_driver(
     model="qwen3-coder:30b",
     base_url="http://localhost:11434/v1",
     max_connections=DEFAULT_MAX_CONNECTIONS,
+    max_model_requests=None,
 ):
     """Cria um driver com o cliente OpenAI mockado."""
     with patch("quimera.runtime.drivers.openai_compat.OpenAI") as MockOpenAI:
         mock_client = MagicMock()
         MockOpenAI.return_value = mock_client
-        driver = OpenAICompatDriver(model=model, base_url=base_url, max_connections=max_connections)
+        driver = OpenAICompatDriver(
+            model=model,
+            base_url=base_url,
+            max_connections=max_connections,
+            max_model_requests=max_model_requests,
+        )
     driver._client = mock_client
     return driver, mock_client
 
@@ -2452,3 +2458,116 @@ def test_semaphore_is_independent_for_different_backend():
     driver2, _ = _make_driver(model="model-a", base_url="http://localhost:2/v1")
 
     assert driver1._semaphore is not driver2._semaphore
+
+
+# ---------------------------------------------------------------------------
+# Orçamento de requests e concorrência entre requests/tool execution
+# ---------------------------------------------------------------------------
+
+def test_run_releases_backend_slot_while_tool_executes():
+    """Tool local bloqueante não deve reter o slot HTTP do backend."""
+    driver, mock_client = _make_driver(max_connections=1)
+    driver._semaphore = threading.Semaphore(1)
+
+    tool_started = threading.Event()
+    release_tool = threading.Event()
+    second_request_completed = threading.Event()
+    non_stream_calls = {"count": 0}
+    lock = threading.Lock()
+
+    tool_call = _make_tool_call("call_wait", "read_file", '{"path":"a.py"}')
+
+    def create(*args, **kwargs):
+        if kwargs.get("stream") is True:
+            second_request_completed.set()
+            return iter([_make_chunk(content="segunda")])
+        with lock:
+            non_stream_calls["count"] += 1
+            call_number = non_stream_calls["count"]
+        if call_number == 1:
+            return _make_non_streaming_response(content="", tool_calls=[tool_call])
+        return _make_non_streaming_response(content="primeira-final", tool_calls=None)
+
+    mock_client.chat.completions.create.side_effect = create
+
+    executor = MagicMock()
+    executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    executor.registry.names.return_value = ["read_file"]
+
+    def execute(*_args, **_kwargs):
+        tool_started.set()
+        assert release_tool.wait(timeout=3)
+        return ToolResult(ok=True, tool_name="read_file", content="ok")
+
+    executor.execute.side_effect = execute
+    first_result = {}
+    second_result = {}
+
+    first = threading.Thread(
+        target=lambda: first_result.setdefault(
+            "value", driver.run(_prompt("primeira"), tool_executor=executor)
+        )
+    )
+    first.start()
+    assert tool_started.wait(timeout=2)
+
+    second = threading.Thread(
+        target=lambda: second_result.setdefault(
+            "value", driver.run(_prompt("segunda"), tool_executor=None)
+        )
+    )
+    second.start()
+
+    assert second_request_completed.wait(timeout=1), (
+        "segunda chamada HTTP ficou bloqueada enquanto a primeira executava tool local"
+    )
+    second.join(timeout=2)
+    assert second_result["value"] == "segunda"
+
+    release_tool.set()
+    first.join(timeout=3)
+    assert first_result["value"] == "primeira-final"
+    assert driver._semaphore._value == 1
+
+
+def test_run_stops_before_exceeding_model_request_budget():
+    """O orçamento independente impede novo request após tool call já executada."""
+    driver, mock_client = _make_driver(max_model_requests=1)
+    tool_call = _make_tool_call("call_once", "read_file", '{"path":"a.py"}')
+    mock_client.chat.completions.create.return_value = _make_non_streaming_response(
+        content="", tool_calls=[tool_call]
+    )
+
+    executor = MagicMock()
+    executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    executor.registry.names.return_value = ["read_file"]
+    executor.execute.return_value = ToolResult(ok=True, tool_name="read_file", content="ok")
+    abort_reasons = []
+
+    result = driver.run(
+        _prompt(),
+        tool_executor=executor,
+        on_tool_abort=abort_reasons.append,
+    )
+
+    assert result == "Limite de chamadas ao modelo atingido."
+    assert mock_client.chat.completions.create.call_count == 1
+    assert abort_reasons == ["max_model_requests"]
+    executor.execute.assert_called_once()
+
+
+def test_tool_budget_prompt_exposes_model_request_budget():
+    """O modelo recebe os budgets de hops e requests restantes."""
+    driver, mock_client = _make_driver(max_model_requests=7)
+    mock_client.chat.completions.create.return_value = _make_non_streaming_response(
+        content="ok", tool_calls=None
+    )
+    executor = MagicMock()
+    executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    executor.registry.names.return_value = ["read_file"]
+
+    assert driver.run(_prompt(), tool_executor=executor) == "ok"
+
+    budget = mock_client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+    assert "max_model_requests=7" in budget
+    assert "remaining_model_requests=7" in budget

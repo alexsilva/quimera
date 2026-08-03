@@ -21,7 +21,7 @@ from quimera.agents.process_runner import ProcessRunner
 from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.profiles import get as get_profile
 from quimera.prompt_templates import PromptText
-from quimera.profiles.base import CliConnection, register_connection_profile
+from quimera.profiles.base import CliConnection, OpenAIConnection, register_connection_profile
 from quimera.profiles.claude import _format_claude_spy_event
 from quimera.profiles.codex import _format_codex_spy_event
 from quimera.profiles.opencode import OpenCodeProfile, _format_opencode_spy_event
@@ -1614,7 +1614,8 @@ def test_agent_client_call_api_driver(renderer):
         mock_profile.tool_use_reliability = "medium"
         mock_get.return_value = mock_profile
 
-        with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls:
+        with patch.dict("os.environ", {"OLLAMA_API_KEY": "test-key"}), \
+                patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls:
             mock_driver = MagicMock()
             mock_driver.run.return_value = "api response"
             mock_driver_cls.return_value = mock_driver
@@ -3399,3 +3400,86 @@ def test_tool_preview_metadata_overrides_bound_agent(renderer):
     )
 
     assert renderer.show_feed.call_args.kwargs["agent"] == "mcp-agent"
+
+
+
+def test_call_api_rejects_missing_configured_api_key(renderer, monkeypatch):
+    """Variável configurada e ausente falha antes de construir o SDK client."""
+    connection = OpenAIConnection(
+        model="test-model",
+        base_url="https://api.example/v1",
+        api_key_env="QUIMERA_MISSING_TEST_KEY",
+    )
+    profile = SimpleNamespace(
+        driver="openai_compat",
+        supports_tools=True,
+        tool_use_reliability="medium",
+        effective_connection=lambda: connection,
+    )
+    monkeypatch.delenv("QUIMERA_MISSING_TEST_KEY", raising=False)
+    client = AgentClient(renderer)
+
+    with patch("quimera.agents.client.OpenAICompatDriver") as driver_cls:
+        result = client._call_api("test-agent", profile, "prompt")
+
+    assert result is None
+    driver_cls.assert_not_called()
+    assert any(
+        "QUIMERA_MISSING_TEST_KEY" in str(call)
+        for call in renderer.show_error.call_args_list
+    )
+
+
+def test_call_api_disables_executor_when_connection_lacks_native_tools(renderer):
+    """supports_native_tools=False não envia schemas nem executor ao driver."""
+    connection = OpenAIConnection(
+        model="test-model",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+        supports_native_tools=False,
+    )
+    profile = SimpleNamespace(
+        driver="openai_compat",
+        supports_tools=True,
+        tool_use_reliability="medium",
+        effective_connection=lambda: connection,
+    )
+    client = AgentClient(renderer)
+
+    with patch("quimera.agents.client.OpenAICompatDriver") as driver_cls, \
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"):
+        driver = MagicMock()
+        driver.run.return_value = "ok"
+        driver_cls.return_value = driver
+        result = client._call_api("test-agent", profile, "prompt")
+
+    assert result == "ok"
+    assert driver.run.call_args.kwargs["tool_executor"] is None
+
+
+def test_call_api_passes_configured_model_request_budget(renderer):
+    """max_model_requests da conexão chega ao driver e participa do cache."""
+    connection = OpenAIConnection(
+        model="test-model",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+        max_model_requests=23,
+    )
+    profile = SimpleNamespace(
+        driver="openai_compat",
+        supports_tools=False,
+        tool_use_reliability="medium",
+        effective_connection=lambda: connection,
+    )
+    client = AgentClient(renderer)
+
+    with patch("quimera.agents.client.OpenAICompatDriver") as driver_cls, \
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"):
+        driver = MagicMock()
+        driver.run.return_value = "ok"
+        driver_cls.return_value = driver
+        assert client._call_api("test-agent", profile, "prompt") == "ok"
+
+    assert driver_cls.call_args.kwargs["max_model_requests"] == 23

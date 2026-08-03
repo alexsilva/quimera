@@ -894,7 +894,7 @@ class AgentClient:
             return OpenAIConnection(
                 model=getattr(profile, "model", None) or "gpt-4o",
                 base_url=getattr(profile, "base_url", None) or "https://api.openai.com/v1",
-                api_key_env=getattr(profile, "api_key_env", None) or "OPENAI_API_KEY",
+                api_key_env=getattr(profile, "api_key_env", None),
                 provider=driver,
                 supports_native_tools=getattr(profile, "supports_tools", True),
             )
@@ -963,6 +963,7 @@ class AgentClient:
             getattr(connection, "provider", None),
             getattr(connection, "supports_native_tools", None),
             getattr(connection, "max_connections", None),
+            getattr(connection, "max_model_requests", None),
             extra_body_sig,
         )
 
@@ -1156,7 +1157,15 @@ class AgentClient:
                 OpenAICompatDriver = _OpenAICompatDriver
 
             api_key_env = connection.api_key_env
-            api_key = os.environ.get(api_key_env, "ollama") if api_key_env else "ollama"
+            if api_key_env:
+                api_key = os.environ.get(api_key_env)
+                if not api_key:
+                    self._show_error(
+                        f"[erro] variável de ambiente '{api_key_env}' não definida para {agent}"
+                    )
+                    return None
+            else:
+                api_key = "ollama"
             self._api_drivers[agent] = OpenAICompatDriver(
                 model=connection.model,
                 base_url=connection.base_url,
@@ -1165,6 +1174,7 @@ class AgentClient:
                 tool_use_reliability=getattr(profile, "tool_use_reliability", "medium"),
                 extra_body=connection.extra_body,
                 max_connections=getattr(connection, "max_connections", 4),
+                max_model_requests=getattr(connection, "max_model_requests", None),
             )
             self._api_driver_signatures[agent] = signature
 
@@ -1188,7 +1198,11 @@ class AgentClient:
             with status_cm as status:
                 if status is not None:
                     status.update(status_label)
-                if allow_tools and getattr(profile, "supports_tools", True):
+                if (
+                    allow_tools
+                    and getattr(profile, "supports_tools", True)
+                    and getattr(connection, "supports_native_tools", True)
+                ):
                     effective_tool_executor = self.tool_executor
                 approval_scope = None
                 if effective_tool_executor is not None:
