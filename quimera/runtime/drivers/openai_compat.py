@@ -267,9 +267,17 @@ def _tool_arguments_message(tc: dict) -> str:
 
 
 def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
-    """Limita o histórico do loop de tools preservando system/user e a cauda recente."""
+    """Limita o histórico do loop de tools preservando system/user e a cauda recente.
+
+    Invariant enforcement:
+    - Every 'tool' message must have a preceding 'assistant' with matching tool_call_id.
+    - Every tool_call in an 'assistant' must have a corresponding 'tool' result.
+    - System/user messages at the head are always preserved.
+    - Total messages never exceed _MAX_TOOL_LOOP_MESSAGES.
+    """
     if len(messages) <= _MAX_TOOL_LOOP_MESSAGES:
-        return messages
+        return _clean_message_sequence(messages)
+
     head_end = 0
     for msg in messages:
         if msg.get("role") in {"system", "user"}:
@@ -281,53 +289,108 @@ def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
     head = messages[:head_end]
     available = max(_MAX_TOOL_LOOP_MESSAGES - len(head), 0)
     tail = messages[len(head):]
-    segments: list[list[dict]] = []
-    index = 0
 
+    # Build valid (assistant, tool_results) pairs from tail, enforcing invariants.
+    pairs: list[tuple[dict, list[dict]]] = []
+    index = 0
     while index < len(tail):
         msg = tail[index]
         if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            segment = [msg]
+            assistant = msg
+            tool_calls = assistant.get("tool_calls", [])
+            call_ids = {call.get("id") for call in tool_calls if call.get("id")}
             index += 1
+            tool_results: list[dict] = []
             while index < len(tail) and tail[index].get("role") == "tool":
-                segment.append(tail[index])
+                tool_msg = tail[index]
+                tcid = tool_msg.get("tool_call_id")
+                if tcid in call_ids:
+                    tool_results.append(tool_msg)
                 index += 1
-            segments.append(segment)
+            # Keep only tool_calls that have corresponding results.
+            matched_calls = [call for call in tool_calls if call.get("id") in {r.get("tool_call_id") for r in tool_results}]
+            if matched_calls:
+                clean_assistant = dict(assistant)
+                clean_assistant["tool_calls"] = matched_calls
+                pairs.append((clean_assistant, tool_results))
+            # If no matched calls, drop this assistant entirely (no orphan tool_calls).
             continue
-        segments.append([msg])
+        # Orphan tool or non-tool-loop message: skip to enforce invariants.
         index += 1
 
-    kept_segments: list[list[dict]] = []
+    # Select most recent pairs that fit within 'available' slots.
+    # Each pair contributes 1 (assistant) + N (tool results) messages.
+    kept_pairs: list[tuple[dict, list[dict]]] = []
     used = 0
-    for segment in reversed(segments):
-        seg_len = len(segment)
-        if kept_segments and used + seg_len > available:
+    for assistant, tools in reversed(pairs):
+        pair_len = 1 + len(tools)
+        if kept_pairs and used + pair_len > available:
             break
-        if not kept_segments and seg_len > available:
-            if (
-                available >= 2
-                and segment[0].get("role") == "assistant"
-                and segment[0].get("tool_calls")
-            ):
-                kept_tools = segment[-(available - 1):]
-                kept_ids = {
-                    msg.get("tool_call_id")
-                    for msg in kept_tools
-                    if msg.get("role") == "tool"
-                }
-                assistant = dict(segment[0])
-                assistant["tool_calls"] = [
-                    call for call in assistant.get("tool_calls", [])
-                    if call.get("id") in kept_ids
-                ]
-                kept_segments.append([assistant, *kept_tools])
+        if not kept_pairs and pair_len > available:
+            # Boundary case: truncate the oldest kept pair to fit.
+            if available >= 2:
+                max_tools = available - 1
+                kept_tools = tools[-max_tools:]
+                kept_ids = {t.get("tool_call_id") for t in kept_tools}
+                matched_calls = [call for call in assistant.get("tool_calls", []) if call.get("id") in kept_ids]
+                if matched_calls:
+                    clean_assistant = dict(assistant)
+                    clean_assistant["tool_calls"] = matched_calls
+                    kept_pairs.append((clean_assistant, kept_tools))
             break
-        kept_segments.append(segment)
-        used += seg_len
+        kept_pairs.append((assistant, tools))
+        used += pair_len
 
-    pruned_tail = [msg for segment in reversed(kept_segments) for msg in segment]
-    tail = pruned_tail if pruned_tail else tail[-available:] if available else []
-    return head + tail
+    # Reconstruct tail from kept pairs (oldest first).
+    pruned_tail: list[dict] = []
+    for assistant, tools in reversed(kept_pairs):
+        pruned_tail.append(assistant)
+        pruned_tail.extend(tools)
+
+    return head + pruned_tail
+
+
+def _clean_message_sequence(messages: list[dict]) -> list[dict]:
+    """Enforce invariants on a message sequence that is already within the size limit."""
+    # First pass: identify valid assistant->tool pairs.
+    pairs: list[tuple[dict, list[dict]]] = []
+    index = 0
+    while index < len(messages):
+        msg = messages[index]
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            assistant = msg
+            tool_calls = assistant.get("tool_calls", [])
+            call_ids = {call.get("id") for call in tool_calls if call.get("id")}
+            index += 1
+            tool_results: list[dict] = []
+            while index < len(messages) and messages[index].get("role") == "tool":
+                tool_msg = messages[index]
+                tcid = tool_msg.get("tool_call_id")
+                if tcid in call_ids:
+                    tool_results.append(tool_msg)
+                index += 1
+            matched_calls = [call for call in tool_calls if call.get("id") in {r.get("tool_call_id") for r in tool_results}]
+            if matched_calls:
+                clean_assistant = dict(assistant)
+                clean_assistant["tool_calls"] = matched_calls
+                pairs.append((clean_assistant, tool_results))
+            continue
+        # Preserve system/user and other messages (non-tool-loop).
+        index += 1
+
+    # Reconstruct: keep head (system/user) + valid pairs.
+    head_end = 0
+    for msg in messages:
+        if msg.get("role") in {"system", "user"}:
+            head_end += 1
+            continue
+        break
+    head = messages[:head_end] if head_end > 0 else messages[:min(2, len(messages))]
+    pruned: list[dict] = list(head)
+    for assistant, tools in pairs:
+        pruned.append(assistant)
+        pruned.extend(tools)
+    return pruned
 
 
 

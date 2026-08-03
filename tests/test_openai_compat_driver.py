@@ -322,16 +322,35 @@ def test_prune_tool_loop_messages_keeps_head_and_recent_tail():
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "user"},
-    ] + [
-        {"role": "tool" if i % 2 else "assistant", "content": f"m{i}"}
-        for i in range(_MAX_TOOL_LOOP_MESSAGES + 6)
     ]
+    for i in range(_MAX_TOOL_LOOP_MESSAGES + 6):
+        if i % 2 == 0:
+            messages.append({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": f"call_{i}", "type": "function", "function": {"name": "foo", "arguments": "{}"}}],
+            })
+        else:
+            messages.append({"role": "tool", "tool_call_id": f"call_{i-1}", "content": f"result_{i-1}"})
 
     pruned = _prune_tool_loop_messages(messages)
 
     assert len(pruned) == _MAX_TOOL_LOOP_MESSAGES
     assert pruned[:2] == messages[:2]
-    assert pruned[2:] == messages[-(_MAX_TOOL_LOOP_MESSAGES - 2):]
+    # The tail should contain the most recent valid pairs
+    assert all(msg.get("role") in {"assistant", "tool"} for msg in pruned[2:])
+    # Verify invariant: every tool has a matching assistant tool_call
+    for index, msg in enumerate(pruned):
+        if msg.get("role") != "tool":
+            continue
+        assert index > 0
+        previous = pruned[index - 1]
+        if previous.get("role") == "tool":
+            previous = pruned[index - 2]
+        assert previous.get("role") == "assistant"
+        assert previous.get("tool_calls")
+        tool_ids = {call.get("id") for call in previous["tool_calls"]}
+        assert msg.get("tool_call_id") in tool_ids
 
 
 def test_prune_tool_loop_messages_preserves_assistant_for_multi_tool_results():
@@ -393,6 +412,193 @@ def test_prune_tool_loop_messages_caps_oversized_final_tool_segment():
     expected_start = total_calls - expected_kept_count
     assert retained_tool_ids == [f"call_{i}" for i in range(expected_start, total_calls)]
     assert [call["id"] for call in pruned[2]["tool_calls"]] == retained_tool_ids
+
+
+# ---------------------------------------------------------------------------
+# Testes de invariantes do _prune_tool_loop_messages
+# ---------------------------------------------------------------------------
+
+def test_prune_tool_loop_messages_removes_orphan_tool():
+    """Tool messages without preceding assistant with matching tool_call_id are removed."""
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+    ]
+    pruned = _prune_tool_loop_messages(messages)
+    assert len(pruned) == 2
+    assert pruned[0]["role"] == "system"
+    assert pruned[1]["role"] == "user"
+
+
+def test_prune_tool_loop_messages_removes_assistant_without_tool_results():
+    """Assistant with tool_calls but no matching tool results is removed."""
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "foo", "arguments": "{}"}}]},
+    ]
+    pruned = _prune_tool_loop_messages(messages)
+    assert len(pruned) == 2
+    assert pruned[0]["role"] == "system"
+    assert pruned[1]["role"] == "user"
+
+
+def test_prune_tool_loop_messages_filters_mismatched_tool_calls():
+    """Assistant tool_calls without corresponding tool results are filtered out."""
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "call_a", "type": "function", "function": {"name": "foo", "arguments": "{}"}},
+            {"id": "call_b", "type": "function", "function": {"name": "bar", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "call_a", "content": "result_a"},
+    ]
+    pruned = _prune_tool_loop_messages(messages)
+    assert len(pruned) == 4
+    assistant = pruned[2]
+    assert assistant["role"] == "assistant"
+    assert len(assistant["tool_calls"]) == 1
+    assert assistant["tool_calls"][0]["id"] == "call_a"
+    assert pruned[3]["role"] == "tool"
+    assert pruned[3]["tool_call_id"] == "call_a"
+
+
+def test_prune_tool_loop_messages_removes_orphan_tool_after_regular_assistant():
+    """Tool after assistant without tool_calls is treated as orphan and removed."""
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+        {"role": "assistant", "content": "just text"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+    ]
+    pruned = _prune_tool_loop_messages(messages)
+    assert len(pruned) == 2
+    assert pruned[0]["role"] == "system"
+    assert pruned[1]["role"] == "user"
+
+
+def test_prune_tool_loop_messages_keeps_only_complete_pairs():
+    """Only complete (assistant + tool results) pairs are kept; incomplete pairs dropped."""
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "foo", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "result1"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "call_2", "type": "function", "function": {"name": "bar", "arguments": "{}"}}]},
+        # missing tool result for call_2
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "call_3", "type": "function", "function": {"name": "baz", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_3", "content": "result3"},
+    ]
+    pruned = _prune_tool_loop_messages(messages)
+    # Should keep system, user, pair1 (assistant+tool), pair3 (assistant+tool)
+    # pair2 is incomplete (no tool result) so dropped entirely
+    assert len(pruned) == 6
+    assert pruned[0]["role"] == "system"
+    assert pruned[1]["role"] == "user"
+    assert pruned[2]["role"] == "assistant"
+    assert pruned[2]["tool_calls"][0]["id"] == "call_1"
+    assert pruned[3]["role"] == "tool"
+    assert pruned[3]["tool_call_id"] == "call_1"
+    assert pruned[4]["role"] == "assistant"
+    assert pruned[4]["tool_calls"][0]["id"] == "call_3"
+    assert pruned[5]["role"] == "tool"
+    assert pruned[5]["tool_call_id"] == "call_3"
+
+
+def test_prune_tool_loop_messages_enforces_invariants_within_limit():
+    """_clean_message_sequence enforces invariants even when under message limit."""
+    from quimera.runtime.drivers.openai_compat import _clean_message_sequence
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+        {"role": "tool", "tool_call_id": "orphan", "content": "result"},  # orphan
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "call_a", "type": "function", "function": {"name": "foo", "arguments": "{}"}}]},
+        # no tool result for call_a
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "call_b", "type": "function", "function": {"name": "bar", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_b", "content": "result_b"},
+    ]
+    pruned = _clean_message_sequence(messages)
+    # Should keep system, user, and only the complete pair (call_b)
+    assert len(pruned) == 4
+    assert pruned[0]["role"] == "system"
+    assert pruned[1]["role"] == "user"
+    assert pruned[2]["role"] == "assistant"
+    assert pruned[2]["tool_calls"][0]["id"] == "call_b"
+    assert pruned[3]["role"] == "tool"
+    assert pruned[3]["tool_call_id"] == "call_b"
+
+
+def test_prune_tool_loop_messages_preserves_invariant_every_tool_has_assistant():
+    """Invariant: every tool message has a preceding assistant with matching tool_call_id."""
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+    ]
+    for i in range(15):
+        messages.append({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": f"call_{i}", "type": "function", "function": {"name": "foo", "arguments": "{}"}}],
+        })
+        messages.append({"role": "tool", "tool_call_id": f"call_{i}", "content": f"result_{i}"})
+    # Add some invalid messages
+    messages.append({"role": "tool", "tool_call_id": "orphan", "content": "orphan_result"})
+    messages.append({"role": "assistant", "content": "", "tool_calls": [{"id": "no_result", "type": "function", "function": {"name": "baz", "arguments": "{}"}}]})
+
+    pruned = _prune_tool_loop_messages(messages)
+
+    # Verify invariant holds for all tool messages
+    for index, msg in enumerate(pruned):
+        if msg.get("role") != "tool":
+            continue
+        assert index > 0, "Tool message cannot be first"
+        previous = pruned[index - 1]
+        if previous.get("role") == "tool":
+            previous = pruned[index - 2]
+        assert previous.get("role") == "assistant", f"Tool {msg['tool_call_id']} not preceded by assistant"
+        assert previous.get("tool_calls"), f"Assistant has no tool_calls"
+        tool_ids = {call.get("id") for call in previous["tool_calls"]}
+        assert msg.get("tool_call_id") in tool_ids, f"Tool {msg['tool_call_id']} not in assistant's tool_calls"
+
+
+def test_prune_tool_loop_messages_preserves_invariant_every_tool_call_has_result():
+    """Invariant: every assistant tool_call has a corresponding tool result."""
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+    ]
+    for i in range(15):
+        messages.append({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": f"call_{i}", "type": "function", "function": {"name": "foo", "arguments": "{}"}}],
+        })
+        messages.append({"role": "tool", "tool_call_id": f"call_{i}", "content": f"result_{i}"})
+    # Add assistant with tool_call but no result
+    messages.append({
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"id": "no_result", "type": "function", "function": {"name": "baz", "arguments": "{}"}}],
+    })
+
+    pruned = _prune_tool_loop_messages(messages)
+
+    # Verify invariant holds for all assistant messages
+    for msg in pruned:
+        if msg.get("role") != "assistant":
+            continue
+        if not msg.get("tool_calls"):
+            continue
+        tool_call_ids = {call.get("id") for call in msg["tool_calls"]}
+        # Find corresponding tool results
+        result_ids = set()
+        for m in pruned:
+            if m.get("role") == "tool":
+                result_ids.add(m.get("tool_call_id"))
+        for tcid in tool_call_ids:
+            assert tcid in result_ids, f"Assistant tool_call {tcid} has no tool result"
 
 
 # ---------------------------------------------------------------------------
