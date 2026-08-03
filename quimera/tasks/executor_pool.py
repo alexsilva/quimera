@@ -46,6 +46,39 @@ class _BackgroundMetricsView:
         return self._get_session_state()
 
 
+class _BackgroundDispatchPerCall:
+    """Proxy que cria dispatch/AgentClient/ToolExecutor isolados para cada chamada."""
+
+    def __init__(self, owner: "TaskExecutorPool", *, auto_approve_task_tools: bool = False) -> None:
+        self._owner = owner
+        self._auto_approve_task_tools = auto_approve_task_tools
+
+    def delegate(self, target_agent: str, **kwargs):
+        background_dispatch = self._owner._create_background_dispatch_services()
+        if background_dispatch is None:
+            fallback_delegate = self._owner._delegate if self._owner._allow_delegate_fallback else None
+            if fallback_delegate is not None:
+                return fallback_delegate(target_agent, **kwargs)
+            raise RuntimeError("dispatch de background indisponível para task")
+        if background_dispatch is self._owner.get_dispatch_services():
+            raise RuntimeError("dispatch de background indisponível para task")
+        approval_handler = getattr(
+            getattr(background_dispatch, "_tool_executor_override", None),
+            "approval_handler",
+            None,
+        )
+        if self._auto_approve_task_tools:
+            self._owner._enable_task_tool_auto_approval(target_agent, approval_handler=approval_handler)
+        try:
+            return background_dispatch.delegate(target_agent, **kwargs)
+        finally:
+            if self._auto_approve_task_tools:
+                self._owner._disable_task_tool_auto_approval(target_agent, approval_handler=approval_handler)
+            close = getattr(background_dispatch, "close", None)
+            if callable(close):
+                close()
+
+
 class TaskExecutorPool:
     """Pool de executores de tasks: lifecycle, dispatch de background e aprovação.
 
@@ -113,6 +146,7 @@ class TaskExecutorPool:
         classify_task_execution_result: Callable[..., Any] | None = None,
         classify_task_review_result: Callable[..., Any] | None = None,
         delegate: Callable[..., Any] | None = None,
+        allow_delegate_fallback: bool = False,
         approval_owner_id: int | None = None,
         # Accessors from protocol service
         get_prompt_builder: Callable[[], Any] | None = None,
@@ -176,6 +210,7 @@ class TaskExecutorPool:
         self._classify_task_execution_result = classify_task_execution_result
         self._classify_task_review_result = classify_task_review_result
         self._delegate = delegate
+        self._allow_delegate_fallback = allow_delegate_fallback
         self._get_prompt_builder_fn = get_prompt_builder
         self._get_history_fn = get_history
         self._get_shared_state_fn = get_shared_state
@@ -191,7 +226,6 @@ class TaskExecutorPool:
         self._current_job_id_value: Any = None
         self._current_job_id_getter: Callable[[], Any] | None = None
         self._background_dispatch_services: Any = None
-        self._background_tool_executor: ToolExecutor | None = None
         # Clients isolados vivos (delegações/tasks); alvo de propagação de cancel.
         self._background_agent_clients: "weakref.WeakSet[Any]" = weakref.WeakSet()
         self._approval_handler: Any = None
@@ -310,9 +344,9 @@ class TaskExecutorPool:
             ),
             cancel_event=cancel_event,
         )
-        delegate = self._delegate_call()
-        if background_dispatch is not None:
-            delegate = background_dispatch.delegate
+        if background_dispatch is None:
+            raise RuntimeError("dispatch de background indisponível para delegate paralelo")
+        delegate = background_dispatch.delegate
         try:
             return delegate_for_parallel_with_client(
                 delegate,
@@ -512,16 +546,22 @@ class TaskExecutorPool:
     def _background_was_user_cancelled(self) -> bool:
         return False
 
+    def _build_background_tool_executor(self) -> ToolExecutor | None:
+        if self.get_workspace() is None:
+            return None
+        return self.build_tool_executor(
+            require_approval_for_mutations=not self.get_auto_approve_mutations(),
+            register_as_primary=False,
+            allow_ask_user=False,
+        )
+
     def _get_background_tool_executor(self) -> ToolExecutor | None:
-        if self._background_tool_executor is None:
-            if self.get_workspace() is None:
-                return self._dispatch_tool_executor
-            self._background_tool_executor = self.build_tool_executor(
-                require_approval_for_mutations=not self.get_auto_approve_mutations(),
-                register_as_primary=False,
-                allow_ask_user=False,
-            )
-        return self._background_tool_executor
+        background_dispatch = self._background_dispatch_services
+        if background_dispatch is not None:
+            executor = getattr(background_dispatch, "_tool_executor_override", None)
+            if executor is not None:
+                return executor
+        return self._build_background_tool_executor()
 
     def _create_background_dispatch_services(
         self,
@@ -532,11 +572,11 @@ class TaskExecutorPool:
         renderer = self.get_renderer()
         workspace = self.get_workspace()
         if renderer is None or workspace is None:
-            return self.get_dispatch_services()
+            return None
 
         chat_agent_client = self.get_agent_client()
         if chat_agent_client is None:
-            return self.get_dispatch_services()
+            return None
         background_timeout = getattr(chat_agent_client, "idle_timeout", None)
         if background_timeout is None or not isinstance(background_timeout, (int, float)) or background_timeout <= 0:
             background_timeout = _BACKGROUND_AGENT_TIMEOUT_SECONDS
@@ -561,7 +601,9 @@ class TaskExecutorPool:
         )
         background_agent_client.execution_mode = self.get_execution_mode()
         background_agent_client.tool_event_callback = self.get_record_tool_event()
-        background_agent_client.tool_executor = self._get_background_tool_executor()
+        background_agent_client.tool_executor = self._build_background_tool_executor()
+        if background_agent_client.tool_executor is None:
+            return None
         if cancel_event is not None:
             share_cancel_event(background_agent_client, cancel_event)
         self._register_background_agent_client(background_agent_client)
@@ -635,6 +677,9 @@ class TaskExecutorPool:
         self._background_dispatch_services = self._create_background_dispatch_services()
         return self._background_dispatch_services
 
+    def _background_dispatch_per_call(self, *, auto_approve_task_tools: bool = False):
+        return _BackgroundDispatchPerCall(self, auto_approve_task_tools=auto_approve_task_tools)
+
     def _register_background_agent_client(self, client) -> None:
         try:
             self._background_agent_clients.add(client)
@@ -660,26 +705,18 @@ class TaskExecutorPool:
 
     def _build_task_execution_service(self, failover_policy: TaskFailoverPolicy) -> TaskRunner:
         return TaskRunner(
-            dispatch_services=self._get_background_dispatch_services(),
+            dispatch_services=self._background_dispatch_per_call(auto_approve_task_tools=True),
             system_layer=self.get_system_layer(),
             repository=self._build_task_repository(),
             failover_policy=failover_policy,
             classify_task_execution_result=self._classify_task_execution_result,
             was_user_cancelled=self._background_was_user_cancelled,
             record_failure=self.get_record_failure(),
-            before_agent_call=lambda agent_name: self._enable_task_tool_auto_approval(
-                agent_name,
-                approval_handler=getattr(self._get_background_tool_executor(), "approval_handler", None),
-            ),
-            after_agent_call=lambda agent_name: self._disable_task_tool_auto_approval(
-                agent_name,
-                approval_handler=getattr(self._get_background_tool_executor(), "approval_handler", None),
-            ),
         )
 
     def _build_task_review_service(self, failover_policy: TaskFailoverPolicy) -> TaskReviewer:
         return TaskReviewer(
-            dispatch_services=self._get_background_dispatch_services(),
+            dispatch_services=self._background_dispatch_per_call(),
             system_layer=self.get_system_layer(),
             repository=self._build_task_repository(),
             failover_policy=failover_policy,

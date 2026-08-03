@@ -291,6 +291,7 @@ class AppTaskServices:
             classify_task_execution_result=classify_task_execution_result,
             classify_task_review_result=classify_task_review_result,
             delegate=self._delegate_call,
+            allow_delegate_fallback=delegate is not None,
             approval_owner_id=id(self),
             get_prompt_builder=self._get_prompt_builder,
             get_history=self._get_history,
@@ -595,9 +596,9 @@ class AppTaskServices:
             ),
             cancel_event=cancel_event,
         )
-        delegate = self._delegate_call
-        if background_dispatch is not None:
-            delegate = background_dispatch.delegate
+        if background_dispatch is None:
+            raise RuntimeError("dispatch de background indisponível para delegate paralelo")
+        delegate = background_dispatch.delegate
         try:
             return delegate_for_parallel_with_client(
                 delegate,

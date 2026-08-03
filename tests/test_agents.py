@@ -2959,6 +2959,68 @@ def test_cancel_event_cleared_on_start(renderer):
     assert not client._cancel_event.is_set()
 
 
+def test_reset_cancel_state_does_not_clear_active_call_cancel(renderer):
+    """Nova rodada concorrente não pode limpar cancel_event de uma chamada ativa.
+
+    O isolamento é por chamada: ``reset_cancel_state`` libera o estado no nível
+    do client para a nova rodada, mas os ``cancel_event`` registrados em
+    ``_active_api_runs`` permanecem acionados e continuam descartando trabalho
+    tardio da chamada cancelada.
+    """
+    client = AgentClient(renderer)
+    token = object()
+    api_cancel_event = threading.Event()
+    client._register_api_run(token, api_cancel_event)
+    client._agent_running = True
+    client.cancel_active_work()
+
+    assert api_cancel_event.is_set()
+
+    client.reset_cancel_state()
+
+    assert client._user_cancelled is False
+    assert not client._cancel_event.is_set()
+    assert api_cancel_event.is_set()
+
+
+def test_call_serializes_concurrent_invocations_on_same_client(renderer, monkeypatch):
+    """Chamadas concorrentes no mesmo AgentClient devem esperar, não executar reentrantes."""
+    client = AgentClient(renderer)
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def fake_call_impl(agent, prompt, **kwargs):
+        nonlocal active, max_active
+        del prompt, kwargs
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        if agent == "a":
+            first_entered.set()
+            release_first.wait(timeout=2)
+        with lock:
+            active -= 1
+        return f"ok-{agent}"
+
+    monkeypatch.setattr(client, "_call_impl", fake_call_impl)
+    results = {}
+    t1 = threading.Thread(target=lambda: results.setdefault("a", client.call("a", "p")))
+    t2 = threading.Thread(target=lambda: results.setdefault("b", client.call("b", "p")))
+
+    t1.start()
+    assert first_entered.wait(timeout=1)
+    t2.start()
+    release_first.set()
+    t1.join(timeout=2)
+    t2.join(timeout=2)
+
+    assert results == {"a": "ok-a", "b": "ok-b"}
+    assert max_active == 1
+
+
 def test_core_turn_manager_reset_after_first_agent(renderer):
     """ core.py:947 - turn_manager.reset() após primeiro agente """
     from unittest import mock

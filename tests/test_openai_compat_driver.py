@@ -61,12 +61,16 @@ def _make_tool_call(tc_id, name, arguments_json):
     return SimpleNamespace(id=tc_id, function=func)
 
 
-def _make_driver(model="qwen3-coder:30b", base_url="http://localhost:11434/v1"):
+def _make_driver(
+    model="qwen3-coder:30b",
+    base_url="http://localhost:11434/v1",
+    max_connections=DEFAULT_MAX_CONNECTIONS,
+):
     """Cria um driver com o cliente OpenAI mockado."""
     with patch("quimera.runtime.drivers.openai_compat.OpenAI") as MockOpenAI:
         mock_client = MagicMock()
         MockOpenAI.return_value = mock_client
-        driver = OpenAICompatDriver(model=model, base_url=base_url)
+        driver = OpenAICompatDriver(model=model, base_url=base_url, max_connections=max_connections)
     driver._client = mock_client
     return driver, mock_client
 
@@ -1701,7 +1705,7 @@ def test_default_max_connections_is_positive():
 
 
 def test_driver_has_instance_semaphore():
-    """Cada instância de OpenAICompatDriver deve ter seu próprio semáforo."""
+    """OpenAICompatDriver expõe o semáforo usado para limitar o backend."""
     import threading
     driver, _ = _make_driver()
     assert hasattr(driver, "_semaphore")
@@ -1796,9 +1800,33 @@ def test_concurrent_runs_block_at_max_connections():
     assert elapsed >= 0.15, f"Segunda thread não deveria ter sido bloqueada no semáforo ({elapsed:.2f}s)"
 
 
-def test_semaphore_is_per_instance_not_class():
-    """Cada instância deve ter seu próprio semáforo independente."""
+def test_semaphore_is_shared_for_same_backend():
+    """Drivers para o mesmo backend/API key compartilham limite de conexões."""
     driver1, _ = _make_driver(model="model-a", base_url="http://localhost:1/v1")
-    driver2, _ = _make_driver(model="model-b", base_url="http://localhost:2/v1")
+    driver2, _ = _make_driver(model="model-a", base_url="http://localhost:1/v1")
+
+    assert driver1._semaphore is driver2._semaphore
+
+
+def test_semaphore_is_shared_for_same_backend_even_with_different_models():
+    """Modelo diferente no mesmo backend não pode multiplicar conexões."""
+    driver1, _ = _make_driver(model="model-a", base_url="http://localhost:1/v1")
+    driver2, _ = _make_driver(model="model-b", base_url="http://localhost:1/v1")
+
+    assert driver1._semaphore is driver2._semaphore
+
+
+def test_semaphore_is_shared_for_same_backend_even_with_different_limits():
+    """max_connections diferente não pode multiplicar o limite do mesmo backend."""
+    driver1, _ = _make_driver(model="model-a", base_url="http://localhost:1/v1", max_connections=1)
+    driver2, _ = _make_driver(model="model-a", base_url="http://localhost:1/v1", max_connections=8)
+
+    assert driver1._semaphore is driver2._semaphore
+
+
+def test_semaphore_is_independent_for_different_backend():
+    """Backends diferentes mantêm limites independentes."""
+    driver1, _ = _make_driver(model="model-a", base_url="http://localhost:1/v1")
+    driver2, _ = _make_driver(model="model-a", base_url="http://localhost:2/v1")
 
     assert driver1._semaphore is not driver2._semaphore

@@ -1264,8 +1264,8 @@ class TestMakeBackgroundDelegateFn:
     compartilhar client.
     """
 
-    def test_retorna_resultado_do_dispatch_padrao(self):
-        """Sem background dispatch, usa dispatch_services e propaga o retorno."""
+    def test_falha_quando_background_dispatch_indisponivel(self):
+        """Sem background dispatch, não deve cair no dispatch principal não reentrante."""
         from quimera.app.bootstrap.wiring import _make_background_delegate_fn
 
         task_services = MagicMock()
@@ -1274,12 +1274,10 @@ class TestMakeBackgroundDelegateFn:
         dispatch_services.delegate.return_value = "resposta do agente"
 
         fn = _make_background_delegate_fn(task_services, dispatch_services)
-        result = fn("claude-opus", delegation={"task": "revisar"})
+        with pytest.raises(RuntimeError, match="background"):
+            fn("claude-opus", delegation={"task": "revisar"})
 
-        assert result == "resposta do agente"
-        dispatch_services.delegate.assert_called_once_with(
-            "claude-opus", delegation={"task": "revisar"},
-        )
+        dispatch_services.delegate.assert_not_called()
 
     def test_retorna_resultado_do_background_dispatch(self):
         """Com background dispatch disponível, usa-o e propaga o retorno."""
@@ -1352,8 +1350,8 @@ class TestMakeBackgroundDelegateFn:
 
         background.close.assert_called_once()
 
-    def test_fallback_para_o_proprio_dispatch_services_nao_fecha(self):
-        """Se o factory devolve o dispatch principal (fallback), não o fecha."""
+    def test_factory_nao_pode_devolver_dispatch_principal(self):
+        """Se o factory devolve o dispatch principal, falha em vez de reusar o client ativo."""
         from quimera.app.bootstrap.wiring import _make_background_delegate_fn
 
         dispatch_services = MagicMock()
@@ -1362,6 +1360,8 @@ class TestMakeBackgroundDelegateFn:
         task_services._create_background_dispatch_services.return_value = dispatch_services
 
         fn = _make_background_delegate_fn(task_services, dispatch_services)
-        assert fn("codex", delegation={"task": "a"}) == "resposta"
+        with pytest.raises(RuntimeError, match="background"):
+            fn("codex", delegation={"task": "a"})
 
+        dispatch_services.delegate.assert_not_called()
         dispatch_services.close.assert_not_called()

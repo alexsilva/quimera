@@ -47,6 +47,20 @@ def test_wire_routes_tool_delegate_through_isolated_dispatch(wired):
     tasks.dispatch_services.delegate.assert_not_called()
 
 
+def test_wire_does_not_fallback_to_primary_dispatch_when_background_unavailable(wired):
+    """Falha de criação do background dispatch não pode reutilizar o client principal."""
+    _app, _plat, _ui, _sess, _rt, tasks, _chat = wired
+
+    tasks.tool_executor.set_delegate_fn.assert_called_once()
+    delegate_fn = tasks.tool_executor.set_delegate_fn.call_args[0][0]
+    tasks.task_services._create_background_dispatch_services.return_value = None
+
+    with pytest.raises(RuntimeError, match="background"):
+        delegate_fn("codex", delegation={"task": "x"})
+
+    tasks.dispatch_services.delegate.assert_not_called()
+
+
 def test_wire_uses_same_isolated_fn_for_sync_and_background_delegate(wired):
     """Caminho síncrono (socket) e assíncrono (http) compartilham a mesma closure isolada."""
     _app, _plat, _ui, _sess, _rt, tasks, _chat = wired

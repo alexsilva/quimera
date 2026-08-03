@@ -83,6 +83,7 @@ class AgentClient:
         self._user_cancelled = False
         self._cancel_notice_lock = threading.Lock()
         self._cancel_notice_state = {"shown": False}
+        self._call_lock = threading.RLock()
         self._agent_running = False
         self._running_agent = None
         self._current_proc = None
@@ -223,7 +224,12 @@ class AgentClient:
             self._cancel_notice_state["shown"] = False
 
     def reset_cancel_state(self) -> None:
-        """Limpa estado de cancelamento antes de uma nova rodada."""
+        """Limpa estado de cancelamento antes de uma nova rodada.
+
+        Limpa apenas o estado no nível do client. Execuções API já em curso
+        possuem ``cancel_event`` próprio (``_active_api_runs``) que permanece
+        acionado, de modo que um novo prompt não revive trabalho cancelado.
+        """
         self._user_cancelled = False
         self._cancel_event.clear()
         self.reset_cancel_notices()
@@ -881,9 +887,11 @@ class AgentClient:
         )
 
     @staticmethod
-    def _should_use_warm_pool(profile, cmd: list[str]) -> bool:
+    def _should_use_warm_pool(profile, cmd: list[str], *, has_mcp_context: bool = False) -> bool:
         """Retorna se o profile permite processo pré-aquecido para execução CLI."""
         if not cmd:
+            return False
+        if has_mcp_context:
             return False
         profile_hook = getattr(type(profile), "should_use_warm_pool", None)
         if callable(profile_hook):
@@ -943,8 +951,34 @@ class AgentClient:
         progress_callback=None,
         from_agent=None,
     ):
+        """Executa um agente de forma serializada neste client."""
+        with self._call_lock:
+            self.reset_cancel_state()
+            return self._call_impl(
+                agent,
+                prompt,
+                silent=silent,
+                show_status=show_status,
+                quiet=quiet,
+                on_text_chunk=on_text_chunk,
+                allow_tools=allow_tools,
+                progress_callback=progress_callback,
+                from_agent=from_agent,
+            )
+
+    def _call_impl(
+        self,
+        agent,
+        prompt: PromptText,
+        silent=False,
+        show_status=True,
+        quiet=False,
+        on_text_chunk=None,
+        allow_tools=True,
+        progress_callback=None,
+        from_agent=None,
+    ):
         """Resolve o comando do agente e delega a execução."""
-        self._user_cancelled = False
         profile = profiles.get(agent)
         if profile is None:
             self._show_error(f"[erro] agente desconhecido: {agent}")
@@ -1012,9 +1046,13 @@ class AgentClient:
         else:
             _extra_env = run_kwargs.get("extra_env")
             _effective_cmd, _effective_cwd = self._build_effective_cmd(cmd, agent, run_kwargs.get("cwd"))
-            _use_warm_pool = self._should_use_warm_pool(profile, cmd)
+            _use_warm_pool = self._should_use_warm_pool(
+                profile,
+                cmd,
+                has_mcp_context=has_mcp_context,
+            )
             _slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env) if _use_warm_pool else None
-            if not _use_warm_pool:
+            if not _use_warm_pool and not has_mcp_context:
                 # Se houver um slot antigo para esse comando, descarta para evitar
                 # processos ociosos extras no gerenciador.
                 _stale_slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env)

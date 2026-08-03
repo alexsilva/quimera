@@ -83,6 +83,38 @@ _MAX_TOOL_LOOP_MESSAGES = 24
 # Limite padrão de conexões concorrentes ao backend OpenAI-compatible.
 # Evita estouro de rate-limit quando múltiplos agentes chamam a API em paralelo.
 DEFAULT_MAX_CONNECTIONS = 4
+_BACKEND_SEMAPHORE_LOCK = threading.Lock()
+_BACKEND_SEMAPHORES: dict[tuple[str, str], threading.Semaphore] = {}
+
+
+def _normalize_max_connections(max_connections: int) -> int:
+    try:
+        value = int(max_connections)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_CONNECTIONS
+    return value if value > 0 else DEFAULT_MAX_CONNECTIONS
+
+
+def _backend_semaphore_key(base_url: str, api_key: str) -> tuple[str, str]:
+    return (
+        str(base_url or ""),
+        str(api_key or ""),
+    )
+
+
+def _backend_semaphore(
+    base_url: str,
+    api_key: str,
+    max_connections: int,
+) -> threading.Semaphore:
+    max_connections = _normalize_max_connections(max_connections)
+    key = _backend_semaphore_key(base_url, api_key)
+    with _BACKEND_SEMAPHORE_LOCK:
+        semaphore = _BACKEND_SEMAPHORES.get(key)
+        if semaphore is None:
+            semaphore = threading.Semaphore(max_connections)
+            _BACKEND_SEMAPHORES[key] = semaphore
+        return semaphore
 
 
 def _strip_thinking(
@@ -233,8 +265,9 @@ class OpenAICompatDriver:
             api_key="sk-...",
         )
 
-    Um semáforo por instância (_semaphore) limita o número de chamadas
-    concorrentes ao backend para evitar estouro de rate-limit.
+    Um semáforo global por backend/API key limita o número de chamadas
+    concorrentes ao mesmo backend para evitar estouro de rate-limit quando
+    múltiplos agentes compartilham provider.
     """
 
     def __init__(
@@ -250,7 +283,7 @@ class OpenAICompatDriver:
         """Inicializa uma instância de OpenAICompatDriver.
         extra_body: dicionário opcional mesclado no corpo da requisição (ex: {"thinking": {"type": "enabled"}}).
         max_connections: limite de chamadas concorrentes ao backend (padrão: 4)."""
-        self._semaphore = threading.Semaphore(max_connections)
+        self._semaphore = _backend_semaphore(base_url, api_key, max_connections)
         if OpenAI is None:
             raise ImportError(
                 "O pacote 'openai' é dependência obrigatória da instalação. "

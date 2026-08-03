@@ -424,6 +424,25 @@ class TestAgentClientWarmPool:
         stale_slot.discard.assert_called_once()
         mock_schedule.assert_not_called()
 
+    def test_call_mcp_agent_does_not_use_warm_pool(self, renderer):
+        """CLI com MCP não reusa processo aquecido para evitar estado residual."""
+        client = AgentClient(renderer)
+        with patch("quimera.profiles.get") as mock_get, \
+             patch.object(client._warm_pool, "take") as mock_take, \
+             patch.object(client._warm_pool, "schedule_warm") as mock_schedule, \
+             patch.object(client, "run", return_value="ok"):
+            mock_profile = MagicMock()
+            mock_profile.cmd = ["codex"]
+            mock_profile.prompt_as_arg = False
+            mock_profile.supports_warm_pool = True
+            mock_profile._mcp_socket_path = "/tmp/quimera.sock"
+            mock_get.return_value = mock_profile
+
+            client.call("codex", "hello")
+
+        mock_take.assert_not_called()
+        mock_schedule.assert_not_called()
+
     def test_should_use_warm_pool_disables_opencode(self):
         """Verifica que _should_use_warm_pool retorna False para OpenCode."""
         opencode_profile = MagicMock(supports_warm_pool=False)
@@ -431,6 +450,7 @@ class TestAgentClientWarmPool:
         assert AgentClient._should_use_warm_pool(opencode_profile, ["opencode"]) is False
         assert AgentClient._should_use_warm_pool(codex_profile, ["/usr/local/bin/opencode"]) is True
         assert AgentClient._should_use_warm_pool(codex_profile, ["codex"]) is True
+        assert AgentClient._should_use_warm_pool(codex_profile, ["codex"], has_mcp_context=True) is False
 
     def test_close_shuts_down_warm_pool(self, renderer):
         """Verifica que close propaga shutdown para o WarmPool."""

@@ -1,4 +1,7 @@
 import threading
+from types import SimpleNamespace
+
+import pytest
 
 from quimera.app.dispatch import AppDispatchServices
 from quimera.tasks.runner import TaskRunner
@@ -392,6 +395,31 @@ def test_background_task_tool_executor_disables_ask_user(tmp_path):
     assert executor.is_ask_user_available() is False
 
 
+def test_background_dispatches_get_isolated_tool_executors(tmp_path):
+    """Cada dispatch de background deve ter ToolExecutor/ApprovalManager próprios."""
+    class AppStub:
+        pass
+
+    app = AppStub()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
+    app.visibility = "summary"
+    app.auto_approve_mutations = False
+
+    services = build_task_services(app)
+    first = services._create_background_dispatch_services()
+    second = services._create_background_dispatch_services()
+
+    assert first is not None and second is not None
+    assert first._tool_executor_override is not second._tool_executor_override
+    assert first._tool_executor_override.approval_handler is not second._tool_executor_override.approval_handler
+
+
 def test_task_tool_auto_approval_scope_applies_to_any_background_agent():
     """Tasks em background devem autorizar tools sem depender do driver do agente."""
     app = type("App", (), {})()
@@ -580,6 +608,86 @@ def test_app_task_services_execution_isolated_from_chat_cancel_state(monkeypatch
     assert repo.complete_calls == [(6, "resultado final", None)]
 
 
+def test_task_runner_uses_dedicated_background_dispatch_per_call(monkeypatch, tmp_path):
+    """TaskRunner criado pelo pool não pode compartilhar dispatch/approval entre chamadas."""
+    system = SystemLayerSpy()
+    repo = RepositorySpy()
+    policy = FailoverPolicyStub(review_agents=[])
+
+    class AppStub:
+        pass
+
+    app = AppStub()
+    app.agent_client = type("ChatClient", (), {"_user_cancelled": False})()
+    app.system_layer = system
+    app.record_failure = lambda _agent_name: None
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
+    app.auto_approve_mutations = False
+    app.get_agent_profile = lambda _agent_name: None
+
+    services = build_task_services(app)
+    pool = services._executor_pool
+    monkeypatch.setattr(pool, "_build_task_repository", lambda: repo)
+
+    created = []
+    closed = []
+    enabled = []
+    disabled = []
+
+    class DispatchPerCall(DispatchStub):
+        def __init__(self, response):
+            super().__init__(response=response)
+            self._tool_executor_override = SimpleNamespace(approval_handler=object())
+
+        def close(self):
+            closed.append(self)
+
+    def _create_background_dispatch_services(**_kwargs):
+        dispatch = DispatchPerCall(f"resultado-{len(created) + 1}")
+        created.append(dispatch)
+        return dispatch
+
+    monkeypatch.setattr(pool, "_create_background_dispatch_services", _create_background_dispatch_services)
+    monkeypatch.setattr(
+        pool,
+        "_enable_task_tool_auto_approval",
+        lambda agent_name, approval_handler=None: enabled.append((agent_name, approval_handler)),
+    )
+    monkeypatch.setattr(
+        pool,
+        "_disable_task_tool_auto_approval",
+        lambda agent_name, approval_handler=None: disabled.append((agent_name, approval_handler)),
+    )
+
+    runner = pool._build_task_execution_service(policy)
+
+    first = runner.handler_for("codex")(
+        TaskRecord(id=7, job_id=0, description="primeira", status="in_progress")
+    )
+    second = runner.handler_for("codex")(
+        TaskRecord(id=8, job_id=0, description="segunda", status="in_progress")
+    )
+
+    assert first is True
+    assert second is True
+    assert len(created) == 2
+    assert created[0] is not created[1]
+    assert closed == created
+    assert enabled == [
+        ("codex", created[0]._tool_executor_override.approval_handler),
+        ("codex", created[1]._tool_executor_override.approval_handler),
+    ]
+    assert disabled == enabled
+    assert repo.complete_calls == [
+        (7, "resultado-1", None),
+        (8, "resultado-2", None),
+    ]
+
+
 def test_background_dispatch_uses_chat_timeout_when_present(tmp_path):
     """Verifica que background dispatch uses chat timeout when present."""
     class AppStub:
@@ -749,6 +857,33 @@ def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_pa
     assert created[0] is not created[1]
     assert created[0].kwargs["cancel_event"] is first_cancel
     assert created[1].kwargs["cancel_event"] is second_cancel
+
+
+def test_parallel_calls_fail_when_background_dispatch_is_unavailable(tmp_path, monkeypatch):
+    """Delegate paralelo não deve voltar ao delegate principal quando background falha."""
+    class AppStub:
+        pass
+
+    app = AppStub()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
+    app.visibility = "summary"
+    app.auto_approve_mutations = False
+    app.delegate = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("delegate principal não deve ser chamado")
+    )
+    app.parse_response = lambda raw: (raw, None, None, False, None)
+
+    services = build_task_services(app)
+    monkeypatch.setattr(services, "_create_background_dispatch_services", lambda **kwargs: None)
+
+    with pytest.raises(RuntimeError, match="background"):
+        services.delegate_for_parallel("codex", None, "standard", tmp_path / "staging", 0)
 
 
 def test_background_dispatch_does_not_reuse_primary_delegate_override(tmp_path, monkeypatch):

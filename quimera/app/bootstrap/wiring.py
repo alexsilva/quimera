@@ -107,7 +107,7 @@ def _make_background_delegate_fn(task_services, dispatch_services):
     def _fn(agent, **opts):
         bg = task_services._create_background_dispatch_services()
         if bg is None or bg is dispatch_services:
-            return dispatch_services.delegate(agent, **opts)
+            raise RuntimeError("dispatch de background indisponível para delegate")
         try:
             return bg.delegate(agent, **opts)
         finally:
