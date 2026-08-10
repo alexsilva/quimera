@@ -624,7 +624,28 @@ def test_textual_feed_tool_preview_preserves_run_metadata():
     payload = model.items[0].event.payload
     assert payload["run_id"] == "http:run-1"
     assert payload["transport"] == "mcp_http"
-    assert payload["tools"] == ["⌘ read_file foo.py"]
+    assert payload["tools"] == ["◇ ⌘ read_file foo.py"]
+
+
+def test_textual_feed_http_mcp_tool_preview_uses_remote_icon_and_merges_status():
+    model = TextualFeedModel()
+    payload = {
+        "content": "⚒ read_file foo.py",
+        "label": "MCP HTTP",
+        "run_id": "http:run-1",
+        "transport": "mcp_http",
+    }
+
+    model.apply(TextualUiEvent("tool_preview", payload, agent="mcp-http"))
+    model.apply(
+        TextualUiEvent(
+            "tool_preview",
+            {**payload, "content": "✓ read_file foo.py"},
+            agent="mcp-http",
+        )
+    )
+
+    assert model.items[0].event.payload["tools"] == ["◇ ✓ read_file foo.py"]
 
 
 def test_textual_feed_structured_tool_preview_stays_in_same_run():

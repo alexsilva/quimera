@@ -303,3 +303,62 @@ def test_agent_gateway_emits_cancelled_before_backend_call():
 
     assert result is None
     assert [event.kind for event in sink.events] == ["started", "cancelled"]
+
+
+def test_agent_run_registry_default_retention_limit():
+    registry = AgentRunRegistry()
+
+    assert registry.max_runs == 100
+
+
+def test_agent_run_registry_prunes_oldest_finished_run_when_limit_is_exceeded():
+    registry = AgentRunRegistry(max_runs=2, clock=iter([1.0, 2.0, 3.0]).__next__)
+
+    registry.record(AgentRunEvent("finished", "codex", run_id="run:1"))
+    registry.record(AgentRunEvent("finished", "codex", run_id="run:2"))
+    registry.record(AgentRunEvent("finished", "codex", run_id="run:3"))
+
+    assert registry.get("run:1") is None
+    assert registry.get("run:2") is not None
+    assert registry.get("run:3") is not None
+    assert [run.run_id for run in registry.snapshot()] == ["run:2", "run:3"]
+
+
+def test_agent_run_registry_never_prunes_active_runs():
+    registry = AgentRunRegistry(max_runs=1, clock=iter([1.0, 2.0, 3.0]).__next__)
+
+    registry.record(AgentRunEvent("started", "codex", run_id="run:active-1"))
+    registry.record(AgentRunEvent("started", "claude", run_id="run:active-2"))
+    registry.record(AgentRunEvent("finished", "opencode", run_id="run:finished"))
+
+    assert registry.get("run:active-1") is not None
+    assert registry.get("run:active-2") is not None
+    assert registry.get("run:finished") is None
+    assert {run.run_id for run in registry.active_runs()} == {"run:active-1", "run:active-2"}
+
+
+def test_agent_run_registry_prune_preserves_snapshot_and_active_runs():
+    registry = AgentRunRegistry(max_runs=2, clock=iter([1.0, 2.0, 3.0, 4.0]).__next__)
+
+    registry.record(AgentRunEvent("started", "codex", run_id="run:active"))
+    registry.record(AgentRunEvent("finished", "codex", run_id="run:old"))
+    registry.record(AgentRunEvent("finished", "codex", run_id="run:new"))
+    registry.prune()
+
+    assert {run.run_id for run in registry.snapshot()} == {"run:active", "run:new"}
+    assert [run.run_id for run in registry.active_runs()] == ["run:active"]
+    assert registry.get("run:old") is None
+
+
+def test_agent_run_registry_notifies_pruned_run_ids():
+    pruned_batches = []
+    registry = AgentRunRegistry(
+        max_runs=1,
+        clock=iter([1.0, 2.0]).__next__,
+        on_prune=pruned_batches.append,
+    )
+
+    registry.record(AgentRunEvent("finished", "codex", run_id="run:old"))
+    registry.record(AgentRunEvent("finished", "codex", run_id="run:new"))
+
+    assert pruned_batches == [["run:old"]]

@@ -31,6 +31,25 @@ _RICH_MARKUP_TAG_RE = re.compile(r"\[/?[a-zA-Z][a-zA-Z0-9_#= .:-]*\]")
 _TOOL_PREVIEW_LINE_LIMIT = 8
 _GUTTER_GUIDE = "│"
 _THINKING_PULSE_FRAMES = ("✻", "✽", "✳", "✢", "·", "✢", "✳", "✽")
+_MCP_HTTP_TRANSPORT = "mcp_http"
+_TRANSPORT_MARKERS = {
+    _MCP_HTTP_TRANSPORT: "☁",
+}
+
+
+def _resolve_transport_label(payload, agent: str | None = None) -> str:
+    """Resolve label from payload, prefixing a discreet transport icon for MCP HTTP.
+
+    MCP HTTP runs come from the external HTTP endpoint (vs local socket),
+    so we prefix with a cloud icon to signal "remote/network" at a glance.
+    """
+    data = payload if isinstance(payload, dict) else {}
+    base_label = str(data.get("label", f"🤖 {agent or 'agente'}"))
+    transport = str(data.get("transport", "")).strip()
+    prefix = _TRANSPORT_MARKERS.get(transport)
+    return f"{prefix} {base_label}" if prefix else base_label
+
+
 _thinking_pulse_index = 0
 _DELEGATION_HINT_RE = re.compile(
     r"(\bdelegate\b|\bdelegar\b|\bdelegação\b|\bdelegacao\b|->|→|=>)",
@@ -467,7 +486,7 @@ def _render_event(event: TextualUiEvent):
     if event.kind == "agent_message":
         payload = event.payload or {}
         content = str(payload.get("content", ""))
-        label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
+        label = _resolve_transport_label(payload, event.agent)
         style = str(payload.get("style", "cyan") or "cyan")
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         is_orchestrator = bool(payload.get("orchestrator", False))
@@ -481,7 +500,7 @@ def _render_event(event: TextualUiEvent):
         )
     if event.kind == "stream_start":
         payload = event.payload or {}
-        label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
+        label = _resolve_transport_label(payload, event.agent)
         style = str(payload.get("style", "cyan") or "cyan")
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         return _build_stream_renderable(theme_name, label, style, "gerando...")
@@ -493,13 +512,13 @@ def _render_event(event: TextualUiEvent):
         payload = event.payload if isinstance(event.payload, dict) else {}
         content = str(payload.get("content") or payload.get("text") or event.payload)
         tools = payload.get("tools") if isinstance(payload, dict) else None
-        label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
+        label = _resolve_transport_label(payload, event.agent)
         style = str(payload.get("style", "cyan") or "cyan")
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         return _build_stream_renderable(theme_name, label, style, content, tools=tools)
     if event.kind == "pending_input":
         payload = event.payload if isinstance(event.payload, dict) else {}
-        label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
+        label = _resolve_transport_label(payload, event.agent)
         style = str(payload.get("style", "cyan") or "cyan")
         question = str(payload.get("question") or "")
         kind = str(payload.get("kind") or "input")
@@ -517,9 +536,14 @@ def _render_event(event: TextualUiEvent):
             activity_payload.update({"activity": status, "message": message})
             return _build_agent_activity_renderable(activity_payload, event.agent)
         tools = payload.get("tools") if isinstance(payload, dict) else None
-        label = str(payload.get("label", f"🤖 {event.agent or 'agente'}")) if isinstance(payload, dict) else f"🤖 {event.agent or 'agente'}"
-        style = str(payload.get("style", "cyan") or "cyan") if isinstance(payload, dict) else "cyan"
-        theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME) if isinstance(payload, dict) else themes.DEFAULT_THEME
+        if isinstance(payload, dict):
+            label = _resolve_transport_label(payload, event.agent)
+            style = str(payload.get("style", "cyan") or "cyan")
+            theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
+        else:
+            label = _resolve_transport_label({}, event.agent)
+            style = "cyan"
+            theme_name = themes.DEFAULT_THEME
         return _build_stream_renderable(theme_name, label, style, message, tools=tools, thinking=False)
     if event.kind == "execution_control":
         control = event.payload
@@ -592,13 +616,13 @@ def _render_event(event: TextualUiEvent):
         if isinstance(event.payload, dict):
             content = str(event.payload.get("content") or "")
             tools = event.payload.get("tools")
-            label = str(event.payload.get("label", f"🤖 {event.agent or 'agente'}"))
+            label = _resolve_transport_label(event.payload, event.agent)
             style = str(event.payload.get("style", "cyan") or "cyan")
             theme_name = str(event.payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         else:
             content = str(event.payload)
             tools = None
-            label = f"🤖 {event.agent or 'agente'}"
+            label = _resolve_transport_label({}, event.agent)
             style = "cyan"
             theme_name = themes.DEFAULT_THEME
         if event.agent:

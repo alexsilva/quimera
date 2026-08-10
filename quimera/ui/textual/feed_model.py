@@ -99,6 +99,7 @@ class TextualFeedModel:
     """Modelo testável do feed: transitórios por agente são substituíveis."""
 
     _TRANSIENT_KINDS = {"stream_start", "stream_chunk", "stream_abort", "agent_update", "agent_lifecycle", "pending_input"}
+    _MCP_HTTP_TOOL_MARKER = "◇"
 
     _IGNORED_KINDS = {
         "prompt",
@@ -493,12 +494,30 @@ class TextualFeedModel:
         text = str(content or "").strip()
         if not text:
             return ""
-        for marker in ("$ ", "✓ ", "✗ ", "⌘ ", "⚒ "):
-            if text.startswith(marker):
-                text = text[len(marker):].strip()
-                break
+        markers = ("◇ ", "$ ", "✓ ", "✗ ", "⌘ ", "⚒ ")
+        changed = True
+        while changed:
+            changed = False
+            for marker in markers:
+                if text.startswith(marker):
+                    text = text[len(marker):].strip()
+                    changed = True
+                    break
         text = re.sub(r"\s*\(exit\s+-?\d+\)\s*$", "", text).strip()
         return text
+
+    @classmethod
+    def _tool_preview_content(cls, event: TextualUiEvent) -> str:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        content_source = payload.get("content") if payload else event.payload
+        content = strip_ansi(str(content_source or "")).strip()
+        transport = str(payload.get("transport") or "").strip()
+        run_id = str(payload.get("run_id") or "").strip()
+        if content and (transport == "mcp_http" or run_id.startswith("http:")):
+            marker = f"{cls._MCP_HTTP_TOOL_MARKER} "
+            if not content.startswith(marker):
+                content = f"{marker}{content}"
+        return content
 
     @staticmethod
     def _tool_preview_tool_name(subject: str) -> str:
@@ -623,8 +642,7 @@ class TextualFeedModel:
             self._last_change = TextualFeedChange(False)
             return False
         payload = event.payload if isinstance(event.payload, dict) else {}
-        content_source = payload.get("content") if payload else event.payload
-        content = strip_ansi(str(content_source or "")).strip()
+        content = self._tool_preview_content(event)
         if not content:
             self._last_change = TextualFeedChange(False)
             return False

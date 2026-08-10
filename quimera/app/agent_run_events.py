@@ -86,10 +86,22 @@ class NullAgentRunSink:
 class AgentRunRegistry:
     """In-memory index of active and recently completed agent runs."""
 
-    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        max_runs: int = 100,
+        on_prune: Callable[[list[str]], None] | None = None,
+    ) -> None:
         self._clock = clock
+        self._max_runs = max(1, int(max_runs))
+        self._on_prune = on_prune
         self._runs: dict[str, AgentRunRecord] = {}
         self._lock = threading.RLock()
+
+    @property
+    def max_runs(self) -> int:
+        return self._max_runs
 
     def record(self, event: AgentRunEvent) -> AgentRunRecord | None:
         """Apply one event and return the updated run snapshot when it is traceable."""
@@ -115,7 +127,36 @@ class AgentRunRegistry:
                 event_count=(current.event_count if current else 0) + 1,
             )
             self._runs[run_id] = record
-            return record
+            pruned = self._prune_locked()
+        self._notify_pruned(pruned)
+        return record
+
+    def prune(self) -> list[str]:
+        """Drop oldest finished runs when the retention limit is exceeded."""
+        with self._lock:
+            pruned = self._prune_locked()
+        self._notify_pruned(pruned)
+        return pruned
+
+    def _prune_locked(self) -> list[str]:
+        excess = len(self._runs) - self._max_runs
+        if excess <= 0:
+            return []
+        candidates = [
+            run
+            for run in self._runs.values()
+            if run.finished_at is not None
+        ]
+        candidates.sort(key=lambda run: (run.finished_at or run.updated_at, run.updated_at, run.run_id))
+        pruned: list[str] = []
+        for run in candidates[:excess]:
+            if self._runs.pop(run.run_id, None) is not None:
+                pruned.append(run.run_id)
+        return pruned
+
+    def _notify_pruned(self, pruned: list[str]) -> None:
+        if pruned and self._on_prune is not None:
+            self._on_prune(list(pruned))
 
     def get(self, run_id: str) -> AgentRunRecord | None:
         with self._lock:
