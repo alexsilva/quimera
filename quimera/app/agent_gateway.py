@@ -2,6 +2,7 @@
 import queue as _queue_module
 import re
 import time
+import uuid
 from contextlib import nullcontext
 
 from ..agents.capabilities import get_cancel_event, is_user_cancelled
@@ -76,6 +77,17 @@ def _is_user_cancelled(agent_client) -> bool:
         except Exception:
             return False
     return False
+
+
+def _metadata_string(source, *names: str) -> str:
+    """Read the first non-empty string field from a metadata mapping."""
+    if not isinstance(source, dict):
+        return ""
+    for name in names:
+        value = source.get(name)
+        if value:
+            return str(value).strip()
+    return ""
 
 
 class AgentGateway:
@@ -159,8 +171,23 @@ class AgentGateway:
         self._refresh_task_state()
 
         output_lock = self._output_lock
+        delegation_metadata = delegation if isinstance(delegation, dict) else {}
+        delegation_id = _metadata_string(delegation_metadata, "delegation_id")
+        parent_run_id = _metadata_string(delegation_metadata, "parent_run_id")
+        run_id = _metadata_string(delegation_metadata, "run_id", "agent_run_id") or f"agentrun:{uuid.uuid4()}"
+        prompt_kind_value = getattr(prompt_kind, "value", str(prompt_kind))
+        if delegation_id or str(protocol_mode or "") == "delegation":
+            transport = "delegate"
+        elif prompt_kind_value in {PromptKind.TASK_EXECUTOR.value, PromptKind.TASK_REVIEWER.value}:
+            transport = "task"
+        else:
+            transport = "chat"
         event_metadata = {
-            "prompt_kind": getattr(prompt_kind, "value", str(prompt_kind)),
+            "run_id": run_id,
+            "parent_run_id": parent_run_id,
+            "delegation_id": delegation_id,
+            "transport": transport,
+            "prompt_kind": prompt_kind_value,
             "protocol_mode": protocol_mode,
             "delegation_only": bool(delegation_only),
             "primary": bool(primary),
@@ -168,9 +195,20 @@ class AgentGateway:
             "show_output": bool(show_output),
             "from_agent": from_agent,
         }
-        self._agent_run_sink.emit(
-            AgentRunEvent("started", str(agent), metadata=event_metadata)
-        )
+
+        def _run_event(kind: str, *, text: str = "", metadata: dict | None = None) -> AgentRunEvent:
+            return AgentRunEvent(
+                kind,
+                str(agent),
+                text=text,
+                metadata=metadata or event_metadata,
+                run_id=run_id,
+                parent_run_id=parent_run_id,
+                delegation_id=delegation_id,
+                transport=transport,
+            )
+
+        self._agent_run_sink.emit(_run_event("started"))
 
         _stream_buffer = []
         thinking_relay = (
@@ -182,7 +220,7 @@ class AgentGateway:
         def _on_text_chunk(chunk):
             if chunk:
                 self._agent_run_sink.emit(
-                    AgentRunEvent("delta", str(agent), text=str(chunk), metadata=event_metadata)
+                    _run_event("delta", text=str(chunk))
                 )
             if silent or not show_output or not chunk:
                 return
@@ -238,17 +276,13 @@ class AgentGateway:
         except Exception as exc:
             fail_metadata = dict(event_metadata)
             fail_metadata["error"] = str(exc)
-            self._agent_run_sink.emit(
-                AgentRunEvent("failed", str(agent), metadata=fail_metadata)
-            )
+            self._agent_run_sink.emit(_run_event("failed", metadata=fail_metadata))
             raise
 
         if _is_user_cancelled(agent_client):
             cancel_metadata = dict(event_metadata)
             cancel_metadata["elapsed"] = time.time() - start
-            self._agent_run_sink.emit(
-                AgentRunEvent("cancelled", str(agent), metadata=cancel_metadata)
-            )
+            self._agent_run_sink.emit(_run_event("cancelled", metadata=cancel_metadata))
             logger.debug("[GATEWAY] agent=%s cancelled by user before backend call, aborting", agent)
             return None
 
@@ -264,9 +298,7 @@ class AgentGateway:
         except Exception as exc:
             fail_metadata = dict(event_metadata)
             fail_metadata["error"] = str(exc)
-            self._agent_run_sink.emit(
-                AgentRunEvent("failed", str(agent), metadata=fail_metadata)
-            )
+            self._agent_run_sink.emit(_run_event("failed", metadata=fail_metadata))
             raise
 
         if _stream_buffer or result:
@@ -284,9 +316,8 @@ class AgentGateway:
         finish_metadata = dict(event_metadata)
         finish_metadata["elapsed"] = elapsed
         self._agent_run_sink.emit(
-            AgentRunEvent(
+            _run_event(
                 "finished" if result else "failed",
-                str(agent),
                 text=str(result or ""),
                 metadata=finish_metadata,
             )

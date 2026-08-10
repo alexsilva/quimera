@@ -53,6 +53,65 @@ def test_textual_renderer_routes_prompt_preview_to_modal_event():
     }
 
 
+def test_textual_renderer_adds_run_metadata_to_agent_events():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    bridge.clear_agent_active = lambda _agent: None
+    renderer = TextualRenderer(bridge)
+
+    renderer.begin_agent_run(
+        "codex",
+        run_id="agentrun:test",
+        parent_run_id="agentrun:parent",
+        delegation_id="dlg-1",
+        transport="delegate",
+    )
+    renderer.update_agent_transient("codex", "executando")
+    renderer.show_message("codex", "final")
+    renderer.update_agent_transient("codex", "fora da run")
+
+    assert emitted[0].kind == "agent_update"
+    assert emitted[0].payload["run_id"] == "agentrun:test"
+    assert emitted[0].payload["parent_run_id"] == "agentrun:parent"
+    assert emitted[0].payload["delegation_id"] == "dlg-1"
+    assert emitted[0].payload["transport"] == "delegate"
+    assert emitted[1].kind == "agent_message"
+    assert emitted[1].payload["run_id"] == "agentrun:test"
+    assert "run_id" not in emitted[2].payload
+
+
+def test_textual_renderer_visual_reset_preserves_run_id():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.begin_agent_run("codex", run_id="agentrun:test", transport="chat")
+    renderer.clear_agent_transient("codex")
+
+    assert emitted[-1].kind == "visual_reset"
+    assert emitted[-1].payload["run_id"] == "agentrun:test"
+    assert emitted[-1].payload["transport"] == "chat"
+
+
+def test_textual_renderer_muted_agent_plain_preserves_run_context():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.begin_agent_run("opencode", run_id="agentrun:opencode", transport="chat")
+    renderer.show_plain("⚒ read_file README.md", agent="opencode", muted=True)
+
+    assert emitted[-1].kind == "tool_preview"
+    assert emitted[-1].agent == "opencode"
+    assert emitted[-1].payload["content"] == "⚒ read_file README.md"
+    assert emitted[-1].payload["run_id"] == "agentrun:opencode"
+    assert emitted[-1].payload["label"]
+    assert emitted[-1].payload["theme"]
+
+
 def test_prompt_preview_screen_shows_content_and_closes_with_button():
     import asyncio
 
@@ -505,6 +564,114 @@ def test_textual_feed_uses_delegation_id_to_isolate_same_agent_runs():
     assert len(model.items) == 1
     assert model.items[0].event.kind == "stream_chunk"
     assert model.items[0].event.payload["delegation_id"] == "two"
+
+
+def test_textual_feed_uses_run_id_to_isolate_same_agent_runs():
+    model = TextualFeedModel()
+
+    first = {"label": "Claude", "run_id": "agentrun:one", "delegation_id": "same"}
+    second = {"label": "Claude", "run_id": "agentrun:two", "delegation_id": "same"}
+
+    model.apply(TextualUiEvent("stream_start", first, agent="claude-sonnet"))
+    model.apply(TextualUiEvent("stream_start", second, agent="claude-sonnet"))
+    model.apply(TextualUiEvent("stream_chunk", {**first, "text": "primeiro"}, agent="claude-sonnet"))
+    model.apply(TextualUiEvent("stream_chunk", {**second, "text": "segundo"}, agent="claude-sonnet"))
+
+    assert len(model.items) == 2
+    assert {item.event.payload["run_id"] for item in model.items} == {
+        "agentrun:one",
+        "agentrun:two",
+    }
+
+
+def test_textual_feed_agent_message_replaces_run_id_transient():
+    model = TextualFeedModel()
+
+    payload = {"label": "Claude", "run_id": "agentrun:one"}
+    model.apply(TextualUiEvent("stream_start", payload, agent="claude"))
+    model.apply(TextualUiEvent("stream_chunk", {**payload, "text": "parcial"}, agent="claude"))
+
+    final = TextualUiEvent(
+        "agent_message",
+        {**payload, "content": "final"},
+        agent="claude",
+    )
+    assert model.apply(final) is True
+
+    assert len(model.items) == 1
+    assert model.items[0].transient is False
+    assert model.items[0].event is final
+    assert model.last_change.redraw is True
+
+
+def test_textual_feed_tool_preview_preserves_run_metadata():
+    model = TextualFeedModel()
+
+    assert model.apply(
+        TextualUiEvent(
+            "tool_preview",
+            {
+                "content": "⌘ read_file foo.py",
+                "label": "MCP HTTP",
+                "run_id": "http:run-1",
+                "transport": "mcp_http",
+            },
+            agent="mcp-http",
+        )
+    )
+
+    assert len(model.items) == 1
+    payload = model.items[0].event.payload
+    assert payload["run_id"] == "http:run-1"
+    assert payload["transport"] == "mcp_http"
+    assert payload["tools"] == ["⌘ read_file foo.py"]
+
+
+def test_textual_feed_structured_tool_preview_stays_in_same_run():
+    model = TextualFeedModel()
+    payload = {"label": "OpenCode", "style": "blue", "run_id": "agentrun:opencode"}
+
+    model.apply(TextualUiEvent("stream_start", payload, agent="opencode"))
+    model.apply(
+        TextualUiEvent(
+            "tool_preview",
+            {**payload, "content": "⚒ read_file README.md"},
+            agent="opencode",
+        )
+    )
+
+    assert len(model.items) == 1
+    assert model.items[0].event.payload["run_id"] == "agentrun:opencode"
+    assert model.items[0].event.payload["tools"] == ["⚒ read_file README.md"]
+
+
+def test_textual_feed_final_without_run_id_replaces_single_active_run():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("stream_start", {"label": "Claude", "run_id": "agentrun:one"}, agent="claude"))
+    model.apply(TextualUiEvent("stream_chunk", {"text": "parcial", "run_id": "agentrun:one"}, agent="claude"))
+
+    final = TextualUiEvent("agent_message", {"content": "final", "label": "Claude"}, agent="claude")
+    assert model.apply(final) is True
+
+    assert len(model.items) == 1
+    assert model.items[0].event is final
+    assert model.last_change.redraw is True
+
+
+def test_textual_feed_visual_reset_with_run_id_clears_only_that_run():
+    model = TextualFeedModel()
+
+    first = {"label": "Claude", "run_id": "agentrun:one"}
+    second = {"label": "Claude", "run_id": "agentrun:two"}
+    model.apply(TextualUiEvent("stream_start", first, agent="claude"))
+    model.apply(TextualUiEvent("stream_start", second, agent="claude"))
+
+    assert len(model.items) == 2
+    assert model.apply(TextualUiEvent("visual_reset", first, agent="claude")) is True
+
+    assert len(model.items) == 1
+    assert model.items[0].event.payload["run_id"] == "agentrun:two"
 
 
 def test_textual_feed_visual_reset_clears_delegated_agent_transients_by_base_agent():

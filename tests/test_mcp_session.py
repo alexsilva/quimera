@@ -44,7 +44,7 @@ def test_start_embedded_mcp_socket_default_centraliza_startup(tmp_path, monkeypa
     assert runtime.socket_path is not None
     assert runtime.socket_path.startswith(str(tmp_path / "tmp" / "mcp-"))
     assert runtime.socket_path.endswith(".sock")
-    mcp_cls.assert_called_once_with(app.tool_executor, auth_token="internal-token")
+    mcp_cls.assert_called_once_with(app.tool_executor, auth_token="internal-token", agent_run_sink=None)
     mcp_cls.return_value.start_background.assert_called_once_with(runtime.socket_path)
     assert app.socket_configs == [(runtime.socket_path, "internal-token")]
     assert app.http_configs == []

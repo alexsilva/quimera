@@ -1,5 +1,10 @@
 from quimera.app.agent_gateway import AgentGateway
-from quimera.app.agent_run_events import AgentRunController, AgentRunEvent, NullAgentRunSink
+from quimera.app.agent_run_events import (
+    AgentRunController,
+    AgentRunEvent,
+    AgentRunRegistry,
+    NullAgentRunSink,
+)
 from quimera.prompt_kinds import PromptKind
 from quimera.runtime.input_broker import InputBroker, _InputRequest
 from quimera.ui.base import RendererBase
@@ -78,6 +83,10 @@ def test_agent_gateway_emits_normalized_run_events_for_silent_task_path():
     assert sink.events[0].metadata["delegation_only"] is True
     assert sink.events[0].metadata["silent"] is True
     assert sink.events[0].metadata["show_output"] is False
+    assert sink.events[0].run_id.startswith("agentrun:")
+    assert {event.run_id for event in sink.events} == {sink.events[0].run_id}
+    assert sink.events[0].metadata["run_id"] == sink.events[0].run_id
+    assert sink.events[0].transport == "task"
     assert sink.events[1].text == "contexto do agente"
     assert sink.events[2].text == "resposta final"
 
@@ -86,6 +95,30 @@ def test_agent_gateway_uses_null_sink_without_changing_behavior():
     gateway = make_gateway(FakeAgentClient(chunks=["ignorado"]), sink=NullAgentRunSink())
 
     assert gateway.call("claude") == "resposta final"
+
+
+def test_agent_gateway_propagates_delegation_run_metadata():
+    sink = RecordingSink()
+    gateway = make_gateway(FakeAgentClient(), sink=sink)
+
+    result = gateway.call(
+        "claude",
+        delegation={
+            "delegation_id": "dlg-123",
+            "parent_run_id": "agentrun:parent",
+        },
+        delegation_only=True,
+        protocol_mode="delegation",
+    )
+
+    assert result == "resposta final"
+    assert [event.kind for event in sink.events] == ["started", "finished"]
+    assert sink.events[0].run_id.startswith("agentrun:")
+    assert {event.run_id for event in sink.events} == {sink.events[0].run_id}
+    assert sink.events[0].delegation_id == "dlg-123"
+    assert sink.events[0].parent_run_id == "agentrun:parent"
+    assert sink.events[0].transport == "delegate"
+    assert sink.events[0].metadata["delegation_id"] == "dlg-123"
 
 
 def test_agent_gateway_emits_failed_event_when_backend_raises():
@@ -157,6 +190,58 @@ def test_agent_run_controller_commits_stream_on_human_action_request():
     controller.emit(AgentRunEvent("human_action_requested", "codex"))
 
     assert renderer.committed == ["codex"]
+
+
+def test_agent_run_controller_tracks_registry_and_renderer_context():
+    class Renderer(RendererBase):
+        def __init__(self):
+            self.started = []
+            self.ended = []
+
+        def begin_agent_run(self, agent, **metadata):
+            self.started.append((agent, metadata))
+
+        def end_agent_run(self, agent, **metadata):
+            self.ended.append((agent, metadata))
+
+    renderer = Renderer()
+    registry = AgentRunRegistry(clock=iter([1.0, 2.0, 3.0]).__next__)
+    controller = AgentRunController(renderer, registry=registry)
+
+    controller.emit(AgentRunEvent("started", "codex", run_id="agentrun:test", transport="chat"))
+    controller.emit(AgentRunEvent("delta", "codex", text="chunk", run_id="agentrun:test", transport="chat"))
+    controller.emit(AgentRunEvent("finished", "codex", text="final", run_id="agentrun:test", transport="chat"))
+
+    record = registry.get("agentrun:test")
+    assert record is not None
+    assert record.status == "finished"
+    assert record.event_count == 3
+    assert record.started_at == 1.0
+    assert record.finished_at == 3.0
+    assert renderer.started == [
+        (
+            "codex",
+            {
+                "run_id": "agentrun:test",
+                "parent_run_id": "",
+                "delegation_id": "",
+                "transport": "chat",
+            },
+        )
+    ]
+    assert renderer.ended == [("codex", {"run_id": "agentrun:test", "status": "finished"})]
+
+
+def test_agent_run_registry_marks_tool_events_as_finished():
+    registry = AgentRunRegistry(clock=iter([1.0, 2.0]).__next__)
+
+    registry.record(AgentRunEvent("tool_started", "mcp-http", run_id="http:run", transport="mcp_http"))
+    record = registry.record(AgentRunEvent("tool_finished", "mcp-http", run_id="http:run", transport="mcp_http"))
+
+    assert record is not None
+    assert record.status == "finished"
+    assert record.finished_at == 2.0
+    assert registry.active_runs() == []
 
 
 def test_input_broker_human_action_request_commits_agent_before_answer():

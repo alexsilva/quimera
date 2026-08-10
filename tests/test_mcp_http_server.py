@@ -789,7 +789,50 @@ class TestToolsCallHTTP:
             assert previews[0][0] == "run_shell"
             assert previews[0][1] == {"command": "pwd"}
             assert previews[0][2]["trusted_context"].transport == "http_mcp"
+            assert previews[0][2]["trusted_context"].agent_name == "mcp-http"
             assert approval_handler.approve.call_count == 0
+        finally:
+            httpd.shutdown()
+
+    def test_tools_call_http_propagates_quimera_run_headers_to_metadata(self, tmp_path):
+        (tmp_path / "foo.py").write_text("print('ok')\n", encoding="utf-8")
+        previews = []
+        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+        executor.set_tool_preview_callback(
+            lambda name, args, metadata=None: previews.append((name, args, metadata))
+        )
+        httpd = MCP_HTTPServer(
+            _make_mcp_server(executor),
+            host="127.0.0.1",
+            port=0,
+            allowed_tools=None,
+        )
+        httpd.start_background()
+        _wait_for_server(httpd.host, httpd.port)
+        try:
+            body = json.dumps({
+                "jsonrpc": "2.0", "id": 103, "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {"path": "foo.py"}},
+            }).encode("utf-8")
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Quimera-Agent": "remote-agent",
+                    "X-Quimera-Run": "http:run-1",
+                    "X-Quimera-Trace": "trace-1",
+                    "X-Quimera-Parent-Run": "agentrun:parent",
+                },
+            )
+
+            assert resp.status == 200
+            context = previews[0][2]["trusted_context"]
+            state = previews[0][2]["_mcp_state"]
+            assert context.agent_name == "remote-agent"
+            assert context.run_id == "http:run-1"
+            assert context.parent_run_id == "agentrun:parent"
+            assert state["trace_id"] == "trace-1"
         finally:
             httpd.shutdown()
 

@@ -126,9 +126,14 @@ def start_embedded_mcp(
     if transport not in {"socket", "http"}:
         raise ValueError(f"Transporte MCP inválido: {transport!r}")
     external_http_enabled = external_http_enabled or transport == "http"
+    agent_run_sink = getattr(app, "agent_run_sink", None)
 
     internal_mcp_token = _resolve_internal_token()
-    internal_mcp_server = MCPServer(app.tool_executor, auth_token=internal_mcp_token)
+    internal_mcp_server = MCPServer(
+        app.tool_executor,
+        auth_token=internal_mcp_token,
+        agent_run_sink=agent_run_sink,
+    )
     resolved_socket_path = socket_path or _default_socket_path(workspace)
     internal_mcp_server.start_background(resolved_socket_path)
     app.configure_mcp_socket(resolved_socket_path, internal_mcp_token)
@@ -144,7 +149,11 @@ def start_embedded_mcp(
 
     if external_http_enabled:
         external_mcp_token = _resolve_external_token(token_env)
-        external_mcp_server = MCPServer(app.tool_executor, auth_token=external_mcp_token)
+        external_mcp_server = MCPServer(
+            app.tool_executor,
+            auth_token=external_mcp_token,
+            agent_run_sink=agent_run_sink,
+        )
         external_mcp_allowed_tools = parse_http_allowed_tools(http_allowed_tools)
         external_mcp_http_server = MCP_HTTPServer(
             external_mcp_server,

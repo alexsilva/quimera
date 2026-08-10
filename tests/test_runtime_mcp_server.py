@@ -186,6 +186,65 @@ class TestToolsCall:
         assert call_arg.name == "read_file"
         assert call_arg.arguments == {"path": "foo.py"}
 
+    def test_internal_mcp_tools_call_does_not_emit_agent_run_events(self):
+        result = ToolResult(ok=True, tool_name="read_file", content="linhas do arquivo")
+        executor = _make_executor(call_result=result)
+        events = []
+
+        class Sink:
+            def emit(self, event):
+                events.append(event)
+
+        server = MCPServer(executor, agent_run_sink=Sink())
+
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {"path": "foo.py"}},
+        })
+
+        assert resp["result"]["isError"] is False
+        assert events == []
+
+    def test_http_mcp_tools_call_emits_agent_run_events(self):
+        result = ToolResult(ok=True, tool_name="read_file", content="linhas do arquivo")
+        executor = _make_executor(call_result=result)
+        events = []
+
+        class Sink:
+            def emit(self, event):
+                events.append(event)
+
+        server = MCPServer(executor, agent_run_sink=Sink())
+        out = io.StringIO()
+        setattr(out, "_mcp_state", {
+            "agent_name": "mcp-http",
+            "transport": "http_mcp",
+            "trusted_run_id": "http:run-1",
+        })
+
+        server.serve(
+            stdin=io.StringIO(
+                json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 10,
+                    "method": "tools/call",
+                    "params": {"name": "read_file", "arguments": {"path": "foo.py"}},
+                })
+                + "\n"
+            ),
+            stdout=out,
+        )
+        [resp] = [json.loads(line) for line in out.getvalue().splitlines()]
+
+        assert resp["result"]["isError"] is False
+        assert [event.kind for event in events] == ["tool_started", "tool_finished"]
+        assert events[0].agent == "mcp-http"
+        assert events[0].run_id == "http:run-1"
+        assert events[1].run_id == events[0].run_id
+        assert events[0].metadata["tool_name"] == "read_file"
+        assert events[0].metadata["arg_keys"] == ["path"]
+        assert events[1].status == "finished"
+
     def test_retorna_texto_e_imagem_sem_duplicar_base64_nos_metadados(self):
         image_block = {
             "type": "image",

@@ -214,8 +214,8 @@ class TextualFeedModel:
         if event.kind == "visual_reset":
             return self._apply_visual_reset(event)
         if event.kind == "agent_message":
-            replaced = self._replace_transient_with_final(event)
-            summary = self._pending_turn_summary_by_agent.pop(self._agent_key(event), None)
+            replaced, agent_key = self._replace_transient_with_final(event)
+            summary = self._pending_turn_summary_by_agent.pop(agent_key, None)
             if summary is not None:
                 self._items.append(TextualFeedItem(summary, transient=False))
                 self._last_change = TextualFeedChange(True, redraw=True)
@@ -297,8 +297,11 @@ class TextualFeedModel:
 
     def _agent_key(self, event: TextualUiEvent) -> str:
         payload = event.payload if isinstance(event.payload, dict) else {}
+        run_id = str(payload.get("run_id") or "").strip()
         delegation_id = str(payload.get("delegation_id") or "").strip()
         base = str(event.agent or "__global__")
+        if run_id:
+            return f"{base}#run:{run_id}"
         return f"{base}#{delegation_id}" if delegation_id else base
 
     def _upsert_transient(self, event: TextualUiEvent) -> bool:
@@ -312,8 +315,8 @@ class TextualFeedModel:
         self._items.append(item)
         return False
 
-    def _replace_transient_with_final(self, event: TextualUiEvent) -> bool:
-        agent = self._agent_key(event)
+    def _replace_transient_with_final(self, event: TextualUiEvent) -> tuple[bool, str]:
+        agent = self._final_replacement_key(event)
         self._stream_buffer_by_agent.pop(agent, None)
         self._stream_meta_by_agent.pop(agent, None)
         self._transient_tools_by_agent.pop(agent, None)
@@ -322,9 +325,25 @@ class TextualFeedModel:
         index = self._transient_index_by_agent.pop(agent, None)
         if index is not None and 0 <= index < len(self._items):
             self._items[index] = item
-            return True
+            return True, agent
         self._items.append(item)
-        return False
+        return False, agent
+
+    def _final_replacement_key(self, event: TextualUiEvent) -> str:
+        preferred = self._agent_key(event)
+        if preferred in self._transient_index_by_agent:
+            return preferred
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if payload.get("run_id") or payload.get("delegation_id"):
+            return preferred
+        base = str(event.agent or "__global__")
+        prefix = f"{base}#"
+        candidates = [
+            key
+            for key in self._transient_index_by_agent
+            if key == base or key.startswith(prefix)
+        ]
+        return candidates[0] if len(candidates) == 1 else preferred
 
     def _is_finalized_agent(self, agent: str) -> bool:
         return agent in self._finalized_agents
@@ -375,6 +394,23 @@ class TextualFeedModel:
         if current.strip():
             payload: Any = current
             meta = self._stream_meta_by_agent.get(agent)
+            if isinstance(event.payload, dict):
+                stream_payload = event.payload
+                runtime_meta = {
+                    key: stream_payload[key]
+                    for key in (
+                        "run_id",
+                        "parent_run_id",
+                        "delegation_id",
+                        "transport",
+                        "label",
+                        "style",
+                        "theme",
+                        "orchestrator",
+                    )
+                    if key in stream_payload
+                }
+                meta = {**runtime_meta, **(meta or {})}
             if meta:
                 payload = {**meta, "content": current}
             replaced = self._upsert_transient(TextualUiEvent("stream_chunk", payload, agent=event.agent))
@@ -387,17 +423,21 @@ class TextualFeedModel:
         """Remove estado visual transitório sem apagar mensagens persistentes."""
         agent = str(event.agent or "").strip()
         if agent:
-            agent_prefix = f"{agent}#"
-            keys = [
-                key
-                for key in set(
-                    self._transient_index_by_agent
-                    | self._stream_buffer_by_agent
-                    | self._stream_meta_by_agent
-                    | self._transient_tools_by_agent
-                )
-                if key == agent or key.startswith(agent_prefix)
-            ]
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            if payload.get("run_id") or payload.get("delegation_id"):
+                keys = [self._agent_key(event)]
+            else:
+                agent_prefix = f"{agent}#"
+                keys = [
+                    key
+                    for key in set(
+                        self._transient_index_by_agent
+                        | self._stream_buffer_by_agent
+                        | self._stream_meta_by_agent
+                        | self._transient_tools_by_agent
+                    )
+                    if key == agent or key.startswith(agent_prefix)
+                ]
             removed = self._remove_transient_keys(keys)
             if not removed:
                 self._last_change = TextualFeedChange(False)
@@ -582,7 +622,9 @@ class TextualFeedModel:
         if self._is_finalized_agent(agent):
             self._last_change = TextualFeedChange(False)
             return False
-        content = strip_ansi(str(event.payload or "")).strip()
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        content_source = payload.get("content") if payload else event.payload
+        content = strip_ansi(str(content_source or "")).strip()
         if not content:
             self._last_change = TextualFeedChange(False)
             return False
@@ -605,7 +647,10 @@ class TextualFeedModel:
             lines.append(content)
         index = self._transient_index_by_agent.get(agent)
         if index is None or not (0 <= index < len(self._items)):
-            replaced = self._upsert_transient(TextualUiEvent("agent_update", {"content": "", "tools": list(lines)}, agent=event.agent))
+            transient_payload = dict(payload)
+            transient_payload["content"] = ""
+            transient_payload["tools"] = list(lines)
+            replaced = self._upsert_transient(TextualUiEvent("agent_update", transient_payload, agent=event.agent))
             self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
             return True
         current_event = self._items[index].event

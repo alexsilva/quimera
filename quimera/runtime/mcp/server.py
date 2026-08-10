@@ -29,6 +29,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import IO, Any
 
+from quimera.app.agent_run_events import AgentRunEvent, coerce_agent_run_sink
 from quimera.runtime.approval import ApprovalManager, TrustedToolExecutionContext
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
@@ -151,6 +152,7 @@ class MCPServer:
         *,
         auth_token: str | None = None,
         allowed_tools: Iterable[str] | None = None,
+        agent_run_sink: Any = None,
     ) -> None:
         """Inicializa uma instância de MCPServer.
 
@@ -168,6 +170,7 @@ class MCPServer:
         normalized = (auth_token or "").strip()
         self._auth_token: str | None = normalized or None
         self._allowed_tools = self._normalize_allowed_tools(allowed_tools)
+        self._agent_run_sink = coerce_agent_run_sink(agent_run_sink)
         self._cancel_events: dict[Any, threading.Event] = {}
         self._cancel_lock = threading.Lock()
         self._pending_calls: list[dict] = []
@@ -180,6 +183,72 @@ class MCPServer:
             max_workers=4, thread_name_prefix="mcp-tool"
         )
         self._resource_subscriptions: set[str] = set()
+
+    @staticmethod
+    def _visual_transport(context: TrustedToolExecutionContext) -> str:
+        transport = str(getattr(context, "transport", "") or "").strip()
+        return "mcp_http" if transport == "http_mcp" else (transport or "mcp_stdio")
+
+    @staticmethod
+    def _visual_agent(context: TrustedToolExecutionContext) -> str:
+        agent = str(getattr(context, "agent_name", "") or "").strip()
+        if agent:
+            return agent
+        return "mcp-http" if getattr(context, "server_origin", "") == "mcp_http" else "mcp-stdio"
+
+    def _emit_tool_run_event(
+        self,
+        kind: str,
+        context: TrustedToolExecutionContext,
+        tool_name: str,
+        *,
+        msg_id: Any = None,
+        arg_keys: list[str] | None = None,
+        duration_ms: int | None = None,
+        ok: bool | None = None,
+        error: str = "",
+    ) -> None:
+        if self._visual_transport(context) != "mcp_http":
+            return
+        run_id = str(getattr(context, "run_id", "") or "").strip()
+        if not run_id:
+            return
+        transport = self._visual_transport(context)
+        metadata: dict[str, Any] = {
+            "run_id": run_id,
+            "parent_run_id": str(getattr(context, "parent_run_id", "") or ""),
+            "transport": transport,
+            "tool_name": tool_name,
+            "msg_id": msg_id,
+            "arg_keys": list(arg_keys or []),
+            "session_id": getattr(context, "session_id", None),
+            "http_profile": getattr(context, "http_profile", None),
+        }
+        if duration_ms is not None:
+            metadata["duration_ms"] = duration_ms
+        if ok is not None:
+            metadata["ok"] = ok
+        if error:
+            metadata["error"] = error
+        status = "running"
+        if kind == "tool_finished":
+            status = "finished" if ok is not False else "failed"
+        elif kind == "tool_failed":
+            status = "failed"
+        elif kind == "tool_cancelled":
+            status = "cancelled"
+        self._agent_run_sink.emit(
+            AgentRunEvent(
+                kind,
+                self._visual_agent(context),
+                text=tool_name,
+                metadata=metadata,
+                run_id=run_id,
+                parent_run_id=metadata["parent_run_id"],
+                transport=transport,
+                status=status,
+            )
+        )
 
     @staticmethod
     def _normalize_allowed_tools(
@@ -614,6 +683,13 @@ class MCPServer:
         arg_keys = sorted(str(key) for key in arguments.keys()) if isinstance(arguments, dict) else []
         started_at = time.perf_counter()
         _logger.debug("MCP tools/call start tool=%s arg_keys=%s", tool_name, arg_keys)
+        self._emit_tool_run_event(
+            "tool_started",
+            trusted_context,
+            tool_name,
+            msg_id=msg_id,
+            arg_keys=arg_keys,
+        )
 
         def _progress_callback(msg: str) -> None:
             _logger.debug("MCP progress [%s]: %s", tool_name, msg)
@@ -650,6 +726,8 @@ class MCPServer:
             "started_at": started_at,
             "deadline_at": started_at + self._configured_tool_timeout(),
             "tool_name": tool_name,
+            "arg_keys": arg_keys,
+            "trusted_context": trusted_context,
             "cancel_event": cancel_event,
         }
         with self._pending_lock:
@@ -706,6 +784,17 @@ class MCPServer:
         request_key = call.get("request_key") or self._request_key(call["out"], msg_id)
         _logger.debug("MCP tools/call timeout tool=%s", call["tool_name"])
         call["cancel_event"].set()
+        duration_ms = int((time.perf_counter() - call["started_at"]) * 1000)
+        self._emit_tool_run_event(
+            "tool_failed",
+            call.get("trusted_context"),
+            call["tool_name"],
+            msg_id=msg_id,
+            arg_keys=call.get("arg_keys") or [],
+            duration_ms=duration_ms,
+            ok=False,
+            error="Tool execution timed out",
+        )
         with self._cancel_lock:
             self._cancel_events.pop(request_key, None)
             self._cancel_events.pop(msg_id, None)
@@ -740,6 +829,17 @@ class MCPServer:
 
         if cancel_event.is_set():
             _logger.debug("MCP tools/call cancelled tool=%s — no response sent", tool_name)
+            duration_ms = int((time.perf_counter() - started_at) * 1000)
+            self._emit_tool_run_event(
+                "tool_cancelled",
+                call.get("trusted_context"),
+                tool_name,
+                msg_id=msg_id,
+                arg_keys=call.get("arg_keys") or [],
+                duration_ms=duration_ms,
+                ok=False,
+                error="cancelled",
+            )
             with self._cancel_lock:
                 self._cancel_events.pop(request_key, None)
             return None
@@ -751,6 +851,16 @@ class MCPServer:
                 self._cancel_events.pop(request_key, None)
             duration_ms = int((time.perf_counter() - started_at) * 1000)
             _logger.debug("MCP tools/call error tool=%s duration_ms=%d", tool_name, duration_ms, exc_info=True)
+            self._emit_tool_run_event(
+                "tool_failed",
+                call.get("trusted_context"),
+                tool_name,
+                msg_id=msg_id,
+                arg_keys=call.get("arg_keys") or [],
+                duration_ms=duration_ms,
+                ok=False,
+                error=str(exc),
+            )
             return self._err(msg_id, -32603, f"Internal error: {exc}")
 
         with self._cancel_lock:
@@ -763,6 +873,16 @@ class MCPServer:
             tool_name,
             result.ok,
             duration_ms,
+        )
+        self._emit_tool_run_event(
+            "tool_finished" if result.ok else "tool_failed",
+            call.get("trusted_context"),
+            tool_name,
+            msg_id=msg_id,
+            arg_keys=call.get("arg_keys") or [],
+            duration_ms=duration_ms,
+            ok=result.ok,
+            error=str(result.error or "") if not result.ok else "",
         )
 
         if result.ok:

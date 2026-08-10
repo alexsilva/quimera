@@ -66,6 +66,11 @@ class RendererBase:
     def show_feed(self, message, agent=None, muted=False):
         self.show_system(message)
 
+    def show_tool_preview(self, message, *, agent=None, metadata=None):
+        if isinstance(message, dict):
+            message = message.get("content", "")
+        self.show_feed(message, agent=agent, muted=True)
+
     def show_agent(self, agent, msg):
         self.show_message(agent, msg)
 
@@ -102,6 +107,20 @@ class RendererBase:
 
     def show_message(self, agent, content, render_mode="auto"):
         self.show_system(content)
+
+    def begin_agent_run(
+        self,
+        agent,
+        *,
+        run_id="",
+        parent_run_id="",
+        delegation_id="",
+        transport="",
+    ):
+        return None
+
+    def end_agent_run(self, agent, *, run_id="", status=""):
+        return None
 
     def show_no_response(self, agent):
         return None

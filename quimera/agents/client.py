@@ -184,10 +184,16 @@ class AgentClient:
             return
         self.renderer.show_system_neutral(message)
 
-    def _show_tool_preview(self, message: str, *, agent: str | None = None) -> None:
+    def _show_tool_preview(self, message: str, *, agent: str | None = None, metadata=None) -> None:
         """Exibe preview operacional de tool no feed quando possível."""
+        context = self._tool_preview_context(metadata)
+        payload = {"content": message, **context} if context else message
         if self.renderer.supports_agent_feed is True:
-            self.renderer.show_feed(message, agent=agent, muted=True)
+            show_tool_preview = getattr(self.renderer, "show_tool_preview", None)
+            if callable(show_tool_preview):
+                show_tool_preview(payload, agent=agent, metadata=metadata)
+            else:
+                self.renderer.show_feed(message, agent=agent, muted=True)
             return
         self._show_muted(message)
 
@@ -199,6 +205,7 @@ class AgentClient:
                 lambda name, args, metadata=None: self._show_tool_preview(
                     ToolPreview.build(name, args),
                     agent=self._agent_from_tool_metadata(metadata) or agent,
+                    metadata=metadata,
                 )
             )
 
@@ -214,7 +221,53 @@ class AgentClient:
         state = metadata.get("_mcp_state")
         if isinstance(state, dict) and state.get("agent_name"):
             return str(state["agent_name"])
+        server_origin = str(getattr(context, "server_origin", "") or "").strip()
+        transport = str(getattr(context, "transport", "") or "").strip()
+        if server_origin == "mcp_http" or transport == "http_mcp":
+            return "mcp-http"
+        if isinstance(state, dict) and state.get("transport") == "http_mcp":
+            return "mcp-http"
         return None
+
+    @staticmethod
+    def _tool_preview_context(metadata) -> dict[str, str]:
+        """Extrai metadados visuais confiáveis de uma chamada de tool."""
+        if not isinstance(metadata, dict):
+            return {}
+        context = metadata.get("trusted_context")
+        state = metadata.get("_mcp_state")
+        server_origin = str(getattr(context, "server_origin", "") or "").strip()
+        transport = str(getattr(context, "transport", "") or "").strip()
+        state_transport = str(state.get("transport") or "").strip() if isinstance(state, dict) else ""
+        is_http_mcp = (
+            server_origin == "mcp_http"
+            or transport == "http_mcp"
+            or state_transport == "http_mcp"
+        )
+        if not is_http_mcp:
+            return {}
+        payload: dict[str, str] = {}
+        for attr, key in (
+            ("run_id", "run_id"),
+            ("parent_run_id", "parent_run_id"),
+            ("transport", "transport"),
+            ("server_origin", "server_origin"),
+            ("session_id", "session_id"),
+            ("http_profile", "http_profile"),
+        ):
+            value = getattr(context, attr, None)
+            if value:
+                payload[key] = str(value)
+        if payload.get("transport") == "http_mcp":
+            payload["transport"] = "mcp_http"
+        if isinstance(state, dict):
+            if state.get("trace_id"):
+                payload["trace_id"] = str(state["trace_id"])
+            if state.get("trusted_run_id") and not payload.get("run_id"):
+                payload["run_id"] = str(state["trusted_run_id"])
+            if state.get("parent_run_id") and not payload.get("parent_run_id"):
+                payload["parent_run_id"] = str(state["parent_run_id"])
+        return {key: value for key, value in payload.items() if value}
 
     @staticmethod
     def _is_tool_call_text(text: str) -> bool:

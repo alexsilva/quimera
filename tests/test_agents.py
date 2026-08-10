@@ -2441,8 +2441,8 @@ def test_agent_client_tool_preview_uses_agent_feed_when_supported():
     muted_reporter.assert_not_called()
 
 
-def test_agent_client_tool_preview_uses_global_feed_for_http_without_agent_metadata():
-    """Preview MCP HTTP sem agent_name deve aparecer no feed global, não ficar deferred."""
+def test_agent_client_tool_preview_uses_mcp_http_feed_for_http_without_agent_metadata():
+    """Preview MCP HTTP sem agent_name deve aparecer no feed mcp-http, não ficar deferred."""
     from types import SimpleNamespace
 
     class FeedRenderer(RendererBase):
@@ -2466,7 +2466,7 @@ def test_agent_client_tool_preview_uses_global_feed_for_http_without_agent_metad
     message = renderer.show_feed.call_args.args[0]
     assert "⚒ read_file" in message
     assert "README.md" in message
-    assert renderer.show_feed.call_args.kwargs == {"agent": None, "muted": True}
+    assert renderer.show_feed.call_args.kwargs == {"agent": "mcp-http", "muted": True}
     muted_reporter.assert_not_called()
 
 
@@ -3484,7 +3484,69 @@ def test_tool_preview_metadata_overrides_bound_agent(renderer):
         {"trusted_context": SimpleNamespace(agent_name="mcp-agent")},
     )
 
-    assert renderer.show_feed.call_args.kwargs["agent"] == "mcp-agent"
+    assert renderer.show_tool_preview.call_args.kwargs["agent"] == "mcp-agent"
+
+
+def test_tool_preview_ignores_internal_mcp_run_id(renderer):
+    """MCP socket deve usar a run visual do agente, não criar bloco stdio separado."""
+    from types import SimpleNamespace
+
+    renderer.supports_agent_feed = True
+    client = AgentClient(renderer)
+    executor = SimpleNamespace(set_tool_preview_callback=MagicMock())
+    client.bind_tool_preview_callback(executor, agent="openai-agent")
+    callback = executor.set_tool_preview_callback.call_args.args[0]
+
+    callback(
+        "read_file",
+        {"path": "README.md"},
+        {
+            "trusted_context": SimpleNamespace(
+                agent_name="opencode",
+                transport="internal_mcp",
+                run_id="stdio:run-1",
+                parent_run_id="agentrun:parent",
+            ),
+            "_mcp_state": {
+                "transport": "internal_mcp",
+                "trusted_run_id": "stdio:run-1",
+            },
+        },
+    )
+
+    assert renderer.show_tool_preview.call_args.args[0] == "⚒ read_file README.md"
+    assert renderer.show_tool_preview.call_args.kwargs["agent"] == "opencode"
+
+
+def test_tool_preview_preserves_http_mcp_run_id(renderer):
+    """MCP HTTP sem agente local precisa manter run_id próprio no feed."""
+    from types import SimpleNamespace
+
+    renderer.supports_agent_feed = True
+    client = AgentClient(renderer)
+    executor = SimpleNamespace(set_tool_preview_callback=MagicMock())
+    client.bind_tool_preview_callback(executor)
+    callback = executor.set_tool_preview_callback.call_args.args[0]
+
+    callback(
+        "read_file",
+        {"path": "README.md"},
+        {
+            "trusted_context": SimpleNamespace(
+                agent_name=None,
+                transport="http_mcp",
+                server_origin="mcp_http",
+                run_id="http:run-1",
+            ),
+            "_mcp_state": {"transport": "http_mcp"},
+        },
+    )
+
+    payload = renderer.show_tool_preview.call_args.args[0]
+    assert payload["content"] == "⚒ read_file README.md"
+    assert payload["run_id"] == "http:run-1"
+    assert payload["transport"] == "mcp_http"
+    assert renderer.show_tool_preview.call_args.kwargs["agent"] == "mcp-http"
 
 
 

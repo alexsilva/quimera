@@ -272,6 +272,12 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             )
 
         def _status_preview_text(self, value) -> str:
+            if isinstance(value, dict):
+                for key in ("content", "message", "preview"):
+                    text = str(value.get(key) or "").strip()
+                    if text:
+                        value = text
+                        break
             line = str(value or "").strip().splitlines()[0] if str(value or "").strip() else ""
             if len(line) > 96:
                 return f"{line[:93]}..."

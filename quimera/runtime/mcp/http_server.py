@@ -158,7 +158,10 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header(
-            "Access-Control-Allow-Headers", "Content-Type, Authorization, MCP-Protocol-Version, MCP-Session-Id, X-Quimera-MCP-Token"
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, MCP-Protocol-Version, MCP-Session-Id, "
+            "X-Quimera-MCP-Token, X-Quimera-Agent, X-Quimera-Run, "
+            "X-Quimera-Trace, X-Quimera-Parent-Run",
         )
         self.send_header(
             "Access-Control-Expose-Headers",
@@ -218,6 +221,20 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_response(204)
         self._send_cors()
         self.end_headers()
+
+    def _apply_quimera_run_headers(self, state: dict) -> None:
+        """Propaga identidade visual confiável do transporte HTTP para tools/call."""
+        agent_name = str(self.headers.get("X-Quimera-Agent") or "").strip()
+        run_id = str(self.headers.get("X-Quimera-Run") or "").strip()
+        trace_id = str(self.headers.get("X-Quimera-Trace") or "").strip()
+        parent_run_id = str(self.headers.get("X-Quimera-Parent-Run") or "").strip()
+        state["agent_name"] = agent_name or state.get("agent_name") or "mcp-http"
+        if run_id:
+            state["trusted_run_id"] = run_id
+        if trace_id:
+            state["trace_id"] = trace_id
+        if parent_run_id:
+            state["parent_run_id"] = parent_run_id
 
     # ------------------------------------------------------------------
     # GET /health
@@ -313,6 +330,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             "http_profile": mcp_server._http_profile,
             "http_delegate_auto_approve": mcp_server._http_profile in ("agent", "all"),
         }
+        self._apply_quimera_run_headers(mcp_server._http_sessions[session_id])
 
         try:
             self.send_response(200)
@@ -431,6 +449,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
                 "http_profile": mcp_server._http_profile,
                 "http_delegate_auto_approve": mcp_server._http_profile in ("agent", "all"),
             }
+        self._apply_quimera_run_headers(state)
         out = StringIO()
         _set_mcp_state(out, state)
         try:
@@ -515,6 +534,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             state["session_id"] = session_id
         state["http_profile"] = mcp_server._http_profile
         state["http_delegate_auto_approve"] = mcp_server._http_profile in ("agent", "all")
+        self._apply_quimera_run_headers(state)
         _set_mcp_state(out, state)
 
         try:
