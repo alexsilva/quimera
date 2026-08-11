@@ -648,6 +648,331 @@ def test_textual_feed_http_mcp_tool_preview_uses_remote_icon_and_merges_status()
     assert model.items[0].event.payload["tools"] == ["◇ ✓ read_file foo.py"]
 
 
+def test_textual_feed_groups_http_mcp_tools_by_client_across_sessions_and_runs():
+    model = TextualFeedModel()
+
+    first = {
+        "content": "⚒ grep_search MCP",
+        "label": "🤖  mcp-http",
+        "run_id": "http:run-1",
+        "session_id": "session-1",
+        "client_name": "chatgpt",
+        "client_version": "1",
+        "transport": "mcp_http",
+        "mcp_msg_id": "1",
+    }
+    second = {
+        "content": "⚒ git_status",
+        "label": "🤖  mcp-http",
+        "run_id": "http:run-2",
+        "session_id": "session-2",
+        "client_name": "chatgpt",
+        "client_version": "1",
+        "transport": "mcp_http",
+        "mcp_msg_id": "2",
+    }
+
+    model.apply(TextualUiEvent("tool_preview", first, agent="mcp-http"))
+    model.apply(TextualUiEvent("tool_preview", second, agent="mcp-http"))
+
+    assert len(model.items) == 1
+    assert model.items[0].event.payload["tools"] == [
+        "◇ ⚒ grep_search MCP",
+        "◇ ⚒ git_status",
+    ]
+
+
+def test_textual_feed_http_mcp_keeps_identical_calls_as_distinct_requests():
+    model = TextualFeedModel()
+    common = {
+        "content": "⚒ read_file README.md",
+        "label": "🤖  mcp-http",
+        "client_name": "chatgpt",
+        "transport": "mcp_http",
+    }
+
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**common, "run_id": "http:run-1", "mcp_msg_id": "1"},
+        agent="mcp-http",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**common, "run_id": "http:run-2", "mcp_msg_id": "1"},
+        agent="mcp-http",
+    ))
+
+    assert len(model.items) == 1
+    assert model.items[0].event.payload["tools"] == [
+        "◇ ⚒ read_file README.md",
+        "◇ ⚒ read_file README.md",
+    ]
+
+
+def test_textual_feed_separates_distinct_http_mcp_clients():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {
+            "content": "⚒ grep_search MCP",
+            "run_id": "http:run-1",
+            "session_id": "session-1",
+            "client_name": "chatgpt",
+            "transport": "mcp_http",
+            "mcp_msg_id": "1",
+        },
+        agent="mcp-http",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {
+            "content": "⚒ read_file README.md",
+            "run_id": "http:run-2",
+            "session_id": "session-2",
+            "client_name": "other-client",
+            "transport": "mcp_http",
+            "mcp_msg_id": "2",
+        },
+        agent="mcp-http",
+    ))
+
+    assert len(model.items) == 2
+
+
+def test_textual_feed_http_mcp_tracks_stats_without_rendering_live_summary():
+    now = [10.0]
+    model = TextualFeedModel(
+        clock=lambda: now[0],
+        tool_preview_dwell_seconds=0.5,
+    )
+    common = {
+        "label": "🤖  mcp-http",
+        "session_id": "session-1",
+        "transport": "mcp_http",
+    }
+
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**common, "content": "⚒ grep_search MCP", "run_id": "http:1", "mcp_msg_id": "1"},
+        agent="mcp-http",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**common, "content": "⚒ git_status", "run_id": "http:2", "mcp_msg_id": "2"},
+        agent="mcp-http",
+    ))
+
+    assert model.apply(TextualUiEvent(
+        "tool_state",
+        {
+            **common,
+            "run_id": "http:1",
+            "msg_id": "1",
+            "tool_name": "grep_search",
+            "status": "finished",
+            "duration_ms": 30,
+        },
+        agent="mcp-http",
+    ))
+    payload = model.items[0].event.payload
+    assert payload["tools"] == ["◇ ✓ grep_search MCP", "◇ ⚒ git_status"]
+    assert "tool_total" not in payload
+    assert "tool_ok_count" not in payload
+    assert "tool_err_count" not in payload
+    assert "tool_duration_ms" not in payload
+
+    assert model.apply(TextualUiEvent(
+        "tool_state",
+        {
+            **common,
+            "run_id": "http:2",
+            "msg_id": "2",
+            "tool_name": "git_status",
+            "status": "failed",
+            "duration_ms": 20,
+        },
+        agent="mcp-http",
+    ))
+    payload = model.items[0].event.payload
+    assert payload["tools"] == ["◇ ✓ grep_search MCP", "◇ ✗ git_status"]
+    assert "tool_total" not in payload
+    agent_key = next(iter(model._mcp_http_tool_stats_by_agent))
+    assert model._mcp_http_tool_stats_by_agent[agent_key] == {
+        "total": 2,
+        "ok_count": 1,
+        "err_count": 1,
+        "duration_ms": 50,
+    }
+
+    assert not model.apply(TextualUiEvent(
+        "tool_state",
+        {
+            **common,
+            "run_id": "http:2",
+            "msg_id": "2",
+            "tool_name": "git_status",
+            "status": "failed",
+        },
+        agent="mcp-http",
+    ))
+    assert model._mcp_http_tool_stats_by_agent[agent_key]["total"] == 2
+
+    now[0] = 10.49
+    assert not model.expire_tool_previews()
+    assert "tools" in model.items[0].event.payload
+
+    now[0] = 10.5
+    assert model.expire_tool_previews()
+    assert model.items == []
+
+
+def test_textual_feed_http_mcp_new_tool_extends_completed_burst_visibility():
+    now = [10.0]
+    model = TextualFeedModel(
+        clock=lambda: now[0],
+        tool_preview_dwell_seconds=0.5,
+    )
+    common = {
+        "label": "🤖  mcp-http",
+        "client_name": "chatgpt",
+        "transport": "mcp_http",
+    }
+
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**common, "content": "⚒ grep_search MCP", "run_id": "http:1", "mcp_msg_id": "1"},
+        agent="mcp-http",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_state",
+        {
+            **common,
+            "run_id": "http:1",
+            "msg_id": "1",
+            "tool_name": "grep_search",
+            "status": "finished",
+        },
+        agent="mcp-http",
+    ))
+
+    now[0] = 10.4
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**common, "content": "⚒ read_file README.md", "run_id": "http:2", "mcp_msg_id": "2"},
+        agent="mcp-http",
+    ))
+
+    now[0] = 10.5
+    assert not model.expire_tool_previews()
+    assert model.items[0].event.payload["tools"] == [
+        "◇ ✓ grep_search MCP",
+        "◇ ⚒ read_file README.md",
+    ]
+
+    model.apply(TextualUiEvent(
+        "tool_state",
+        {
+            **common,
+            "run_id": "http:2",
+            "msg_id": "2",
+            "tool_name": "read_file",
+            "status": "finished",
+        },
+        agent="mcp-http",
+    ))
+    now[0] = 10.99
+    assert not model.expire_tool_previews()
+    now[0] = 11.0
+    assert model.expire_tool_previews()
+    assert model.items == []
+
+
+def test_textual_feed_http_mcp_idle_does_not_close_block_while_tool_is_running():
+    now = [10.0]
+    model = TextualFeedModel(
+        clock=lambda: now[0],
+        tool_preview_dwell_seconds=0.5,
+    )
+    common = {
+        "label": "🤖  mcp-http",
+        "client_name": "chatgpt",
+        "transport": "mcp_http",
+    }
+
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**common, "content": "⚒ grep_search MCP", "run_id": "http:1", "mcp_msg_id": "1"},
+        agent="mcp-http",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_state",
+        {
+            **common,
+            "run_id": "http:1",
+            "msg_id": "1",
+            "tool_name": "grep_search",
+            "status": "finished",
+        },
+        agent="mcp-http",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**common, "content": "⚒ read_file README.md", "run_id": "http:2", "mcp_msg_id": "2"},
+        agent="mcp-http",
+    ))
+
+    now[0] = 11.0
+    assert not model.expire_tool_previews()
+    assert len(model.items) == 1
+    assert model.items[0].event.payload["tools"] == [
+        "◇ ✓ grep_search MCP",
+        "◇ ⚒ read_file README.md",
+    ]
+
+    model.apply(TextualUiEvent(
+        "tool_state",
+        {
+            **common,
+            "run_id": "http:2",
+            "msg_id": "2",
+            "tool_name": "read_file",
+            "status": "finished",
+        },
+        agent="mcp-http",
+    ))
+    now[0] = 11.5
+    assert model.expire_tool_previews()
+    assert model.items == []
+
+
+def test_textual_render_event_groups_mcp_http_identity_tools_and_summary():
+    event = TextualUiEvent(
+        "agent_update",
+        {
+            "content": "",
+            "label": "🤖  mcp-http",
+            "style": "cyan",
+            "theme": "chat",
+            "transport": "mcp_http",
+            "tools": ["◇ ⚒ git_status"],
+            "tool_total": 3,
+            "tool_ok_count": 3,
+            "tool_err_count": 0,
+            "tool_duration_ms": 1200,
+        },
+        agent="mcp-http",
+    )
+    console = Console(record=True, width=120)
+
+    console.print(_render_event(event))
+    output = console.export_text()
+
+    assert "☁ 🤖  mcp-http" in output
+    assert "git_status" in output
+    assert "3 ferramentas · 3 concluídas · 1.2s" in output
+
+
 def test_textual_feed_structured_tool_preview_stays_in_same_run():
     model = TextualFeedModel()
     payload = {"label": "OpenCode", "style": "blue", "run_id": "agentrun:opencode"}

@@ -71,6 +71,10 @@ class RendererBase:
             message = message.get("content", "")
         self.show_feed(message, agent=agent, muted=True)
 
+    def show_tool_run_state(self, agent, detail):
+        """Recebe atualização estruturada de lifecycle de uma tool."""
+        return None
+
     def show_agent(self, agent, msg):
         self.show_message(agent, msg)
 

@@ -7,6 +7,7 @@ substituir estados transitórios, acumular stream e limpar previews.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
@@ -111,12 +112,24 @@ class TextualFeedModel:
         "theme_changed",
     }
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        tool_preview_dwell_seconds: float = 15.0,
+    ) -> None:
+        self._clock = clock
+        self._tool_preview_dwell_seconds = max(0.0, float(tool_preview_dwell_seconds))
         self._items: list[TextualFeedItem] = []
         self._transient_index_by_agent: dict[str, int] = {}
         self._stream_buffer_by_agent: dict[str, str] = {}
         self._stream_meta_by_agent: dict[str, dict[str, Any]] = {}
         self._transient_tools_by_agent: dict[str, list[str]] = {}
+        self._tool_request_lines_by_agent: dict[str, dict[str, str]] = {}
+        self._tool_request_seen_at_by_agent: dict[str, dict[str, float]] = {}
+        self._tool_request_expiry_by_agent: dict[str, dict[str, float]] = {}
+        self._completed_tool_requests_by_agent: dict[str, set[str]] = {}
+        self._mcp_http_tool_stats_by_agent: dict[str, dict[str, int]] = {}
         self._pending_turn_summary_by_agent: dict[str, TextualUiEvent] = {}
         self._finalized_agents: set[str] = set()
         self._last_change = TextualFeedChange(False)
@@ -138,6 +151,11 @@ class TextualFeedModel:
         self._stream_buffer_by_agent.clear()
         self._stream_meta_by_agent.clear()
         self._transient_tools_by_agent.clear()
+        self._tool_request_lines_by_agent.clear()
+        self._tool_request_seen_at_by_agent.clear()
+        self._tool_request_expiry_by_agent.clear()
+        self._completed_tool_requests_by_agent.clear()
+        self._mcp_http_tool_stats_by_agent.clear()
         self._pending_turn_summary_by_agent.clear()
         self._finalized_agents.clear()
         self._last_change = TextualFeedChange(True, redraw=True)
@@ -247,6 +265,8 @@ class TextualFeedModel:
             self._transient_tools_by_agent.pop(agent, None)
         if event.kind == "tool_preview":
             return self._apply_tool_preview(event)
+        if event.kind == "tool_state":
+            return self._apply_tool_state(event)
         if event.kind == "delegation":
             removed_preview = self._consume_delegate_tool_preview(event)
             item = TextualFeedItem(event, transient=False)
@@ -301,6 +321,18 @@ class TextualFeedModel:
         run_id = str(payload.get("run_id") or "").strip()
         delegation_id = str(payload.get("delegation_id") or "").strip()
         base = str(event.agent or "__global__")
+        transport = str(payload.get("transport") or "").strip()
+        if transport == "mcp_http" or run_id.startswith("http:"):
+            # Sessão e run não são identidade visual estável para MCP HTTP:
+            # alguns clientes recriam ambos entre chamadas. O clientInfo do
+            # handshake representa o cliente lógico e separa consumidores
+            # distintos sem fragmentar as tools do mesmo consumidor.
+            client_name = str(payload.get("client_name") or "").strip().lower()
+            client_version = str(payload.get("client_version") or "").strip().lower()
+            if client_name:
+                client_key = f"{client_name}@{client_version}" if client_version else client_name
+                return f"{base}#mcp-client:{client_key}"
+            return base
         if run_id:
             return f"{base}#run:{run_id}"
         return f"{base}#{delegation_id}" if delegation_id else base
@@ -452,6 +484,11 @@ class TextualFeedModel:
         self._stream_buffer_by_agent.clear()
         self._stream_meta_by_agent.clear()
         self._transient_tools_by_agent.clear()
+        self._tool_request_lines_by_agent.clear()
+        self._tool_request_seen_at_by_agent.clear()
+        self._tool_request_expiry_by_agent.clear()
+        self._completed_tool_requests_by_agent.clear()
+        self._mcp_http_tool_stats_by_agent.clear()
         changed = len(self._items) != before
         self._last_change = TextualFeedChange(changed, redraw=changed)
         return changed
@@ -470,6 +507,11 @@ class TextualFeedModel:
             self._stream_buffer_by_agent.pop(key, None)
             self._stream_meta_by_agent.pop(key, None)
             self._transient_tools_by_agent.pop(key, None)
+            self._tool_request_lines_by_agent.pop(key, None)
+            self._tool_request_seen_at_by_agent.pop(key, None)
+            self._tool_request_expiry_by_agent.pop(key, None)
+            self._completed_tool_requests_by_agent.pop(key, None)
+            self._mcp_http_tool_stats_by_agent.pop(key, None)
         if not indexes:
             return False
         for index in indexes:
@@ -607,7 +649,13 @@ class TextualFeedModel:
         return True
 
     def _with_transient_tools(self, event: TextualUiEvent) -> TextualUiEvent:
-        """Anexa previews de tools ao evento transitório do agente."""
+        """Anexa somente previews de tools ao estado transitório do agente.
+
+        O resumo agregado pertence ao boundary final do turno nos agentes CLI.
+        MCP HTTP não possui uma resposta textual final equivalente, então seus
+        stats ficam apenas no estado interno durante o burst e não são
+        projetados no ``agent_update`` transitório.
+        """
         agent = self._agent_key(event)
         tool_lines = self._transient_tools_by_agent.get(agent)
         if not tool_lines:
@@ -617,14 +665,26 @@ class TextualFeedModel:
             merged = dict(payload)
         else:
             merged = {"content": str(payload or "")}
-        visible_tools = tool_lines[-12:]
-        hidden_count = len(tool_lines) - len(visible_tools)
-        if hidden_count > 0:
-            visible_tools = [
-                f"⋮ +{hidden_count} ferramentas anteriores",
-                *visible_tools,
-            ]
-        merged["tools"] = visible_tools
+        # Evita carregar stats que possam ter sido materializados por uma
+        # versão anterior do mesmo transient.
+        for key in (
+            "tool_total",
+            "tool_ok_count",
+            "tool_err_count",
+            "tool_duration_ms",
+        ):
+            merged.pop(key, None)
+        if tool_lines:
+            visible_tools = tool_lines[-12:]
+            hidden_count = len(tool_lines) - len(visible_tools)
+            if hidden_count > 0:
+                visible_tools = [
+                    f"⋮ +{hidden_count} ferramentas anteriores",
+                    *visible_tools,
+                ]
+            merged["tools"] = visible_tools
+        else:
+            merged.pop("tools", None)
         return TextualUiEvent(event.kind, merged, agent=event.agent)
 
     @staticmethod
@@ -647,22 +707,41 @@ class TextualFeedModel:
             self._last_change = TextualFeedChange(False)
             return False
         lines = self._transient_tools_by_agent.setdefault(agent, [])
-        # Uma mesma tool costuma emitir uma linha de início ("$ cmd") e outra de
-        # conclusão ("✓ cmd"/"✗ cmd (exit N)"). Em vez de acumular as duas —
-        # duplicando a saída no feed — atualizamos a linha existente do mesmo
-        # comando no lugar, refletindo a transição running → concluído.
-        subject = self._tool_preview_subject(content)
-        replaced_line = False
-        if subject:
-            for idx in range(len(lines) - 1, -1, -1):
-                if self._tool_preview_subject(lines[idx]) == subject:
-                    lines[idx] = content
-                    replaced_line = True
-                    break
-        if not replaced_line and subject:
-            replaced_line = self._merge_generic_tool_line(lines, content, subject)
-        if not replaced_line:
-            lines.append(content)
+        request_id = self._tool_request_id(payload)
+        if request_id:
+            # MCP HTTP fornece identidade explícita por chamada. Duas requests
+            # distintas podem executar exatamente a mesma tool/argumentos e
+            # ainda assim precisam ocupar linhas independentes no burst.
+            # Portanto só substituímos uma linha quando o request_id é o mesmo;
+            # deduplicação textual fica restrita ao caminho CLI sem request_id.
+            request_lines = self._tool_request_lines_by_agent.setdefault(agent, {})
+            previous_line = request_lines.get(request_id)
+            if previous_line and previous_line in lines:
+                lines[lines.index(previous_line)] = content
+            else:
+                lines.append(content)
+            request_lines[request_id] = content
+            self._tool_request_seen_at_by_agent.setdefault(agent, {}).setdefault(
+                request_id,
+                self._clock(),
+            )
+        else:
+            # Uma mesma tool CLI costuma emitir uma linha de início ("$ cmd") e
+            # outra de conclusão ("✓ cmd"/"✗ cmd (exit N)"). Em vez de acumular
+            # as duas, atualizamos a linha existente do mesmo comando no lugar.
+            subject = self._tool_preview_subject(content)
+            replaced_line = False
+            if subject:
+                for idx in range(len(lines) - 1, -1, -1):
+                    if self._tool_preview_subject(lines[idx]) == subject:
+                        lines[idx] = content
+                        replaced_line = True
+                        break
+            if not replaced_line and subject:
+                replaced_line = self._merge_generic_tool_line(lines, content, subject)
+            if not replaced_line:
+                lines.append(content)
+        self._extend_tool_preview_expiries(agent)
         index = self._transient_index_by_agent.get(agent)
         if index is None or not (0 <= index < len(self._items)):
             transient_payload = dict(payload)
@@ -677,3 +756,142 @@ class TextualFeedModel:
         self._items[index] = TextualFeedItem(self._with_transient_tools(current_event), transient=True)
         self._last_change = TextualFeedChange(True, redraw=True)
         return True
+
+    @staticmethod
+    def _tool_request_id(payload: dict[str, Any]) -> str:
+        """Identidade estável de uma chamada MCP dentro do agrupamento visual."""
+        msg_id = str(payload.get("mcp_msg_id") or payload.get("msg_id") or "").strip()
+        run_id = str(payload.get("run_id") or "").strip()
+        if run_id and msg_id:
+            return f"{run_id}#{msg_id}"
+        return msg_id or run_id
+
+    @classmethod
+    def _terminal_tool_line(cls, preview_line: str, status: str) -> str:
+        """Converte a linha running em resultado terminal sem perder argumentos."""
+        subject = cls._tool_preview_subject(preview_line)
+        marker = "✓" if status == "finished" else "✗"
+        has_remote_prefix = str(preview_line).strip().startswith(
+            f"{cls._MCP_HTTP_TOOL_MARKER} "
+        )
+        remote_prefix = f"{cls._MCP_HTTP_TOOL_MARKER} " if has_remote_prefix else ""
+        return f"{remote_prefix}{marker} {subject}".strip()
+
+    def _extend_tool_preview_expiries(self, agent: str, *, now: float | None = None) -> None:
+        """Mantém o burst MCP HTTP visível enquanto o mesmo cliente segue ativo.
+
+        Agentes CLI limpam previews no fim da execução. MCP HTTP não possui um
+        evento equivalente de fim de turno; portanto usamos inatividade do
+        cliente como boundary visual e renovamos o prazo de todas as tools
+        concluídas quando uma nova chamada chega.
+        """
+        expiries = self._tool_request_expiry_by_agent.get(agent)
+        if not expiries:
+            return
+        deadline = (self._clock() if now is None else now) + self._tool_preview_dwell_seconds
+        for request_id in expiries:
+            expiries[request_id] = deadline
+
+    def _apply_tool_state(self, event: TextualUiEvent) -> bool:
+        """Finaliza preview MCP HTTP, acumula stats e agenda remoção visual."""
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if str(payload.get("transport") or "").strip() != "mcp_http":
+            self._last_change = TextualFeedChange(False)
+            return False
+
+        agent = self._agent_key(event)
+        status = str(payload.get("status") or "").strip().lower()
+        if status not in {"finished", "failed", "cancelled"}:
+            self._last_change = TextualFeedChange(False)
+            return False
+
+        request_id = self._tool_request_id(payload)
+        if request_id:
+            completed = self._completed_tool_requests_by_agent.setdefault(agent, set())
+            if request_id in completed:
+                self._last_change = TextualFeedChange(False)
+                return False
+            completed.add(request_id)
+        lines = self._transient_tools_by_agent.get(agent, [])
+        request_lines = self._tool_request_lines_by_agent.get(agent, {})
+        preview_line = request_lines.get(request_id) if request_id else None
+        if preview_line and preview_line in lines:
+            terminal_line = self._terminal_tool_line(preview_line, status)
+            lines[lines.index(preview_line)] = terminal_line
+            request_lines[request_id] = terminal_line
+        elif lines:
+            tool_name = str(payload.get("tool_name") or "").strip()
+            for index in range(len(lines) - 1, -1, -1):
+                subject = self._tool_preview_subject(lines[index])
+                if self._tool_preview_tool_name(subject) == tool_name:
+                    preview_line = lines[index]
+                    terminal_line = self._terminal_tool_line(preview_line, status)
+                    lines[index] = terminal_line
+                    if request_id:
+                        request_lines[request_id] = terminal_line
+                    break
+        if request_id and preview_line:
+            now = self._clock()
+            self._tool_request_expiry_by_agent.setdefault(agent, {})[request_id] = (
+                now + self._tool_preview_dwell_seconds
+            )
+            self._extend_tool_preview_expiries(agent, now=now)
+
+        stats = self._mcp_http_tool_stats_by_agent.setdefault(
+            agent,
+            {"total": 0, "ok_count": 0, "err_count": 0, "duration_ms": 0},
+        )
+        stats["total"] += 1
+        if status == "finished":
+            stats["ok_count"] += 1
+        else:
+            stats["err_count"] += 1
+        duration_ms = payload.get("duration_ms")
+        if isinstance(duration_ms, int) and duration_ms >= 0:
+            stats["duration_ms"] += duration_ms
+
+        index = self._transient_index_by_agent.get(agent)
+        if index is not None and 0 <= index < len(self._items):
+            current = self._items[index].event
+            self._items[index] = TextualFeedItem(
+                self._with_transient_tools(current),
+                transient=True,
+            )
+            self._last_change = TextualFeedChange(True, redraw=True)
+            return True
+
+        transient_payload = dict(payload)
+        transient_payload["content"] = ""
+        replaced = self._upsert_transient(
+            TextualUiEvent("agent_update", transient_payload, agent=event.agent)
+        )
+        self._last_change = TextualFeedChange(
+            True,
+            redraw=replaced,
+            appended=None if replaced else self._items[-1],
+        )
+        return True
+
+    def expire_tool_previews(self) -> bool:
+        """Encerra bursts MCP HTTP inativos como uma resposta final de agente CLI.
+
+        Enquanto houver qualquer tool do cliente ainda rodando, o bloco inteiro
+        permanece visível. Quando todas estiverem concluídas e o último prazo de
+        inatividade vencer, removemos o transient completo, incluindo stats.
+        """
+        now = self._clock()
+        expired_agents: list[str] = []
+        for agent, expiries in list(self._tool_request_expiry_by_agent.items()):
+            request_lines = self._tool_request_lines_by_agent.get(agent, {})
+            running_request_ids = set(request_lines) - set(expiries)
+            if running_request_ids:
+                continue
+            if not expiries or any(deadline > now for deadline in expiries.values()):
+                continue
+            expired_agents.append(agent)
+
+        changed = False
+        for agent in expired_agents:
+            changed = self._remove_transient_keys([agent]) or changed
+        self._last_change = TextualFeedChange(changed, redraw=changed)
+        return changed

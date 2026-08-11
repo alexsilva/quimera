@@ -253,6 +253,8 @@ class AgentClient:
             ("transport", "transport"),
             ("server_origin", "server_origin"),
             ("session_id", "session_id"),
+            ("client_name", "client_name"),
+            ("client_version", "client_version"),
             ("http_profile", "http_profile"),
         ):
             value = getattr(context, attr, None)
@@ -261,12 +263,20 @@ class AgentClient:
         if payload.get("transport") == "http_mcp":
             payload["transport"] = "mcp_http"
         if isinstance(state, dict):
+            client_info = state.get("client_info") or {}
+            if isinstance(client_info, dict):
+                if client_info.get("name") and not payload.get("client_name"):
+                    payload["client_name"] = str(client_info["name"])
+                if client_info.get("version") and not payload.get("client_version"):
+                    payload["client_version"] = str(client_info["version"])
             if state.get("trace_id"):
                 payload["trace_id"] = str(state["trace_id"])
             if state.get("trusted_run_id") and not payload.get("run_id"):
                 payload["run_id"] = str(state["trusted_run_id"])
             if state.get("parent_run_id") and not payload.get("parent_run_id"):
                 payload["parent_run_id"] = str(state["parent_run_id"])
+        if metadata.get("mcp_msg_id") is not None:
+            payload["mcp_msg_id"] = str(metadata["mcp_msg_id"])
         return {key: value for key, value in payload.items() if value}
 
     @staticmethod

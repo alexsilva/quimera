@@ -203,6 +203,8 @@ class AgentRunController:
             self._begin_agent_run(event)
         elif event.kind in _FINAL_EVENT_KINDS:
             self._end_agent_run(event)
+        if event.kind in {"tool_finished", "tool_failed", "tool_cancelled"}:
+            self._show_tool_run_state(event)
         if event.kind == "human_action_requested":
             self._commit_agent_output(event.agent)
 
@@ -231,6 +233,27 @@ class AgentRunController:
             run_id=AgentRunRegistry._field(event, "run_id"),
             status=_event_status(event.kind, AgentRunRegistry._field(event, "status")),
         )
+
+    def _show_tool_run_state(self, event: AgentRunEvent) -> None:
+        if self._renderer is None:
+            return
+        transport = AgentRunRegistry._field(event, "transport")
+        if transport != "mcp_http":
+            return
+        show_state = getattr(self._renderer, "show_tool_run_state", None)
+        if not callable(show_state):
+            return
+        metadata = dict(event.metadata) if isinstance(event.metadata, dict) else {}
+        metadata.update(
+            {
+                "run_id": AgentRunRegistry._field(event, "run_id"),
+                "parent_run_id": AgentRunRegistry._field(event, "parent_run_id"),
+                "transport": transport,
+                "status": _event_status(event.kind, AgentRunRegistry._field(event, "status")),
+                "tool_name": str(event.text or metadata.get("tool_name") or ""),
+            }
+        )
+        show_state(event.agent, metadata)
 
     def _commit_agent_output(self, agent: str) -> None:
         if self._renderer is not None:

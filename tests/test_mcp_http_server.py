@@ -833,6 +833,7 @@ class TestToolsCallHTTP:
             assert context.run_id == "http:run-1"
             assert context.parent_run_id == "agentrun:parent"
             assert state["trace_id"] == "trace-1"
+            assert previews[0][2]["mcp_msg_id"] == 103
         finally:
             httpd.shutdown()
 

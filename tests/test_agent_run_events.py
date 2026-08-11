@@ -244,6 +244,37 @@ def test_agent_run_registry_marks_tool_events_as_finished():
     assert registry.active_runs() == []
 
 
+def test_agent_run_controller_forwards_http_tool_terminal_state_to_renderer():
+    class Renderer(RendererBase):
+        def __init__(self):
+            self.states = []
+
+        def show_system(self, message):
+            del message
+
+        def show_tool_run_state(self, agent, detail):
+            self.states.append((agent, detail))
+
+    renderer = Renderer()
+    controller = AgentRunController(renderer)
+    controller.emit(AgentRunEvent(
+        "tool_finished",
+        "mcp-http",
+        text="read_file",
+        run_id="http:run-1",
+        transport="mcp_http",
+        metadata={"msg_id": "42", "duration_ms": 12, "ok": True},
+    ))
+
+    assert len(renderer.states) == 1
+    agent, detail = renderer.states[0]
+    assert agent == "mcp-http"
+    assert detail["tool_name"] == "read_file"
+    assert detail["msg_id"] == "42"
+    assert detail["duration_ms"] == 12
+    assert detail["status"] == "finished"
+
+
 def test_input_broker_human_action_request_commits_agent_before_answer():
     order = []
 

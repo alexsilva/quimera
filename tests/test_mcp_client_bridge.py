@@ -6,6 +6,7 @@ from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.mcp.client import (
     HttpMCPTransport,
     MCPClientBridge,
+    MCPClientSession,
     StdioMCPTransport,
     build_mcp_remote_command,
     merge_specs_by_name,
@@ -14,6 +15,30 @@ from quimera.runtime.mcp.client import (
 )
 from quimera.runtime.models import ToolCall, ToolResult
 from quimera.runtime.tools.mcp_clients import set_bridge
+
+
+def test_http_mcp_session_sends_initialized_notification_after_handshake(monkeypatch):
+    transport = HttpMCPTransport("https://mcp.example.test/mcp")
+    calls = []
+
+    monkeypatch.setattr(
+        transport,
+        "http_initialize",
+        lambda: {
+            "protocolVersion": "2025-11-25",
+            "serverInfo": {"name": "remote", "version": "1"},
+        },
+    )
+    monkeypatch.setattr(
+        transport,
+        "send_mcp_notification",
+        lambda method, params=None: calls.append((method, params)),
+    )
+
+    session = MCPClientSession(transport, name="remote")
+    session.connect()
+
+    assert calls == [("notifications/initialized", None)]
 
 
 class FakeSession:

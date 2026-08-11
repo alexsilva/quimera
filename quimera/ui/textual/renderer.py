@@ -134,6 +134,8 @@ class TextualRenderer(RendererBase):
 
     def _resolve_agent_style(self, agent: str) -> tuple[str, str]:
         """Retorna (style, label) para o agente usando o resolver existente."""
+        if str(agent or "").strip().lower() == "mcp-http":
+            return "cyan", "🤖  mcp-http"
         resolver = self._profile_resolver
         if resolver:
             try:
@@ -486,6 +488,14 @@ class TextualRenderer(RendererBase):
         extra = dict(message) if isinstance(message, dict) else {"content": str(message)}
         payload = self._agent_event_payload(agent, extra)
         self._bridge.emit(TextualUiEvent("tool_preview", payload, agent=str(agent)))
+
+    def show_tool_run_state(self, agent, detail) -> None:
+        """Atualiza o estado visual de uma tool MCP HTTP concluída."""
+        payload = self._agent_event_payload(
+            agent,
+            dict(detail) if isinstance(detail, dict) else {},
+        )
+        self._bridge.emit(TextualUiEvent("tool_state", payload, agent=str(agent or "mcp-http")))
 
     def show_turn_summary(self, agent: str | None, detail: dict) -> None:
         """Exibe resumo compacto de tools do turno."""

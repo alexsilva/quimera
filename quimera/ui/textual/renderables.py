@@ -102,6 +102,8 @@ def _styled_tool_line(line: str, style: str) -> Text:
     """Estiliza uma linha de tool com ícone de status, sem cortar conteúdo."""
     stripped = str(line or "").strip()
     rendered = Text(no_wrap=False, overflow="fold")
+    if stripped.startswith("◇ "):
+        stripped = stripped[2:].strip()
     if stripped.startswith("⋮ +"):
         rendered.append(stripped, style=f"dim {style}")
         return rendered
@@ -161,7 +163,15 @@ def _build_tools_renderable(tools, style: str, *, guide: bool = True):
     return Group(*parts)
 
 
-def _build_agent_live_body(content: str, tools, style: str, *, thinking: bool = True, guide: bool = True):
+def _build_agent_live_body(
+    content: str,
+    tools,
+    style: str,
+    *,
+    thinking: bool = True,
+    guide: bool = True,
+    summary: str = "",
+):
     """Corpo do bloco transitório: pensamento em destaque e tools listadas abaixo.
 
     Mensagens de lifecycle (``thinking=False``) são status operacional e ficam
@@ -184,6 +194,15 @@ def _build_agent_live_body(content: str, tools, style: str, *, thinking: bool = 
     tools_renderable = _build_tools_renderable(tools, style, guide=guide)
     if tools_renderable is not None:
         parts.append(tools_renderable)
+    summary_text = str(summary or "").strip()
+    if summary_text:
+        parts.append(
+            _gutter_row(
+                marker,
+                marker_style,
+                Text(summary_text, style="dim", no_wrap=False, overflow="fold"),
+            )
+        )
     if not parts:
         return None
     if len(parts) == 1:
@@ -616,17 +635,43 @@ def _render_event(event: TextualUiEvent):
         if isinstance(event.payload, dict):
             content = str(event.payload.get("content") or "")
             tools = event.payload.get("tools")
+            tool_total = int(event.payload.get("tool_total") or 0)
+            tool_ok_count = int(event.payload.get("tool_ok_count") or 0)
+            tool_err_count = int(event.payload.get("tool_err_count") or 0)
+            duration_ms = int(event.payload.get("tool_duration_ms") or 0)
             label = _resolve_transport_label(event.payload, event.agent)
             style = str(event.payload.get("style", "cyan") or "cyan")
             theme_name = str(event.payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         else:
             content = str(event.payload)
             tools = None
+            tool_total = 0
+            tool_ok_count = 0
+            tool_err_count = 0
+            duration_ms = 0
             label = _resolve_transport_label({}, event.agent)
             style = "cyan"
             theme_name = themes.DEFAULT_THEME
         if event.agent:
-            return _build_stream_renderable(theme_name, label, style, content, tools=tools)
+            summary = ""
+            if tool_total:
+                noun = "ferramenta" if tool_total == 1 else "ferramentas"
+                summary = f"{tool_total} {noun}"
+                if tool_ok_count:
+                    summary += f" · {tool_ok_count} concluída{'s' if tool_ok_count != 1 else ''}"
+                if tool_err_count:
+                    summary += f" · {tool_err_count} falha{'s' if tool_err_count != 1 else ''}"
+                if duration_ms:
+                    duration = f"{duration_ms}ms" if duration_ms < 1000 else f"{duration_ms / 1000:.1f}s"
+                    summary += f" · {duration}"
+            return _build_stream_renderable(
+                theme_name,
+                label,
+                style,
+                content,
+                tools=tools,
+                summary=summary,
+            )
         if not content.strip():
             return None
         return Text(content, style="dim")
@@ -831,14 +876,30 @@ def _build_turn_tools(theme_name: str, label: str, style: str, tools_table, turn
     return tools_table
 
 
-def _build_stream_renderable(theme_name: str, label: str, style: str, content: str, tools=None, *, thinking: bool = True):
+def _build_stream_renderable(
+    theme_name: str,
+    label: str,
+    style: str,
+    content: str,
+    tools=None,
+    *,
+    thinking: bool = True,
+    summary: str = "",
+):
     """Monta o renderable dinâmico usado no streaming, com pensamento em destaque.
 
     Temas com borda própria (panel/card) dispensam a guia vertical do gutter —
     a moldura já delimita o bloco.
     """
     guide = themes.get(theme_name).name not in {"panel", "card"}
-    body = _build_agent_live_body(content, tools, style, thinking=thinking, guide=guide)
+    body = _build_agent_live_body(
+        content,
+        tools,
+        style,
+        thinking=thinking,
+        guide=guide,
+        summary=summary,
+    )
     if body is None:
         return None
     return _render_themed_agent_block(theme_name, label, style, body, streaming=True)

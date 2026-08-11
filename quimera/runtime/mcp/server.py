@@ -222,6 +222,8 @@ class MCPServer:
             "msg_id": msg_id,
             "arg_keys": list(arg_keys or []),
             "session_id": getattr(context, "session_id", None),
+            "client_name": getattr(context, "client_name", None),
+            "client_version": getattr(context, "client_version", None),
             "http_profile": getattr(context, "http_profile", None),
         }
         if duration_ms is not None:
@@ -648,6 +650,9 @@ class MCPServer:
         state = getattr(out, "_mcp_state", {}) or {}
         real_transport = str(state.get("transport") or "internal_mcp")
         session_id = state.get("session_id")
+        client_info = state.get("client_info") or {}
+        if not isinstance(client_info, dict):
+            client_info = {}
         trusted_context = TrustedToolExecutionContext(
             agent_name=state.get("agent_name"),
             parent_agent=state.get("parent_agent"),
@@ -657,13 +662,19 @@ class MCPServer:
             task_id=state.get("task_id"),
             transport=real_transport,
             session_id=session_id,
+            client_name=str(client_info.get("name") or "").strip() or None,
+            client_version=str(client_info.get("version") or "").strip() or None,
             server_origin="mcp_http" if real_transport == "http_mcp" else "mcp_stdio",
             http_profile=state.get("http_profile"),
             approval_scope_id=state.get("approval_scope_id"),
             delegation_budget=state.get("delegation_budget"),
             http_delegate_auto_approve=bool(state.get("http_delegate_auto_approve", False)),
         )
-        call_metadata = {"trusted_context": trusted_context, "_mcp_state": state}
+        call_metadata = {
+            "trusted_context": trusted_context,
+            "_mcp_state": state,
+            "mcp_msg_id": msg_id,
+        }
 
         if not tool_name:
             return self._err(msg_id, -32602, "tools/call: 'name' é obrigatório")

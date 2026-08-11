@@ -38,6 +38,8 @@ class TrustedToolExecutionContext:
     task_id: str | int | None = None
     transport: str = "native_tool_call"
     session_id: str | None = None
+    client_name: str | None = None
+    client_version: str | None = None
     server_origin: str = "tool_executor"
     http_profile: str | None = None
     approval_scope_id: str | None = None

@@ -382,6 +382,17 @@ class HttpMCPTransport(MCPTransport):
             return resp_data
         return {}
 
+    def send_mcp_notification(
+        self, method: str, params: dict | None = None
+    ) -> None:
+        """Envia uma notificação MCP HTTP sem ``id`` JSON-RPC."""
+        body = _build_request(method, params, msg_id=None)
+        self._http_request(
+            "POST",
+            headers={"Content-Type": "application/json"},
+            data=body,
+        )
+
     def http_initialize(self) -> dict:
         body = _build_request(
             "initialize",
@@ -585,6 +596,7 @@ class MCPClientSession:
         self, method: str, params: dict | None = None
     ) -> None:
         if isinstance(self._transport, HttpMCPTransport):
+            self._transport.send_mcp_notification(method, params)
             return
         body = _build_request(method, params, msg_id=None)
         with self._lock:
