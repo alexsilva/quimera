@@ -414,13 +414,14 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         def _pulse_thinking_marker(self) -> None:
             """Anima o marcador de pensamento enquanto houver execução em andamento."""
             expired_tools = self._feed_model.expire_tool_previews()
+            if expired_tools:
+                self._sync_transient_layer()
+                self._refresh_now()
             if not any(item.transient for item in self._feed_model.items):
                 reset_thinking_pulse()
                 return
             advance_thinking_pulse()
             self._sync_transient_layer()
-            if expired_tools:
-                self._refresh_now()
 
         def _run_quimera_app(self) -> None:
             try:

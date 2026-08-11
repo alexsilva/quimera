@@ -322,7 +322,7 @@ class TextualFeedModel:
         delegation_id = str(payload.get("delegation_id") or "").strip()
         base = str(event.agent or "__global__")
         transport = str(payload.get("transport") or "").strip()
-        if transport == "mcp_http" or run_id.startswith("http:"):
+        if transport == "mcp_http":
             # Sessão e run não são identidade visual estável para MCP HTTP:
             # alguns clientes recriam ambos entre chamadas. O clientInfo do
             # handshake representa o cliente lógico e separa consumidores
@@ -554,8 +554,7 @@ class TextualFeedModel:
         content_source = payload.get("content") if payload else event.payload
         content = strip_ansi(str(content_source or "")).strip()
         transport = str(payload.get("transport") or "").strip()
-        run_id = str(payload.get("run_id") or "").strip()
-        if content and (transport == "mcp_http" or run_id.startswith("http:")):
+        if content and transport == "mcp_http":
             marker = f"{cls._MCP_HTTP_TOOL_MARKER} "
             if not content.startswith(marker):
                 content = f"{marker}{content}"
@@ -649,13 +648,7 @@ class TextualFeedModel:
         return True
 
     def _with_transient_tools(self, event: TextualUiEvent) -> TextualUiEvent:
-        """Anexa somente previews de tools ao estado transitório do agente.
-
-        O resumo agregado pertence ao boundary final do turno nos agentes CLI.
-        MCP HTTP não possui uma resposta textual final equivalente, então seus
-        stats ficam apenas no estado interno durante o burst e não são
-        projetados no ``agent_update`` transitório.
-        """
+        """Anexa previews de tools ao estado transitório do agente."""
         agent = self._agent_key(event)
         tool_lines = self._transient_tools_by_agent.get(agent)
         if not tool_lines:
@@ -665,26 +658,32 @@ class TextualFeedModel:
             merged = dict(payload)
         else:
             merged = {"content": str(payload or "")}
-        # Evita carregar stats que possam ter sido materializados por uma
-        # versão anterior do mesmo transient.
-        for key in (
-            "tool_total",
-            "tool_ok_count",
-            "tool_err_count",
-            "tool_duration_ms",
-        ):
-            merged.pop(key, None)
-        if tool_lines:
-            visible_tools = tool_lines[-12:]
-            hidden_count = len(tool_lines) - len(visible_tools)
-            if hidden_count > 0:
-                visible_tools = [
-                    f"⋮ +{hidden_count} ferramentas anteriores",
-                    *visible_tools,
-                ]
-            merged["tools"] = visible_tools
-        else:
-            merged.pop("tools", None)
+        if self._is_mcp_http_payload(merged):
+            for key in (
+                "tool_total",
+                "tool_ok_count",
+                "tool_err_count",
+                "tool_duration_ms",
+            ):
+                merged.pop(key, None)
+            stats = self._mcp_http_tool_stats_by_agent.get(agent)
+            if stats:
+                merged.update(
+                    {
+                        "tool_total": stats["total"],
+                        "tool_ok_count": stats["ok_count"],
+                        "tool_err_count": stats["err_count"],
+                        "tool_duration_ms": stats["duration_ms"],
+                    }
+                )
+        visible_tools = tool_lines[-12:]
+        hidden_count = len(tool_lines) - len(visible_tools)
+        if hidden_count > 0:
+            visible_tools = [
+                f"⋮ +{hidden_count} ferramentas anteriores",
+                *visible_tools,
+            ]
+        merged["tools"] = visible_tools
         return TextualUiEvent(event.kind, merged, agent=event.agent)
 
     @staticmethod
@@ -707,7 +706,8 @@ class TextualFeedModel:
             self._last_change = TextualFeedChange(False)
             return False
         lines = self._transient_tools_by_agent.setdefault(agent, [])
-        request_id = self._tool_request_id(payload)
+        is_mcp_http = self._is_mcp_http_payload(payload)
+        request_id = self._tool_request_id(payload) if is_mcp_http else ""
         if request_id:
             # MCP HTTP fornece identidade explícita por chamada. Duas requests
             # distintas podem executar exatamente a mesma tool/argumentos e
@@ -741,7 +741,8 @@ class TextualFeedModel:
                 replaced_line = self._merge_generic_tool_line(lines, content, subject)
             if not replaced_line:
                 lines.append(content)
-        self._extend_tool_preview_expiries(agent)
+        if is_mcp_http:
+            self._extend_tool_preview_expiries(agent)
         index = self._transient_index_by_agent.get(agent)
         if index is None or not (0 <= index < len(self._items)):
             transient_payload = dict(payload)
@@ -765,6 +766,12 @@ class TextualFeedModel:
         if run_id and msg_id:
             return f"{run_id}#{msg_id}"
         return msg_id or run_id
+
+    @staticmethod
+    def _is_mcp_http_payload(payload: dict[str, Any]) -> bool:
+        """Retorna se o payload pertence ao transporte MCP HTTP."""
+        transport = str(payload.get("transport") or "").strip()
+        return transport == "mcp_http"
 
     @classmethod
     def _terminal_tool_line(cls, preview_line: str, status: str) -> str:
@@ -815,12 +822,12 @@ class TextualFeedModel:
         lines = self._transient_tools_by_agent.get(agent, [])
         request_lines = self._tool_request_lines_by_agent.get(agent, {})
         preview_line = request_lines.get(request_id) if request_id else None
+        tool_name = str(payload.get("tool_name") or "").strip()
         if preview_line and preview_line in lines:
             terminal_line = self._terminal_tool_line(preview_line, status)
             lines[lines.index(preview_line)] = terminal_line
             request_lines[request_id] = terminal_line
         elif lines:
-            tool_name = str(payload.get("tool_name") or "").strip()
             for index in range(len(lines) - 1, -1, -1):
                 subject = self._tool_preview_subject(lines[index])
                 if self._tool_preview_tool_name(subject) == tool_name:
@@ -830,12 +837,23 @@ class TextualFeedModel:
                     if request_id:
                         request_lines[request_id] = terminal_line
                     break
-        if request_id and preview_line:
-            now = self._clock()
-            self._tool_request_expiry_by_agent.setdefault(agent, {})[request_id] = (
-                now + self._tool_preview_dwell_seconds
+        if not preview_line:
+            preview_line = self._terminal_tool_line(
+                f"{self._MCP_HTTP_TOOL_MARKER} ⚒ {tool_name or 'tool'}",
+                status,
             )
-            self._extend_tool_preview_expiries(agent, now=now)
+            lines = self._transient_tools_by_agent.setdefault(agent, [])
+            lines.append(preview_line)
+            if request_id:
+                request_lines = self._tool_request_lines_by_agent.setdefault(agent, {})
+                request_lines[request_id] = preview_line
+
+        now = self._clock()
+        expiry_id = request_id or f"terminal:{tool_name or 'tool'}"
+        self._tool_request_expiry_by_agent.setdefault(agent, {})[expiry_id] = (
+            now + self._tool_preview_dwell_seconds
+        )
+        self._extend_tool_preview_expiries(agent, now=now)
 
         stats = self._mcp_http_tool_stats_by_agent.setdefault(
             agent,

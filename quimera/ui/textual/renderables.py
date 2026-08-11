@@ -635,10 +635,26 @@ def _render_event(event: TextualUiEvent):
         if isinstance(event.payload, dict):
             content = str(event.payload.get("content") or "")
             tools = event.payload.get("tools")
-            tool_total = int(event.payload.get("tool_total") or 0)
-            tool_ok_count = int(event.payload.get("tool_ok_count") or 0)
-            tool_err_count = int(event.payload.get("tool_err_count") or 0)
-            duration_ms = int(event.payload.get("tool_duration_ms") or 0)
+            transport = str(event.payload.get("transport") or "").strip()
+            is_mcp_http = transport == "mcp_http"
+            tool_total = (
+                int(event.payload.get("tool_total") or 0) if is_mcp_http else 0
+            )
+            tool_ok_count = (
+                int(event.payload.get("tool_ok_count") or 0)
+                if is_mcp_http
+                else 0
+            )
+            tool_err_count = (
+                int(event.payload.get("tool_err_count") or 0)
+                if is_mcp_http
+                else 0
+            )
+            duration_ms = (
+                int(event.payload.get("tool_duration_ms") or 0)
+                if is_mcp_http
+                else 0
+            )
             label = _resolve_transport_label(event.payload, event.agent)
             style = str(event.payload.get("style", "cyan") or "cyan")
             theme_name = str(event.payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)

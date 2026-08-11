@@ -627,6 +627,85 @@ def test_textual_feed_tool_preview_preserves_run_metadata():
     assert payload["tools"] == ["◇ ⌘ read_file foo.py"]
 
 
+def test_textual_feed_cli_tool_preview_with_run_id_keeps_legacy_deduplication():
+    model = TextualFeedModel()
+    payload = {
+        "label": "Codex",
+        "run_id": "agentrun:codex-1",
+        "transport": "chat",
+    }
+
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**payload, "content": "⚒ read_file foo.py"},
+        agent="codex",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**payload, "content": "✓ read_file foo.py"},
+        agent="codex",
+    ))
+
+    assert model.items[0].event.payload["tools"] == ["✓ read_file foo.py"]
+
+
+def test_textual_feed_keeps_cli_and_http_mcp_tool_state_isolated():
+    now = [10.0]
+    model = TextualFeedModel(
+        clock=lambda: now[0],
+        tool_preview_dwell_seconds=0.5,
+    )
+    cli_payload = {
+        "label": "Codex",
+        "run_id": "http:cli-run-name",
+        "transport": "chat",
+    }
+    http_payload = {
+        "label": "MCP HTTP",
+        "run_id": "http:mcp-run",
+        "transport": "mcp_http",
+        "client_name": "chatgpt",
+        "mcp_msg_id": "1",
+    }
+
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**cli_payload, "content": "⚒ read_file foo.py"},
+        agent="codex",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**http_payload, "content": "⚒ read_file foo.py"},
+        agent="mcp-http",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**cli_payload, "content": "✓ read_file foo.py"},
+        agent="codex",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_state",
+        {
+            **http_payload,
+            "msg_id": "1",
+            "tool_name": "read_file",
+            "status": "finished",
+        },
+        agent="mcp-http",
+    ))
+
+    assert len(model.items) == 2
+    cli_item = next(item for item in model.items if item.event.agent == "codex")
+    http_item = next(item for item in model.items if item.event.agent == "mcp-http")
+    assert cli_item.event.payload["tools"] == ["✓ read_file foo.py"]
+    assert http_item.event.payload["tools"] == ["◇ ✓ read_file foo.py"]
+
+    now[0] = 10.5
+    assert model.expire_tool_previews()
+    assert len(model.items) == 1
+    assert model.items[0].event.agent == "codex"
+
+
 def test_textual_feed_http_mcp_tool_preview_uses_remote_icon_and_merges_status():
     model = TextualFeedModel()
     payload = {
@@ -740,7 +819,7 @@ def test_textual_feed_separates_distinct_http_mcp_clients():
     assert len(model.items) == 2
 
 
-def test_textual_feed_http_mcp_tracks_stats_without_rendering_live_summary():
+def test_textual_feed_http_mcp_tracks_and_projects_live_summary():
     now = [10.0]
     model = TextualFeedModel(
         clock=lambda: now[0],
@@ -777,10 +856,10 @@ def test_textual_feed_http_mcp_tracks_stats_without_rendering_live_summary():
     ))
     payload = model.items[0].event.payload
     assert payload["tools"] == ["◇ ✓ grep_search MCP", "◇ ⚒ git_status"]
-    assert "tool_total" not in payload
-    assert "tool_ok_count" not in payload
-    assert "tool_err_count" not in payload
-    assert "tool_duration_ms" not in payload
+    assert payload["tool_total"] == 1
+    assert payload["tool_ok_count"] == 1
+    assert payload["tool_err_count"] == 0
+    assert payload["tool_duration_ms"] == 30
 
     assert model.apply(TextualUiEvent(
         "tool_state",
@@ -796,7 +875,10 @@ def test_textual_feed_http_mcp_tracks_stats_without_rendering_live_summary():
     ))
     payload = model.items[0].event.payload
     assert payload["tools"] == ["◇ ✓ grep_search MCP", "◇ ✗ git_status"]
-    assert "tool_total" not in payload
+    assert payload["tool_total"] == 2
+    assert payload["tool_ok_count"] == 1
+    assert payload["tool_err_count"] == 1
+    assert payload["tool_duration_ms"] == 50
     agent_key = next(iter(model._mcp_http_tool_stats_by_agent))
     assert model._mcp_http_tool_stats_by_agent[agent_key] == {
         "total": 2,
@@ -822,6 +904,35 @@ def test_textual_feed_http_mcp_tracks_stats_without_rendering_live_summary():
     assert not model.expire_tool_previews()
     assert "tools" in model.items[0].event.payload
 
+    now[0] = 10.5
+    assert model.expire_tool_previews()
+    assert model.items == []
+
+
+def test_textual_feed_http_mcp_terminal_state_without_preview_expires():
+    now = [10.0]
+    model = TextualFeedModel(
+        clock=lambda: now[0],
+        tool_preview_dwell_seconds=0.5,
+    )
+
+    assert model.apply(TextualUiEvent(
+        "tool_state",
+        {
+            "label": "MCP HTTP",
+            "run_id": "http:run-1",
+            "transport": "mcp_http",
+            "client_name": "chatgpt",
+            "msg_id": "1",
+            "tool_name": "read_file",
+            "status": "finished",
+            "duration_ms": 20,
+        },
+        agent="mcp-http",
+    ))
+
+    assert model.items[0].event.payload["tools"] == ["◇ ✓ read_file"]
+    assert model.items[0].event.payload["tool_total"] == 1
     now[0] = 10.5
     assert model.expire_tool_previews()
     assert model.items == []
@@ -2967,6 +3078,21 @@ def test_textual_bridge_handler_refreshes_after_visual_event_updates():
     assert "self._refresh_now(layout=True)" in source
     assert "self._refresh_now()" in source
     assert "_logger.exception(\"Falha ao atualizar a interface Textual\")" in source
+
+
+def test_textual_app_syncs_last_expired_tool_before_early_return():
+    import inspect
+
+    source = inspect.getsource(run_textual_quimera_app)
+    pulse_start = source.index("def _pulse_thinking_marker")
+    pulse_end = source.index("def _run_quimera_app", pulse_start)
+    pulse_source = source[pulse_start:pulse_end]
+
+    expiry_branch = pulse_source.index("if expired_tools:")
+    empty_branch = pulse_source.index("if not any(item.transient")
+    assert expiry_branch < empty_branch
+    assert "self._sync_transient_layer()" in pulse_source[expiry_branch:empty_branch]
+    assert "self._refresh_now()" in pulse_source[expiry_branch:empty_branch]
 
 
 
