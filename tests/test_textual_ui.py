@@ -1514,6 +1514,34 @@ def test_connection_screen_resolves_profile_from_system_layer_contract():
     profile_resolver.get.assert_called_once_with("openai")
 
 
+def test_connection_screen_fields_show_scrollbar_when_content_overflows():
+    import asyncio
+
+    from textual.app import App
+    from textual.containers import VerticalScroll
+
+    async def run_test() -> None:
+        profile = SimpleNamespace(effective_connection=Mock(return_value=SimpleNamespace()))
+        profile_resolver = Mock()
+        profile_resolver.get.return_value = profile
+        quimera_app = SimpleNamespace(
+            system_layer=SimpleNamespace(profile_resolver=profile_resolver),
+        )
+        app = App()
+
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.push_screen(ConnectionScreen(quimera_app, Mock(), "openai"))
+            await pilot.pause()
+
+            fields = app.screen.query_one("#connection_fields")
+            assert isinstance(fields, VerticalScroll)
+            assert fields.virtual_size.height > fields.container_size.height
+            assert fields.max_scroll_y > 0
+            assert fields.show_vertical_scrollbar is True
+
+    asyncio.run(run_test())
+
+
 def test_textual_input_gate_is_active_while_textual_is_mounted():
     gate = TextualInputGate(TextualUiBridge())
 

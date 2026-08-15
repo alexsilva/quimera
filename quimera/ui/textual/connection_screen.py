@@ -5,7 +5,7 @@ import json
 import shlex
 
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Switch
 
@@ -23,6 +23,7 @@ class ConnectionScreen(ModalScreen[None]):
     }
     #connection_title { text-align: center; text-style: bold; color: $accent; margin-bottom: 1; }
     #connection_fields { height: auto; max-height: 62vh; overflow-y: auto; }
+    #conn_openai_fields, #conn_cli_fields { height: auto; }
     #connection_fields Label { margin-top: 1; color: $text-muted; }
     #connection_buttons { margin-top: 1; height: 1; align-horizontal: right; }
     #connection_buttons Button { height: 1; min-width: 12; border: none; margin-left: 2; }
@@ -58,7 +59,7 @@ class ConnectionScreen(ModalScreen[None]):
         )
         with Container(id="connection_dialog"):
             yield Label(f"Conexão · {self.agent_name}", id="connection_title")
-            with Vertical(id="connection_fields"):
+            with VerticalScroll(id="connection_fields"):
                 yield Label("Driver")
                 yield Select([("OpenAI/API", "openai"), ("CLI", "cli")], value="cli" if is_cli else "openai", id="conn_driver")
 
