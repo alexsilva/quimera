@@ -261,7 +261,7 @@ def main():
         except (AttributeError, OSError, ValueError):
             pass
 
-    parser = argparse.ArgumentParser(prog="quimera")
+    parser = argparse.ArgumentParser(prog="quimera", allow_abbrev=False)
     parser.add_argument(
         "--version",
         action="version",
@@ -441,6 +441,10 @@ def main():
 
     if "--spy" in unknown:
         parser.error("--spy foi removido; use --visibility quiet|summary|full")
+    if unknown:
+        parser.error(f"argumentos não reconhecidos: {' '.join(unknown)}")
+    if args.test_agent is not None and not args.interactive_test:
+        parser.error(f"argumento não reconhecido: {args.test_agent}")
 
     if args.history_window is not None and args.history_window <= 0:
         parser.error("--history-window deve ser maior que zero")

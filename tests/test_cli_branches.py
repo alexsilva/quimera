@@ -448,6 +448,57 @@ def test_main_rejects_non_positive_history_window(monkeypatch):
     assert exc.value.code == 2
 
 
+@pytest.mark.parametrize(
+    "argv, unknown",
+    [
+        (["quimera", "--conect", "novo-agente"], "--conect"),
+        (["quimera", "--visibility", "summary", "--desconhecido"], "--desconhecido"),
+        (["quimera", "-x"], "-x"),
+    ],
+)
+def test_main_rejects_unknown_arguments_before_starting_chat(monkeypatch, capsys, argv, unknown):
+    """Qualquer opção desconhecida encerra o CLI antes de iniciar o chat."""
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(
+        cli,
+        "QuimeraApp",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("chat não deve iniciar")),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+    assert unknown in capsys.readouterr().err
+
+
+def test_main_rejects_abbreviated_long_options(monkeypatch, capsys):
+    """Opções longas precisam corresponder exatamente ao nome registrado."""
+    monkeypatch.setattr(sys, "argv", ["quimera", "--visib", "full"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+    assert "--visib" in capsys.readouterr().err
+
+
+def test_main_rejects_positional_agent_outside_interactive_test(monkeypatch, capsys):
+    """O agente posicional só é válido como argumento de --interactive-test."""
+    monkeypatch.setattr(sys, "argv", ["quimera", "x"])
+    monkeypatch.setattr(
+        cli,
+        "QuimeraApp",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("chat não deve iniciar")),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+    assert "argumento não reconhecido: x" in capsys.readouterr().err
+
+
 def test_main_rejects_non_positive_set_history_window(monkeypatch):
     """`--set-history-window` deve rejeitar valores menores ou iguais a zero."""
     _patch_main_basics(monkeypatch)
@@ -526,7 +577,11 @@ def test_main_connect_registers_dynamic_profile_and_saves_override(monkeypatch):
     """Verifica que main connect registers dynamic profile and saves override."""
     dynamic_profile = SimpleNamespace(effective_connection=lambda: CliConnection(cmd=["builtin"]))
 
-    monkeypatch.setattr(sys, "argv", ["quimera", "--connect", "novo-agente", "--driver", "cli", "--cmd", "novo-cli"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["quimera", "--connect", "novo-agente", "--driver", "cli", "--cmd", "novo-cli", "--child-flag"],
+    )
     monkeypatch.setattr(cli._profiles, "get", lambda _name: None)
     monkeypatch.setattr(cli, "is_valid_agent_name", lambda _name: True)
 
@@ -538,6 +593,7 @@ def test_main_connect_registers_dynamic_profile_and_saves_override(monkeypatch):
 
     register_dynamic.assert_called_once_with("novo-agente", metadata=None)
     set_override.assert_called_once()
+    assert set_override.call_args.args[1].cmd == ["novo-cli", "--child-flag"]
     printed_messages = [call.args[0] for call in mock_print.call_args_list]
     assert any("Conexão registrada: novo-agente" in msg for msg in printed_messages)
     assert any("Conexão salva em base_dir para novo-agente" in msg for msg in printed_messages)
