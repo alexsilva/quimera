@@ -28,7 +28,7 @@ class DebateCommand:
     mode: DebateMode = DebateMode.VERDICT
     agents: tuple[str, ...] = ()
     rounds: int = 2
-    timeout_seconds: float = 300.0
+    timeout_seconds: float = 900.0
     quorum: int | None = None
     debate_id: str = ""
 
@@ -56,7 +56,7 @@ def parse_debate_command(command: str) -> DebateCommand:
     )
     parser.add_argument("--agents", default="")
     parser.add_argument("--rounds", type=int, default=2)
-    parser.add_argument("--timeout", type=float, default=300.0)
+    parser.add_argument("--timeout", type=float, default=900.0)
     parser.add_argument("--quorum", type=int)
     parser.add_argument("topic", nargs="+")
     try:
@@ -113,5 +113,5 @@ def _parse_control(action: str, args: list[str]) -> DebateCommand:
 def _usage() -> str:
     return (
         "Uso: /debate [--mode verdict|workflow] [--agents a,b,c] "
-        "[--rounds 2] [--timeout 300] [--quorum 2] <tema>"
+        "[--rounds 2] [--timeout 900] [--quorum 2] <tema>"
     )

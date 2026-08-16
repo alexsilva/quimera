@@ -64,7 +64,7 @@ TERMINAL_DEBATE_STATUSES = frozenset(
 @dataclass(frozen=True, slots=True)
 class DebateLimits:
     max_rounds: int = 2
-    timeout_seconds: float = 300.0
+    timeout_seconds: float = 900.0
     quorum: int = 2
 
 
