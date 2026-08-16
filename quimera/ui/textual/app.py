@@ -155,6 +155,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._restored_history_hydrated = False
             self._breadcrumb_chain: list[str] = []
             self._feed_renderable_cache: dict[int, object] = {}
+            self._scroll_feed_on_submit = False
 
         def compose(self) -> ComposeResult:
             yield _SummaryHeader(show_clock=True, id="header")
@@ -431,6 +432,17 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 event.input.add_to_history(value)
                 event.input.save_history(self._history_file_path)
             bridge.submit_input(value)
+            if value:
+                # Enviar um prompt leva o scroll ao fim do chat uma única vez;
+                # depois disso o acompanhamento volta a depender do "pinned".
+                self._scroll_feed_on_submit = True
+                feed = self.query_one("#feed", _UnifiedFeed)
+                self.call_after_refresh(
+                    feed.scroll_end,
+                    animate=False,
+                    immediate=True,
+                    x_axis=False,
+                )
 
         def _set_question_overlay(self, payload) -> None:
             overlay = self.query_one("#question_overlay", Static)
@@ -523,6 +535,11 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 if token in active_tokens
             }
             was_pinned = feed.is_vertical_scroll_end
+            if self._scroll_feed_on_submit:
+                # O envio de prompt força o scroll ao fim exatamente uma vez,
+                # mesmo que o usuário estivesse lendo o histórico lá em cima.
+                self._scroll_feed_on_submit = False
+                scroll_end = True
             feed.sync_entries(entries, force=force)
             if scroll_end or was_pinned:
                 self.call_after_refresh(

@@ -3324,6 +3324,30 @@ def test_textual_unified_feed_uses_actual_scroll_position_for_auto_follow():
     assert "if renderable is not None:" in sync_source
 
 
+def test_textual_prompt_submission_scrolls_feed_to_end_once():
+    import inspect
+
+    source = inspect.getsource(run_textual_quimera_app)
+
+    submit_start = source.index("def on_input_submitted")
+    submit_end = source.index("def _set_question_overlay", submit_start)
+    submit_source = source[submit_start:submit_end]
+    # Enviar o prompt leva o scroll ao fim imediatamente e agenda o pin
+    # para quando o turno do usuário entrar no feed.
+    assert "self._scroll_feed_on_submit = True" in submit_source
+    assert "feed.scroll_end" in submit_source
+
+    sync_start = source.index("def _sync_feed")
+    sync_end = source.index("def _sync_transient_feed_slots", sync_start)
+    sync_source = source[sync_start:sync_end]
+    # A flag é consumida uma única vez: depois o auto-follow volta a
+    # depender do usuário estar no fim (was_pinned).
+    assert "self._scroll_feed_on_submit = False" in sync_source
+    assert sync_source.index("self._scroll_feed_on_submit = False") < sync_source.index(
+        "feed.sync_entries(entries, force=force)"
+    )
+
+
 def test_textual_app_pulse_updates_only_transient_slots():
     import inspect
 
