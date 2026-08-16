@@ -2652,6 +2652,7 @@ def test_textual_user_message_renders_as_chat_turn():
     rendered = _render_event(TextualUiEvent("user_message", {"content": "oi", "label": "Alex"}))
 
     assert isinstance(rendered, Padding)
+    assert rendered.top == 1
     assert rendered.bottom == 1
 
 

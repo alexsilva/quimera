@@ -491,7 +491,7 @@ def _render_event(event: TextualUiEvent):
                 content=content,
                 render_mode="plain",
             ),
-            pad=(0, 0, 1, 0),
+            pad=(1, 0, 1, 0),
         )
     if event.kind == "agent_message":
         payload = event.payload or {}
