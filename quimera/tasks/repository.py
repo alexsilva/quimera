@@ -10,9 +10,15 @@ from ..constants import TaskStatus, TaskType, can_transition
 from ..runtime.models import JobRecord, TaskRecord
 from ..app.event_sink import EventSink
 from .events import (
-    TaskProposed, TaskApproved, TaskRejected, TaskStarted,
-    TaskSubmittedForReview, TaskReviewStarted, TaskCompleted,
-    TaskFailed, TaskRequeued,
+    TaskProposed,
+    TaskApproved,
+    TaskRejected,
+    TaskStarted,
+    TaskSubmittedForReview,
+    TaskReviewStarted,
+    TaskCompleted,
+    TaskFailed,
+    TaskRequeued,
 )
 
 _UNSET = object()
@@ -116,12 +122,29 @@ class TaskRepository:
         for col, spec in migrations.items():
             if col not in existing:
                 cur.execute(f"ALTER TABLE tasks ADD COLUMN {col} {spec}")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS task_dependencies (
+                task_id INTEGER NOT NULL,
+                depends_on_task_id INTEGER NOT NULL,
+                created_at DATETIME NOT NULL,
+                PRIMARY KEY(task_id, depends_on_task_id),
+                CHECK(task_id != depends_on_task_id),
+                FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY(depends_on_task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            );
+        """)
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent "
+            "ON task_dependencies(depends_on_task_id)"
+        )
         conn.commit()
         conn.close()
 
     # ── Jobs ──────────────────────────────────────────────────────────
 
-    def add_job(self, description: str, created_by: str | None = None, job_id: int | None = None) -> int:
+    def add_job(
+        self, description: str, created_by: str | None = None, job_id: int | None = None
+    ) -> int:
         """Cria um job (ou reutiliza ``job_id`` existente)."""
         conn = self._conn()
         cur = conn.cursor()
@@ -271,13 +294,89 @@ class TaskRepository:
         conn.close()
         return [
             TaskRecord(
-                id=r[0], job_id=r[1], description=r[2], body=r[3], status=r[4],
-                task_type=r[5], origin=r[6], assigned_to=r[7], result=r[8], notes=r[9],
-                priority=r[10], created_at=r[11], updated_at=r[12], created_by=r[13],
-                requested_by=r[14], started_at=r[15], completed_at=r[16],
+                id=r[0],
+                job_id=r[1],
+                description=r[2],
+                body=r[3],
+                status=r[4],
+                task_type=r[5],
+                origin=r[6],
+                assigned_to=r[7],
+                result=r[8],
+                notes=r[9],
+                priority=r[10],
+                created_at=r[11],
+                updated_at=r[12],
+                created_by=r[13],
+                requested_by=r[14],
+                started_at=r[15],
+                completed_at=r[16],
             )
             for r in rows
         ]
+
+    def find_task_by_source_context(self, source_context: str) -> TaskRecord | None:
+        """Finds one task by its stable external source identity."""
+        if not str(source_context or "").strip():
+            return None
+        conn = self._conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM tasks WHERE source_context = ? ORDER BY id ASC LIMIT 1",
+            (str(source_context),),
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        tasks = self.list_tasks({"id": int(row[0])})
+        return tasks[0] if tasks else None
+
+    def add_task_dependency(self, task_id: int, depends_on_task_id: int) -> bool:
+        """Adds an idempotent prerequisite edge between two tasks."""
+        if int(task_id) == int(depends_on_task_id):
+            raise ValueError("task nao pode depender de si mesma")
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            creates_cycle = conn.execute(
+                """
+                WITH RECURSIVE reachable(task_id) AS (
+                    SELECT ?
+                    UNION
+                    SELECT edge.depends_on_task_id
+                    FROM task_dependencies AS edge
+                    JOIN reachable ON edge.task_id = reachable.task_id
+                )
+                SELECT 1 FROM reachable WHERE task_id = ? LIMIT 1
+                """,
+                (int(depends_on_task_id), int(task_id)),
+            ).fetchone()
+            if creates_cycle:
+                raise ValueError("dependencia criaria ciclo entre tasks")
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO task_dependencies(task_id, depends_on_task_id, created_at) "
+                "VALUES (?, ?, ?)",
+                (int(task_id), int(depends_on_task_id), self._now()),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def list_task_dependencies(self, task_id: int) -> list[int]:
+        """Returns direct prerequisite task IDs in stable order."""
+        conn = self._conn()
+        rows = conn.execute(
+            "SELECT depends_on_task_id FROM task_dependencies "
+            "WHERE task_id = ? ORDER BY depends_on_task_id ASC",
+            (int(task_id),),
+        ).fetchall()
+        conn.close()
+        return [int(row[0]) for row in rows]
 
     # ── Tasks — escrita ───────────────────────────────────────────────
 
@@ -290,7 +389,13 @@ class TaskRepository:
             cur.execute(
                 "UPDATE tasks SET assigned_to = NULL, status = ?, updated_at = ? "
                 "WHERE assigned_to = ? AND status IN (?, ?)",
-                (TaskStatus.PENDING, self._now(), agent_name, TaskStatus.PENDING, TaskStatus.IN_PROGRESS),
+                (
+                    TaskStatus.PENDING,
+                    self._now(),
+                    agent_name,
+                    TaskStatus.PENDING,
+                    TaskStatus.IN_PROGRESS,
+                ),
             )
             conn.commit()
             conn.close()
@@ -328,19 +433,37 @@ class TaskRepository:
                                   priority, created_at, updated_at, started_at, created_by, requested_by, notes, source_context)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (job_id, description, body, status, task_type, origin, assigned_to,
-                 priority, now, now, started_at, created_by, requested_by, notes, source_context),
+                (
+                    job_id,
+                    description,
+                    body,
+                    status,
+                    task_type,
+                    origin,
+                    assigned_to,
+                    priority,
+                    now,
+                    now,
+                    started_at,
+                    created_by,
+                    requested_by,
+                    notes,
+                    source_context,
+                ),
             )
             task_id = cur.lastrowid
             conn.commit()
             conn.close()
-            self._publish(TaskProposed(
-                task_id=int(task_id), job_id=job_id,
-                description=description,
-                task_type=task_type,
-                requested_by=requested_by,
-                source_context=source_context,
-            ))
+            self._publish(
+                TaskProposed(
+                    task_id=int(task_id),
+                    job_id=job_id,
+                    description=description,
+                    task_type=task_type,
+                    requested_by=requested_by,
+                    source_context=source_context,
+                )
+            )
             return task_id
         except Exception:
             conn.rollback()
@@ -365,7 +488,11 @@ class TaskRepository:
             completed_at_sql = ""
             if status_str == TaskStatus.IN_PROGRESS.value:
                 started_at_sql = ", started_at = COALESCE(started_at, ?)"
-            elif status_str in (TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.REJECTED.value):
+            elif status_str in (
+                TaskStatus.COMPLETED.value,
+                TaskStatus.FAILED.value,
+                TaskStatus.REJECTED.value,
+            ):
                 completed_at_sql = ", completed_at = ?"
             params: list = [status, result, notes, now]
             if started_at_sql:
@@ -388,16 +515,23 @@ class TaskRepository:
 
     def fail_task(self, task_id: int, reason: str | None = None) -> bool:
         """Marca task como failed."""
-        return self.transition_task(task_id, TaskStatus.FAILED, result=reason, notes=reason)
+        return self.transition_task(
+            task_id, TaskStatus.FAILED, result=reason, notes=reason
+        )
 
-    def requeue_task(self, task_id: int, failed_agent: str, reason: str | None = None) -> bool:
+    def requeue_task(
+        self, task_id: int, failed_agent: str, reason: str | None = None
+    ) -> bool:
         """Retorna task para pending após falha de execução."""
         conn = self._conn()
         cur = conn.cursor()
         try:
             cur.execute("BEGIN IMMEDIATE")
             now = self._now()
-            cur.execute("SELECT status, failed_agents, attempt_count, job_id FROM tasks WHERE id = ?", (task_id,))
+            cur.execute(
+                "SELECT status, failed_agents, attempt_count, job_id FROM tasks WHERE id = ?",
+                (task_id,),
+            )
             row = cur.fetchone()
             if not row:
                 conn.rollback()
@@ -416,21 +550,36 @@ class TaskRepository:
             cur.execute(
                 "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
                 "failed_agents = ?, attempt_count = ?, started_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?",
-                (TaskStatus.PENDING, reason, reason, failed_agents, attempt_count, now, task_id),
+                (
+                    TaskStatus.PENDING,
+                    reason,
+                    reason,
+                    failed_agents,
+                    attempt_count,
+                    now,
+                    task_id,
+                ),
             )
             conn.commit()
             conn.close()
-            self._publish(TaskRequeued(
-                task_id=task_id, job_id=job_id,
-                reason=reason, failed_agent=failed_agent, attempt=attempt_count,
-            ))
+            self._publish(
+                TaskRequeued(
+                    task_id=task_id,
+                    job_id=job_id,
+                    reason=reason,
+                    failed_agent=failed_agent,
+                    attempt=attempt_count,
+                )
+            )
             return True
         except Exception:
             conn.rollback()
             conn.close()
             raise
 
-    def complete_task(self, task_id: int, result: str | None = None, reviewed_by: str | None = None) -> bool:
+    def complete_task(
+        self, task_id: int, result: str | None = None, reviewed_by: str | None = None
+    ) -> bool:
         """Conclui task respeitando state machine."""
         conn = self._conn()
         cur = conn.cursor()
@@ -447,7 +596,15 @@ class TaskRepository:
             if reviewed_by:
                 cur.execute(
                     "UPDATE tasks SET status = ?, result = ?, reviewed_by = ?, notes = ?, completed_at = ?, updated_at = ? WHERE id = ?",
-                    (TaskStatus.COMPLETED, result, reviewed_by, None, now, now, task_id),
+                    (
+                        TaskStatus.COMPLETED,
+                        result,
+                        reviewed_by,
+                        None,
+                        now,
+                        now,
+                        task_id,
+                    ),
                 )
             else:
                 cur.execute(
@@ -456,10 +613,14 @@ class TaskRepository:
                 )
             conn.commit()
             conn.close()
-            self._publish(TaskCompleted(
-                task_id=task_id, job_id=job_id,
-                result=result, reviewed_by=reviewed_by,
-            ))
+            self._publish(
+                TaskCompleted(
+                    task_id=task_id,
+                    job_id=job_id,
+                    result=result,
+                    reviewed_by=reviewed_by,
+                )
+            )
             return True
         except Exception:
             conn.rollback()
@@ -472,7 +633,9 @@ class TaskRepository:
         cur = conn.cursor()
         try:
             cur.execute("BEGIN IMMEDIATE")
-            cur.execute("SELECT status, job_id, assigned_to FROM tasks WHERE id = ?", (task_id,))
+            cur.execute(
+                "SELECT status, job_id, assigned_to FROM tasks WHERE id = ?", (task_id,)
+            )
             row = cur.fetchone()
             if not row or not can_transition(row[0], TaskStatus.PENDING_REVIEW):
                 conn.rollback()
@@ -485,10 +648,14 @@ class TaskRepository:
             )
             conn.commit()
             conn.close()
-            self._publish(TaskSubmittedForReview(
-                task_id=task_id, job_id=job_id,
-                result=result, executed_by=executed_by,
-            ))
+            self._publish(
+                TaskSubmittedForReview(
+                    task_id=task_id,
+                    job_id=job_id,
+                    result=result,
+                    executed_by=executed_by,
+                )
+            )
             return True
         except Exception:
             conn.rollback()
@@ -508,7 +675,10 @@ class TaskRepository:
         try:
             cur.execute("BEGIN IMMEDIATE")
             now = self._now()
-            cur.execute("SELECT status, failed_agents, attempt_count, job_id FROM tasks WHERE id = ?", (task_id,))
+            cur.execute(
+                "SELECT status, failed_agents, attempt_count, job_id FROM tasks WHERE id = ?",
+                (task_id,),
+            )
             row = cur.fetchone()
             if not row:
                 conn.rollback()
@@ -528,14 +698,27 @@ class TaskRepository:
                 "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
                 "reviewed_by = NULL, failed_agents = ?, attempt_count = ?, "
                 "started_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?",
-                (TaskStatus.PENDING, result, notes, failed_agents, attempt_count, now, task_id),
+                (
+                    TaskStatus.PENDING,
+                    result,
+                    notes,
+                    failed_agents,
+                    attempt_count,
+                    now,
+                    task_id,
+                ),
             )
             conn.commit()
             conn.close()
-            self._publish(TaskRequeued(
-                task_id=task_id, job_id=job_id,
-                reason=notes, failed_agent=failed_agent, attempt=attempt_count,
-            ))
+            self._publish(
+                TaskRequeued(
+                    task_id=task_id,
+                    job_id=job_id,
+                    reason=notes,
+                    failed_agent=failed_agent,
+                    attempt=attempt_count,
+                )
+            )
             return True
         except Exception:
             conn.rollback()
@@ -569,7 +752,11 @@ class TaskRepository:
             job_id = row[1]
             now = self._now()
             fields: dict = {"status": to_status, "updated_at": now}
-            if to_status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.REJECTED):
+            if to_status in (
+                TaskStatus.COMPLETED,
+                TaskStatus.FAILED,
+                TaskStatus.REJECTED,
+            ):
                 fields["completed_at"] = now
             if result is not _UNSET:
                 fields["result"] = result
@@ -585,20 +772,29 @@ class TaskRepository:
             conn.commit()
             conn.close()
             if to_status == TaskStatus.APPROVED:
-                self._publish(TaskApproved(
-                    task_id=task_id, job_id=job_id,
-                    approved_by=fields.get("approved_by"),
-                ))
+                self._publish(
+                    TaskApproved(
+                        task_id=task_id,
+                        job_id=job_id,
+                        approved_by=fields.get("approved_by"),
+                    )
+                )
             elif to_status == TaskStatus.REJECTED:
-                self._publish(TaskRejected(
-                    task_id=task_id, job_id=job_id,
-                    reason=fields.get("result"),
-                ))
+                self._publish(
+                    TaskRejected(
+                        task_id=task_id,
+                        job_id=job_id,
+                        reason=fields.get("result"),
+                    )
+                )
             elif to_status == TaskStatus.FAILED:
-                self._publish(TaskFailed(
-                    task_id=task_id, job_id=job_id,
-                    reason=fields.get("result"),
-                ))
+                self._publish(
+                    TaskFailed(
+                        task_id=task_id,
+                        job_id=job_id,
+                        reason=fields.get("result"),
+                    )
+                )
             return True
         except Exception:
             conn.rollback()
@@ -611,21 +807,34 @@ class TaskRepository:
         cur = conn.cursor()
         try:
             cur.execute("BEGIN IMMEDIATE")
-            job_filter = "AND job_id = ?" if job_id is not None else ""
+            job_filter = "AND candidate.job_id = ?" if job_id is not None else ""
             params: list = [agent_name, f"%{self._failed_agents_token(agent_name)}%"]
             if job_id is not None:
                 params.insert(1, job_id)
             cur.execute(
                 f"""
-                SELECT id, job_id FROM tasks
-                WHERE status IN (?, ?)
-                  AND (assigned_to = ? OR assigned_to IS NULL)
+                SELECT id, job_id FROM tasks AS candidate
+                WHERE candidate.status IN (?, ?)
+                  AND (candidate.assigned_to = ? OR candidate.assigned_to IS NULL)
                   {job_filter}
-                  AND COALESCE(failed_agents, '') NOT LIKE ?
-                ORDER BY id ASC
+                  AND COALESCE(candidate.failed_agents, '') NOT LIKE ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM task_dependencies AS dependency_edge
+                      JOIN tasks AS prerequisite
+                        ON prerequisite.id = dependency_edge.depends_on_task_id
+                      WHERE dependency_edge.task_id = candidate.id
+                        AND prerequisite.status != ?
+                  )
+                ORDER BY candidate.id ASC
                 LIMIT 1
                 """,
-                (TaskStatus.PENDING, TaskStatus.APPROVED, *params),
+                (
+                    TaskStatus.PENDING,
+                    TaskStatus.APPROVED,
+                    *params,
+                    TaskStatus.COMPLETED,
+                ),
             )
             row = cur.fetchone()
             if not row:
@@ -667,14 +876,18 @@ class TaskRepository:
                 return None
             conn.commit()
             conn.close()
-            self._publish(TaskStarted(task_id=task_id, job_id=job_id, assigned_to=agent_name))
+            self._publish(
+                TaskStarted(task_id=task_id, job_id=job_id, assigned_to=agent_name)
+            )
             return task_id
         except Exception:
             conn.rollback()
             conn.close()
             raise
 
-    def claim_review_task(self, agent_name: str, job_id: int | None = None) -> int | None:
+    def claim_review_task(
+        self, agent_name: str, job_id: int | None = None
+    ) -> int | None:
         """Reserva atomicamente uma task pending_review para revisão pelo agente."""
         conn = self._conn()
         cur = conn.cursor()
@@ -708,7 +921,11 @@ class TaskRepository:
             )
             conn.commit()
             conn.close()
-            self._publish(TaskReviewStarted(task_id=task_id, job_id=job_id, reviewed_by=agent_name))
+            self._publish(
+                TaskReviewStarted(
+                    task_id=task_id, job_id=job_id, reviewed_by=agent_name
+                )
+            )
             return task_id
         except Exception:
             conn.rollback()
@@ -731,4 +948,6 @@ class TaskRepository:
         if not row:
             return False
         failed_agents = row[0] or ""
-        return any(self._failed_agents_token(a) not in failed_agents for a in candidate_agents)
+        return any(
+            self._failed_agents_token(a) not in failed_agents for a in candidate_agents
+        )

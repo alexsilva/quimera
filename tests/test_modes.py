@@ -1,19 +1,48 @@
 """Testes para quimera.modes e integração com ToolPolicy e parse_routing."""
-import json
-import tempfile
+
 import threading
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from quimera.app.toolbar import ToolbarManager
-from quimera.modes import MODES, ExecutionMode, get_mode
+from quimera.modes import DEBATE_MODE, MODES, ExecutionMode, get_mode
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
 
 
 class TestExecutionMode(unittest.TestCase):
+    def test_debate_mode_is_read_only_and_blocks_side_effects(self):
+        self.assertTrue(DEBATE_MODE.read_only_fs)
+        self.assertTrue(DEBATE_MODE.allow_network)
+        for tool_name in (
+            "write_file",
+            "replace_text",
+            "remove_file",
+            "run_shell",
+            "exec_command",
+            "delegate",
+            "tasks",
+            "ask_user",
+            "update_shared_state",
+        ):
+            self.assertIn(tool_name, DEBATE_MODE.blocked_tools)
+        self.assertNotIn("read_file", DEBATE_MODE.blocked_tools)
+        self.assertEqual(
+            DEBATE_MODE.allowed_tools,
+            [
+                "list_files",
+                "read_file",
+                "grep_search",
+                "git_status",
+                "git_diff",
+                "git_log",
+                "web_search",
+                "web_fetch",
+            ],
+        )
+
     def test_all_modes_defined(self):
         """Verifica que todos os modos esperados estão registrados em MODES."""
         for key in ["/planning", "/analysis", "/design", "/review", "/execute"]:
@@ -113,7 +142,9 @@ class TestToolPolicyBlockedTools(unittest.TestCase):
         blocked = ["write_file", "apply_patch", "run_shell"]
         policy = self._make_policy(blocked=blocked)
         for tool in blocked:
-            call = self._call(tool, {"path": "x", "content": "y", "patch": "z", "command": "ls"})
+            call = self._call(
+                tool, {"path": "x", "content": "y", "patch": "z", "command": "ls"}
+            )
             with self.assertRaises(ToolPolicyError):
                 policy.validate(call)
 
@@ -150,6 +181,7 @@ class TestParseRoutingWithModes(unittest.TestCase):
         from quimera.app.command_router import CommandRouter
         from quimera.app.core import QuimeraApp
         from quimera.app.agent_pool import AgentPool
+
         app = QuimeraApp.__new__(QuimeraApp)
         app._lock = __import__("threading").Lock()
         app.selected_agents = ["claude", "codex"]
@@ -172,6 +204,7 @@ class TestParseRoutingWithModes(unittest.TestCase):
         # ToolExecutor mock com policy
         from quimera.runtime.policy import ToolPolicy
         from quimera.runtime.config import ToolRuntimeConfig
+
         policy = ToolPolicy(ToolRuntimeConfig(workspace_root=Path("/tmp")))
         mock_executor = MagicMock()
         mock_executor.policy = policy
@@ -182,12 +215,16 @@ class TestParseRoutingWithModes(unittest.TestCase):
         mock_agent_client.execution_mode = None
         app.agent_client = mock_agent_client
 
-        app._set_execution_mode = QuimeraApp._set_execution_mode.__get__(app, QuimeraApp)
+        app._set_execution_mode = QuimeraApp._set_execution_mode.__get__(
+            app, QuimeraApp
+        )
         app.parse_routing = QuimeraApp.parse_routing.__get__(app, QuimeraApp)
         app.command_router = CommandRouter(
             agent_pool=app.agent_pool,
             renderer=app.renderer,
-            get_active_agent_profiles=lambda: [p for p in [mock_claude, mock_codex] if p.name in app.active_agents],
+            get_active_agent_profiles=lambda: [
+                p for p in [mock_claude, mock_codex] if p.name in app.active_agents
+            ],
             set_execution_mode=app._set_execution_mode,
             normalize_agent_name=lambda n: n,
             selected_agents=app.selected_agents,
@@ -202,8 +239,10 @@ class TestParseRoutingWithModes(unittest.TestCase):
         """Verifica que um comando de modo define execution_mode na instância do app."""
         app, _, _ = self._make_app()
         with patch("quimera.app.core.profiles") as mp:
-            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
-                                "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
+            mp.get = lambda n: {
+                "claude": MagicMock(prefix="/claude", name="claude"),
+                "codex": MagicMock(prefix="/codex", name="codex"),
+            }.get(n)
             app.parse_routing("/planning")
         self.assertIsNotNone(app.execution_mode)
         self.assertEqual(app.execution_mode.name, "planning")
@@ -211,16 +250,20 @@ class TestParseRoutingWithModes(unittest.TestCase):
     def test_mode_propagates_to_policy(self):
         app, _, _ = self._make_app()
         with patch("quimera.app.core.profiles") as mp:
-            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
-                                "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
+            mp.get = lambda n: {
+                "claude": MagicMock(prefix="/claude", name="claude"),
+                "codex": MagicMock(prefix="/codex", name="codex"),
+            }.get(n)
             app.parse_routing("/planning faz algo")
         self.assertIn("write_file", app.tool_executor.policy.blocked_tools)
 
     def test_mode_propagates_to_agent_client(self):
         app, _, _ = self._make_app()
         with patch("quimera.app.core.profiles") as mp:
-            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
-                                "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
+            mp.get = lambda n: {
+                "claude": MagicMock(prefix="/claude", name="claude"),
+                "codex": MagicMock(prefix="/codex", name="codex"),
+            }.get(n)
             app.parse_routing("/analysis analise o código")
         self.assertIsNotNone(app.agent_client.execution_mode)
         self.assertEqual(app.agent_client.execution_mode.name, "analysis")
@@ -230,16 +273,20 @@ class TestParseRoutingWithModes(unittest.TestCase):
         # Primeiro ativa planning
         app.tool_executor.policy.blocked_tools = ["write_file", "apply_patch"]
         with patch("quimera.app.core.profiles") as mp:
-            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
-                                "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
+            mp.get = lambda n: {
+                "claude": MagicMock(prefix="/claude", name="claude"),
+                "codex": MagicMock(prefix="/codex", name="codex"),
+            }.get(n)
             app.parse_routing("/execute faz a tarefa")
         self.assertEqual(app.tool_executor.policy.blocked_tools, [])
 
     def test_execute_mode_announces_previous_restrictions_were_removed(self):
         app, _, _ = self._make_app()
         with patch("quimera.app.core.profiles") as mp:
-            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
-                                "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
+            mp.get = lambda n: {
+                "claude": MagicMock(prefix="/claude", name="claude"),
+                "codex": MagicMock(prefix="/codex", name="codex"),
+            }.get(n)
             app.parse_routing("/execute faz a tarefa")
         app.renderer.show_system.assert_any_call(
             "[modo] execute ativado — restrições anteriores removidas; ferramentas bloqueadas: nenhuma"
@@ -303,12 +350,15 @@ class TestParseRoutingWithModes(unittest.TestCase):
         mock_codex.name = "codex"
         mock_codex.aliases = []
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool(["claude", "codex"])
         app.active_agents = ["claude", "codex"]
 
         with patch("quimera.app.core.profiles") as mp:
             mp.get = lambda n: {"claude": mock_claude, "codex": mock_codex}.get(n)
-            with patch.object(app, "get_active_agent_profiles", return_value=[mock_claude, mock_codex]):
+            with patch.object(
+                app, "get_active_agent_profiles", return_value=[mock_claude, mock_codex]
+            ):
                 agent, msg, _ = app.parse_routing("/planning analisa o código")
         self.assertIsNotNone(agent)
         self.assertEqual(msg, "analisa o código")
@@ -319,10 +369,13 @@ class TestFormatUserPrompt(unittest.TestCase):
 
     def _make_app(self, mode_cmd=None, user_name="Você"):
         from quimera.app.core import QuimeraApp
+
         app = QuimeraApp.__new__(QuimeraApp)
         app.user_name = user_name
         app.execution_mode = get_mode(mode_cmd) if mode_cmd else None
-        app._format_user_prompt = QuimeraApp._format_user_prompt.__get__(app, QuimeraApp)
+        app._format_user_prompt = QuimeraApp._format_user_prompt.__get__(
+            app, QuimeraApp
+        )
         return app
 
     def test_no_mode_plain_prompt(self):
@@ -367,6 +420,7 @@ def _attach_toolbar_coordinator(app):
     from quimera.app.toolbar_coordinator import ToolbarCoordinator
     from quimera.app.agent_pool import AgentPool
     from quimera.app.runtime_state import AppRuntimeState
+
     if not hasattr(app, "runtime_state"):
         app.runtime_state = AppRuntimeState()
     coordinator = ToolbarCoordinator(
@@ -395,9 +449,14 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 1
@@ -412,14 +471,21 @@ class TestInputContextAndWelcome(unittest.TestCase):
         self.assertEqual(context["model"], "unknown")
         self.assertNotIn("cwd", context)
 
-    def test_build_input_toolbar_context_exposes_parallel_status_when_threads_enabled(self):
+    def test_build_input_toolbar_context_exposes_parallel_status_when_threads_enabled(
+        self,
+    ):
         from quimera.app.core import QuimeraApp
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 2
@@ -440,9 +506,14 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 2
@@ -461,9 +532,14 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 1
@@ -482,9 +558,14 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 1
@@ -502,9 +583,14 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 1
@@ -527,9 +613,14 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 1
@@ -559,9 +650,14 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 1
@@ -580,9 +676,14 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 1
@@ -601,15 +702,25 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 2
         app.toolbar = ToolbarManager(threads=app.threads)
         app.toolbar._parallel_toolbar_state.update(
-            {"active": 1, "queued": 0, "capacity": 2, "active_agents": ("codex", "claude")}
+            {
+                "active": 1,
+                "queued": 0,
+                "capacity": 2,
+                "active_agents": ("codex", "claude"),
+            }
         )
         _attach_toolbar_coordinator(app)
 
@@ -621,15 +732,25 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 4
         app.toolbar = ToolbarManager(threads=app.threads)
         app.toolbar._parallel_toolbar_state.update(
-            {"active": 3, "queued": 0, "capacity": 4, "active_agents": ("codex", "claude", "qwen", "nemotron")}
+            {
+                "active": 3,
+                "queued": 0,
+                "capacity": 4,
+                "active_agents": ("codex", "claude", "qwen", "nemotron"),
+            }
         )
         _attach_toolbar_coordinator(app)
 
@@ -641,10 +762,15 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         app.workspace.branch = "feature-x"
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 1
@@ -659,14 +785,19 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
     def test_build_input_toolbar_context_omits_branch_when_none(self):
         from quimera.app.core import QuimeraApp
- 
+
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         # Explicitly set branch to None to simulate absence
         app.workspace.branch = None
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 1
@@ -684,9 +815,14 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
+
         app.runtime_state = AppRuntimeState()
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace = MagicMock(
+            cwd=Path("/tmp/quimera-project"),
+            tasks_db=Path("/tmp/quimera_test_tasks.db"),
+        )
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 1
@@ -702,7 +838,9 @@ class TestInputContextAndWelcome(unittest.TestCase):
     def test_build_welcome_message_includes_version_and_project_path(self):
         from quimera.app.welcome_presenter import WelcomePresenter
 
-        with patch.object(WelcomePresenter, "resolve_app_version", return_value="0.1.0"):
+        with patch.object(
+            WelcomePresenter, "resolve_app_version", return_value="0.1.0"
+        ):
             message = WelcomePresenter.build_welcome_message()
 
         self.assertIn("v0.1.0", message)
@@ -725,6 +863,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool(["codex"])
         app.active_agents = ["codex"]
         app.toolbar = ToolbarManager(threads=1)
@@ -745,6 +884,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool(["opencode"])
         app.active_agents = ["opencode"]
         app.toolbar = ToolbarManager(threads=1)
@@ -759,12 +899,15 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         self.assertEqual(app._resolve_active_model_label(), "gpt-5-mini")
 
-    def test_resolve_active_model_label_falls_back_to_profile_name_when_cli_has_no_model(self):
+    def test_resolve_active_model_label_falls_back_to_profile_name_when_cli_has_no_model(
+        self,
+    ):
         from quimera.app.core import QuimeraApp
         from quimera.profiles.base import CliConnection
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.agent_pool import AgentPool
+
         app.agent_pool = AgentPool(["claude"])
         app.active_agents = ["claude"]
         app.toolbar = ToolbarManager(threads=1)
@@ -809,6 +952,7 @@ class TestModeGuardrails(unittest.TestCase):
         self.assertFalse(mode.read_only_fs)
         self.assertTrue(mode.allow_network)
         self.assertEqual(mode.blocked_tools, [])
+        self.assertIsNone(mode.allowed_tools)
         self.assertEqual(mode.prompt_addon, "")
 
     def test_planning_mode_allows_shell(self):

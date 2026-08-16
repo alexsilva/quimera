@@ -1,4 +1,5 @@
 """Componentes de `quimera.modes`."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -12,6 +13,7 @@ class ExecutionMode:
     read_only_fs: bool = False
     allow_network: bool = True
     blocked_tools: list[str] = field(default_factory=list)
+    allowed_tools: list[str] | None = None
     prompt_addon: str = ""
 
 
@@ -21,7 +23,8 @@ MODES: dict[str, ExecutionMode] = {
         read_only_fs=True,
         allow_network=True,
         blocked_tools=[
-            "write_file", "apply_patch",
+            "write_file",
+            "apply_patch",
         ],
         prompt_addon=(
             "[MODO: PLANEJAMENTO] Planejamento com workspace somente leitura. "
@@ -33,17 +36,19 @@ MODES: dict[str, ExecutionMode] = {
         read_only_fs=True,
         allow_network=True,
         blocked_tools=["write_file", "apply_patch"],
-        prompt_addon=(
-            "[MODO: ANÁLISE] Apenas leitura e análise. Não edite arquivos."
-        ),
+        prompt_addon=("[MODO: ANÁLISE] Apenas leitura e análise. Não edite arquivos."),
     ),
     "/design": ExecutionMode(
         name="design",
         read_only_fs=True,
         allow_network=True,
         blocked_tools=[
-            "write_file", "apply_patch",
-            "run_shell", "exec_command", "write_stdin", "close_command_session",
+            "write_file",
+            "apply_patch",
+            "run_shell",
+            "exec_command",
+            "write_stdin",
+            "close_command_session",
         ],
         prompt_addon=(
             "[MODO: DESIGN] Apenas design e arquitetura. Não execute código."
@@ -54,12 +59,14 @@ MODES: dict[str, ExecutionMode] = {
         read_only_fs=True,
         allow_network=True,
         blocked_tools=[
-            "write_file", "apply_patch",
-            "run_shell", "exec_command", "write_stdin", "close_command_session",
+            "write_file",
+            "apply_patch",
+            "run_shell",
+            "exec_command",
+            "write_stdin",
+            "close_command_session",
         ],
-        prompt_addon=(
-            "[MODO: REVISÃO] Apenas revisão de código. Não edite arquivos."
-        ),
+        prompt_addon=("[MODO: REVISÃO] Apenas revisão de código. Não edite arquivos."),
     ),
     "/execute": ExecutionMode(
         name="execute",
@@ -74,6 +81,64 @@ MODES: dict[str, ExecutionMode] = {
         ),
     ),
 }
+
+
+DEBATE_MODE = ExecutionMode(
+    name="debate",
+    read_only_fs=True,
+    allow_network=True,
+    blocked_tools=[
+        "write_file",
+        "replace_text",
+        "apply_patch",
+        "remove_file",
+        "run_shell",
+        "run_shell_command",
+        "exec_command",
+        "poll_command_session",
+        "write_stdin",
+        "close_command_session",
+        "delegate",
+        "tasks",
+        "ask_user",
+        "update_shared_state",
+        "todo_write",
+        "memory_save",
+        "git_fetch",
+        "git_add",
+        "git_commit",
+        "git_checkout",
+        "git_push",
+        "browser_start",
+        "browser_close",
+        "browser_navigate",
+        "browser_click",
+        "browser_type",
+        "browser_press",
+        "browser_mouse",
+        "browser_wait",
+        "browser_evaluate",
+        "browser_screenshot",
+    ],
+    allowed_tools=[
+        "list_files",
+        "read_file",
+        "grep_search",
+        "git_status",
+        "git_diff",
+        "git_log",
+        "web_search",
+        "web_fetch",
+    ],
+    prompt_addon=(
+        "[MODO: DEBATE] Investigue antes de opinar e fundamente afirmacoes com "
+        "evidencias verificaveis: arquivos reais do workspace ou paginas web "
+        "que voce mesmo buscou. Nunca aceite a afirmacao de outro participante "
+        "sem verificar por conta propria. Use somente ferramentas de leitura "
+        "autorizadas. Nao edite arquivos, nao crie tasks, nao delegue e nao "
+        "solicite entrada humana."
+    ),
+)
 
 
 def get_mode(command: str | None) -> ExecutionMode | None:

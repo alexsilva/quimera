@@ -5,7 +5,7 @@ delegação originada de tool call precisa usar AgentClient isolado
 (o run() do client principal não é reentrante), e o cancelamento do
 usuário deve se propagar aos clients de background.
 """
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
@@ -81,9 +81,10 @@ def test_wire_binds_tasks_tool_to_canonical_task_service(wired):
 
 
 def test_wire_registers_cancel_propagation_to_background_clients(wired):
-    """ESC no fluxo principal deve cancelar delegações em background."""
+    """ESC no fluxo principal deve cancelar todo trabalho em background."""
     _app, _plat, _ui, _sess, rt, tasks, _chat = wired
 
-    rt.agent_client.add_cancel_listener.assert_called_once_with(
-        tasks.task_services.cancel_background_work
-    )
+    assert rt.agent_client.add_cancel_listener.call_args_list == [
+        call(tasks.task_services.cancel_background_work),
+        call(tasks.debate_service.cancel_active),
+    ]

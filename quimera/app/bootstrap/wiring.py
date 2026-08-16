@@ -63,6 +63,8 @@ from ...bugs import (
 )
 from ...config import ConfigManager
 from ...constants import MSG_MIGRATION, Visibility
+from ...debate import DebateRepository, DebateService
+from ...modes import DEBATE_MODE
 from ...context import ContextManager
 from ...env_config import EnvConfig
 from ...metrics import BehaviorMetricsTracker
@@ -77,6 +79,7 @@ from ...tasks import api as runtime_tasks
 from ...tasks.classifiers import classify_task_review_result
 from ...tasks.executor import create_executor
 from ...tasks.services import AppTaskServices
+from ...tasks.repository import TaskRepository
 from ...ui import RenderAuditLogger, TerminalRenderer
 from ...workspace import Workspace
 
@@ -722,11 +725,32 @@ class AppAssembler:
         tool_executor = task_services.build_tool_executor(
             require_approval_for_mutations=not plat.auto_approve_mutations
         )
+        debate_repository = DebateRepository(rt.tasks_db_path)
+        debate_service = DebateService(
+            repository=debate_repository,
+            task_repository=TaskRepository(rt.tasks_db_path, event_sink=ui.event_sink),
+            dispatch_factory=lambda cancel_event: task_services.create_isolated_dispatch(
+                cancel_event,
+                execution_mode=DEBATE_MODE,
+            ),
+            active_agents=plat.agent_pool.list_agents,
+            renderer=ui.renderer,
+            session_id=plat.session_id,
+            current_job_id=rt.current_job_id,
+            staging_root=rt.workspace_tmp_root / "debates",
+            workspace_root=plat.workspace.cwd,
+            persist_message=session_services.persist_message,
+            notify_tasks_changed=task_services.notify_tasks_changed,
+            show_system=sess.system_layer.show_system_message,
+            show_warning=sess.system_layer.show_warning_message,
+            show_error=sess.system_layer.show_error_message,
+        )
         return TaskBundle(
             task_services=task_services,
             session_services=session_services,
             dispatch_services=dispatch_services,
             tool_executor=tool_executor,
+            debate_service=debate_service,
         )
 
     def _apply_tasks(self, app, tasks: TaskBundle) -> None:
@@ -734,6 +758,7 @@ class AppAssembler:
         app.session_services = tasks.session_services
         app.dispatch_services = tasks.dispatch_services
         app.tool_executor = tasks.tool_executor
+        app.debate_service = tasks.debate_service
 
     # ------------------------------------------------------------------
     # Fase 6: chat — orquestração de rodada, toolbar e serviços auxiliares
@@ -875,6 +900,7 @@ class AppAssembler:
         chat: ChatBundle,
     ) -> None:
         sess.system_layer.task_command_handler = tasks.task_services.handle_task_command
+        sess.system_layer.debate_command_handler = tasks.debate_service.handle_command
         tasks.task_services.bind_session_services(tasks.session_services)
         tasks.task_services.bind_dispatch_services(tasks.dispatch_services)
         tasks.task_services.bind_dispatch_tool_executor(tasks.tool_executor)
@@ -901,6 +927,7 @@ class AppAssembler:
         # ESC/Ctrl+C no fluxo principal também cancela delegações em background,
         # que possuem cancel_event próprio.
         rt.agent_client.add_cancel_listener(tasks.task_services.cancel_background_work)
+        rt.agent_client.add_cancel_listener(tasks.debate_service.cancel_active)
         tasks.tool_executor.set_active_agents_provider(plat.agent_pool.list_agents)
         tasks.tool_executor.set_orchestrator_provider(plat.agent_pool.get_orchestrator)
         tasks.tool_executor.set_cancel_checker(rt.agent_client.is_cancelled)

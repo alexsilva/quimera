@@ -109,6 +109,14 @@ class TextualUiBridge:
         if len(parts) != 2 or not parts[1].strip():
             return ""
         requested_prefix = parts[0].casefold()
+        if requested_prefix == "/debate":
+            try:
+                from quimera.debate.commands import parse_debate_command
+
+                parsed = parse_debate_command(clean)
+            except Exception:
+                return ""
+            return parsed.topic if parsed.action == "start" else ""
         with self._lock:
             quimera_app = self.quimera_app
         get_profiles = getattr(quimera_app, "get_active_agent_profiles", None)

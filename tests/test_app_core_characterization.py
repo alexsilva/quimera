@@ -83,6 +83,7 @@ EXPECTED_PUBLIC_ATTRS = [
     ("config", "ConfigManager"),
     ("context_manager", "ContextManager"),
     ("current_job_id", "int"),
+    ("debate_service", "DebateService"),
     ("debug_prompt_metrics", "bool"),
     ("dispatch_services", "AppDispatchServices"),
     ("event_sink", "EventSink"),

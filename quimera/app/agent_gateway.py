@@ -151,6 +151,7 @@ class AgentGateway:
         history_snapshot=None,
         request_override=None,
         progress_callback=None,
+        emit_run_deltas=True,
     ):
         """Monta o prompt final e executa a chamada ao backend do agente."""
         agent_client = self._agent_client
@@ -193,6 +194,7 @@ class AgentGateway:
             "primary": bool(primary),
             "silent": bool(silent),
             "show_output": bool(show_output),
+            "emit_run_deltas": bool(emit_run_deltas),
             "from_agent": from_agent,
         }
 
@@ -218,7 +220,7 @@ class AgentGateway:
         )
 
         def _on_text_chunk(chunk):
-            if chunk:
+            if emit_run_deltas and chunk:
                 self._agent_run_sink.emit(
                     _run_event("delta", text=str(chunk))
                 )

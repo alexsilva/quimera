@@ -2619,6 +2619,21 @@ def test_textual_bridge_does_not_echo_slash_command_as_user_message():
     assert emitted == []
 
 
+def test_textual_bridge_echoes_debate_topic_but_not_control_commands():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    bridge.attach_quimera_app(SimpleNamespace(user_name="Alex"))
+
+    bridge.submit_input('/debate --mode workflow "planejar entrega"')
+    assert emitted[-1].kind == "user_message"
+    assert emitted[-1].payload["content"] == "planejar entrega"
+
+    emitted.clear()
+    bridge.submit_input("/debate status")
+    assert emitted == []
+
+
 def test_textual_bridge_echoes_agent_prefixed_prompt_without_prefix():
     bridge = TextualUiBridge()
     emitted = []

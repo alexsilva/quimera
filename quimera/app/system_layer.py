@@ -25,6 +25,7 @@ from ..constants import (
     CMD_RELOAD,
     CMD_RESET,
     CMD_TASK,
+    CMD_DEBATE,
     CMD_CONFIG,
     DEFAULT_FIRST_AGENT,
     build_agents_help,
@@ -69,6 +70,7 @@ class SystemLayerDependencies:
     run_above_active_prompt: Callable | None = None
     read_user_input: Callable | None = None
     task_command_handler: Callable | None = None
+    debate_command_handler: Callable | None = None
     bugs_command_handler: Callable | None = None
     session_state_manager: Any = None
     approval_handler_getter: Callable | None = None
@@ -125,6 +127,7 @@ class AppSystemLayer:
         run_above_active_prompt=None,
         read_user_input=None,
         task_command_handler=None,
+        debate_command_handler=None,
         bugs_command_handler=None,
         session_state_manager=None,
         approval_handler_getter=None,
@@ -166,6 +169,7 @@ class AppSystemLayer:
         self.run_above_active_prompt = run_above_active_prompt
         self.read_user_input = read_user_input
         self.task_command_handler = task_command_handler
+        self.debate_command_handler = debate_command_handler
         self.bugs_command_handler = bugs_command_handler
         self.session_state_manager = session_state_manager
         self.approval_handler_getter = approval_handler_getter or (lambda: None)
@@ -560,6 +564,13 @@ class AppSystemLayer:
         if command.startswith(CMD_TASK):
             if callable(self.task_command_handler):
                 self.task_command_handler(command)
+            return True
+
+        if command == CMD_DEBATE or command.startswith(f"{CMD_DEBATE} "):
+            if callable(self.debate_command_handler):
+                self.debate_command_handler(command)
+            else:
+                self._display.show_warning_message("Comando /debate indisponivel nesta sessao.")
             return True
 
         if command == CMD_RESET or command.startswith(f"{CMD_RESET} "):

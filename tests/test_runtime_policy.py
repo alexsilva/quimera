@@ -864,6 +864,14 @@ def test_policy_blocked_tools(policy):
         policy.validate(call)
 
 
+def test_policy_allowed_tools_rejects_everything_outside_allowlist(policy):
+    policy.allowed_tools = ["list_files"]
+
+    policy.validate(ToolCall(name="list_files", arguments={"path": "."}))
+    with pytest.raises(ToolPolicyError, match="nao permitida"):
+        policy.validate(ToolCall(name="read_file", arguments={"path": "README.md"}))
+
+
 # ── _resolve_workspace_path ─────────────────────────────────
 
 def test_policy_resolve_workspace_path_empty_becomes_current(tmp_path):

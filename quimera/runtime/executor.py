@@ -151,14 +151,19 @@ class ToolExecutor:
         O fork reconstrói registry, policy e tools do zero (sem cópia rasa de
         estado mutável) e reaplica apenas as injeções nomeadas guardadas em
         ``ToolExecutorWiring``, preservando delegate, cancelamento, ask_user e
-        demais integrações. ``blocked_tools`` é copiado por valor para manter o
-        modo de execução vigente no momento do fork.
+        demais integrações. As listas de ferramentas bloqueadas e permitidas
+        são copiadas por valor para manter o modo de execução vigente no fork.
         """
         forked = ToolExecutor(
             config=self.config,
             approval_handler=self.approval_manager.fork_for_concurrent_run(),
         )
         forked.policy.blocked_tools = list(self.policy.blocked_tools)
+        forked.policy.allowed_tools = (
+            None
+            if self.policy.allowed_tools is None
+            else list(self.policy.allowed_tools)
+        )
         self._wiring.apply_to(forked)
         return forked
 

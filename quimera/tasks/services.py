@@ -624,6 +624,19 @@ class AppTaskServices:
         """Propaga cancelamento do usuário aos AgentClients de background."""
         return self._executor_pool.cancel_background_work()
 
+    def create_isolated_dispatch(self, cancel_event, *, execution_mode=None):
+        """Creates one registered background dispatch with explicit cancellation."""
+        return self._executor_pool._create_background_dispatch_services(
+            cancel_checker_override=lambda: bool(cancel_event and cancel_event.is_set()),
+            cancel_event=cancel_event,
+            execution_mode_override=execution_mode,
+        )
+
+    def notify_tasks_changed(self) -> None:
+        """Refreshes shared task state and wakes executors after an external batch."""
+        self.refresh_task_shared_state()
+        self._wake_task_executors()
+
     # ── Overview / estado compartilhado (delegates to TaskProtocolService) ─
 
     def build_task_overview(self) -> dict:

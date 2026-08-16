@@ -97,6 +97,25 @@ def test_textual_input_gate_completions():
     assert "/context branch1" in gate.completions_for("/context b")
 
 
+def test_textual_input_gate_completes_debate_command_and_mode():
+    from quimera.ui.textual.bridge import TextualUiBridge
+
+    bridge = TextualUiBridge()
+    gate = bridge.create_input_gate(
+        command_resolver=lambda: ["/debate"],
+        argument_resolver=lambda command, partial: (
+            ["status", "--mode verdict ", "--mode workflow "]
+            if command == "/debate"
+            else []
+        ),
+    )
+
+    assert gate.completions_for("/deb") == ["/debate"]
+    assert gate.completions_for("/debate --mode w") == [
+        "/debate --mode workflow "
+    ]
+
+
 def test_textual_input_gate_get_line_buffer_returns_empty():
     from quimera.ui.textual.bridge import TextualUiBridge
 

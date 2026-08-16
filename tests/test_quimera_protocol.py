@@ -42,6 +42,7 @@ from quimera.app.session_bootstrap import (
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_POLICY, CMD_PROMPT, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
+from quimera.constants import CMD_DEBATE
 from quimera.profiles import ExecutionProfile
 from quimera.prompt_templates import PromptText
 from quimera.profiles.base import ProfileRegistry
@@ -1039,6 +1040,19 @@ class ProtocolTests(unittest.TestCase):
     def test_available_internal_commands_include_policy(self):
         """Verifica que available internal commands include policy."""
         self.assertIn(CMD_POLICY, QuimeraApp._available_internal_commands())
+
+    def test_available_internal_commands_include_debate(self):
+        self.assertIn(CMD_DEBATE, QuimeraApp._available_internal_commands())
+
+    def test_debate_command_argument_resolver_suggests_controls_and_modes(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+
+        suggestions = app._command_argument_resolver(CMD_DEBATE, "")
+
+        self.assertIn("status", suggestions)
+        self.assertIn("cancel", suggestions)
+        self.assertIn("--mode verdict ", suggestions)
+        self.assertIn("--mode workflow ", suggestions)
 
     def test_policy_command_argument_resolver_suggests_presets(self):
         """Verifica que policy command argument resolver suggests presets."""

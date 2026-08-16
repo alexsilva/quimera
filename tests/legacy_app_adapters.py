@@ -260,6 +260,7 @@ def system_layer_from_app(app, **overrides):
         run_above_active_prompt=getattr(input_gate, "run_in_terminal_message", None),
         read_user_input=getattr(app, "read_user_input", None),
         task_command_handler=getattr(task_services, "handle_task_command", None),
+        debate_command_handler=getattr(getattr(app, "debate_service", None), "handle_command", None),
         bugs_command_handler=getattr(app, "_handle_bugs_command", None),
         session_state_manager=getattr(app, "session_state_mgr", None),
         approval_handler_getter=lambda: getattr(app, "_approval_handler", None),

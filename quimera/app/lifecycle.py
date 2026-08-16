@@ -31,6 +31,12 @@ class AppLifecycle:
         self._closed = True
         app = self._app
         try:
+            debate_service = getattr(app, "debate_service", None)
+            if debate_service is not None:
+                debate_service.shutdown()
+        except Exception:
+            pass
+        try:
             app._stop_task_executors()
         except Exception:
             pass

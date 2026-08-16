@@ -18,7 +18,8 @@ from .worker import ChatWorker
 from .. import profiles
 from ..bugs import BugEvidenceRef, BugReport
 from ..constants import (
-    CMD_AGENTS, CMD_ALIASES, CMD_BUGS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_CONTEXT, CMD_EDIT, CMD_EXIT,
+    CMD_AGENTS, CMD_ALIASES, CMD_BUGS, CMD_CLEAR, CMD_CONNECT, CMD_DEBATE,
+    CMD_DISCONNECT, CMD_CONTEXT, CMD_EDIT, CMD_EXIT,
     CMD_APPROVE, CMD_APPROVE_ALL, CMD_FILE_PREFIX, CMD_HELP,
     CMD_POLICY, CMD_PROMPT, CMD_RELOAD, CMD_RESET, CMD_TASK, CMD_CONFIG,
     MSG_SESSION_LOG,
@@ -118,6 +119,7 @@ class CoreFacadeMixin:
             CMD_BUGS,
             CMD_CLEAR,
             CMD_CONNECT,
+            CMD_DEBATE,
             CMD_DISCONNECT,
             CMD_CONTEXT,
             CMD_EDIT,
@@ -159,6 +161,20 @@ class CoreFacadeMixin:
             return self.system_layer.list_connected_agents()
         if command == CMD_BUGS:
             return ["list", "show", "close", "analyze", "stats"]
+        if command == CMD_DEBATE:
+            return [
+                "status",
+                "cancel",
+                "list",
+                "show ",
+                "apply ",
+                "--mode verdict ",
+                "--mode workflow ",
+                "--agents ",
+                "--rounds ",
+                "--timeout ",
+                "--quorum ",
+            ]
         if command == CMD_POLICY:
             return ["status", "strict", "developer", "autonomous"]
         if command == CMD_RESET:
@@ -522,8 +538,14 @@ class CoreFacadeMixin:
         tool_executor = self.__dict__.get("tool_executor")
         if tool_executor is not None and new is not None:
             tool_executor.policy.blocked_tools = list(new.blocked_tools)
+            tool_executor.policy.allowed_tools = (
+                None
+                if getattr(new, "allowed_tools", None) is None
+                else list(new.allowed_tools)
+            )
         elif tool_executor is not None:
             tool_executor.policy.blocked_tools = []
+            tool_executor.policy.allowed_tools = None
 
     def _set_execution_mode(self, mode):
         """Define o modo de execução ativo (delega ao state)."""

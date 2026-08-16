@@ -588,6 +588,7 @@ class TaskExecutorPool:
         *,
         cancel_checker_override=None,
         cancel_event: threading.Event | None = None,
+        execution_mode_override=None,
     ):
         with self._background_clients_lock:
             if self._background_shutdown:
@@ -622,11 +623,26 @@ class TaskExecutorPool:
             process_supervisor=getattr(chat_agent_client, "process_supervisor", None),
             pause_idle_if=get_pause_idle_if(chat_agent_client),
         )
-        background_agent_client.execution_mode = self.get_execution_mode()
+        effective_execution_mode = (
+            execution_mode_override
+            if execution_mode_override is not None
+            else self.get_execution_mode()
+        )
+        background_agent_client.execution_mode = effective_execution_mode
         background_agent_client.tool_event_callback = self.get_record_tool_event()
         background_agent_client.tool_executor = self._build_background_tool_executor()
         if background_agent_client.tool_executor is None:
             return None
+        if execution_mode_override is not None:
+            policy = getattr(background_agent_client.tool_executor, "policy", None)
+            if policy is not None:
+                policy.blocked_tools = list(
+                    getattr(execution_mode_override, "blocked_tools", ()) or ()
+                )
+                allowed_tools = getattr(execution_mode_override, "allowed_tools", None)
+                policy.allowed_tools = (
+                    None if allowed_tools is None else list(allowed_tools)
+                )
         if cancel_event is not None:
             share_cancel_event(background_agent_client, cancel_event)
         if not self._register_background_agent_client(background_agent_client):
@@ -664,7 +680,11 @@ class TaskExecutorPool:
                 prompt_builder=self.get_prompt_builder,
                 renderer=self.get_renderer,
                 get_agent_profile=self.get_agent_profile,
-                get_execution_mode=self.get_execution_mode,
+                get_execution_mode=(
+                    (lambda: execution_mode_override)
+                    if execution_mode_override is not None
+                    else self.get_execution_mode
+                ),
                 refresh_task_state=lambda: None,
                 agent_run_sink=self.get_agent_run_sink,
                 debug_prompt_metrics=self._get_debug_prompt_metrics or (lambda: False),

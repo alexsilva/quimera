@@ -22,6 +22,7 @@ CMD_CONTEXT_BRANCH = "/context-branch"
 CMD_EDIT = "/edit"
 CMD_FILE_PREFIX = "/file"
 CMD_TASK = "/task"
+CMD_DEBATE = "/debate"
 CMD_BUGS = "/bugs"
 CMD_RESET = "/reset"
 CMD_APPROVE = "/approve"
@@ -55,6 +56,8 @@ def build_help(agent_names: Sequence[str]) -> str:
     help_text = (
             "\nComandos:\n" +
             "- /task <descrição>: cria uma task explícita do humano e roteia para o melhor agente\n"
+            "- /debate <tema>: coordena agentes em rodadas até um veredito ou workflow auditável\n"
+            "- /debate status|cancel|list|show <id>|apply <id>: controla debates\n"
             "- /bugs [list|show|close|analyze|stats]: operações de diagnóstico com bugs detectados automaticamente\n"
             "- /planning <mensagem>: modo planejamento — workspace somente leitura, sem edição de arquivos\n"
             "- /analysis <mensagem>: modo análise — somente leitura, sem edição de arquivos\n"

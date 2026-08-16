@@ -519,10 +519,11 @@ class AppDispatchServices:
         show_output = dispatch_options.pop("show_output", True)
         dispatch_options.pop("quiet", False)
         progress_callback = dispatch_options.pop("progress_callback", None)
+        show_delegation = bool(dispatch_options.pop("show_delegation", True))
         delegation = dispatch_options.get("delegation")
         delegation_id = delegation.get("delegation_id") if isinstance(delegation, dict) else None
         from_agent = dispatch_options.get("from_agent")
-        if isinstance(delegation, dict):
+        if show_delegation and isinstance(delegation, dict):
             self._show_delegation(
                 str(from_agent or delegation.get("from_agent") or "agente"),
                 str(agent),
@@ -581,6 +582,7 @@ class AppDispatchServices:
             history_snapshot=None,
             request_override=None,
             progress_callback=None,
+            emit_run_deltas=True,
     ):
         """Monta o prompt final e executa a chamada ao backend do agente."""
         result = self._get_gateway().call(
@@ -597,6 +599,7 @@ class AppDispatchServices:
             history_snapshot=history_snapshot,
             request_override=request_override,
             progress_callback=progress_callback,
+            emit_run_deltas=emit_run_deltas,
         )
         self._update_spy_telemetry(agent)
         return result

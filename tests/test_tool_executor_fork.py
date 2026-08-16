@@ -100,6 +100,17 @@ def test_fork_preserves_blocked_tools_from_execution_mode(workspace):
     assert primary.policy.blocked_tools == ["write_file", "apply_patch"]
 
 
+def test_fork_preserves_allowed_tools_from_execution_mode(workspace):
+    primary = _build_executor(workspace)
+    primary.policy.allowed_tools = ["read_file", "grep_search"]
+
+    forked = primary.fork_for_concurrent_run()
+
+    assert forked.policy.allowed_tools == ["read_file", "grep_search"]
+    forked.policy.allowed_tools.append("list_files")
+    assert primary.policy.allowed_tools == ["read_file", "grep_search"]
+
+
 def test_wiring_apply_to_skips_unset_injections(workspace):
     """Injeções não configuradas não são reaplicadas no destino."""
     target = _build_executor(workspace)

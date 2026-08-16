@@ -4,9 +4,15 @@ import pytest
 
 from quimera.app.event_sink import EventSink
 from quimera.tasks.events import (
-    TaskProposed, TaskStarted, TaskSubmittedForReview,
-    TaskReviewStarted, TaskCompleted, TaskRequeued,
-    TaskApproved, TaskRejected, TaskFailed,
+    TaskProposed,
+    TaskStarted,
+    TaskSubmittedForReview,
+    TaskReviewStarted,
+    TaskCompleted,
+    TaskRequeued,
+    TaskApproved,
+    TaskRejected,
+    TaskFailed,
 )
 from quimera.tasks.repository import TaskRepository
 from quimera.constants import TaskStatus
@@ -64,6 +70,31 @@ def test_create_task_and_list_tasks(repository):
     assert isinstance(rows[0], TaskRecord)
 
 
+def test_claim_task_waits_for_dependencies(repository):
+    job_id = runtime_tasks.add_job("job dependencies", db_path=repository.db_path)
+    first = repository.create_task(job_id, "primeira", assigned_to="codex")
+    second = repository.create_task(job_id, "segunda", assigned_to="claude")
+    assert repository.add_task_dependency(second, first) is True
+    assert repository.add_task_dependency(second, first) is False
+
+    assert repository.claim_task("claude", job_id=job_id) is None
+    assert repository.claim_task("codex", job_id=job_id) == first
+    assert repository.complete_task(first, result="ok") is True
+    assert repository.claim_task("claude", job_id=job_id) == second
+
+
+def test_task_dependencies_reject_cycles(repository):
+    job_id = runtime_tasks.add_job("job dependency cycle", db_path=repository.db_path)
+    first = repository.create_task(job_id, "primeira")
+    second = repository.create_task(job_id, "segunda")
+    third = repository.create_task(job_id, "terceira")
+    assert repository.add_task_dependency(second, first) is True
+    assert repository.add_task_dependency(third, second) is True
+
+    with pytest.raises(ValueError, match="ciclo"):
+        repository.add_task_dependency(first, third)
+
+
 def test_get_job_returns_existing_and_none(repository):
     """Verifica que get_job retorna o job existente ou None."""
     job_id = runtime_tasks.add_job("job detail", db_path=repository.db_path)
@@ -91,7 +122,9 @@ def test_fail_task(repository):
 def test_requeue_task(repository):
     """Verifica que requeue_task coloca a tarefa de volta na fila."""
     job_id = runtime_tasks.add_job("job requeue", db_path=repository.db_path)
-    task_id = repository.create_task(job_id, "retentar", assigned_to="codex", status=TaskStatus.IN_PROGRESS)
+    task_id = repository.create_task(
+        job_id, "retentar", assigned_to="codex", status=TaskStatus.IN_PROGRESS
+    )
 
     assert repository.requeue_task(task_id, "codex", reason="falha transitoria") is True
 
@@ -107,21 +140,34 @@ def test_requeue_task(repository):
 def test_submit_for_review_and_complete_task(repository):
     """Verifica o fluxo de submissão para revisão e conclusão de tarefa."""
     job_id = runtime_tasks.add_job("job review", db_path=repository.db_path)
-    review_task_id = repository.create_task(job_id, "revisar", status=TaskStatus.IN_PROGRESS)
-    direct_task_id = repository.create_task(job_id, "fechar", status=TaskStatus.IN_PROGRESS)
+    review_task_id = repository.create_task(
+        job_id, "revisar", status=TaskStatus.IN_PROGRESS
+    )
+    direct_task_id = repository.create_task(
+        job_id, "fechar", status=TaskStatus.IN_PROGRESS
+    )
 
-    assert repository.submit_for_review(review_task_id, result="resultado da execucao") is True
+    assert (
+        repository.submit_for_review(review_task_id, result="resultado da execucao")
+        is True
+    )
     pending_review = repository.list_tasks({"id": review_task_id})[0]
     assert pending_review.status == TaskStatus.PENDING_REVIEW
     assert pending_review.result == "resultado da execucao"
 
     conn = runtime_tasks.get_conn(repository.db_path)
     cur = conn.cursor()
-    cur.execute("UPDATE tasks SET status = ? WHERE id = ?", (TaskStatus.REVIEWING, review_task_id))
+    cur.execute(
+        "UPDATE tasks SET status = ? WHERE id = ?",
+        (TaskStatus.REVIEWING, review_task_id),
+    )
     conn.commit()
     conn.close()
 
-    assert repository.complete_task(review_task_id, result="ok", reviewed_by="gemini") is True
+    assert (
+        repository.complete_task(review_task_id, result="ok", reviewed_by="gemini")
+        is True
+    )
     assert repository.complete_task(direct_task_id, result="ok sem review") is True
 
     by_id = {row.id: row for row in repository.list_tasks({"job_id": job_id})}
@@ -132,7 +178,9 @@ def test_submit_for_review_and_complete_task(repository):
 def test_requeue_task_after_review_clears_reviewer(repository):
     """Verifica que requeue após revisão limpa o revisor."""
     job_id = runtime_tasks.add_job("job review requeue", db_path=repository.db_path)
-    task_id = repository.create_task(job_id, "ajustar", assigned_to="codex", status=TaskStatus.REVIEWING)
+    task_id = repository.create_task(
+        job_id, "ajustar", assigned_to="codex", status=TaskStatus.REVIEWING
+    )
 
     conn = runtime_tasks.get_conn(repository.db_path)
     cur = conn.cursor()
@@ -140,7 +188,12 @@ def test_requeue_task_after_review_clears_reviewer(repository):
     conn.commit()
     conn.close()
 
-    assert repository.requeue_task_after_review(task_id, "codex", result="novo resultado", notes="pedir ajuste") is True
+    assert (
+        repository.requeue_task_after_review(
+            task_id, "codex", result="novo resultado", notes="pedir ajuste"
+        )
+        is True
+    )
 
     row = _task_row(task_id, repository.db_path)
     assert row[0] == TaskStatus.PENDING
@@ -154,7 +207,9 @@ def test_requeue_task_after_review_clears_reviewer(repository):
 def test_transition_task_preserves_omitted_fields(repository):
     """Verifica que transition_task preserva campos não informados."""
     job_id = runtime_tasks.add_job("job transition", db_path=repository.db_path)
-    task_id = repository.create_task(job_id, "transicionar", status=TaskStatus.IN_PROGRESS)
+    task_id = repository.create_task(
+        job_id, "transicionar", status=TaskStatus.IN_PROGRESS
+    )
     runtime_tasks.update_task(
         task_id,
         TaskStatus.IN_PROGRESS,
@@ -168,7 +223,10 @@ def test_transition_task_preserves_omitted_fields(repository):
     assert first.result == "resultado inicial"
     assert first.notes == "nota inicial"
 
-    assert repository.transition_task(task_id, TaskStatus.REVIEWING, notes="validando") is True
+    assert (
+        repository.transition_task(task_id, TaskStatus.REVIEWING, notes="validando")
+        is True
+    )
     second = repository.list_tasks({"id": task_id})[0]
     assert second.result == "resultado inicial"
     assert second.notes == "validando"
@@ -180,7 +238,9 @@ def test_can_reassign_task(repository):
     assert repository.can_reassign_task(999, ["codex"]) is False
 
     job_id = runtime_tasks.add_job("job can reassign", db_path=repository.db_path)
-    task_id = repository.create_task(job_id, "roteamento", status=TaskStatus.IN_PROGRESS)
+    task_id = repository.create_task(
+        job_id, "roteamento", status=TaskStatus.IN_PROGRESS
+    )
     conn = runtime_tasks.get_conn(repository.db_path)
     cur = conn.cursor()
     cur.execute("UPDATE tasks SET failed_agents = ? WHERE id = ?", ("|codex|", task_id))
@@ -193,6 +253,7 @@ def test_can_reassign_task(repository):
 
 def test_can_reassign_task_returns_true_on_sqlite_error(repository, monkeypatch):
     """Verifica que can_reassign_task retorna True em caso de erro SQLite."""
+
     class BrokenCursor:
         def execute(self, *_args, **_kwargs):
             raise sqlite3.Error("boom")
@@ -229,6 +290,7 @@ def test_no_event_sink_works_normally(repository):
 
 def test_publish_swallows_sink_exception(tmp_path):
     """_publish não propaga exceção quando o sink lança."""
+
     class BoomSink:
         def publish(self, _event):
             raise RuntimeError("sink explodiu")
@@ -302,7 +364,9 @@ def test_claim_review_task_publishes_event(sink_repository):
     sink.subscribe(TaskReviewStarted, received.append)
 
     job_id = runtime_tasks.add_job("job review started", db_path=repo.db_path)
-    task_id = repo.create_task(job_id, "revisar", status=TaskStatus.IN_PROGRESS, assigned_to="codex")
+    task_id = repo.create_task(
+        job_id, "revisar", status=TaskStatus.IN_PROGRESS, assigned_to="codex"
+    )
     repo.submit_for_review(task_id)
 
     claimed = repo.claim_review_task("gemini", job_id=job_id)

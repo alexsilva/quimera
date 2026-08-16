@@ -113,6 +113,7 @@ class TaskBundle:
     session_services: Any
     dispatch_services: Any
     tool_executor: Any
+    debate_service: Any
 
 
 @dataclass(frozen=True)

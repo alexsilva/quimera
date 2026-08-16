@@ -203,6 +203,22 @@ def test_resolve_tool_schemas_hides_blocked_tools_from_active_mode():
     assert "list_files" in actual
 
 
+def test_resolve_tool_schemas_honors_active_mode_allowlist():
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db")
+    mock_executor.policy = SimpleNamespace(
+        blocked_tools=[], allowed_tools=["read_file", "grep_search"]
+    )
+    mock_executor.is_delegate_available.return_value = True
+    mock_executor.registry.names.return_value = [
+        schema["function"]["name"] for schema in TOOL_SCHEMAS
+    ]
+
+    actual = {schema["function"]["name"] for schema in resolve_tool_schemas(mock_executor)}
+
+    assert actual == {"read_file", "grep_search"}
+
+
 def test_resolve_tool_schemas_hides_delegate_when_not_bound():
     """Verifica que Test resolve tool schemas hides call agent when not bound."""
     mock_executor = MagicMock()

@@ -1501,3 +1501,12 @@ def test_notify_agent_failover_falls_back_to_system_text_for_legacy_renderer():
     system_layer_from_app(app).notify_agent_failover("codex", "claude")
 
     assert renderer.system_messages == ["codex não respondeu, continuando com claude"]
+
+
+def test_handle_debate_command_delegates_to_debate_service():
+    app = make_app()
+    app.debate_service = SimpleNamespace(handle_command=Mock(return_value=True))
+    layer = system_layer_from_app(app)
+
+    assert layer.handle_command("/debate avaliar arquitetura") is True
+    app.debate_service.handle_command.assert_called_once_with("/debate avaliar arquitetura")

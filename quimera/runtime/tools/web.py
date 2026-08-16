@@ -21,6 +21,46 @@ from .base import ToolBase, ValidatableTool
 _logger = logging.getLogger(__name__)
 
 
+def fetch_url_text(url: str, *, timeout: int = 30) -> str:
+    """Baixa uma URL publica e retorna o texto sem HTML.
+
+    Aplica as mesmas guardas do web_fetch (apenas http/https, IPs privados
+    bloqueados contra SSRF). Levanta ValueError para URL invalida ou bloqueada
+    e TimeoutError/OSError em falhas de rede.
+    """
+    cleaned = str(url or "").strip()
+    parsed = urllib.parse.urlparse(cleaned)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"URL invalida: {cleaned}")
+    try:
+        ip = socket.gethostbyname(parsed.hostname)
+        if ipaddress.ip_address(ip).is_private:
+            raise ValueError(f"Acesso a IP privado nao permitido (SSRF): {ip}")
+    except OSError as exc:
+        raise OSError(f"Falha ao resolver host: {parsed.hostname}") from exc
+    args = [
+        "curl",
+        "-s",
+        "--max-redirs",
+        "0",
+        "-m",
+        str(timeout),
+        "-A",
+        "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
+        cleaned,
+    ]
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=timeout + 5,
+        )
+    except subprocess.TimeoutExpired:
+        raise TimeoutError(f"curl excedeu o tempo limite de {timeout}s.")
+    return WebTool._strip_html(result.stdout)
+
+
 class WebTool(ToolBase, tool_prefix="web"):
     """Implementa `WebTool` — busca na web usando curl."""
     _MAX_URLS = 5

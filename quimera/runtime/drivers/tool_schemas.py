@@ -63,6 +63,14 @@ def resolve_tool_schemas(tool_executor=None) -> list[dict]:
         ]
 
     policy = getattr(tool_executor, "policy", None)
+    allowed_tools = getattr(policy, "allowed_tools", None)
+    if isinstance(allowed_tools, (list, tuple, set, frozenset)):
+        allowed_names = set(allowed_tools)
+        schemas = [
+            schema
+            for schema in schemas
+            if schema["function"]["name"] in allowed_names
+        ]
     blocked_tools = getattr(policy, "blocked_tools", None)
     if blocked_tools:
         blocked_names = set(blocked_tools)

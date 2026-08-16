@@ -34,7 +34,16 @@ class FakeAgentClient:
         self.exc = exc
         self.flushed = False
 
-    def call(self, agent, prompt, *, silent=False, on_text_chunk=None, progress_callback=None, from_agent=None):
+    def call(
+        self,
+        agent,
+        prompt,
+        *,
+        silent=False,
+        on_text_chunk=None,
+        progress_callback=None,
+        from_agent=None,
+    ):
         del agent, prompt, silent, progress_callback, from_agent
         if self.exc is not None:
             raise self.exc
@@ -57,7 +66,12 @@ def make_gateway(client, sink=None):
         get_shared_state=lambda: {},
         get_execution_mode=lambda: None,
         refresh_task_state=lambda: None,
-        session_state={"delegations_sent": 0, "total_latency": 0, "delegations_succeeded": 0, "delegations_failed": 0},
+        session_state={
+            "delegations_sent": 0,
+            "total_latency": 0,
+            "delegations_succeeded": 0,
+            "delegations_failed": 0,
+        },
         increment_call_index=lambda: 1,
         get_round_index=lambda: 1,
         agent_run_sink=sink,
@@ -92,9 +106,29 @@ def test_agent_gateway_emits_normalized_run_events_for_silent_task_path():
 
 
 def test_agent_gateway_uses_null_sink_without_changing_behavior():
-    gateway = make_gateway(FakeAgentClient(chunks=["ignorado"]), sink=NullAgentRunSink())
+    gateway = make_gateway(
+        FakeAgentClient(chunks=["ignorado"]), sink=NullAgentRunSink()
+    )
 
     assert gateway.call("claude") == "resposta final"
+
+
+def test_agent_gateway_can_hide_protocol_deltas_without_hiding_run_boundaries():
+    sink = RecordingSink()
+    gateway = make_gateway(
+        FakeAgentClient(chunks=['{"position":"parcial"}']), sink=sink
+    )
+
+    result = gateway.call(
+        "codex",
+        silent=True,
+        show_output=False,
+        emit_run_deltas=False,
+    )
+
+    assert result == "resposta final"
+    assert [event.kind for event in sink.events] == ["started", "finished"]
+    assert sink.events[0].metadata["emit_run_deltas"] is False
 
 
 def test_agent_gateway_propagates_delegation_run_metadata():
@@ -208,9 +242,19 @@ def test_agent_run_controller_tracks_registry_and_renderer_context():
     registry = AgentRunRegistry(clock=iter([1.0, 2.0, 3.0]).__next__)
     controller = AgentRunController(renderer, registry=registry)
 
-    controller.emit(AgentRunEvent("started", "codex", run_id="agentrun:test", transport="chat"))
-    controller.emit(AgentRunEvent("delta", "codex", text="chunk", run_id="agentrun:test", transport="chat"))
-    controller.emit(AgentRunEvent("finished", "codex", text="final", run_id="agentrun:test", transport="chat"))
+    controller.emit(
+        AgentRunEvent("started", "codex", run_id="agentrun:test", transport="chat")
+    )
+    controller.emit(
+        AgentRunEvent(
+            "delta", "codex", text="chunk", run_id="agentrun:test", transport="chat"
+        )
+    )
+    controller.emit(
+        AgentRunEvent(
+            "finished", "codex", text="final", run_id="agentrun:test", transport="chat"
+        )
+    )
 
     record = registry.get("agentrun:test")
     assert record is not None
@@ -229,14 +273,24 @@ def test_agent_run_controller_tracks_registry_and_renderer_context():
             },
         )
     ]
-    assert renderer.ended == [("codex", {"run_id": "agentrun:test", "status": "finished"})]
+    assert renderer.ended == [
+        ("codex", {"run_id": "agentrun:test", "status": "finished"})
+    ]
 
 
 def test_agent_run_registry_marks_tool_events_as_finished():
     registry = AgentRunRegistry(clock=iter([1.0, 2.0]).__next__)
 
-    registry.record(AgentRunEvent("tool_started", "mcp-http", run_id="http:run", transport="mcp_http"))
-    record = registry.record(AgentRunEvent("tool_finished", "mcp-http", run_id="http:run", transport="mcp_http"))
+    registry.record(
+        AgentRunEvent(
+            "tool_started", "mcp-http", run_id="http:run", transport="mcp_http"
+        )
+    )
+    record = registry.record(
+        AgentRunEvent(
+            "tool_finished", "mcp-http", run_id="http:run", transport="mcp_http"
+        )
+    )
 
     assert record is not None
     assert record.status == "finished"
@@ -257,14 +311,16 @@ def test_agent_run_controller_forwards_http_tool_terminal_state_to_renderer():
 
     renderer = Renderer()
     controller = AgentRunController(renderer)
-    controller.emit(AgentRunEvent(
-        "tool_finished",
-        "mcp-http",
-        text="read_file",
-        run_id="http:run-1",
-        transport="mcp_http",
-        metadata={"msg_id": "42", "duration_ms": 12, "ok": True},
-    ))
+    controller.emit(
+        AgentRunEvent(
+            "tool_finished",
+            "mcp-http",
+            text="read_file",
+            run_id="http:run-1",
+            transport="mcp_http",
+            metadata={"msg_id": "42", "duration_ms": 12, "ok": True},
+        )
+    )
 
     assert len(renderer.states) == 1
     agent, detail = renderer.states[0]
@@ -307,7 +363,9 @@ def test_input_broker_human_action_request_commits_agent_before_answer():
 def test_agent_gateway_emits_failed_when_prompt_build_raises():
     sink = RecordingSink()
     gateway = make_gateway(FakeAgentClient(), sink=sink)
-    gateway._prompt_builder.build = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("prompt boom"))
+    gateway._prompt_builder.build = lambda *args, **kwargs: (_ for _ in ()).throw(
+        RuntimeError("prompt boom")
+    )
 
     try:
         gateway.call("codex")
@@ -365,7 +423,10 @@ def test_agent_run_registry_never_prunes_active_runs():
     assert registry.get("run:active-1") is not None
     assert registry.get("run:active-2") is not None
     assert registry.get("run:finished") is None
-    assert {run.run_id for run in registry.active_runs()} == {"run:active-1", "run:active-2"}
+    assert {run.run_id for run in registry.active_runs()} == {
+        "run:active-1",
+        "run:active-2",
+    }
 
 
 def test_agent_run_registry_prune_preserves_snapshot_and_active_runs():

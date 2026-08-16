@@ -1,12 +1,13 @@
 """Testes para quimera.app.dispatch — 100% de cobertura."""
-from unittest.mock import MagicMock, Mock, call, patch, PropertyMock, sentinel
+
+from unittest.mock import MagicMock, patch
 import pytest
-import time
-import re
 import threading
 
 from quimera.app.dispatch import AppDispatchServices
 from tests.legacy_app_adapters import dispatch_services_from_app
+
+
 class TestSanitizeSpyTurnDetail:
     """_sanitize_spy_turn_detail — método de classe"""
 
@@ -99,6 +100,7 @@ class TestSanitizeSpyTurnDetail:
 # AppDispatchServices — resolve_agent_response
 # =============================================================================
 
+
 @pytest.fixture
 def dispatch_app():
     """Cria app mock com todos os atributos que dispatch precisa."""
@@ -153,7 +155,9 @@ class TestResolveAgentResponse:
         )
         ds = dispatch_services_from_app(dispatch_app)
 
-        response = 'Texto <tool function="read_file" path="secret.txt" /> continua texto.'
+        response = (
+            'Texto <tool function="read_file" path="secret.txt" /> continua texto.'
+        )
         result = ds.resolve_agent_response("agent1", response)
 
         assert result == response
@@ -164,9 +168,12 @@ class TestResolveAgentResponse:
         ds = dispatch_services_from_app(dispatch_app)
         response = "resposta final"
 
-        assert ds.resolve_agent_response(
-            "agent1", response, show_output=True, persist_history=True
-        ) == response
+        assert (
+            ds.resolve_agent_response(
+                "agent1", response, show_output=True, persist_history=True
+            )
+            == response
+        )
         dispatch_app.print_response.assert_not_called()
         dispatch_app.session_services.persist_message.assert_not_called()
 
@@ -175,6 +182,7 @@ class TestResolveAgentResponse:
 # AppDispatchServices — delegate
 # =============================================================================
 
+
 class TestCallAgent:
     """Testes para AppDispatchServices.delegate"""
 
@@ -182,8 +190,10 @@ class TestCallAgent:
         """Verifica que successful single call."""
         dispatch_app.MAX_RETRIES = 1
         ds = dispatch_services_from_app(dispatch_app)
-        with patch.object(ds, "delegate_low_level", return_value="response"), \
-             patch.object(ds, "resolve_agent_response", return_value="result"):
+        with (
+            patch.object(ds, "delegate_low_level", return_value="response"),
+            patch.object(ds, "resolve_agent_response", return_value="result"),
+        ):
             result = ds.delegate("agent1")
         assert result == "result"
 
@@ -236,7 +246,12 @@ class TestCallAgent:
         def invoke(key, agent):
             results[key] = ds.delegate(agent)
 
-        with patch.object(AppDispatchServices, "delegate_low_level", autospec=True, side_effect=low_level):
+        with patch.object(
+            AppDispatchServices,
+            "delegate_low_level",
+            autospec=True,
+            side_effect=low_level,
+        ):
             first = threading.Thread(target=invoke, args=("first", "agent-a"))
             second = threading.Thread(target=invoke, args=("second", "agent-b"))
             first.start()
@@ -294,7 +309,12 @@ class TestCallAgent:
         def low_level(dispatch, agent, **_options):
             return dispatch._get_agent_client().call(agent)
 
-        with patch.object(AppDispatchServices, "delegate_low_level", autospec=True, side_effect=low_level):
+        with patch.object(
+            AppDispatchServices,
+            "delegate_low_level",
+            autospec=True,
+            side_effect=low_level,
+        ):
             first = ds.delegate("agent-a", isolated_run=True)
             second = ds.delegate("agent-b", isolated_run=True)
 
@@ -309,9 +329,11 @@ class TestCallAgent:
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.01
         ds = dispatch_services_from_app(dispatch_app)
-        with patch.object(ds, "delegate_low_level", return_value=None), \
-             patch.object(ds, "resolve_agent_response") as mock_resolve, \
-             patch("quimera.app.agent_call_service.time.sleep"):
+        with (
+            patch.object(ds, "delegate_low_level", return_value=None),
+            patch.object(ds, "resolve_agent_response") as mock_resolve,
+            patch("quimera.app.agent_call_service.time.sleep"),
+        ):
             result = ds.delegate("agent1")
         assert result is None
         mock_resolve.assert_not_called()  # nunca chamado pois low_level retornou None
@@ -321,21 +343,27 @@ class TestCallAgent:
         """max_retries por chamada deve sobrescrever o default do app."""
         dispatch_app.MAX_RETRIES = 3
         ds = dispatch_services_from_app(dispatch_app)
-        with patch.object(ds, "delegate_low_level", return_value=None) as mock_ll, \
-             patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
+        with (
+            patch.object(ds, "delegate_low_level", return_value=None) as mock_ll,
+            patch("quimera.app.agent_call_service.time.sleep") as mock_sleep,
+        ):
             result = ds.delegate("agent1", max_retries=1)
         assert result is None
         assert mock_ll.call_count == 1
         mock_sleep.assert_not_called()
 
-    def test_retry_on_none_low_level_uses_linear_backoff_without_rate_limit(self, dispatch_app):
+    def test_retry_on_none_low_level_uses_linear_backoff_without_rate_limit(
+        self, dispatch_app
+    ):
         """Verifica que retry on none low level uses linear backoff without rate limit."""
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.5
         dispatch_app.agent_client.rate_limit_detected = False
         ds = dispatch_services_from_app(dispatch_app)
-        with patch.object(ds, "delegate_low_level", return_value=None), \
-             patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
+        with (
+            patch.object(ds, "delegate_low_level", return_value=None),
+            patch("quimera.app.agent_call_service.time.sleep") as mock_sleep,
+        ):
             result = ds.delegate("agent1")
         assert result is None
         mock_sleep.assert_called_with(0.5)
@@ -358,22 +386,30 @@ class TestCallAgent:
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.01
         ds = dispatch_services_from_app(dispatch_app)
-        with patch.object(ds, "delegate_low_level", return_value="response"), \
-             patch.object(ds, "resolve_agent_response", return_value=None) as mock_resolve, \
-             patch("quimera.app.agent_call_service.time.sleep"):
+        with (
+            patch.object(ds, "delegate_low_level", return_value="response"),
+            patch.object(
+                ds, "resolve_agent_response", return_value=None
+            ) as mock_resolve,
+            patch("quimera.app.agent_call_service.time.sleep"),
+        ):
             result = ds.delegate("agent1")
         assert result is None
         assert mock_resolve.call_count >= 1  # chamado pelo menos uma vez
 
-    def test_retry_on_none_resolve_uses_linear_backoff_without_rate_limit(self, dispatch_app):
+    def test_retry_on_none_resolve_uses_linear_backoff_without_rate_limit(
+        self, dispatch_app
+    ):
         """Verifica que retry on none resolve uses linear backoff without rate limit."""
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.5
         dispatch_app.agent_client.rate_limit_detected = False
         ds = dispatch_services_from_app(dispatch_app)
-        with patch.object(ds, "delegate_low_level", return_value="response"), \
-             patch.object(ds, "resolve_agent_response", return_value=None), \
-             patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
+        with (
+            patch.object(ds, "delegate_low_level", return_value="response"),
+            patch.object(ds, "resolve_agent_response", return_value=None),
+            patch("quimera.app.agent_call_service.time.sleep") as mock_sleep,
+        ):
             result = ds.delegate("agent1")
         assert result is None
         mock_sleep.assert_called_with(0.5)
@@ -387,8 +423,10 @@ class TestCallAgent:
             dispatch_app.agent_client._user_cancelled = True
             return None
 
-        with patch.object(ds, "delegate_low_level", return_value="response"), \
-             patch.object(ds, "resolve_agent_response", side_effect=_resolve):
+        with (
+            patch.object(ds, "delegate_low_level", return_value="response"),
+            patch.object(ds, "resolve_agent_response", side_effect=_resolve),
+        ):
             result = ds.delegate("agent1")
         assert result is None
 
@@ -397,8 +435,10 @@ class TestCallAgent:
         dispatch_app.agent_client._user_cancelled = True
         dispatch_app.MAX_RETRIES = 2
         ds = dispatch_services_from_app(dispatch_app)
-        with patch.object(ds, "delegate_low_level", return_value=None), \
-             patch("quimera.app.agent_call_service.time.sleep"):
+        with (
+            patch.object(ds, "delegate_low_level", return_value=None),
+            patch("quimera.app.agent_call_service.time.sleep"),
+        ):
             result = ds.delegate("agent1")
         assert result is None
 
@@ -408,12 +448,16 @@ class TestCallAgent:
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.5
         ds = dispatch_services_from_app(dispatch_app)
-        with patch.object(ds, "delegate_low_level", return_value=None), \
-             patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
+        with (
+            patch.object(ds, "delegate_low_level", return_value=None),
+            patch("quimera.app.agent_call_service.time.sleep") as mock_sleep,
+        ):
             result = ds.delegate("agent1")
         assert result is None
         # rate_limit_detected=True deve usar RATE_LIMIT_BACKOFF_SECONDS (0.01)
-        rate_calls = [c for c in mock_sleep.call_args_list if abs(c[0][0] - 0.01) < 0.001]
+        rate_calls = [
+            c for c in mock_sleep.call_args_list if abs(c[0][0] - 0.01) < 0.001
+        ]
         assert len(rate_calls) >= 1
 
     def test_exception_during_call_retries_and_raises(self, dispatch_app):
@@ -421,8 +465,10 @@ class TestCallAgent:
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.01
         ds = dispatch_services_from_app(dispatch_app)
-        with patch.object(ds, "delegate_low_level", side_effect=ValueError("boom")), \
-             patch("quimera.app.agent_call_service.time.sleep"):
+        with (
+            patch.object(ds, "delegate_low_level", side_effect=ValueError("boom")),
+            patch("quimera.app.agent_call_service.time.sleep"),
+        ):
             with pytest.raises(ValueError, match="boom"):
                 ds.delegate("agent1")
 
@@ -433,6 +479,7 @@ class TestCallAgent:
 
         class _CancelledOnSecondCall:
             call_count = 0
+
             def __call__(self, *a, **kw):
                 _CancelledOnSecondCall.call_count += 1
                 if _CancelledOnSecondCall.call_count == 1:
@@ -440,8 +487,10 @@ class TestCallAgent:
                 return None
 
         dispatch_app.agent_client._user_cancelled = True
-        with patch.object(ds, "delegate_low_level", _CancelledOnSecondCall()), \
-             patch("quimera.app.agent_call_service.time.sleep"):
+        with (
+            patch.object(ds, "delegate_low_level", _CancelledOnSecondCall()),
+            patch("quimera.app.agent_call_service.time.sleep"),
+        ):
             result = ds.delegate("agent1")
         assert result is None
 
@@ -494,23 +543,51 @@ class TestCallAgent:
         """delegation dict é passado corretamente"""
         dispatch_app.MAX_RETRIES = 1
         ds = dispatch_services_from_app(dispatch_app)
-        with patch.object(ds, "delegate_low_level", return_value="resp") as mock_ll, \
-             patch.object(ds, "resolve_agent_response", return_value="result"):
+        with (
+            patch.object(ds, "delegate_low_level", return_value="resp") as mock_ll,
+            patch.object(ds, "resolve_agent_response", return_value="result"),
+        ):
             result = ds.delegate("agent1", delegation={"delegation_id": "h123"})
         assert result == "result"
         # Verifica que delegation foi passado
         mock_ll.assert_called_once_with(
-            "agent1", silent=False, show_output=True, progress_callback=None, delegation={"delegation_id": "h123"}
+            "agent1",
+            silent=False,
+            show_output=True,
+            progress_callback=None,
+            delegation={"delegation_id": "h123"},
         )
+
+    def test_can_suppress_delegation_preview(self, dispatch_app):
+        ds = dispatch_services_from_app(dispatch_app)
+        with (
+            patch.object(ds, "_show_delegation") as show,
+            patch.object(ds, "delegate_low_level", return_value="ok"),
+        ):
+            assert (
+                ds.delegate(
+                    "agent1",
+                    delegation={"delegation_id": "deb-1"},
+                    show_delegation=False,
+                )
+                == "ok"
+            )
+        show.assert_not_called()
 
     def test_exception_at_resolve_retries(self, dispatch_app):
         """Exception no resolve_agent_response → retry"""
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.01
         ds = dispatch_services_from_app(dispatch_app)
-        with patch.object(ds, "delegate_low_level", return_value="response"), \
-             patch.object(ds, "resolve_agent_response", side_effect=[RuntimeError("resolve fail"), "ok"]), \
-             patch("quimera.app.agent_call_service.time.sleep"):
+        with (
+            patch.object(ds, "delegate_low_level", return_value="response"),
+            patch.object(
+                ds,
+                "resolve_agent_response",
+                side_effect=[RuntimeError("resolve fail"), "ok"],
+            ),
+            patch("quimera.app.agent_call_service.time.sleep"),
+        ):
             result = ds.delegate("agent1")
         assert result == "ok"
 
@@ -518,6 +595,7 @@ class TestCallAgent:
 # =============================================================================
 # AppDispatchServices — delegate_low_level
 # =============================================================================
+
 
 class TestCallAgentLowLevel:
     """Testes para AppDispatchServices.delegate_low_level"""
@@ -556,12 +634,21 @@ class TestCallAgentLowLevel:
 
     def test_on_text_chunk_starts_stream(self, ll_app):
         """chunks são bufferizados e entregues via show_message"""
-        def _call(agent, prompt, silent=False, on_text_chunk=None, progress_callback=None, from_agent=None):
+
+        def _call(
+            agent,
+            prompt,
+            silent=False,
+            on_text_chunk=None,
+            progress_callback=None,
+            from_agent=None,
+        ):
             del from_agent
             if on_text_chunk:
                 on_text_chunk("hello")
                 on_text_chunk(" world")
             return "response"
+
         ll_app.agent_client.call = _call
         ds = dispatch_services_from_app(ll_app)
         result = ds.delegate_low_level("agent1")
@@ -570,11 +657,20 @@ class TestCallAgentLowLevel:
 
     def test_stream_result_none_shows_buffered(self, ll_app):
         """stream com result None — gateway não renderiza, caller faz"""
-        def _call(agent, prompt, silent=False, on_text_chunk=None, progress_callback=None, from_agent=None):
+
+        def _call(
+            agent,
+            prompt,
+            silent=False,
+            on_text_chunk=None,
+            progress_callback=None,
+            from_agent=None,
+        ):
             del from_agent
             if on_text_chunk:
                 on_text_chunk("hello")
             return None
+
         ll_app.agent_client.call = _call
         ds = dispatch_services_from_app(ll_app)
         result = ds.delegate_low_level("agent1")
@@ -584,7 +680,9 @@ class TestCallAgentLowLevel:
     def test_debug_prompt_metrics(self, ll_app):
         """debug_prompt_metrics=True chama log_prompt_metrics"""
         ll_app.debug_prompt_metrics = True
-        ll_app.prompt_builder.build = MagicMock(return_value=("prompt_text", {"tokens": 10}))
+        ll_app.prompt_builder.build = MagicMock(
+            return_value=("prompt_text", {"tokens": 10})
+        )
         ll_app.agent_client.log_prompt_metrics = MagicMock()
         ds = dispatch_services_from_app(ll_app)
         ds.delegate_low_level("agent1")
@@ -635,15 +733,25 @@ class TestCallAgentLowLevel:
         """_redisplay_user_prompt_if_needed chamado após finish"""
         ll_app._redisplay_user_prompt_if_needed = MagicMock()
 
-        def _call(agent, prompt, silent=False, on_text_chunk=None, progress_callback=None, from_agent=None):
+        def _call(
+            agent,
+            prompt,
+            silent=False,
+            on_text_chunk=None,
+            progress_callback=None,
+            from_agent=None,
+        ):
             del from_agent
             if on_text_chunk:
                 on_text_chunk("hello")
             return "response"
+
         ll_app.agent_client.call = _call
         ds = dispatch_services_from_app(ll_app)
         ds.delegate_low_level("agent1")
-        ll_app._redisplay_user_prompt_if_needed.assert_called_once_with(clear_first=False)
+        ll_app._redisplay_user_prompt_if_needed.assert_called_once_with(
+            clear_first=False
+        )
 
     def test_primary_false(self, ll_app):
         """Verifica que primary false."""
@@ -654,7 +762,15 @@ class TestCallAgentLowLevel:
 
     def test_show_output_false_ignores_text_chunks(self, ll_app):
         """Verifica que show output false ignores text chunks."""
-        def _call(agent, prompt, silent=False, on_text_chunk=None, progress_callback=None, from_agent=None):
+
+        def _call(
+            agent,
+            prompt,
+            silent=False,
+            on_text_chunk=None,
+            progress_callback=None,
+            from_agent=None,
+        ):
             del from_agent
             if on_text_chunk:
                 on_text_chunk("hello")
@@ -665,6 +781,15 @@ class TestCallAgentLowLevel:
         ds.delegate_low_level("agent1", show_output=False)
         ll_app.renderer.start_message_stream.assert_not_called()
         ll_app.renderer.update_message_stream.assert_not_called()
+
+    def test_low_level_can_suppress_protocol_deltas(self, ll_app):
+        ds = dispatch_services_from_app(ll_app)
+        gateway = ds._get_gateway()
+        gateway.call = MagicMock(return_value="response")
+
+        assert ds.delegate_low_level("agent1", emit_run_deltas=False) == "response"
+
+        assert gateway.call.call_args.kwargs["emit_run_deltas"] is False
 
     def test_cancelled_before_low_level_call_returns_none(self, ll_app):
         """Verifica que cancelled before low level call returns none."""
@@ -721,7 +846,9 @@ class TestPrintResponse:
         ds.print_response("agent1", "hello")
         dispatch_app.renderer.show_message.assert_called_once_with("agent1", "hello")
         dispatch_app.renderer.show_no_response.assert_not_called()
-        dispatch_app._redisplay_user_prompt_if_needed.assert_called_once_with(clear_first=False)
+        dispatch_app._redisplay_user_prompt_if_needed.assert_called_once_with(
+            clear_first=False
+        )
 
     def test_print_response_without_text_shows_no_response(self, dispatch_app):
         """Verifica que print response without text shows no response."""
@@ -730,12 +857,15 @@ class TestPrintResponse:
         ds.print_response("agent1", None)
         dispatch_app.renderer.show_no_response.assert_called_once_with("agent1")
         dispatch_app.renderer.show_message.assert_not_called()
-        dispatch_app._redisplay_user_prompt_if_needed.assert_called_once_with(clear_first=False)
+        dispatch_app._redisplay_user_prompt_if_needed.assert_called_once_with(
+            clear_first=False
+        )
 
 
 # =============================================================================
 # AppDispatchServices — _update_spy_telemetry
 # =============================================================================
+
 
 class TestUpdateSpyTelemetry:
     """_update_spy_telemetry"""

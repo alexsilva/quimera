@@ -46,6 +46,7 @@ class ToolPolicy:
         """Inicializa uma instância de ToolPolicy."""
         self.config = config
         self.blocked_tools: list[str] = []
+        self.allowed_tools: list[str] | None = None
         self._tool_validators: dict[str, object] = {}
         self._external_mcp_tools: set[str] = set()
 
@@ -65,6 +66,10 @@ class ToolPolicy:
 
     def validate(self, call: ToolCall) -> None:
         """Valida a chamada: despacha para o validator registrado ou para _validate_<name>."""
+        if self.allowed_tools is not None and call.name not in self.allowed_tools:
+            raise ToolPolicyError(
+                f"Ferramenta '{call.name}' nao permitida pelo modo de execucao ativo."
+            )
         if call.name in self.blocked_tools:
             raise ToolPolicyError(
                 f"Ferramenta '{call.name}' bloqueada pelo modo de execução ativo."
