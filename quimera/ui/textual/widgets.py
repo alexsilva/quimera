@@ -5,12 +5,13 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 from rich.highlighter import Highlighter
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import VerticalScroll
 from textual.geometry import clamp
 from textual.worker import WorkerCancelled
 from textual.widgets import Header, Input, Static
@@ -23,6 +24,67 @@ from quimera.clipboard_support import ClipboardManager
 logger = logging.getLogger(__name__)
 
 _ATTACHED_IMAGE_LABEL = "🖼 imagem anexada"
+
+
+class _FeedEntry(Static):
+    """Slot visual substituível dentro do feed unificado."""
+
+
+class _UnifiedFeed(VerticalScroll, can_focus=True):
+    """Feed rolável cujos itens podem ser atualizados sem reescrever o histórico."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._entry_widgets: list[_FeedEntry] = []
+        self._entry_tokens: list[int] = []
+
+    def sync_entries(
+        self,
+        entries: Iterable[tuple[int, bool, object]],
+        *,
+        force: bool = False,
+    ) -> None:
+        """Reconcilia slots por posição, preservando widgets já montados."""
+        desired = list(entries)
+        shared = min(len(desired), len(self._entry_widgets))
+
+        for index in range(shared):
+            token, transient, renderable = desired[index]
+            if force or transient or token != self._entry_tokens[index]:
+                self._entry_widgets[index].update(renderable)
+            self._entry_tokens[index] = token
+
+        if len(desired) < len(self._entry_widgets):
+            removed = self._entry_widgets[len(desired):]
+            self.remove_children(removed)
+            del self._entry_widgets[len(desired):]
+            del self._entry_tokens[len(desired):]
+        elif len(desired) > len(self._entry_widgets):
+            new_widgets = [
+                _FeedEntry(renderable, classes="feed-entry")
+                for _, _, renderable in desired[len(self._entry_widgets):]
+            ]
+            self.mount(*new_widgets)
+            self._entry_widgets.extend(new_widgets)
+            self._entry_tokens.extend(
+                token for token, _, _ in desired[len(self._entry_tokens):]
+            )
+
+    def update_entry(self, index: int, token: int, renderable: object) -> bool:
+        """Atualiza um slot existente quando a identidade ainda coincide."""
+        if not 0 <= index < len(self._entry_widgets):
+            return False
+        if self._entry_tokens[index] != token:
+            return False
+        self._entry_widgets[index].update(renderable)
+        return True
+
+    def clear_entries(self) -> None:
+        """Remove todos os slots e seu estado de reconciliação."""
+        if self._entry_widgets:
+            self.remove_children(self._entry_widgets)
+        self._entry_widgets.clear()
+        self._entry_tokens.clear()
 
 
 class _PrefixDimHighlighter(Highlighter):

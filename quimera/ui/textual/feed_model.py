@@ -140,6 +140,21 @@ class TextualFeedModel:
         return list(self._items)
 
     @property
+    def has_transients(self) -> bool:
+        """Retorna se existe algum slot transitório ativo."""
+        return bool(self._transient_index_by_agent)
+
+    def transient_items(self) -> list[tuple[int, TextualFeedItem]]:
+        """Snapshot dos slots transitórios ativos ordenados pela posição visual."""
+        transients: list[tuple[int, TextualFeedItem]] = []
+        for index in sorted(set(self._transient_index_by_agent.values())):
+            if 0 <= index < len(self._items):
+                item = self._items[index]
+                if item.transient:
+                    transients.append((index, item))
+        return transients
+
+    @property
     def last_change(self) -> TextualFeedChange:
         """Última mudança aplicada ao feed."""
         return self._last_change

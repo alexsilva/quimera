@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from rich.console import Console, Group
 
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
-from quimera.ui.textual.app import _update_transient_widget, run_textual_quimera_app
+from quimera.ui.textual.app import run_textual_quimera_app
 from quimera.ui.textual.bridge import TextualUiBridge
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.feed_model import (
@@ -30,6 +30,7 @@ from quimera.ui.textual.renderables import (
     _render_event,
 )
 from quimera.ui.textual.terminal_modes import _external_textual_window
+from quimera.ui.textual.widgets import _UnifiedFeed
 
 
 def _events(model: TextualFeedModel):
@@ -582,6 +583,34 @@ def test_textual_feed_uses_run_id_to_isolate_same_agent_runs():
         "agentrun:one",
         "agentrun:two",
     }
+
+
+def test_textual_feed_exposes_active_transient_slots():
+    model = TextualFeedModel()
+    first = {"label": "Claude", "run_id": "agentrun:one"}
+    second = {"label": "Claude", "run_id": "agentrun:two"}
+
+    model.apply(TextualUiEvent("plain", "persistente"))
+    model.apply(TextualUiEvent("stream_start", first, agent="claude"))
+    model.apply(TextualUiEvent("stream_start", second, agent="claude"))
+
+    assert model.has_transients is True
+    assert [index for index, _ in model.transient_items()] == [1, 2]
+
+    model.apply(TextualUiEvent("agent_message", {**first, "content": "final"}, agent="claude"))
+
+    assert [index for index, _ in model.transient_items()] == [2]
+
+    model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            {**second, **_agent_lifecycle_payload("concluído", status=AgentLifecycleStatus.COMPLETED)},
+            agent="claude",
+        )
+    )
+
+    assert model.has_transients is False
+    assert model.transient_items() == []
 
 
 def test_textual_feed_agent_message_replaces_run_id_transient():
@@ -2606,32 +2635,137 @@ def test_textual_feed_reserves_at_least_ten_lines_for_agent_output():
     assert "max-height: 3;" in css
 
 
-def test_textual_transient_layer_is_removed_from_layout_when_empty():
-    widget = SimpleNamespace(display=True, update=Mock())
-
-    _update_transient_widget(widget, [])
-
-    widget.update.assert_called_once_with("")
-    assert widget.display is False
-
-
-def test_textual_transient_layer_is_visible_while_agent_output_exists():
-    widget = SimpleNamespace(display=False, update=Mock())
-
-    _update_transient_widget(widget, ["executando"])
-
-    rendered = widget.update.call_args.args[0]
-    assert isinstance(rendered, Group)
-    assert widget.display is True
-
-
-def test_textual_transient_layer_is_hidden_by_default_in_css():
+def test_textual_feed_uses_single_scrollable_area_without_transient_overlay():
     from quimera.ui.textual.styles import TEXTUAL_APP_CSS
 
-    transient_rule = TEXTUAL_APP_CSS.split("#feed_transient", 1)[1].split("}", 1)[0]
+    assert "#feed_transient" not in TEXTUAL_APP_CSS
+    assert ".feed-entry" in TEXTUAL_APP_CSS
 
-    assert "display: none;" in transient_rule
-    assert "background: $surface;" in transient_rule
+
+def test_textual_unified_feed_replaces_parallel_runs_in_their_original_slots():
+    import asyncio
+
+    from textual.app import App, ComposeResult
+
+    class FeedApp(App):
+        def compose(self) -> ComposeResult:
+            yield _UnifiedFeed(id="feed")
+
+    async def run_test() -> None:
+        app = FeedApp()
+        async with app.run_test(size=(60, 16)) as pilot:
+            feed = app.query_one("#feed", _UnifiedFeed)
+            feed.sync_entries(
+                [
+                    (1, True, "agente A executando"),
+                    (2, True, "agente B executando"),
+                ]
+            )
+            await pilot.pause()
+            original_slots = list(feed.children)
+
+            feed.sync_entries(
+                [
+                    (3, False, "resposta final A"),
+                    (4, True, "agente B usando ferramenta"),
+                ]
+            )
+            await pilot.pause()
+
+            assert list(feed.children) == original_slots
+            assert str(original_slots[0].render()) == "resposta final A"
+            assert str(original_slots[1].render()) == "agente B usando ferramenta"
+
+            feed.sync_entries(
+                [
+                    (3, False, "resposta final A"),
+                    (5, False, "resposta final B"),
+                ]
+            )
+            await pilot.pause()
+
+            assert list(feed.children) == original_slots
+            assert [str(slot.render()) for slot in original_slots] == [
+                "resposta final A",
+                "resposta final B",
+            ]
+
+    asyncio.run(run_test())
+
+
+def test_textual_unified_feed_handles_middle_removal_clear_and_resync():
+    import asyncio
+
+    from textual.app import App, ComposeResult
+
+    class FeedApp(App):
+        def compose(self) -> ComposeResult:
+            yield _UnifiedFeed(id="feed")
+
+    async def run_test() -> None:
+        app = FeedApp()
+        async with app.run_test(size=(60, 16)) as pilot:
+            feed = app.query_one("#feed", _UnifiedFeed)
+            feed.sync_entries(
+                [
+                    (1, False, "mensagem A"),
+                    (2, True, "agente B executando"),
+                    (3, False, "mensagem C"),
+                ]
+            )
+            await pilot.pause()
+
+            feed.sync_entries([(1, False, "mensagem A"), (3, False, "mensagem C")])
+            await pilot.pause()
+
+            assert [str(slot.render()) for slot in feed.children] == [
+                "mensagem A",
+                "mensagem C",
+            ]
+
+            feed.clear_entries()
+            await pilot.pause()
+
+            assert list(feed.children) == []
+            assert feed._entry_widgets == []
+            assert feed._entry_tokens == []
+
+            feed.sync_entries([(4, True, "novo agente executando")])
+            await pilot.pause()
+
+            assert [str(slot.render()) for slot in feed.children] == [
+                "novo agente executando",
+            ]
+
+    asyncio.run(run_test())
+
+
+def test_textual_unified_feed_updates_single_matching_slot_only():
+    import asyncio
+
+    from textual.app import App, ComposeResult
+
+    class FeedApp(App):
+        def compose(self) -> ComposeResult:
+            yield _UnifiedFeed(id="feed")
+
+    async def run_test() -> None:
+        app = FeedApp()
+        async with app.run_test(size=(60, 16)) as pilot:
+            feed = app.query_one("#feed", _UnifiedFeed)
+            feed.sync_entries([(1, True, "executando"), (2, False, "fixo")])
+            await pilot.pause()
+
+            assert feed.update_entry(0, 1, "pulso atualizado") is True
+            assert feed.update_entry(1, 99, "nao deve entrar") is False
+            assert feed.update_entry(3, 1, "nao deve entrar") is False
+
+            assert [str(slot.render()) for slot in feed.children] == [
+                "pulso atualizado",
+                "fixo",
+            ]
+
+    asyncio.run(run_test())
 
 
 def test_toolbar_coordinator_formats_agent_names_with_profile_icons():
@@ -3117,10 +3251,38 @@ def test_textual_app_syncs_last_expired_tool_before_early_return():
     pulse_source = source[pulse_start:pulse_end]
 
     expiry_branch = pulse_source.index("if expired_tools:")
-    empty_branch = pulse_source.index("if not any(item.transient")
+    empty_branch = pulse_source.index("if not self._feed_model.has_transients")
     assert expiry_branch < empty_branch
-    assert "self._sync_transient_layer()" in pulse_source[expiry_branch:empty_branch]
+    assert "self._sync_feed()" in pulse_source[expiry_branch:empty_branch]
     assert "self._refresh_now()" in pulse_source[expiry_branch:empty_branch]
+    assert "any(item.transient" not in pulse_source
+    assert "self._sync_transient_feed_slots()" in pulse_source
+
+
+def test_textual_unified_feed_uses_actual_scroll_position_for_auto_follow():
+    import inspect
+
+    source = inspect.getsource(run_textual_quimera_app)
+    sync_start = source.index("def _sync_feed")
+    sync_end = source.index("def _redraw_feed", sync_start)
+    sync_source = source[sync_start:sync_end]
+
+    assert "_feed_pinned_to_bottom" not in source
+    assert "was_pinned = feed.is_vertical_scroll_end" in sync_source
+    assert "if renderable is not None:" in sync_source
+
+
+def test_textual_app_pulse_updates_only_transient_slots():
+    import inspect
+
+    source = inspect.getsource(run_textual_quimera_app)
+    transient_start = source.index("def _sync_transient_feed_slots")
+    transient_end = source.index("def _redraw_feed", transient_start)
+    transient_source = source[transient_start:transient_end]
+
+    assert "self._feed_model.transient_items()" in transient_source
+    assert "feed.update_entry(index, token, renderable)" in transient_source
+    assert "self._sync_feed()" in transient_source
 
 
 
