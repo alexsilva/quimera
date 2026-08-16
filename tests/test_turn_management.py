@@ -1024,6 +1024,106 @@ class TestTurnCycle(unittest.TestCase):
         self.assertTrue(completed.is_set())
         self.assertTrue(app.renderer.messages)
 
+    def test_exit_cancels_prompt_that_exceeds_shutdown_grace(self):
+        """Um agente preso não pode manter o processo vivo após `/exit`."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
+        app.renderer = DummyRenderer()
+        app.threads = 1
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.session_id = "test-session"
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.session_services = Mock()
+        app.turn_manager = TurnManager()
+        app._format_user_prompt = lambda: "User: "
+        app.bug_services = Mock()
+        app._file_bug = Mock()
+        app.read_user_input = Mock(side_effect=["mensagem", CMD_EXIT])
+
+        cancelled = threading.Event()
+        app.agent_client = Mock()
+        app.agent_client.cancel_active_work.side_effect = cancelled.set
+
+        def blocked_process(_user):
+            cancelled.wait(timeout=1)
+
+        app._do_process_chat_message = blocked_process
+
+        _materialize_ui_event_handler(app)
+        started = time.monotonic()
+        with patch(
+            "quimera.app.chat_processor._NORMAL_SHUTDOWN_GRACE_SECONDS",
+            0.05,
+        ):
+            QuimeraApp.run(app)
+
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertTrue(cancelled.is_set())
+        app.agent_client.cancel_active_work.assert_called_once()
+        app.session_services.shutdown.assert_called_once_with(interrupted=True)
+
+    def test_exit_cancels_queued_prompt_behind_stuck_turn(self):
+        """Com threads=1, `/exit` cancela o prompt ativo e o ainda enfileirado."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
+        app.renderer = DummyRenderer()
+        app.threads = 1
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.session_id = "test-session"
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.session_services = Mock()
+        app.turn_manager = TurnManager()
+        app._format_user_prompt = lambda: "User: "
+        app.bug_services = Mock()
+        app._file_bug = Mock()
+        app.read_user_input = Mock(
+            side_effect=["turno preso", "prompt enfileirado", CMD_EXIT]
+        )
+
+        cancelled = threading.Event()
+        app.agent_client = Mock()
+        app.agent_client.cancel_active_work.side_effect = cancelled.set
+        started = []
+
+        def blocked_process(user):
+            started.append(user)
+            if user == "turno preso":
+                cancelled.wait(timeout=1)
+
+        app._do_process_chat_message = blocked_process
+
+        _materialize_ui_event_handler(app)
+        with patch(
+            "quimera.app.chat_processor._NORMAL_SHUTDOWN_GRACE_SECONDS",
+            0.05,
+        ):
+            QuimeraApp.run(app)
+
+        self.assertEqual(started, ["turno preso"])
+        self.assertTrue(cancelled.is_set())
+        self.assertEqual(app.runtime_state.get_chat_outstanding_count(), 0)
+        app.session_services.shutdown.assert_called_once_with(interrupted=True)
+
     def test_threads_one_is_serial(self):
         """Com threads=1, no máximo uma execução de agente roda por vez (sem overlap).
 

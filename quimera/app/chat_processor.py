@@ -35,6 +35,9 @@ from ..constants import (
 
 _tty = TtyController()
 
+_NORMAL_SHUTDOWN_GRACE_SECONDS = 10.0
+_FORCED_SHUTDOWN_JOIN_SECONDS = 0.5
+
 
 class _WakeupQueue(queue.Queue):
     """Queue que notifica um Event a cada put(), permitindo espera bloqueante no consumidor."""
@@ -140,6 +143,7 @@ def run_chat_loop(
     chat_slot_semaphore = None
     chat_worker_failure_reported = False
     interrupted_shutdown = False
+    forced_shutdown = False
     swallow_threaded_input_interrupt = False
     ctrl_c_cancelled = False
     if threaded_chat:
@@ -304,41 +308,49 @@ def run_chat_loop(
             app.runtime_state.decrement_chat_inflight(app._refresh_parallel_toolbar)
             app.runtime_state.release_chat_slot()
             _pending_async_slot = False
-        leaked_slots = app.runtime_state.get_chat_inflight_count()
-        if leaked_slots > 0:
-            app._file_bug(
-                session_id=getattr(app.storage, "session_id", ""),
-                category="slot_leak_suspect",
-                summary=f"Shutdown iniciou com {leaked_slots} slot(s) ainda em uso",
-                severity="high",
-                confidence=0.9,
-            )
-            lock = getattr(app.runtime_state, "chat_inflight_lock", None)
-            if lock is not None:
-                with lock:
-                    app.runtime_state.chat_inflight_count = 0
-            else:
-                app.runtime_state.chat_inflight_count = 0
         if interrupted_shutdown:
             _process_supervisor = getattr(app, "process_supervisor", None)
             if _process_supervisor is not None:
                 _process_supervisor.shutdown()
         try:
+            shutdown_deadline = (
+                None
+                if interrupted_shutdown
+                else time.monotonic() + _NORMAL_SHUTDOWN_GRACE_SECONDS
+            )
             if threaded_chat and chat_queue is not None:
                 chat_queue.put(None)
             if chat_worker is not None:
-                # No encerramento normal, todos os prompts já aceitos precisam
-                # ser retirados da fila e submetidos ao executor antes de ele
-                # ser fechado. O timeout anterior permitia que um `/exit`
-                # imediato encerrasse o executor enquanto o worker ainda
-                # carregava uma mensagem, perdendo a resposta.
-                chat_worker.join(timeout=0.5 if interrupted_shutdown else None)
+                chat_worker.join(
+                    timeout=(
+                        0.5
+                        if interrupted_shutdown
+                        else _remaining_shutdown_time(shutdown_deadline)
+                    )
+                )
             if chat_executor is not None:
                 if interrupted_shutdown:
                     chat_executor.shutdown(wait=False, cancel_futures=True)
                     _join_executor_threads(chat_executor, timeout=0.3)
                 else:
-                    chat_executor.shutdown(wait=True, cancel_futures=False)
+                    # Preserva prompts rápidos já aceitos, mas não deixa `/exit`
+                    # bloquear indefinidamente por uma API ou CLI presa.
+                    chat_executor.shutdown(wait=False, cancel_futures=False)
+                    executor_stopped = _join_executor_threads(
+                        chat_executor,
+                        timeout=_remaining_shutdown_time(shutdown_deadline),
+                    )
+                    worker_stopped = chat_worker is None or not chat_worker.is_alive()
+                    if not executor_stopped or not worker_stopped:
+                        forced_shutdown = True
+                        chat_executor.shutdown(wait=False, cancel_futures=True)
+                        _cancel_chat_work_for_shutdown(app)
+                        if chat_worker is not None:
+                            chat_worker.join(timeout=_FORCED_SHUTDOWN_JOIN_SECONDS)
+                        _join_executor_threads(
+                            chat_executor,
+                            timeout=_FORCED_SHUTDOWN_JOIN_SECONDS,
+                        )
             if not interrupted_shutdown:
                 # Futures concluídos podem ter publicado RenderEvents depois da
                 # última iteração do loop. Drena-os antes de desmontar renderer,
@@ -348,6 +360,19 @@ def run_chat_loop(
                     app.event_sink.drain_pending()
         except KeyboardInterrupt:
             pass
+        leaked_slots = app.runtime_state.get_chat_outstanding_count()
+        if leaked_slots > 0 and forced_shutdown:
+            app._file_bug(
+                session_id=getattr(app.storage, "session_id", ""),
+                category="slot_leak_suspect",
+                summary=(
+                    "Shutdown forçado após o prazo com "
+                    f"{leaked_slots} prompt(s) ainda pendente(s)"
+                ),
+                severity="high",
+                confidence=0.95,
+            )
+        _reset_chat_work_counts(app.runtime_state)
         app.runtime_state.chat_executor = None
         app.runtime_state.chat_slot_semaphore = None
         app.runtime_state.chat_queue = None
@@ -358,22 +383,53 @@ def run_chat_loop(
             if lifecycle is None:
                 lifecycle = AppLifecycle(app)
                 app.lifecycle = lifecycle
-            lifecycle.close(interrupted=interrupted_shutdown)
+            lifecycle.close(interrupted=interrupted_shutdown or forced_shutdown)
         finally:
             _tty.restore_control_echo()
 
 
-def _join_executor_threads(executor, timeout=2.0):
-    """Aguarda threads do executor para evitar travar no atexit."""
+def _remaining_shutdown_time(deadline: float | None) -> float:
+    if deadline is None:
+        return 0.0
+    return max(0.0, deadline - time.monotonic())
+
+
+def _cancel_chat_work_for_shutdown(app) -> None:
+    agent_client = getattr(app, "agent_client", None)
+    cancel_active_work = getattr(agent_client, "cancel_active_work", None)
+    if callable(cancel_active_work):
+        cancel_active_work()
+    else:
+        mark_user_cancelled(agent_client)
+    process_supervisor = getattr(app, "process_supervisor", None)
+    terminate_all = getattr(process_supervisor, "terminate_all", None)
+    if callable(terminate_all):
+        terminate_all()
+
+
+def _reset_chat_work_counts(runtime_state) -> None:
+    lock = getattr(runtime_state, "chat_inflight_lock", None)
+    if lock is not None:
+        with lock:
+            runtime_state.chat_inflight_count = 0
+            runtime_state.chat_pending_count = 0
+        return
+    runtime_state.chat_inflight_count = 0
+    runtime_state.chat_pending_count = 0
+
+
+def _join_executor_threads(executor, timeout=2.0) -> bool:
+    """Aguarda threads do executor e informa se todas terminaram."""
     try:
         threads = list(getattr(executor, "_threads", []))
         if not threads:
-            return
+            return True
         deadline = time.monotonic() + timeout
         for thread in threads:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             thread.join(timeout=remaining)
+        return not any(thread.is_alive() for thread in threads)
     except Exception:
-        pass
+        return False
