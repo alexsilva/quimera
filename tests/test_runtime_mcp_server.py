@@ -551,6 +551,50 @@ class TestServeSocket:
             time.sleep(0.02)
         # Não lança exceção, servidor está rodando
 
+    def test_full_disconnect_cancels_pending_tool(self, tmp_path):
+        """Fechar o socket cancela a execução vinculada sem esperar o timeout."""
+        sock_path = str(tmp_path / "mcp_disconnect.sock")
+        executor = _make_executor()
+        started = threading.Event()
+        cancelled = threading.Event()
+
+        def execute(call, _progress=None):
+            request_cancel = call.metadata["_mcp_cancel_event"]
+            started.set()
+            if request_cancel.wait(timeout=2):
+                cancelled.set()
+            return ToolResult(ok=False, tool_name=call.name, error="cancelled")
+
+        executor.execute.side_effect = execute
+        server = _make_server(executor)
+        threading.Thread(
+            target=server.serve_socket,
+            args=(sock_path,),
+            daemon=True,
+        ).start()
+        for _ in range(50):
+            if os.path.exists(sock_path):
+                break
+            time.sleep(0.02)
+
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(sock_path)
+        client.sendall((json.dumps({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {}},
+        }) + "\n").encode())
+        assert started.wait(timeout=1)
+        client.close()
+
+        assert cancelled.wait(timeout=1)
+        for _ in range(50):
+            if not server.has_pending_calls:
+                break
+            time.sleep(0.02)
+        assert server.has_pending_calls is False
+
 
 class TestPendingCallsProperty:
     def test_has_pending_calls_reflects_internal_queue(self):

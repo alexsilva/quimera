@@ -64,6 +64,31 @@ class _DelegateStepCancelHandle:
                 logger.warning("delegate cancel callback failed", exc_info=True)
 
 
+def _watch_request_cancellation(
+    cancel_event: threading.Event | None,
+    cancel_handles: list[_DelegateStepCancelHandle],
+    done_event: threading.Event,
+) -> threading.Thread | None:
+    """Propaga cancelamento da chamada MCP aos AgentClients do delegate."""
+    if cancel_event is None:
+        return None
+
+    def _watch() -> None:
+        while not done_event.wait(0.05):
+            if cancel_event.is_set():
+                for handle in cancel_handles:
+                    handle.cancel()
+                return
+
+    watcher = threading.Thread(
+        target=_watch,
+        daemon=True,
+        name="delegate-request-cancel",
+    )
+    watcher.start()
+    return watcher
+
+
 class _DelegateFnProto(Protocol):
     """Protocolo para a função de despacho de tarefas entre agentes."""
 
@@ -499,6 +524,7 @@ class DelegateTools(ToolBase):
         normalize_agent_fn: Callable[[str | None], str],
         cleanup_callback: Callable[[str], None] | None = None,
         cancel_checker: Callable[[], bool] | None = None,
+        request_cancel_event: threading.Event | None = None,
     ) -> ToolResult:
         """Loop sequencial de execução dos steps — reusado síncrono e assíncrono."""
         tool_name = "delegate"
@@ -531,10 +557,26 @@ class DelegateTools(ToolBase):
                             ),
                         )
 
-                selected_agent, step_result, error = DelegateTools._execute_single_step(
-                    step, delegate_fn, progress_callback, normalize_agent_fn,
-                    cleanup_callback, cancel_checker,
+                cancel_handle = (
+                    _DelegateStepCancelHandle()
+                    if request_cancel_event is not None
+                    else None
                 )
+                step_done = threading.Event()
+                watcher = _watch_request_cancellation(
+                    request_cancel_event,
+                    [cancel_handle] if cancel_handle is not None else [],
+                    step_done,
+                )
+                try:
+                    selected_agent, step_result, error = DelegateTools._execute_single_step(
+                        step, delegate_fn, progress_callback, normalize_agent_fn,
+                        cleanup_callback, cancel_checker, cancel_handle,
+                    )
+                finally:
+                    step_done.set()
+                    if watcher is not None:
+                        watcher.join(timeout=0.1)
 
                 if step_result is None:
                     return ToolResult(ok=False, tool_name=tool_name, error=error)
@@ -562,6 +604,7 @@ class DelegateTools(ToolBase):
         normalize_agent_fn: Callable[[str | None], str],
         cleanup_callback: Callable[[str], None] | None = None,
         cancel_checker: Callable[[], bool] | None = None,
+        request_cancel_event: threading.Event | None = None,
     ) -> ToolResult:
         """Execução paralela de steps — cada step roda em thread própria."""
         tool_name = "delegate"
@@ -600,6 +643,12 @@ class DelegateTools(ToolBase):
         results_lock = threading.Lock()
         timed_out_indexes: set[int] = set()
         cancel_handles = [_DelegateStepCancelHandle() for _ in steps]
+        steps_done = threading.Event()
+        cancel_watcher = _watch_request_cancellation(
+            request_cancel_event,
+            cancel_handles,
+            steps_done,
+        )
 
         def run_step(idx: int, step: dict) -> None:
             step_result = DelegateTools._execute_single_step(
@@ -617,25 +666,30 @@ class DelegateTools(ToolBase):
             )
             for i, step in enumerate(steps)
         ]
-        for t in threads:
-            t.start()
-        timeout_seconds = max(1, int(self.config.delegate_parallel_timeout_seconds))
-        deadline = time.monotonic() + timeout_seconds
-        for index, thread in enumerate(threads):
-            remaining = deadline - time.monotonic()
-            if remaining > 0:
-                thread.join(timeout=remaining)
-            if thread.is_alive():
-                with results_lock:
-                    timed_out_indexes.add(index)
-                    results[index] = (
-                        None,
-                        None,
-                        f"Delegação paralela excedeu o limite de {timeout_seconds}s",
-                    )
-                timeout_cancelled.set()
-                cancel_handles[index].cancel()
-                thread.join(timeout=_DELEGATE_TIMEOUT_CANCEL_JOIN_SECONDS)
+        try:
+            for t in threads:
+                t.start()
+            timeout_seconds = max(1, int(self.config.delegate_parallel_timeout_seconds))
+            deadline = time.monotonic() + timeout_seconds
+            for index, thread in enumerate(threads):
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    thread.join(timeout=remaining)
+                if thread.is_alive():
+                    with results_lock:
+                        timed_out_indexes.add(index)
+                        results[index] = (
+                            None,
+                            None,
+                            f"Delegação paralela excedeu o limite de {timeout_seconds}s",
+                        )
+                    timeout_cancelled.set()
+                    cancel_handles[index].cancel()
+                    thread.join(timeout=_DELEGATE_TIMEOUT_CANCEL_JOIN_SECONDS)
+        finally:
+            steps_done.set()
+            if cancel_watcher is not None:
+                cancel_watcher.join(timeout=0.1)
 
         if timed_out_indexes:
             if cleanup_callback:
@@ -937,6 +991,19 @@ class DelegateTools(ToolBase):
         if transport == "http_mcp":
             return self._delegate_http_async(call, steps)
 
+        raw_cancel_event = call.metadata.get("_mcp_cancel_event")
+        request_cancel_event = (
+            raw_cancel_event
+            if isinstance(raw_cancel_event, threading.Event)
+            else None
+        )
+
+        def request_cancelled() -> bool:
+            return bool(
+                (request_cancel_event is not None and request_cancel_event.is_set())
+                or (callable(self._cancel_checker) and self._cancel_checker())
+            )
+
         if parallel and len(steps) > 1:
             return self._execute_steps_parallel(
                 steps,
@@ -945,7 +1012,8 @@ class DelegateTools(ToolBase):
                 self._resolve_active_agents,
                 self._normalize_agent_identity,
                 cleanup_callback=self._cleanup_callback,
-                cancel_checker=self._cancel_checker,
+                cancel_checker=request_cancelled,
+                request_cancel_event=request_cancel_event,
             )
 
         return self._execute_steps_inner(
@@ -955,7 +1023,8 @@ class DelegateTools(ToolBase):
             self._resolve_active_agents,
             self._normalize_agent_identity,
             cleanup_callback=self._cleanup_callback,
-            cancel_checker=self._cancel_checker,
+            cancel_checker=request_cancelled,
+            request_cancel_event=request_cancel_event,
         )
 
 

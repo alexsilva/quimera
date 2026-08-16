@@ -372,6 +372,45 @@ def test_cancel_background_work_tolerates_client_failure(tmp_path, monkeypatch):
     assert AgentClientStub.instances[1].cancelled is True
 
 
+def test_stop_task_executors_cancels_and_blocks_new_background_clients(
+    tmp_path,
+    monkeypatch,
+):
+    """Shutdown da sessão cancela delegates vivos e impede fallbacks tardios."""
+    app = type("App", (), {})()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
+    app.visibility = "summary"
+    app.auto_approve_mutations = False
+    services = build_task_services(app)
+
+    class AgentClientStub:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.execution_mode = None
+            self.tool_event_callback = None
+            self.tool_executor = None
+            self.cancelled = False
+
+        def cancel_active_work(self):
+            self.cancelled = True
+
+    monkeypatch.setattr("quimera.tasks.executor_pool.AgentClient", AgentClientStub)
+    dispatch = services._create_background_dispatch_services()
+    assert dispatch is not None
+    background_client = dispatch._get_agent_client()
+
+    services.stop_task_executors()
+
+    assert background_client.cancelled is True
+    assert services._create_background_dispatch_services() is None
+
+
 def test_background_task_tool_executor_disables_ask_user(tmp_path):
     """Executores de /task não devem abrir perguntas interativas ao humano."""
     class AppStub:

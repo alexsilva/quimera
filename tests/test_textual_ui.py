@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 from rich.console import Console, Group
+from rich.padding import Padding
 
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
 from quimera.ui.textual.app import run_textual_quimera_app
@@ -1986,7 +1987,7 @@ def test_textual_renderer_emits_delegation_chain_metadata():
     assert event.payload["chain"] == ["human", "claude", "codex"]
 
 
-def test_textual_render_event_shows_delegation_chain_and_id():
+def test_textual_render_event_shows_only_delegation_content():
     event = TextualUiEvent(
         "delegation",
         {
@@ -2004,8 +2005,11 @@ def test_textual_render_event_shows_delegation_chain_and_id():
     console.print(_render_event(event))
     output = console.export_text()
 
-    assert "humano > claude > codex" in output
-    assert "dlg-123" in output
+    assert "Claude → Codex" in output
+    assert "revisar" in output
+    assert "humano > claude > codex" not in output
+    assert "dlg-123" not in output
+    assert "╭" not in output
 
 
 def test_textual_render_event_does_not_infer_human_delegator():
@@ -2026,9 +2030,11 @@ def test_textual_render_event_does_not_infer_human_delegator():
     console.print(_render_event(event))
     output = console.export_text()
 
-    assert "codex-gpt-5-6-sol > opencode-big-pickle" in output
+    assert "codex-gpt-5-6-sol > opencode-big-pickle" not in output
     assert "humano" not in output
     assert "Codex GPT 5 6 Sol" in output
+    assert "OpenCode Big Pickle" in output
+    assert "teste visual" in output
 
 
 def test_textual_render_event_orchestrator_uses_sectioned_panel():
@@ -2613,10 +2619,40 @@ def test_textual_bridge_does_not_echo_slash_command_as_user_message():
     assert emitted == []
 
 
+def test_textual_bridge_echoes_agent_prefixed_prompt_without_prefix():
+    bridge = TextualUiBridge()
+    emitted = []
+
+    def capture(event):
+        assert bridge.input_queue.empty()
+        emitted.append(event)
+
+    bridge.emit = capture
+    profile = SimpleNamespace(
+        prefix="/opencode-big-pickle",
+        aliases=["o/opencode-big-pickle"],
+    )
+    bridge.attach_quimera_app(
+        SimpleNamespace(
+            user_name="Alex",
+            get_active_agent_profiles=lambda: [profile],
+        )
+    )
+
+    bridge.submit_input("/opencode-big-pickle comitar")
+
+    assert bridge.input_queue.get_nowait() == "/opencode-big-pickle comitar"
+    assert len(emitted) == 1
+    assert emitted[0].kind == "user_message"
+    assert emitted[0].payload["content"] == "comitar"
+    assert emitted[0].payload["label"] == "Alex"
+
+
 def test_textual_user_message_renders_as_chat_turn():
     rendered = _render_event(TextualUiEvent("user_message", {"content": "oi", "label": "Alex"}))
 
-    assert rendered is not None
+    assert isinstance(rendered, Padding)
+    assert rendered.bottom == 1
 
 
 def test_textual_feed_reserves_at_least_ten_lines_for_agent_output():

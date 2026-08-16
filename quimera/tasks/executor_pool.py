@@ -228,6 +228,8 @@ class TaskExecutorPool:
         self._background_dispatch_services: Any = None
         # Clients isolados vivos (delegações/tasks); alvo de propagação de cancel.
         self._background_agent_clients: "weakref.WeakSet[Any]" = weakref.WeakSet()
+        self._background_clients_lock = threading.Lock()
+        self._background_shutdown = False
         self._approval_handler: Any = None
         self._dispatch_tool_executor: ToolExecutor | None = None
         self._dispatch_services: Any = None
@@ -236,6 +238,8 @@ class TaskExecutorPool:
 
     def setup_task_executors(self, claim_gate=None, *, task_executors=None, task_executors_getter=None, task_executors_setter=None, current_job_id=None, current_job_id_getter=None):
         """Inicializa executores assíncronos para tasks humanas."""
+        with self._background_clients_lock:
+            self._background_shutdown = False
         self._task_executors_ref = task_executors
         self._task_executors_getter = task_executors_getter
         self._task_executors_setter = task_executors_setter
@@ -268,6 +272,7 @@ class TaskExecutorPool:
 
     def stop_task_executors(self):
         """Interrompe todos os executores de tasks em segundo plano."""
+        self.shutdown_background_work()
         for executor in self._task_executors():
             try:
                 executor.stop()
@@ -584,6 +589,9 @@ class TaskExecutorPool:
         cancel_checker_override=None,
         cancel_event: threading.Event | None = None,
     ):
+        with self._background_clients_lock:
+            if self._background_shutdown:
+                return None
         renderer = self.get_renderer()
         workspace = self.get_workspace()
         if renderer is None or workspace is None:
@@ -621,7 +629,8 @@ class TaskExecutorPool:
             return None
         if cancel_event is not None:
             share_cancel_event(background_agent_client, cancel_event)
-        self._register_background_agent_client(background_agent_client)
+        if not self._register_background_agent_client(background_agent_client):
+            return None
 
         def _redisplay_prompt(**kw):
             callback = self.get_redisplay_prompt()
@@ -695,20 +704,45 @@ class TaskExecutorPool:
     def _background_dispatch_per_call(self, *, auto_approve_task_tools: bool = False):
         return _BackgroundDispatchPerCall(self, auto_approve_task_tools=auto_approve_task_tools)
 
-    def _register_background_agent_client(self, client) -> None:
+    def _register_background_agent_client(self, client) -> bool:
+        should_cancel = False
         try:
-            self._background_agent_clients.add(client)
+            with self._background_clients_lock:
+                if self._background_shutdown:
+                    should_cancel = True
+                else:
+                    self._background_agent_clients.add(client)
         except TypeError:
             # Stubs sem suporte a weakref não participam da propagação de cancel.
             _logger.debug("background client sem suporte a weakref; cancel não propagará")
+        if should_cancel:
+            try:
+                client.cancel_active_work()
+            except Exception:
+                _logger.debug("falha ao cancelar background client tardio", exc_info=True)
+            return False
+        return True
 
     def cancel_background_work(self) -> None:
         """Propaga cancelamento do usuário aos AgentClients de background vivos."""
-        for client in list(self._background_agent_clients):
+        with self._background_clients_lock:
+            clients = list(self._background_agent_clients)
+        for client in clients:
             try:
                 client.cancel_active_work()
             except Exception:
                 _logger.debug("falha ao cancelar background client", exc_info=True)
+
+    def shutdown_background_work(self) -> None:
+        """Fecha o ingresso e cancela todo background pertencente à sessão."""
+        with self._background_clients_lock:
+            self._background_shutdown = True
+            clients = list(self._background_agent_clients)
+        for client in clients:
+            try:
+                client.cancel_active_work()
+            except Exception:
+                _logger.debug("falha ao encerrar background client", exc_info=True)
 
     # ── Internal builders ──────────────────────────────────────────────
 

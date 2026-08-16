@@ -300,18 +300,6 @@ def _build_turn_summary_renderable(payload, agent: str | None = None):
     return _gutter_row("└", "dim", line)
 
 
-def _breadcrumb_items(chain: list[str], from_label: str, to_label: str) -> list[str]:
-    """Normaliza a cadeia real sem inferir que o humano executou a delegação."""
-    raw_items = chain if len(chain or []) >= 2 else [from_label, to_label]
-    items = [str(item).strip() for item in raw_items if str(item).strip()]
-    if not items:
-        return []
-    first = items[0].lower()
-    if first in {"human", "humano", "user", "usuario", "usuário", ">>>"}:
-        items[0] = "humano"
-    return items
-
-
 def _orchestrator_section_name(line: str) -> str | None:
     """Detecta cabeçalhos simples para organizar respostas do orquestrador."""
     raw = str(line or "").strip()
@@ -495,12 +483,15 @@ def _render_event(event: TextualUiEvent):
         label = str(payload.get("label", "Alex")) if isinstance(payload, dict) else "Alex"
         style = str(payload.get("style", "green") or "green") if isinstance(payload, dict) else "green"
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME) if isinstance(payload, dict) else themes.DEFAULT_THEME
-        return _render_turn_block(
-            theme_name,
-            label,
-            style,
-            content=content,
-            render_mode="plain",
+        return Padding(
+            _render_turn_block(
+                theme_name,
+                label,
+                style,
+                content=content,
+                render_mode="plain",
+            ),
+            pad=(0, 0, 1, 0),
         )
     if event.kind == "agent_message":
         payload = event.payload or {}
@@ -603,24 +594,17 @@ def _render_event(event: TextualUiEvent):
     if event.kind == "delegation":
         payload = event.payload if isinstance(event.payload, dict) else {}
         task = str(payload.get("task", "")).strip()
-        chain = [str(item).strip() for item in (payload.get("chain") or []) if str(item).strip()]
         from_label = str(payload.get("from_label", "agente"))
         from_style = str(payload.get("from_style", "cyan"))
         to_label = str(payload.get("to_label", "agente"))
         to_style = str(payload.get("to_style", "cyan"))
-        delegation_id = str(payload.get("delegation_id") or "").strip()
-        breadcrumb_items = _breadcrumb_items(chain, from_label, to_label)
-        breadcrumb = " > ".join(breadcrumb_items)
-        breadcrumb_title = f"  cadeia: {breadcrumb}"
-        if delegation_id:
-            breadcrumb_title += f"  ·  #{delegation_id[:8]}"
         body = Text()
         body.append(f"▸ {from_label}", style=f"bold {from_style}")
         body.append(" → ", style="dim")
         body.append(to_label, style=f"bold {to_style}")
         if task:
             body.append(f"\n  ·  {task}", style="dim")
-        return Panel(body, title=f"[dim]{breadcrumb_title}[/dim]", border_style="dim", padding=(0, 1))
+        return body
     if event.kind == "turn_summary":
         return _build_turn_summary_renderable(event.payload, event.agent)
     if event.kind == "agent_activity":

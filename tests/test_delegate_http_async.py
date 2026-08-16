@@ -871,6 +871,49 @@ class TestCallAgentAutoReferencia:
         assert result.error == "Execução cancelada pelo usuário"
         assert dispatched == ["codex"]
 
+    def test_mcp_request_cancel_stops_sequential_delegate_and_fallbacks(self, tmp_path):
+        """Cancelamento da request MCP alcança o AgentClient isolado do delegate."""
+        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        tools = DelegateTools(config)
+        request_cancel = threading.Event()
+        dispatch_started = threading.Event()
+        agent_cancelled = threading.Event()
+        dispatched: list[str] = []
+
+        def dispatch(agent, **kwargs):
+            dispatched.append(agent)
+            kwargs["cancel_handle"].register(agent_cancelled.set)
+            dispatch_started.set()
+            agent_cancelled.wait(timeout=2)
+            return None
+
+        tools.set_delegate_fn(dispatch)
+        tools.set_active_agents_provider(lambda: ["codex", "claude"])
+        call = _make_call(
+            metadata={"_mcp_cancel_event": request_cancel},
+            args={
+                "target_agent": "codex",
+                "request": "faz algo",
+                "fallback_agents": ["claude"],
+            },
+        )
+        result_holder: list[ToolResult] = []
+        worker = threading.Thread(
+            target=lambda: result_holder.append(tools.delegate(call)),
+            daemon=True,
+        )
+
+        worker.start()
+        assert dispatch_started.wait(timeout=1)
+        request_cancel.set()
+        worker.join(timeout=2)
+
+        assert not worker.is_alive()
+        assert agent_cancelled.is_set()
+        assert dispatched == ["codex"]
+        assert result_holder[0].ok is False
+        assert result_holder[0].error == "Execução cancelada pelo usuário"
+
 
     def test_parallel_delegate_timeout_cleans_up_and_preserves_completed_result(
         self,

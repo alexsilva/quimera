@@ -84,8 +84,8 @@ class TextualUiBridge:
 
     def _emit_user_message(self, text: str) -> None:
         """Espelha mensagens humanas no feed antes de despachar para o agente."""
-        clean = str(text).strip()
-        if not clean or clean.startswith("/"):
+        clean = self._visible_user_message(text)
+        if not clean:
             return
         label = "Alex"
         with self._lock:
@@ -98,6 +98,37 @@ class TextualUiBridge:
                 {"content": clean, "label": label, "style": "green", "theme": themes.DEFAULT_THEME},
             )
         )
+
+    def _visible_user_message(self, text: str) -> str:
+        """Remove prefixo de agente e oculta comandos de controle do feed."""
+        clean = str(text).strip()
+        if not clean or not clean.startswith("/"):
+            return clean
+
+        parts = clean.split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].strip():
+            return ""
+        requested_prefix = parts[0].casefold()
+        with self._lock:
+            quimera_app = self.quimera_app
+        get_profiles = getattr(quimera_app, "get_active_agent_profiles", None)
+        if not callable(get_profiles):
+            return ""
+        try:
+            active_profiles = list(get_profiles() or ())
+        except Exception:
+            return ""
+        for profile in active_profiles:
+            prefixes = (
+                getattr(profile, "prefix", None),
+                *(getattr(profile, "aliases", None) or ()),
+            )
+            if any(
+                requested_prefix == str(prefix or "").strip().casefold()
+                for prefix in prefixes
+            ):
+                return parts[1].strip()
+        return ""
 
     def begin_direct_input(self) -> None:
         """Força submissões seguintes a irem para o prompt inline ativo."""
@@ -256,4 +287,3 @@ class TextualUiBridge:
                 cancel()
                 return
         self.submit_input("/exit")
-

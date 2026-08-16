@@ -20,6 +20,7 @@ import concurrent.futures
 import json
 import logging
 import os
+import select
 import socket
 import sys
 import threading
@@ -670,9 +671,11 @@ class MCPServer:
             delegation_budget=state.get("delegation_budget"),
             http_delegate_auto_approve=bool(state.get("http_delegate_auto_approve", False)),
         )
+        cancel_event = threading.Event()
         call_metadata = {
             "trusted_context": trusted_context,
             "_mcp_state": state,
+            "_mcp_cancel_event": cancel_event,
             "mcp_msg_id": msg_id,
         }
 
@@ -718,7 +721,6 @@ class MCPServer:
                     }
                 }, out)
 
-        cancel_event = threading.Event()
         request_key = self._request_key(out, msg_id)
         with self._cancel_lock:
             self._cancel_events[request_key] = cancel_event
@@ -1016,6 +1018,21 @@ class MCPServer:
                 break
             time.sleep(0.05)
 
+    def _cancel_pending_for_output(self, out: IO) -> None:
+        """Cancela tools da conexão encerrada sem aguardar o timeout global."""
+        with self._pending_lock:
+            owned = [call for call in self._pending_calls if call["out"] is out]
+        for call in owned:
+            call["cancel_event"].set()
+            call["future"].cancel()
+            request_key = call.get("request_key") or self._request_key(
+                out,
+                call["msg_id"],
+            )
+            with self._cancel_lock:
+                self._cancel_events.pop(request_key, None)
+            self._discard_pending_call(call)
+
     def _force_expire_pending(self, calls: list[dict], out: IO) -> None:
         """Expira pendências travadas no shutdown, sem duplicar respostas."""
         for call in calls:
@@ -1125,9 +1142,24 @@ class MCPServer:
                     conn_state["parent_agent"] = str(parent_agent_name)
                 if conn_state:
                     setattr(out, "_mcp_state", conn_state)
+                setattr(
+                    out,
+                    "_mcp_cancel_pending_on_eof",
+                    lambda: self._socket_peer_disconnected(conn),
+                )
                 self.serve(stdin=inp, stdout=out)
         except Exception:
             _logger.debug("Conexão MCP encerrada com erro", exc_info=True)
+
+    @staticmethod
+    def _socket_peer_disconnected(conn: socket.socket) -> bool:
+        """Distingue close total de um half-close de escrita do cliente."""
+        poller = select.poll()
+        poller.register(conn, select.POLLIN | select.POLLHUP | select.POLLERR)
+        return any(
+            flags & (select.POLLHUP | select.POLLERR)
+            for _, flags in poller.poll(0)
+        )
 
     def serve_socket(self, path: str) -> None:
         """Escuta num socket Unix e serve cada cliente numa thread daemon.
@@ -1332,7 +1364,12 @@ class MCPServer:
             self._process_message(msg, out, used_ids=used_ids)
 
         flusher_active[0] = False
-        self._drain_all_pending(out)
+        cancel_pending_on_eof = getattr(out, "_mcp_cancel_pending_on_eof", False)
+        should_cancel = cancel_pending_on_eof() if callable(cancel_pending_on_eof) else False
+        if should_cancel:
+            self._cancel_pending_for_output(out)
+        else:
+            self._drain_all_pending(out)
 
 
 # ---------------------------------------------------------------------------
