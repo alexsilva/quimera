@@ -130,6 +130,10 @@ class AppSessionServices:
                 return history_snapshot
         return None
 
+    def history_snapshot(self) -> list:
+        """Retorna uma cópia rasa do histórico da sessão."""
+        return self._session_state.history_snapshot()
+
     def maybe_auto_summarize(self, preferred_agent=None):
         """Sumariza e trunca o histórico quando excede o threshold configurado."""
         self._flush_pending_summary_completion()

@@ -10,6 +10,7 @@ from .models import DebateMode
 
 
 MAX_DEBATE_TOPIC_CHARS = 8_000
+MAX_DEBATE_CONTEXT_CHARS = 8_000
 
 
 class DebateCommandError(ValueError):
@@ -25,6 +26,7 @@ class _Parser(argparse.ArgumentParser):
 class DebateCommand:
     action: str
     topic: str = ""
+    include_context: bool = False
     mode: DebateMode = DebateMode.VERDICT
     agents: tuple[str, ...] = ()
     rounds: int = 2
@@ -55,6 +57,7 @@ def parse_debate_command(command: str) -> DebateCommand:
         default=DebateMode.VERDICT.value,
     )
     parser.add_argument("--agents", default="")
+    parser.add_argument("--context", action="store_true")
     parser.add_argument("--rounds", type=int, default=2)
     parser.add_argument("--timeout", type=float, default=900.0)
     parser.add_argument("--quorum", type=int)
@@ -88,6 +91,7 @@ def parse_debate_command(command: str) -> DebateCommand:
     return DebateCommand(
         action="start",
         topic=topic,
+        include_context=namespace.context,
         mode=DebateMode(namespace.mode),
         agents=agents,
         rounds=namespace.rounds,
@@ -113,5 +117,6 @@ def _parse_control(action: str, args: list[str]) -> DebateCommand:
 def _usage() -> str:
     return (
         "Uso: /debate [--mode verdict|workflow] [--agents a,b,c] "
-        "[--rounds 2] [--timeout 900] [--quorum 2] <tema>"
+        "[--rounds 2] [--timeout 900] [--quorum 2] [--context] <tema> "
+        "(--context inclui o historico recente do chat no debate)"
     )

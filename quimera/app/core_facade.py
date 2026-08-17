@@ -171,6 +171,7 @@ class CoreFacadeMixin:
                 "--mode verdict ",
                 "--mode workflow ",
                 "--agents ",
+                "--context ",
                 "--rounds ",
                 "--timeout ",
                 "--quorum ",

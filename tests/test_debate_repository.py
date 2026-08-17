@@ -18,6 +18,7 @@ def _session(debate_id="deb-1"):
         id=debate_id,
         session_id="session-1",
         topic="decidir arquitetura",
+        context="resumo neutro do problema",
         mode=DebateMode.WORKFLOW,
         status=DebateStatus.CREATED,
         participants=("claude", "codex"),
@@ -78,6 +79,7 @@ def test_repository_persists_result_and_workflow(tmp_path):
 
     loaded = repository.get_session(session.id)
     assert loaded is not None
+    assert loaded.context == "resumo neutro do problema"
     assert loaded.status == DebateStatus.EXHAUSTED
     assert loaded.result is not None
     assert loaded.result.verdict == "plano"
@@ -85,6 +87,49 @@ def test_repository_persists_result_and_workflow(tmp_path):
     assert loaded.result.evidence_ids == ("E1",)
     assert loaded.result.work_items[0].evidence_ids == ("E1",)
     assert [item.id for item in repository.get_work_items(session.id)] == ["T1", "T2"]
+
+
+def test_repository_migrates_legacy_schema_without_context(tmp_path):
+    import sqlite3
+
+    db_path = str(tmp_path / "state.db")
+    TaskRepository(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("""
+            CREATE TABLE debates (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                status TEXT NOT NULL,
+                participants_json TEXT NOT NULL,
+                moderator TEXT NOT NULL,
+                max_rounds INTEGER NOT NULL,
+                timeout_seconds REAL NOT NULL,
+                quorum INTEGER NOT NULL,
+                current_round INTEGER NOT NULL DEFAULT 0,
+                result_json TEXT,
+                error TEXT,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                started_at DATETIME,
+                completed_at DATETIME,
+                applied_at DATETIME
+            )
+        """)
+        conn.execute(
+            "INSERT INTO debates(id, session_id, topic, mode, status, participants_json, "
+            "moderator, max_rounds, timeout_seconds, quorum, created_at, updated_at) "
+            "VALUES ('deb-old', 's1', 'tema antigo', 'verdict', 'converged', "
+            "'[\"claude\"]', 'claude', 2, 60, 2, '2026-01-01', '2026-01-01')"
+        )
+
+    repository = DebateRepository(db_path)
+    loaded = repository.get_session("deb-old")
+    assert loaded is not None
+    assert loaded.context == ""
+    repository.create_session(_session("deb-new"))
+    assert repository.get_session("deb-new").context == "resumo neutro do problema"
 
 
 def test_repository_recovers_incomplete_sessions(tmp_path):

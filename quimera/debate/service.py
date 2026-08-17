@@ -14,9 +14,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..constants import TaskStatus, TaskType
+from ..domain.execution import ExecutionControlSource
 from ..runtime.tools.files import set_staging_root
 from ..runtime.tools.web import fetch_url_text
-from .commands import DebateCommand, DebateCommandError, parse_debate_command
+from .commands import (
+    MAX_DEBATE_CONTEXT_CHARS,
+    DebateCommand,
+    DebateCommandError,
+    parse_debate_command,
+)
 from .models import (
     DebateContribution,
     DebateEvidence,
@@ -119,6 +125,7 @@ class DebateService:
         show_warning: Callable[[str], None] | None = None,
         show_error: Callable[[str], None] | None = None,
         web_fetcher: Callable[[str], str] | None = None,
+        history_provider: Callable[[], list] | None = None,
     ) -> None:
         self._repository = repository
         self._task_repository = task_repository
@@ -135,6 +142,7 @@ class DebateService:
         self._show_warning = show_warning or (lambda _message: None)
         self._show_error = show_error or (lambda _message: None)
         self._web_fetcher = web_fetcher or fetch_url_text
+        self._history_provider = history_provider
         self._repository.recover_expired()
         self._state_lock = threading.RLock()
         self._apply_lock = threading.Lock()
@@ -201,6 +209,7 @@ class DebateService:
                 id=debate_id,
                 session_id=self._session_id,
                 topic=command.topic,
+                context=self._build_chat_context() if command.include_context else "",
                 mode=command.mode,
                 status=DebateStatus.CREATED,
                 participants=participants,
@@ -220,6 +229,47 @@ class DebateService:
             self._active_thread = thread
             thread.start()
             return session
+
+    def _build_chat_context(self) -> str:
+        """Monta o contexto do debate a partir do historico recente do chat.
+
+        Mantem as mensagens mais recentes que couberem no limite; o texto
+        resultante entra no snapshot como alegacao nao verificada.
+
+        O historico da sessao usa "human" para o usuario e o nome do agente
+        como role nas respostas (ex.: "claude-fable"), nunca
+        "user"/"assistant" — o filtro precisa refletir isso.
+        """
+        if self._history_provider is None:
+            raise ValueError(
+                "--context indisponivel: historico do chat nao acessivel nesta sessao"
+            )
+        history = self._history_provider() or []
+        lines: list[str] = []
+        used = 0
+        for entry in reversed(history):
+            if not isinstance(entry, dict):
+                continue
+            role = str(entry.get("role") or "").strip().lower()
+            if not role or role in {"system", "tool"}:
+                continue
+            label = "user" if role in {"human", "user"} else role
+            content = entry.get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            line = f"[{label}] {content.strip()}"
+            cost = len(line) + (2 if lines else 0)
+            if used + cost > MAX_DEBATE_CONTEXT_CHARS:
+                if not lines:
+                    lines.append(line[: MAX_DEBATE_CONTEXT_CHARS])
+                break
+            lines.append(line)
+            used += cost
+        if not lines:
+            raise ValueError(
+                "--context sem efeito: historico do chat vazio nesta sessao"
+            )
+        return "\n\n".join(reversed(lines))
 
     def cancel(self, debate_id: str = "") -> bool:
         with self._state_lock:
@@ -274,6 +324,8 @@ class DebateService:
     def format_details(self, debate_id: str) -> str:
         session = self._require_session(debate_id)
         lines = [self.format_status(debate_id), f"Tema: {session.topic}"]
+        if session.context:
+            lines.append(f"Contexto: {session.context}")
         contributions = self._repository.list_contributions(debate_id)
         lines.append(f"Contribuicoes: {len(contributions)}")
         if session.result is not None:
@@ -499,31 +551,34 @@ class DebateService:
         root_cancel: threading.Event,
         timeout_seconds: float,
     ) -> tuple[tuple[DebateContribution, ...], dict[str, str]]:
-        futures: dict[Future, tuple[str, _CallHandle]] = {}
-        try:
-            for agent in session.participants:
-                handle = _CallHandle.create()
-                key = f"r{round_index}:{agent}"
-                self._register_call(key, handle, root_cancel)
-                future = _submit_daemon_future(
-                    f"debate-{session.id}-r{round_index}-{agent}",
-                    self._run_participant,
-                    session,
-                    round_index,
-                    agent,
-                    previous,
-                    candidate,
-                    handle,
-                    root_cancel,
-                )
-                futures[future] = (agent, handle)
-            done, pending = wait(tuple(futures), timeout=timeout_seconds)
-            for future in pending:
-                futures[future][1].cancel()
-            contributions: list[DebateContribution] = []
-            failures: dict[str, str] = {}
-            for future in done:
-                agent, _ = futures[future]
+        deadline = time.monotonic() + timeout_seconds
+        contributions: list[DebateContribution] = []
+        failures: dict[str, str] = {}
+        for agent in session.participants:
+            self._raise_if_cancelled(root_cancel)
+            remaining = self._remaining_seconds(session, deadline)
+            handle = _CallHandle.create()
+            key = f"r{round_index}:{agent}"
+            self._register_call(key, handle, root_cancel)
+            future = _submit_daemon_future(
+                f"debate-{session.id}-r{round_index}-{agent}",
+                self._run_participant,
+                session,
+                round_index,
+                agent,
+                previous,
+                tuple(contributions),
+                candidate,
+                handle,
+                root_cancel,
+            )
+            try:
+                done, _ = wait((future,), timeout=remaining)
+                if not done:
+                    handle.cancel()
+                    raise RuntimeError(
+                        f"debate excedeu timeout total de {session.limits.timeout_seconds:.0f}s"
+                    )
                 try:
                     contributions.append(future.result())
                 except DebateCancelled:
@@ -532,23 +587,12 @@ class DebateService:
                     failures[agent] = "cancelado"
                 except Exception as exc:
                     failures[agent] = str(exc)
-            for future in pending:
-                agent, _ = futures[future]
-                failures[agent] = f"timeout apos {timeout_seconds:.1f}s"
-            self._raise_if_cancelled(root_cancel)
-            if pending:
-                raise RuntimeError(
-                    f"debate excedeu timeout total de {session.limits.timeout_seconds:.0f}s"
-                )
-            order = {agent: index for index, agent in enumerate(session.participants)}
-            contributions.sort(key=lambda item: order[item.agent])
-            return tuple(contributions), failures
-        finally:
-            for future, (_, handle) in futures.items():
+            finally:
                 if root_cancel.is_set() or not future.done():
                     handle.cancel()
-            for _, (agent, _) in futures.items():
-                self._unregister_call(f"r{round_index}:{agent}")
+                self._unregister_call(key)
+        self._raise_if_cancelled(root_cancel)
+        return tuple(contributions), failures
 
     def _run_participant(
         self,
@@ -556,6 +600,7 @@ class DebateService:
         round_index: int,
         agent: str,
         previous: tuple[DebateContribution, ...],
+        current: tuple[DebateContribution, ...],
         candidate: DebateSynthesis | None,
         handle: _CallHandle,
         root_cancel: threading.Event,
@@ -566,6 +611,7 @@ class DebateService:
             agent=agent,
             previous=previous,
             candidate=candidate,
+            current=current,
         )
         raw = self._call_agent(
             session, round_index, agent, "participant", prompt, handle, root_cancel
@@ -690,6 +736,28 @@ class DebateService:
             self._validate_synthesis(session, synthesis)
             return synthesis
 
+    @staticmethod
+    def _make_cancel_fn(
+        client: Any, root_cancel: threading.Event
+    ) -> Callable[[], None] | None:
+        """Cancela o client declarando a origem: usuário (root_cancel) ou sistema (timeout)."""
+        cancel_active_work = getattr(client, "cancel_active_work", None)
+        if not callable(cancel_active_work):
+            return None
+
+        def _cancel() -> None:
+            source = (
+                ExecutionControlSource.USER
+                if root_cancel.is_set()
+                else ExecutionControlSource.SYSTEM
+            )
+            try:
+                cancel_active_work(source=source)
+            except TypeError:
+                cancel_active_work()
+
+        return _cancel
+
     def _call_agent(
         self,
         session: DebateSession,
@@ -714,7 +782,7 @@ class DebateService:
                 raise RuntimeError("dispatch isolado indisponivel")
             get_client = getattr(dispatch, "_get_agent_client", None)
             client = get_client() if callable(get_client) else None
-            handle.bind(getattr(client, "cancel_active_work", None))
+            handle.bind(self._make_cancel_fn(client, root_cancel))
             raw = dispatch.delegate(
                 agent,
                 delegation={

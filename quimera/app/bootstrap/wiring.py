@@ -740,6 +740,7 @@ class AppAssembler:
             staging_root=rt.workspace_tmp_root / "debates",
             workspace_root=plat.workspace.cwd,
             persist_message=session_services.persist_message,
+            history_provider=session_services.history_snapshot,
             notify_tasks_changed=task_services.notify_tasks_changed,
             show_system=sess.system_layer.show_system_message,
             show_warning=sess.system_layer.show_warning_message,

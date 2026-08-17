@@ -29,8 +29,10 @@ class _Renderer:
 class _Client:
     def __init__(self, cancel_event):
         self.cancel_event = cancel_event
+        self.cancel_sources = []
 
-    def cancel_active_work(self):
+    def cancel_active_work(self, source=None):
+        self.cancel_sources.append(source)
         self.cancel_event.set()
 
 
@@ -173,7 +175,7 @@ def _evidence():
     ]
 
 
-def _make_service(tmp_path, *, blocking=False, **dispatch_options):
+def _make_service(tmp_path, *, blocking=False, history_provider=None, **dispatch_options):
     (tmp_path / "evidence.py").write_text(
         "def verified_behavior():\n    return True\n", encoding="utf-8"
     )
@@ -202,6 +204,7 @@ def _make_service(tmp_path, *, blocking=False, **dispatch_options):
         workspace_root=tmp_path,
         persist_message=lambda agent, content: persisted.append((agent, content)),
         notify_tasks_changed=lambda: notices.append("tasks"),
+        history_provider=history_provider,
     )
     return (
         service,
@@ -227,6 +230,83 @@ def test_service_recovers_expired_sessions_on_startup(tmp_path, monkeypatch):
     assert recovered == [str(tmp_path / "debate.db")]
 
 
+def test_context_flag_snapshots_recent_chat_history(tmp_path):
+    # roles reais da sessao: "human" para o usuario, nome do agente na resposta
+    history = [
+        {"role": "human", "content": "qual bug estamos investigando?"},
+        {"role": "claude-fable", "content": "o scroll do feed nao vai ao fim"},
+        {"role": "tool", "content": "saida de ferramenta ignorada"},
+        {"role": "human", "content": "   "},
+    ]
+    service, repository, *_ = _make_service(tmp_path, history_provider=lambda: history)
+
+    session = service.start(
+        DebateCommand(
+            action="start",
+            topic="decidir correcao",
+            include_context=True,
+            timeout_seconds=2,
+        )
+    )
+    service.wait(timeout=10)
+
+    expected = (
+        "[user] qual bug estamos investigando?\n\n"
+        "[claude-fable] o scroll do feed nao vai ao fim"
+    )
+    assert session.context == expected
+    assert repository.get_session(session.id).context == expected
+
+
+def test_context_flag_fails_when_history_is_empty(tmp_path):
+    service, *_ = _make_service(tmp_path, history_provider=lambda: [])
+    with pytest.raises(ValueError, match="historico do chat vazio"):
+        service.start(
+            DebateCommand(
+                action="start",
+                topic="tema",
+                include_context=True,
+                timeout_seconds=2,
+            )
+        )
+
+
+def test_context_flag_without_flag_keeps_context_empty(tmp_path):
+    service, repository, *_ = _make_service(
+        tmp_path, history_provider=lambda: [{"role": "user", "content": "oi"}]
+    )
+    session = service.start(
+        DebateCommand(action="start", topic="tema", timeout_seconds=2)
+    )
+    service.wait(timeout=10)
+    assert session.context == ""
+    assert repository.get_session(session.id).context == ""
+
+
+def test_context_flag_truncates_history_keeping_recent_messages(tmp_path):
+    history = [{"role": "user", "content": f"mensagem {i} " + "x" * 500} for i in range(40)]
+    service, *_ = _make_service(tmp_path, history_provider=lambda: history)
+
+    context = service._build_chat_context()
+
+    assert len(context) <= 8_000
+    assert "mensagem 39" in context
+    assert "mensagem 0 " not in context
+
+
+def test_context_flag_fails_without_history_provider(tmp_path):
+    service, *_ = _make_service(tmp_path)
+    with pytest.raises(ValueError, match="historico do chat nao acessivel"):
+        service.start(
+            DebateCommand(
+                action="start",
+                topic="tema",
+                include_context=True,
+                timeout_seconds=2,
+            )
+        )
+
+
 def test_debate_runs_two_rounds_and_converges(tmp_path):
     service, repository, _, renderer, calls, persisted, _ = _make_service(tmp_path)
     session = service.start(
@@ -243,12 +323,38 @@ def test_debate_runs_two_rounds_and_converges(tmp_path):
     assert all(call[1]["show_delegation"] is False for call in calls)
     assert all(call[1]["emit_run_deltas"] is False for call in calls)
     assert all(
-        "read_file" in call[1]["request_override"]
+        "whatever tools your environment provides" in call[1]["request_override"]
         and '"evidence"' in call[1]["request_override"]
         for call in calls
     )
     assert any("Resultado: **consenso**" in content for _, content in renderer.messages)
     assert len(persisted) == 1
+
+
+def test_round_runs_sequentially_and_shares_same_round_contributions(tmp_path):
+    service, _, _, _, calls, _, _ = _make_service(tmp_path)
+    session = service.start(
+        DebateCommand(action="start", topic="ordem sequencial", timeout_seconds=30)
+    )
+
+    assert service.wait(10)
+    assert session is not None
+    round_one = [
+        (agent, options)
+        for agent, options in calls
+        if ":r1:participant:" in options["delegation"]["delegation_id"]
+    ]
+    assert [agent for agent, _ in round_one] == ["alpha", "beta", "gamma"]
+
+    def _current_round_agents(options):
+        snapshot = json.loads(
+            options["request_override"].split("SNAPSHOT_JSON:\n", 1)[1]
+        )
+        return [item["agent"] for item in snapshot["current_round_contributions"]]
+
+    assert _current_round_agents(round_one[0][1]) == []
+    assert _current_round_agents(round_one[1][1]) == ["alpha"]
+    assert _current_round_agents(round_one[2][1]) == ["alpha", "beta"]
 
 
 def test_workflow_apply_is_idempotent_and_enforces_dependencies(tmp_path):
@@ -292,6 +398,43 @@ def test_cancel_stops_active_participants(tmp_path):
     loaded = repository.get_session(session.id)
     assert loaded is not None
     assert loaded.status == DebateStatus.CANCELLED
+
+
+def test_cancel_fn_declares_system_source_on_timeout_and_user_on_cancel():
+    import threading
+
+    from quimera.domain.execution import ExecutionControlSource
+
+    root_cancel = threading.Event()
+    client = _Client(threading.Event())
+    cancel_fn = DebateService._make_cancel_fn(client, root_cancel)
+    assert cancel_fn is not None
+
+    cancel_fn()
+    assert client.cancel_sources == [ExecutionControlSource.SYSTEM]
+
+    root_cancel.set()
+    cancel_fn()
+    assert client.cancel_sources[-1] == ExecutionControlSource.USER
+
+
+def test_cancel_fn_handles_missing_client_and_legacy_signature():
+    import threading
+
+    assert DebateService._make_cancel_fn(None, threading.Event()) is None
+
+    class _Legacy:
+        def __init__(self):
+            self.calls = 0
+
+        def cancel_active_work(self):
+            self.calls += 1
+
+    legacy = _Legacy()
+    cancel_fn = DebateService._make_cancel_fn(legacy, threading.Event())
+    assert cancel_fn is not None
+    cancel_fn()
+    assert legacy.calls == 1
 
 
 def test_service_allows_only_one_active_debate_and_closes_ingress(tmp_path):

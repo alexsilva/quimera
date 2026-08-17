@@ -50,6 +50,7 @@ class DebateRepository:
                     id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
                     topic TEXT NOT NULL,
+                    context TEXT NOT NULL DEFAULT '',
                     mode TEXT NOT NULL,
                     status TEXT NOT NULL,
                     participants_json TEXT NOT NULL,
@@ -116,6 +117,14 @@ class DebateRepository:
                 CREATE INDEX IF NOT EXISTS idx_debate_contributions_round
                     ON debate_contributions(debate_id, round_index, id);
             """)
+            # Bancos criados antes do campo context precisam da coluna nova.
+            try:
+                conn.execute(
+                    "ALTER TABLE debates ADD COLUMN context TEXT NOT NULL DEFAULT ''"
+                )
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
             # Debate task creation is retry-safe across concurrent app instances.
             try:
                 conn.execute(
@@ -132,15 +141,16 @@ class DebateRepository:
             conn.execute(
                 """
                 INSERT INTO debates(
-                    id, session_id, topic, mode, status, participants_json,
+                    id, session_id, topic, context, mode, status, participants_json,
                     moderator, max_rounds, timeout_seconds, quorum,
                     current_round, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.id,
                     session.session_id,
                     session.topic,
+                    session.context,
                     session.mode.value,
                     session.status.value,
                     json.dumps(session.participants, ensure_ascii=False),
@@ -431,6 +441,7 @@ class DebateRepository:
             id=row["id"],
             session_id=row["session_id"],
             topic=row["topic"],
+            context=row["context"] or "",
             mode=DebateMode(row["mode"]),
             status=DebateStatus(row["status"]),
             participants=tuple(json.loads(row["participants_json"])),

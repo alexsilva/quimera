@@ -293,6 +293,7 @@ class AgentClient:
         """Permite exibir novamente avisos de cancelamento em um novo ciclo."""
         with self._cancel_notice_lock:
             self._cancel_notice_state["shown"] = False
+            self._cancel_notice_state.pop("source", None)
 
     def reset_cancel_state(self) -> None:
         """Limpa cancelamento somente quando este client é dono da rodada.
@@ -433,11 +434,12 @@ class AgentClient:
             if not self._cancel_notice_state["shown"]:
                 self._cancel_notice_state["shown"] = True
                 should_show = True
+            source = self._cancel_notice_state.get("source") or ExecutionControlSource.USER
         if should_show:
             self.renderer.show_execution_control(
                 ExecutionControlEvent(
                     status=ExecutionControlStatus.CANCELLED,
-                    source=ExecutionControlSource.USER,
+                    source=source,
                     agent=self._running_agent,
                 )
             )
@@ -475,9 +477,17 @@ class AgentClient:
             except Exception:
                 _logger.debug("cancel listener falhou", exc_info=True)
 
-    def cancel_active_work(self) -> None:
-        """Cancela o trabalho atual e encerra subprocessos ainda vivos."""
+    def cancel_active_work(
+        self, source: ExecutionControlSource = ExecutionControlSource.USER
+    ) -> None:
+        """Cancela o trabalho atual e encerra subprocessos ainda vivos.
+
+        `source` distingue cancelamento do usuário (Esc, /debate cancel) de
+        cancelamento do sistema (timeout de debate) na notificação exibida.
+        """
         self._user_cancelled = True
+        with self._cancel_notice_lock:
+            self._cancel_notice_state.setdefault("source", source)
         self._cancel_event.set()
         self._cancel_active_api_runs()
         # Listeners primeiro: clients de background precisam do cancel_event

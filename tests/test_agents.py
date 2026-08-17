@@ -579,6 +579,24 @@ def test_agent_client_cancel_listener_failure_does_not_block_cancel(renderer):
     assert client._user_cancelled is True
 
 
+def test_agent_client_cancel_source_controls_cancellation_notice(renderer):
+    """cancel_active_work(source=SYSTEM) publica aviso 'pelo sistema'; default segue USER."""
+    from quimera.domain.execution import ExecutionControlSource
+
+    client = AgentClient(renderer)
+    client.cancel_active_work(source=ExecutionControlSource.SYSTEM)
+    client._show_cancelled_once()
+    event = renderer.show_execution_control.call_args[0][0]
+    assert event.source is ExecutionControlSource.SYSTEM
+
+    # reset limpa a origem gravada; novo cancel sem source volta ao default USER
+    client.reset_cancel_state()
+    client.cancel_active_work()
+    client._show_cancelled_once()
+    event = renderer.show_execution_control.call_args[0][0]
+    assert event.source is ExecutionControlSource.USER
+
+
 def test_agent_client_cancelled_background_run_treats_sigterm_as_expected(renderer):
     """Após cancel propagado, retorno -15 do CLI delegado não vira erro no feed."""
     client = AgentClient(renderer)

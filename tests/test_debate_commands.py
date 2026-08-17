@@ -7,16 +7,23 @@ from quimera.debate.models import DebateMode
 def test_parse_debate_start_with_strict_options():
     command = parse_debate_command(
         "/debate --mode workflow --agents claude,codex --rounds 3 "
-        '--timeout 120 --quorum 2 "planejar entrega"'
+        "--timeout 120 --quorum 2 --context "
+        '"planejar entrega"'
     )
 
     assert command.action == "start"
     assert command.topic == "planejar entrega"
+    assert command.include_context is True
     assert command.mode == DebateMode.WORKFLOW
     assert command.agents == ("claude", "codex")
     assert command.rounds == 3
     assert command.timeout_seconds == 120
     assert command.quorum == 2
+
+
+def test_parse_debate_context_defaults_to_disabled():
+    command = parse_debate_command("/debate tema simples")
+    assert command.include_context is False
 
 
 @pytest.mark.parametrize(
