@@ -412,6 +412,72 @@ class TestAuthorizationCodeFlow:
         assert payload["expires_in"] == 3600
         assert payload["scope"] == "mcp"
 
+    def test_access_token_valido_sobrevive_a_restart(self, tmp_path):
+        """Restart do provider não deve revogar access token ainda válido."""
+        store = tmp_path / "mcp_oauth.json"
+        first = OAuthProvider(OAuthConfig(enabled=True, store_path=store))
+        httpd = _start_server(first)
+        try:
+            client = _register_client(httpd)
+            verifier, challenge = _pkce_pair()
+            code = _authorize_and_get_code(httpd, client["client_id"], challenge)
+            tokens = _post_form(
+                httpd,
+                "/oauth/token",
+                {
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "client_id": client["client_id"],
+                    "code_verifier": verifier,
+                    "redirect_uri": "http://127.0.0.1:5599/cb",
+                },
+            ).json()
+        finally:
+            httpd.shutdown()
+
+        second = OAuthProvider(OAuthConfig(enabled=True, store_path=store))
+
+        restored = second.validate_access_token(tokens["access_token"])
+        assert restored is not None
+        assert restored.client_id == client["client_id"]
+
+    def test_access_token_expirado_nao_sobrevive_a_restart(self, tmp_path):
+        """Persistência não deve prolongar a validade de access token expirado."""
+        store = tmp_path / "mcp_oauth.json"
+        provider = OAuthProvider(
+            OAuthConfig(enabled=True, store_path=store, access_token_ttl=0)
+        )
+        client = provider.register_client(
+            {
+                "client_name": "expiracao",
+                "redirect_uris": ["http://127.0.0.1:5599/cb"],
+            }
+        )
+        tokens = provider._build_token_response(client, "mcp", "", refresh=True)
+
+        restarted = OAuthProvider(OAuthConfig(enabled=True, store_path=store))
+
+        assert restarted.validate_access_token(tokens["access_token"]) is None
+
+    def test_access_token_revogado_nao_reaparece_apos_restart(self, tmp_path):
+        """Revogação persistida deve impedir ressurreição do token após restart."""
+        store = tmp_path / "mcp_oauth.json"
+        provider = OAuthProvider(OAuthConfig(enabled=True, store_path=store))
+        client = provider.register_client(
+            {
+                "client_name": "revogacao",
+                "redirect_uris": ["http://127.0.0.1:5599/cb"],
+            }
+        )
+        tokens = provider._build_token_response(client, "mcp", "", refresh=True)
+        provider.revoke(
+            {"token": tokens["access_token"], "client_id": client.client_id}
+        )
+
+        restarted = OAuthProvider(OAuthConfig(enabled=True, store_path=store))
+
+        assert restarted.validate_access_token(tokens["access_token"]) is None
+
     def test_tela_de_consentimento_exibe_client_e_escopo(self, oauth_server):
         """A tela deve identificar o client e os escopos pedidos."""
         client = _register_client(oauth_server)

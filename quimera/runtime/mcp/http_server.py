@@ -766,7 +766,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         elif session_id:
             state = mcp_server._http_sessions.get(session_id)
             if state is None:
-                self._send_error_response(400, -32602, "Unknown MCP-Session-Id")
+                self._send_error_response(404, -32602, "Unknown MCP-Session-Id")
                 return
             state["session_id"] = session_id
             state["http_profile"] = mcp_server._http_profile

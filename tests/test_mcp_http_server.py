@@ -1297,7 +1297,7 @@ class TestHTTPTrustedSessions:
                     "MCP-Protocol-Version": "2025-11-25",
                 },
             )
-            assert resp.status == 400
+            assert resp.status == 404
             assert b"Unknown MCP-Session-Id" in resp.data
         finally:
             httpd.shutdown()

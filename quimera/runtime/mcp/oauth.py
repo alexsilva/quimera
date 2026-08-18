@@ -468,13 +468,14 @@ def parse_client_specs(
 
 
 class OAuthStore:
-    """Persistência JSON atômica de clients dinâmicos e refresh tokens.
+    """Persistência JSON atômica do estado OAuth durável.
 
-    Access tokens e códigos de autorização são deliberadamente voláteis: eles
-    têm vida curta e não precisam sobreviver a um restart.
+    Clients dinâmicos, access tokens ainda válidos e refresh tokens sobrevivem
+    a reinícios do servidor. Códigos de autorização e pedidos pendentes são
+    deliberadamente voláteis porque pertencem ao fluxo interativo em andamento.
 
     **Segurança em disco:** sem ``store_key``, o arquivo contém ``client_secret``
-    de clients dinâmicos e refresh tokens em texto claro (apenas permissões
+    de clients dinâmicos, access tokens e refresh tokens em texto claro (apenas permissões
     ``0600`` protegem o conteúdo). Com ``store_key`` definida, o payload é
     criptografado com Fernet (requer o pacote opcional ``cryptography``).
     """
@@ -562,34 +563,51 @@ class OAuthStore:
             )
         return json.loads(text)
 
-    def load(self) -> tuple[dict[str, OAuthClient], dict[str, IssuedToken]]:
-        """Carrega clients e refresh tokens persistidos, tolerando corrupção."""
+    def load_state(
+        self,
+    ) -> tuple[
+        dict[str, OAuthClient],
+        dict[str, IssuedToken],
+        dict[str, IssuedToken],
+    ]:
+        """Carrega clients, access e refresh tokens válidos, tolerando corrupção."""
         if not self._path or not self._path.exists():
-            return {}, {}
+            return {}, {}, {}
         try:
             data = self._decode_payload(self._path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             _logger.warning("MCP OAuth: store ilegível em %s (%s); recomeçando vazio", self._path, exc)
-            return {}, {}
+            return {}, {}, {}
         except Exception as exc:  # noqa: BLE001 — InvalidToken e erros do Fernet
             _logger.warning("MCP OAuth: store ilegível em %s (%s); recomeçando vazio", self._path, exc)
-            return {}, {}
+            return {}, {}, {}
         clients = {}
         for raw in data.get("clients") or []:
             client = OAuthClient.from_dict(raw)
             if client.client_id:
                 clients[client.client_id] = client
-        tokens = {}
+        access_tokens = {}
+        for raw in data.get("access_tokens") or []:
+            token = IssuedToken.from_dict(raw)
+            if token.token and not token.is_expired():
+                access_tokens[token.token] = token
+        refresh_tokens = {}
         for raw in data.get("refresh_tokens") or []:
             token = IssuedToken.from_dict(raw)
             if token.token and not token.is_expired():
-                tokens[token.token] = token
-        return clients, tokens
+                refresh_tokens[token.token] = token
+        return clients, access_tokens, refresh_tokens
+
+    def load(self) -> tuple[dict[str, OAuthClient], dict[str, IssuedToken]]:
+        """Compatibilidade: carrega clients e refresh tokens como nas versões anteriores."""
+        clients, _, refresh_tokens = self.load_state()
+        return clients, refresh_tokens
 
     def save(
         self,
         clients: Mapping[str, OAuthClient],
         refresh_tokens: Mapping[str, IssuedToken],
+        access_tokens: Mapping[str, IssuedToken] | None = None,
     ) -> None:
         """Grava o estado de forma atômica, ignorando falhas de I/O não fatais."""
         if not self._path:
@@ -597,6 +615,11 @@ class OAuthStore:
         payload = {
             "version": self._VERSION,
             "clients": [client.to_dict() for client in clients.values() if client.dynamic],
+            "access_tokens": [
+                token.to_dict()
+                for token in (access_tokens or {}).values()
+                if not token.is_expired()
+            ],
             "refresh_tokens": [
                 token.to_dict() for token in refresh_tokens.values() if not token.is_expired()
             ],
@@ -638,11 +661,21 @@ class OAuthProvider:
         self._codes: dict[str, AuthorizationCode] = {}
         self._access_tokens: dict[str, IssuedToken] = {}
         self._refresh_tokens: dict[str, IssuedToken] = {}
-        stored_clients, stored_refresh = self._store.load()
+        stored_clients, stored_access, stored_refresh = self._store.load_state()
         self._clients.update(stored_clients)
-        self._refresh_tokens.update(stored_refresh)
         for client in self._config.clients:
             self._clients[client.client_id] = client
+        known_clients = set(self._clients)
+        self._access_tokens = {
+            token.token: token
+            for token in stored_access.values()
+            if token.client_id in known_clients
+        }
+        self._refresh_tokens = {
+            token.token: token
+            for token in stored_refresh.values()
+            if token.client_id in known_clients
+        }
 
     # ------------------------------------------------------------------
     # Estado e configuração
@@ -1261,12 +1294,16 @@ deste workspace.</p>
         if not token:
             return
         with self._lock:
+            changed = False
             access = self._access_tokens.get(token)
             if access is not None and access.client_id == client.client_id:
                 self._access_tokens.pop(token, None)
+                changed = True
             refresh = self._refresh_tokens.get(token)
             if refresh is not None and refresh.client_id == client.client_id:
                 self._refresh_tokens.pop(token, None)
+                changed = True
+            if changed:
                 self._persist_locked()
 
     def introspect(
@@ -1360,7 +1397,11 @@ deste workspace.</p>
 
     def _persist_locked(self) -> None:
         """Persiste o estado durável. Requer ``self._lock``."""
-        self._store.save(self._clients, self._refresh_tokens)
+        self._store.save(
+            self._clients,
+            self._refresh_tokens,
+            access_tokens=self._access_tokens,
+        )
 
 
 def build_provider_from_cli(
