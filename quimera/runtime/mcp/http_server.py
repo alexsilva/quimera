@@ -7,7 +7,7 @@ Endpoints MCP:
   POST /mcp             — mensagem JSON-RPC do transporte Streamable HTTP
   GET  /health          — healthcheck
 
-Endpoints OAuth (ativos apenas quando um ``OAuthProvider`` habilitado é passado):
+Endpoints OAuth:
   GET  /.well-known/oauth-protected-resource[/mcp]  — RFC 9728
   GET  /.well-known/oauth-authorization-server      — RFC 8414
   GET  /oauth/authorize  — tela de consentimento
@@ -17,9 +17,8 @@ Endpoints OAuth (ativos apenas quando um ``OAuthProvider`` habilitado é passado
   POST /oauth/revoke     — RFC 7009
   POST /oauth/introspect — RFC 7662
 
-Autenticação: token estático de header (``Authorization: Bearer`` ou
-``X-Quimera-MCP-Token``) e Bearer OAuth coexistem — qualquer um dos dois
-autoriza a requisição.
+Autenticação: Bearer OAuth. O transporte HTTP não aceita o token interno usado
+pelo transporte socket.
 
 Uso:
     executor = ToolExecutor(config, approval_handler)
@@ -202,7 +201,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_header(
             "Access-Control-Allow-Headers",
             "Content-Type, Authorization, MCP-Protocol-Version, MCP-Session-Id, "
-            "X-Quimera-MCP-Token, X-Quimera-Agent, X-Quimera-Run, "
+            "X-Quimera-Agent, X-Quimera-Run, "
             "X-Quimera-Trace, X-Quimera-Parent-Run",
         )
         self.send_header(
@@ -329,11 +328,8 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
     def _handle_oauth_protected_resource(self) -> None:
         """RFC 9728 — OAuth 2.0 Protected Resource Metadata.
 
-        Com OAuth habilitado, publica ``authorization_servers`` apontando para
-        este próprio processo, permitindo que o client MCP descubra o AS e
-        execute o fluxo completo. Sem OAuth, publica apenas
-        ``bearer_methods_supported`` para que clientes usem o token estático de
-        header sem tentar auto-descoberta de endpoints inexistentes.
+        Publica ``authorization_servers`` quando o provider está habilitado,
+        permitindo que o client MCP descubra o AS e execute o fluxo completo.
         """
         mcp_server: MCP_HTTPServer = self.server.mcp_http_server
         metadata = mcp_server.oauth.protected_resource_metadata(self._base_url_from_request())
@@ -635,37 +631,19 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         return ""
 
     def _authenticate(self) -> AuthContext:
-        """Autentica a requisição por token estático de header ou Bearer OAuth.
-
-        Os dois esquemas coexistem: o token estático (``Authorization: Bearer
-        <token>`` ou ``X-Quimera-MCP-Token``) continua válido, e qualquer Bearer
-        que não corresponda a ele é validado contra o Authorization Server
-        embutido. Quando nenhum dos dois está configurado, o acesso é liberado
-        (bind loopback de desenvolvimento).
-        """
+        """Autentica a requisição exclusivamente por Bearer OAuth."""
         oauth = self._oauth
-        static_token = (
-            getattr(self.server.mcp_http_server._mcp, "_auth_token", None) or ""
-        ).strip()
-        bearer = self._bearer_token()
-        header_token = str(self.headers.get("X-Quimera-MCP-Token") or "").strip()
-        if static_token and (
-            secrets.compare_digest(bearer, static_token)
-            or secrets.compare_digest(header_token, static_token)
-        ):
-            return AuthContext(authenticated=True, mode="static_token")
-        if oauth.enabled and bearer:
-            return oauth.authenticate_bearer(bearer)
-        if not static_token and not oauth.enabled:
+        if not oauth.enabled:
             return AuthContext(authenticated=True, mode="anonymous")
-        if oauth.enabled and not static_token:
-            return AuthContext(
-                authenticated=False,
-                mode="oauth",
-                error="invalid_request",
-                error_description="Bearer token OAuth ausente",
-            )
-        return AuthContext(authenticated=False, mode="static_token", error="invalid_token")
+        bearer = self._bearer_token()
+        if bearer:
+            return oauth.authenticate_bearer(bearer)
+        return AuthContext(
+            authenticated=False,
+            mode="oauth",
+            error="invalid_request",
+            error_description="Bearer token OAuth ausente",
+        )
 
     def _require_auth(self) -> AuthContext | None:
         """Aplica a autenticação, respondendo 401 quando ela falha.
@@ -985,8 +963,9 @@ class MCP_HTTPServer:
     def _resolve_oauth(oauth: OAuthProvider | OAuthConfig | None) -> OAuthProvider:
         """Normaliza o argumento ``oauth`` para um ``OAuthProvider``.
 
-        ``None`` produz um provider desabilitado, mantendo apenas o esquema de
-        token estático em header.
+        ``None`` produz um provider desabilitado para usos embutidos/testes que
+        injetam o transporte diretamente. O bootstrap da aplicação sempre passa
+        um provider OAuth habilitado ao HTTP externo.
         """
         if isinstance(oauth, OAuthProvider):
             return oauth
@@ -1179,7 +1158,7 @@ def create_server(
         cors_origins: Origens CORS permitidas. Quando omitido, lê
             ``QUIMERA_MCP_HTTP_CORS_ORIGINS`` e usa ``*`` como padrão de desenvolvimento.
         oauth: ``OAuthProvider`` ou ``OAuthConfig`` do Authorization Server
-            embutido. ``None`` mantém apenas o token estático de header.
+            embutido. O bootstrap do MCP HTTP externo fornece OAuth habilitado.
 
     Returns:
         MCP_HTTPServer configurado mas não iniciado.

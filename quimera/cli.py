@@ -397,28 +397,11 @@ def main():
         help="Host do servidor MCP HTTP externo quando --mcp-http está ativo (padrão: 127.0.0.1).",
     )
     parser.add_argument(
-        "--mcp-token-env",
-        dest="mcp_token_env",
-        default="QUIMERA_MCP_TOKEN",
-        metavar="VAR",
-        help="Variável de ambiente com token MCP fixo para clientes HTTP externos (padrão: QUIMERA_MCP_TOKEN). Se ausente, gera token externo aleatório por sessão.",
-    )
-    parser.add_argument(
         "--mcp-http-allow-tools",
         dest="mcp_http_allow_tools",
         default="read",
         metavar="read-local|read|agent|all|CSV",
         help="Allowlist de tools para MCP HTTP externo: read-local (sem rede), read (padrão), agent, all ou lista CSV de nomes.",
-    )
-    parser.add_argument(
-        "--mcp-oauth",
-        dest="mcp_oauth",
-        action="store_true",
-        default=False,
-        help=(
-            "Habilita o Authorization Server OAuth 2.1 no MCP HTTP externo "
-            "(PKCE + registro dinâmico de clients). O token de header continua válido."
-        ),
     )
     parser.add_argument(
         "--mcp-oauth-issuer",
@@ -475,7 +458,7 @@ def main():
         dest="mcp_oauth_store",
         default=None,
         metavar="PATH",
-        help="Arquivo JSON de clients/refresh tokens OAuth (padrão: <workspace>/state/mcp_oauth.json).",
+        help="Arquivo JSON de estado OAuth (padrão: <workspace>/state/mcp_oauth.json).",
     )
     parser.add_argument(
         "--mcp-client",
@@ -699,12 +682,10 @@ def main():
             socket_path=args.mcp_socket,
             http_host=args.mcp_host,
             http_port=args.mcp_port,
-            token_env=args.mcp_token_env,
             http_allowed_tools=args.mcp_http_allow_tools,
             external_http_enabled=args.mcp_http,
             oauth=build_oauth_provider(
                 workspace,
-                enabled=args.mcp_oauth,
                 issuer=args.mcp_oauth_issuer,
                 client_specs=args.mcp_oauth_clients,
                 redirect_uris=args.mcp_oauth_redirect_uris,

@@ -25,6 +25,7 @@ from quimera.runtime.mcp.http_server import (
     _SSEQueueOutput,
 )
 from quimera.runtime.mcp.session import parse_http_allowed_tools
+from quimera.runtime.mcp.oauth import OAuthConfig
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolResult
@@ -1222,41 +1223,45 @@ class TestStreamableHTTP:
             getattr(httpd, "shutdown")()
 
 
-    def test_mcp_http_respeita_bearer_token(self):
-        """Verifica que Test mcp http respeita bearer token."""
+    def test_mcp_http_nao_aceita_auth_token_estatico_do_mcpserver(self):
+        """O auth_token do MCPServer pertence ao socket e não autentica HTTP OAuth."""
         mcp = MCPServer(_make_executor(), auth_token="secret")
-        httpd = _start_http_server(mcp)
+        httpd = MCP_HTTPServer(
+            mcp,
+            host="127.0.0.1",
+            port=0,
+            oauth=OAuthConfig(enabled=True),
+        )
+        httpd.start_background()
+        _wait_for_server(httpd.host, httpd.port)
         try:
             body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25"}}).encode()
             denied = _http_request(httpd.host, httpd.port, "POST", "/mcp", body=body, headers={"Content-Type": "application/json"})
             assert denied.status == 401
-            allowed = _http_request(httpd.host, httpd.port, "POST", "/mcp", body=body, headers={"Content-Type": "application/json", "Authorization": "Bearer secret"})
-            assert allowed.status == 200
+            static_bearer = _http_request(httpd.host, httpd.port, "POST", "/mcp", body=body, headers={"Content-Type": "application/json", "Authorization": "Bearer secret"})
+            assert static_bearer.status == 401
         finally:
             httpd.shutdown()
 
-    def test_mcp_http_aplica_token_em_sse_e_message_legados(self):
-        """Verifica que Test mcp http aplica token em sse e message legados."""
+    def test_mcp_http_nao_aceita_header_estatico_legado(self):
+        """X-Quimera-MCP-Token não deve contornar OAuth."""
         mcp = MCPServer(_make_executor(), auth_token="secret")
-        httpd = _start_http_server(mcp)
+        httpd = MCP_HTTPServer(
+            mcp,
+            host="127.0.0.1",
+            port=0,
+            oauth=OAuthConfig(enabled=True),
+        )
+        httpd.start_background()
+        _wait_for_server(httpd.host, httpd.port)
         try:
-            denied_sse = _http_request(httpd.host, httpd.port, "GET", "/sse")
-            assert denied_sse.status == 401
-
             body = json.dumps({"jsonrpc": "2.0", "id": 7, "method": "ping"}).encode()
-            denied_message = _http_request(
-                httpd.host, httpd.port, "POST", "/message",
-                body=body, headers={"Content-Type": "application/json"},
-            )
-            assert denied_message.status == 401
-
-            allowed_message = _http_request(
+            via_legacy_header = _http_request(
                 httpd.host, httpd.port, "POST", "/message",
                 body=body,
                 headers={"Content-Type": "application/json", "X-Quimera-MCP-Token": "secret"},
             )
-            assert allowed_message.status == 200
-            assert json.loads(allowed_message.data)["result"] == {}
+            assert via_legacy_header.status == 401
         finally:
             httpd.shutdown()
 

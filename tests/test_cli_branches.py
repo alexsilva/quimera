@@ -1057,8 +1057,7 @@ def test_main_mcp_http_adds_external_http_without_replacing_internal_socket(monk
         allowed_tools=DEFAULT_HTTP_READ_ONLY_TOOLS,
         oauth=ANY,
     )
-    # Sem --mcp-oauth, o provider é construído mas permanece desabilitado.
-    assert mock_http_cls.call_args.kwargs["oauth"].enabled is False
+    assert mock_http_cls.call_args.kwargs["oauth"].enabled is True
     mock_http.start_background.assert_called_once_with()
     assert _FakeApp.last_instance.mcp_socket_calls == [called_path]
     assert _FakeApp.last_instance.mcp_http_calls == []
@@ -1079,8 +1078,8 @@ def test_main_mcp_http_can_combine_with_custom_internal_socket(monkeypatch):
     assert _FakeApp.last_instance.mcp_socket_calls == ["/tmp/custom-mcp.sock"]
 
 
-def test_main_mcp_http_uses_external_token_from_env_but_internal_socket_gets_session_token(monkeypatch):
-    """Verifica que main mcp http uses external token from env but internal socket gets session token."""
+def test_main_mcp_http_ignora_token_estatico_env_e_preserva_token_do_socket(monkeypatch):
+    """QUIMERA_MCP_TOKEN não cria um segundo esquema de autenticação HTTP."""
     _patch_main_basics(monkeypatch)
     monkeypatch.setenv("QUIMERA_MCP_TOKEN", "remote-token")
     monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-http", "--mcp-port", "9090"])
@@ -1090,7 +1089,7 @@ def test_main_mcp_http_uses_external_token_from_env_but_internal_socket_gets_ses
         cli.main()
 
     auth_tokens = [call.kwargs["auth_token"] for call in mock_mcp_cls.call_args_list]
-    assert auth_tokens == ["internal-token", "remote-token"]
+    assert auth_tokens == ["internal-token", None]
     assert _FakeApp.last_instance.mcp_socket_tokens == ["internal-token"]
     assert _FakeApp.last_instance.mcp_http_tokens == []
 
@@ -1098,8 +1097,8 @@ def test_main_mcp_http_uses_external_token_from_env_but_internal_socket_gets_ses
 def test_main_mcp_socket_uses_internal_session_token_not_external_token_env(monkeypatch):
     """Verifica que main mcp socket uses internal session token not external token env."""
     _patch_main_basics(monkeypatch)
-    monkeypatch.setenv("MY_MCP_TOKEN", "external-token-not-used")
-    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-socket", "--mcp-token-env", "MY_MCP_TOKEN"])
+    monkeypatch.setenv("QUIMERA_MCP_TOKEN", "external-token-not-used")
+    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-socket"])
     monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
 
     with patch("quimera.runtime.mcp.session.secrets.token_urlsafe", return_value="internal-token"), patch("quimera.runtime.mcp.session.MCPServer") as mock_mcp_cls:
@@ -1109,8 +1108,8 @@ def test_main_mcp_socket_uses_internal_session_token_not_external_token_env(monk
     assert _FakeApp.last_instance.mcp_socket_tokens == ["internal-token"]
 
 
-def test_main_mcp_http_uses_token_loaded_from_app_env_file(monkeypatch, tmp_path):
-    """Verifica que main mcp http uses token loaded from app env file."""
+def test_main_mcp_http_ignora_token_estatico_loaded_from_app_env_file(monkeypatch, tmp_path):
+    """Token estático legado no .env não deve autenticar o HTTP."""
     class _FakeWorkspaceWithEnv(_FakeWorkspace):
         def __init__(self, cwd):
             super().__init__(cwd)
@@ -1140,7 +1139,7 @@ def test_main_mcp_http_uses_token_loaded_from_app_env_file(monkeypatch, tmp_path
             cli.main()
 
         auth_tokens = [call.kwargs["auth_token"] for call in mock_mcp_cls.call_args_list]
-        assert auth_tokens[-1] == "env-file-token"
+        assert auth_tokens[-1] is None
         assert _FakeAppLoadsEnv.last_instance.mcp_http_tokens == []
     finally:
         os.environ.pop("QUIMERA_MCP_TOKEN", None)

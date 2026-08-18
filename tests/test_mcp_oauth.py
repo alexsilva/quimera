@@ -3,7 +3,7 @@
 Cobre o fluxo completo ponta a ponta contra um servidor HTTP real (sem mocks de
 rede): descoberta de metadados, registro dinâmico, consentimento, PKCE, troca de
 código, refresh, client_credentials, revogação, introspecção, restrição de
-escopo e coexistência com o token estático de header.
+escopo e rejeição dos mecanismos estáticos legados no transporte HTTP.
 """
 from __future__ import annotations
 
@@ -1056,8 +1056,8 @@ class TestMCPAccess:
         assert resp.status == 401
         assert 'error="invalid_token"' in (resp.header("WWW-Authenticate") or "")
 
-    def test_token_estatico_de_header_continua_valido_com_oauth(self, tmp_path):
-        """Compatibilidade: o token fixo funciona junto com o OAuth habilitado."""
+    def test_token_estatico_de_header_nao_bypassa_oauth(self, tmp_path):
+        """Tokens estáticos do MCPServer não devem autorizar o transporte HTTP."""
         provider = OAuthProvider(OAuthConfig(enabled=True, store_path=tmp_path / "s.json"))
         httpd = _start_server(provider, auth_token="token-fixo")
         try:
@@ -1067,8 +1067,8 @@ class TestMCPAccess:
         finally:
             httpd.shutdown()
 
-        assert via_bearer.status == 200
-        assert via_header.status == 200
+        assert via_bearer.status == 401
+        assert via_header.status == 401
         assert sem_token.status == 401
 
     def test_escopo_restritivo_remove_tools_de_rede(self, tmp_path):

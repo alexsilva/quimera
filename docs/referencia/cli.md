@@ -47,7 +47,6 @@ quimera [opções] [test_agent]
 | `--mcp-http` | Expõe servidor MCP HTTP adicional; agentes locais continuam usando socket Unix interno. |
 | `--mcp-port N` | Porta HTTP MCP; padrão `9090`. |
 | `--mcp-host HOST` | Host HTTP MCP; padrão `127.0.0.1`. |
-| `--mcp-token-env VAR` | Variável com token MCP fixo; padrão `QUIMERA_MCP_TOKEN`. |
 | `--mcp-http-allow-tools CSV` | Allowlist de tools para MCP HTTP externo (padrão: read). |
 
 ## Exemplos

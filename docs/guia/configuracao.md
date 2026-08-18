@@ -24,7 +24,7 @@ Temas disponíveis na CLI incluem `panel`, `chat`, `rule`, `minimal`, `card` e `
 | Variável | Uso |
 |---|---|
 | `OPENAI_API_KEY` | Chave padrão para conexões OpenAI-compatible. |
-| `QUIMERA_MCP_TOKEN` | Token fixo para clientes MCP externos quando usado com `--mcp-token-env`. |
+| `QUIMERA_MCP_TOKEN` | Token opcional do entrypoint MCP socket standalone; não autentica o MCP HTTP. |
 | `QUIMERA_MAX_STDERR_LINES` | Ajusta limite de linhas de stderr exibidas em resumo. |
 | `SHELL` | Shell usado por ferramentas de comando quando não especificado. |
 
@@ -60,9 +60,8 @@ Para investigação detalhada:
 quimera --agents claude codex gemini --visibility full --debug
 ```
 
-Para ambiente com cliente MCP externo:
+Para ambiente com cliente MCP HTTP externo:
 
 ```bash
-export QUIMERA_MCP_TOKEN='token-local-forte'
-quimera --mcp-http --mcp-token-env QUIMERA_MCP_TOKEN
+quimera --mcp-http
 ```

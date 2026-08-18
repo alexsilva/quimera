@@ -12,10 +12,10 @@ Implementa o conjunto de RFCs exigido pela especificação MCP de autorização:
 * RFC 8707 — Resource Indicators (``resource`` audience binding).
 * RFC 9728 — Protected Resource Metadata + ``WWW-Authenticate``.
 
-O provider é intencionalmente auto-contido: tokens são opacos, guardados em
-memória, e apenas clients registrados dinamicamente e refresh tokens são
+O provider é intencionalmente auto-contido: tokens são opacos; clients
+registrados dinamicamente, access tokens ainda válidos e refresh tokens são
 persistidos em disco (JSON atômico). Sem ``QUIMERA_MCP_OAUTH_STORE_KEY`` o
-arquivo fica em texto claro (``client_secret`` e refresh tokens legíveis;
+arquivo fica em texto claro (``client_secret`` e tokens legíveis;
 protegido só por permissões ``0600``). Com a chave definida, o payload é
 criptografado com Fernet (pacote opcional ``cryptography``).
 
@@ -24,9 +24,8 @@ Uso mínimo::
     provider = OAuthProvider(OAuthConfig(enabled=True))
     httpd = MCP_HTTPServer(mcp, oauth=provider)
 
-O esquema legado de token estático em header (``Authorization: Bearer <token>``
-ou ``X-Quimera-MCP-Token``) continua válido em paralelo — ver
-``MCP_HTTPServer._authenticate``.
+No transporte HTTP, ``Authorization: Bearer`` carrega exclusivamente access
+tokens OAuth. O token de autenticação do transporte socket é independente.
 """
 from __future__ import annotations
 
@@ -363,8 +362,8 @@ class OAuthConfig:
     """Configuração declarativa do Authorization Server embutido.
 
     Attributes:
-        enabled: Liga o fluxo OAuth. Quando ``False``, apenas o token estático
-            de header é aceito.
+        enabled: Liga o fluxo OAuth. O bootstrap do MCP HTTP externo sempre o
+            habilita; ``False`` existe para construção isolada/testes.
         issuer: URL pública do issuer. Vazio ⇒ derivada da requisição (suporta
             túneis como ngrok/cloudflared via ``X-Forwarded-*``).
         clients: Clients estáticos pré-registrados.
@@ -1418,8 +1417,8 @@ def build_provider_from_cli(
     """Constrói o provider a partir de flags de CLI, com fallback no ambiente.
 
     Args:
-        enabled: Liga o OAuth (``--mcp-oauth``). Se ``False``, o ambiente ainda
-            pode habilitá-lo via ``QUIMERA_MCP_OAUTH=1``.
+        enabled: Liga o provider OAuth. O MCP HTTP da aplicação passa ``True``
+            incondicionalmente.
         issuer: URL pública do issuer (necessária atrás de túnel/proxy).
         client_specs: Clients estáticos ``id[:secret]``.
         redirect_uris: Redirects permitidos aos clients estáticos.

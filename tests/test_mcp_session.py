@@ -1,6 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from quimera.runtime.mcp import EmbeddedMCPRuntime, start_embedded_mcp
 from quimera.runtime.mcp.http_server import DEFAULT_HTTP_READ_ONLY_TOOLS
@@ -64,7 +64,6 @@ def test_start_embedded_mcp_socket_usa_path_explicito(tmp_path):
             app,
             _workspace(tmp_path),
             socket_path="/tmp/custom.sock",
-            token_env="MY_TOKEN",
         )
 
     assert runtime.socket_path == "/tmp/custom.sock"
@@ -72,9 +71,8 @@ def test_start_embedded_mcp_socket_usa_path_explicito(tmp_path):
     assert app.socket_configs == [("/tmp/custom.sock", "internal-token")]
 
 
-def test_start_embedded_mcp_http_centraliza_startup_sem_substituir_socket(tmp_path, monkeypatch):
+def test_start_embedded_mcp_http_centraliza_startup_sem_substituir_socket(tmp_path):
     """Verifica que start embedded mcp http centraliza startup sem substituir socket."""
-    monkeypatch.setenv("QUIMERA_MCP_TOKEN", "http-token")
     app = _FakeApp()
 
     with patch("quimera.runtime.mcp.session.secrets.token_urlsafe", return_value="internal-token"), patch("quimera.runtime.mcp.session.MCPServer") as mcp_cls, patch(
@@ -93,14 +91,16 @@ def test_start_embedded_mcp_http_centraliza_startup_sem_substituir_socket(tmp_pa
     assert runtime.http_url == "http://0.0.0.0:9090/mcp"
     assert runtime.external_mcp_http_url == "http://0.0.0.0:9090/mcp"
     assert mcp_cls.call_count == 2
-    assert [call.kwargs["auth_token"] for call in mcp_cls.call_args_list] == ["internal-token", "http-token"]
+    assert [call.kwargs["auth_token"] for call in mcp_cls.call_args_list] == ["internal-token", None]
     http_cls.assert_called_once_with(
         mcp_cls.return_value,
         host="0.0.0.0",
         port=9090,
         allowed_tools=DEFAULT_HTTP_READ_ONLY_TOOLS,
-        oauth=None,
+        oauth=ANY,
     )
+    oauth = http_cls.call_args.kwargs["oauth"]
+    assert oauth.enabled is True
     http_cls.return_value.start_background.assert_called_once_with()
     assert app.socket_configs == [(runtime.socket_path, "internal-token")]
     assert app.http_configs == []

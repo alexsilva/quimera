@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import secrets
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -32,7 +31,6 @@ class EmbeddedMCPRuntime:
     external_mcp_server: MCPServer | None = None
     external_mcp_http_server: MCP_HTTPServer | None = None
     external_mcp_http_url: str | None = None
-    external_mcp_token: str | None = None
     external_mcp_allowed_tools: frozenset[str] | None = None
     external_mcp_oauth: OAuthProvider | None = None
     transport: MCPTransport | None = None
@@ -48,11 +46,6 @@ def _prompt_session_state(app: Any) -> dict | None:
     prompt_builder = getattr(app, "prompt_builder", None)
     session_state = getattr(prompt_builder, "session_state", None)
     return session_state if isinstance(session_state, dict) else None
-
-
-def _resolve_external_token(token_env: str | None) -> str:
-    env_name = token_env or ""
-    return (os.environ.get(env_name) or "").strip() or secrets.token_urlsafe(32)
 
 
 def _resolve_internal_token() -> str:
@@ -96,7 +89,6 @@ def _default_oauth_store_path(workspace: Any) -> Path | None:
 def build_oauth_provider(
     workspace: Any,
     *,
-    enabled: bool = False,
     issuer: str | None = None,
     client_specs: Iterable[str] | None = None,
     redirect_uris: Iterable[str] | None = None,
@@ -112,7 +104,7 @@ def build_oauth_provider(
     sessão sem exigir configuração.
     """
     return build_provider_from_cli(
-        enabled=enabled,
+        enabled=True,
         issuer=issuer,
         client_specs=client_specs,
         redirect_uris=redirect_uris,
@@ -132,7 +124,6 @@ def start_embedded_mcp(
     socket_path: str | None = None,
     http_host: str = "127.0.0.1",
     http_port: int = 9090,
-    token_env: str | None = "QUIMERA_MCP_TOKEN",
     http_allowed_tools: str | Iterable[str] | None = DEFAULT_HTTP_TOOL_PROFILE,
     external_http_enabled: bool = False,
     oauth: OAuthProvider | None = None,
@@ -144,9 +135,8 @@ def start_embedded_mcp(
     instância separada de ``MCPServer`` para clientes remotos, com allowlist
     aplicada somente nessa instância.
 
-    Quando *oauth* está habilitado, o transporte HTTP externo publica o
-    Authorization Server embutido; o token estático de header continua aceito em
-    paralelo, sem quebrar clientes já configurados.
+    O transporte HTTP externo usa OAuth exclusivamente. O token do socket interno
+    não é reutilizado nem aceito pelo HTTP.
     """
     session_state = _prompt_session_state(app)
 
@@ -189,14 +179,14 @@ def start_embedded_mcp(
     external_mcp_server = None
     external_mcp_http_server = None
     external_mcp_http_url = None
-    external_mcp_token = None
     external_mcp_allowed_tools = None
 
     if external_http_enabled:
-        external_mcp_token = _resolve_external_token(token_env)
+        if oauth is None:
+            oauth = build_oauth_provider(workspace)
         external_mcp_server = MCPServer(
             app.tool_executor,
-            auth_token=external_mcp_token,
+            auth_token=None,
             agent_run_sink=agent_run_sink,
         )
         external_mcp_allowed_tools = parse_http_allowed_tools(http_allowed_tools)
@@ -236,7 +226,6 @@ def start_embedded_mcp(
         external_mcp_server=external_mcp_server,
         external_mcp_http_server=external_mcp_http_server,
         external_mcp_http_url=external_mcp_http_url,
-        external_mcp_token=external_mcp_token,
         external_mcp_allowed_tools=external_mcp_allowed_tools,
         external_mcp_oauth=(
             external_mcp_http_server.oauth if external_mcp_http_server is not None else None
