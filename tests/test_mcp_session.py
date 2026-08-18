@@ -99,6 +99,7 @@ def test_start_embedded_mcp_http_centraliza_startup_sem_substituir_socket(tmp_pa
         host="0.0.0.0",
         port=9090,
         allowed_tools=DEFAULT_HTTP_READ_ONLY_TOOLS,
+        oauth=None,
     )
     http_cls.return_value.start_background.assert_called_once_with()
     assert app.socket_configs == [(runtime.socket_path, "internal-token")]

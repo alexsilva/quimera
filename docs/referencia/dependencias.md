@@ -19,11 +19,21 @@ A CLI valida essas dependências base na inicialização e encerra antes de subi
 | Extra | Pacotes | Uso |
 |---|---|---|
 | `docs` | `mkdocs>=1.6` | Build e servidor local desta documentação. |
+| `browser` | `playwright>=1.50` | Ferramentas `browser_*` (Chrome/Chromium). |
+| `oauth-store` | `cryptography>=42` | Criptografia Fernet do store OAuth (`QUIMERA_MCP_OAUTH_STORE_KEY`). |
 
 Instalação para desenvolvimento da documentação:
 
 ```bash
 pip install -e ".[docs]"
+```
+
+Para criptografar o store OAuth em disco:
+
+```bash
+pip install -e ".[oauth-store]"
+# ou apenas: pip install cryptography
+export QUIMERA_MCP_OAUTH_STORE_KEY='passphrase-longa-e-secreta'
 ```
 
 ## Dependências externas não Python

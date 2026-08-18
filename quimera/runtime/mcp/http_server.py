@@ -1,18 +1,36 @@
 """MCP HTTP+SSE Server: expõe o MCPServer via HTTP com Server-Sent Events.
 
-Endpoints:
+Endpoints MCP:
   GET  /sse             — estabelece conexão SSE, recebe eventos MCP
   POST /message         — envia mensagem JSON-RPC para o MCPServer
+  GET  /mcp             — stream SSE do transporte Streamable HTTP
+  POST /mcp             — mensagem JSON-RPC do transporte Streamable HTTP
   GET  /health          — healthcheck
+
+Endpoints OAuth (ativos apenas quando um ``OAuthProvider`` habilitado é passado):
+  GET  /.well-known/oauth-protected-resource[/mcp]  — RFC 9728
+  GET  /.well-known/oauth-authorization-server      — RFC 8414
+  GET  /oauth/authorize  — tela de consentimento
+  POST /oauth/authorize  — decisão do usuário
+  POST /oauth/token      — authorization_code / refresh_token / client_credentials
+  POST /oauth/register   — Dynamic Client Registration (RFC 7591)
+  POST /oauth/revoke     — RFC 7009
+  POST /oauth/introspect — RFC 7662
+
+Autenticação: token estático de header (``Authorization: Bearer`` ou
+``X-Quimera-MCP-Token``) e Bearer OAuth coexistem — qualquer um dos dois
+autoriza a requisição.
 
 Uso:
     executor = ToolExecutor(config, approval_handler)
     mcp = MCPServer(executor)
-    httpd = MCP_HTTPServer(mcp)
+    httpd = MCP_HTTPServer(mcp, oauth=OAuthConfig(enabled=True))
     httpd.serve_forever()
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import errno
 import json
 import logging
@@ -28,6 +46,13 @@ from io import StringIO
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from quimera.runtime.mcp.oauth import (
+    AuthContext,
+    OAuthConfig,
+    OAuthError,
+    OAuthProvider,
+    OAuthRedirectError,
+)
 from quimera.runtime.mcp.server import MCPServer
 
 _logger = logging.getLogger(__name__)
@@ -105,6 +130,23 @@ HTTP_TOOL_PROFILES: dict[str, frozenset[str] | None] = {
 
 DEFAULT_HTTP_READ_ONLY_TOOLS = HTTP_READ_TOOLS
 DEFAULT_HTTP_TOOL_PROFILE = "read"
+
+_OAUTH_PROTECTED_RESOURCE_PATHS = frozenset({
+    OAuthProvider.METADATA_PR_PATH,
+    f"{OAuthProvider.METADATA_PR_PATH}{OAuthProvider.RESOURCE_PATH}",
+})
+
+_OAUTH_AUTHORIZATION_SERVER_PATHS = frozenset({
+    OAuthProvider.METADATA_AS_PATH,
+    f"{OAuthProvider.METADATA_AS_PATH}{OAuthProvider.RESOURCE_PATH}",
+})
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Indica se *host* (com porta opcional) aponta para a máquina local."""
+    hostname = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    hostname = hostname.strip("[]").lower()
+    return hostname in ("127.0.0.1", "localhost", "::1", "")
 
 
 def _set_mcp_state(out: Any, state: dict) -> None:
@@ -185,10 +227,12 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             return self._handle_sse()
         if parsed.path == "/mcp":
             return self._handle_mcp_stream()
-        if parsed.path == "/.well-known/oauth-protected-resource/mcp":
+        if parsed.path in _OAUTH_PROTECTED_RESOURCE_PATHS:
             return self._handle_oauth_protected_resource()
-        if parsed.path == "/.well-known/oauth-authorization-server":
+        if parsed.path in _OAUTH_AUTHORIZATION_SERVER_PATHS:
             return self._handle_oauth_authorization_server()
+        if parsed.path == OAuthProvider.AUTHORIZE_PATH:
+            return self._handle_oauth_authorize_get(parsed)
         self.send_response(404)
         self._send_cors()
         self.end_headers()
@@ -199,6 +243,16 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             return self._handle_mcp_post()
         if parsed.path.startswith("/message"):
             return self._handle_message()
+        if parsed.path == OAuthProvider.AUTHORIZE_PATH:
+            return self._handle_oauth_authorize_post()
+        if parsed.path == OAuthProvider.TOKEN_PATH:
+            return self._handle_oauth_token()
+        if parsed.path == OAuthProvider.REGISTER_PATH:
+            return self._handle_oauth_register()
+        if parsed.path == OAuthProvider.REVOKE_PATH:
+            return self._handle_oauth_revoke()
+        if parsed.path == OAuthProvider.INTROSPECT_PATH:
+            return self._handle_oauth_introspect()
         self.send_response(404)
         self._send_cors()
         self.end_headers()
@@ -210,8 +264,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             self._send_cors()
             self.end_headers()
             return
-        if not self._is_authorized():
-            self._send_error_response(401, -32001, "Unauthorized")
+        if self._require_auth() is None:
             return
         mcp_server: MCP_HTTPServer = self.server.mcp_http_server
         session_id = self.headers.get("MCP-Session-Id")
@@ -257,64 +310,263 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
 
     def _base_url_from_request(self) -> str:
-        """Constrói a URL base a partir do cabeçalho Host da requisição."""
-        host = self.headers.get("Host", "").strip()
-        if host:
-            return f"http://{host}"
-        mcp_server: MCP_HTTPServer = self.server.mcp_http_server
-        return f"http://{mcp_server.host}:{mcp_server.port}"
+        """Constrói a URL base pública da requisição.
+
+        Respeita ``X-Forwarded-Proto``/``X-Forwarded-Host`` para que o fluxo
+        OAuth funcione atrás de proxies e túneis (ngrok, cloudflared), onde o
+        issuer precisa ser a URL HTTPS externa e não o bind local.
+        """
+        forwarded_host = str(self.headers.get("X-Forwarded-Host") or "").split(",")[0].strip()
+        host = forwarded_host or str(self.headers.get("Host") or "").strip()
+        scheme = str(self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip()
+        if not host:
+            mcp_server: MCP_HTTPServer = self.server.mcp_http_server
+            return f"{scheme or 'http'}://{mcp_server.host}:{mcp_server.port}"
+        if not scheme:
+            scheme = "http" if _is_loopback_host(host) else "https"
+        return f"{scheme}://{host}"
 
     def _handle_oauth_protected_resource(self) -> None:
         """RFC 9728 — OAuth 2.0 Protected Resource Metadata.
 
-        Informa ao tunnel-client que este recurso MCP aceita Bearer tokens
-        pré-configurados via header. Não há fluxo OAuth/AS — omitimos
-        ``authorization_servers`` para evitar que clientes tentem auto-descoberta
-        de endpoints inexistentes.
+        Com OAuth habilitado, publica ``authorization_servers`` apontando para
+        este próprio processo, permitindo que o client MCP descubra o AS e
+        execute o fluxo completo. Sem OAuth, publica apenas
+        ``bearer_methods_supported`` para que clientes usem o token estático de
+        header sem tentar auto-descoberta de endpoints inexistentes.
         """
-        base = self._base_url_from_request()
-        metadata = {
-            "resource": f"{base}/mcp",
-            "bearer_methods_supported": ["header"],
-        }
-        body_bytes = json.dumps(metadata).encode("utf-8")
-        self.send_response(200)
-        self._send_cors()
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body_bytes)))
-        self.end_headers()
-        self.wfile.write(body_bytes)
+        mcp_server: MCP_HTTPServer = self.server.mcp_http_server
+        metadata = mcp_server.oauth.protected_resource_metadata(self._base_url_from_request())
+        self._send_json(200, metadata)
 
     def _handle_oauth_authorization_server(self) -> None:
-        """RFC 8414 — OAuth 2.0 Authorization Server Metadata (mínimo).
+        """RFC 8414 — OAuth 2.0 Authorization Server Metadata.
 
-        O Quimera usa Bearer tokens pré-configurados — não há fluxo OAuth.
-        Publicamos apenas ``issuer`` para compatibilidade com clientes que
-        consultam este endpoint após RFC 9728, mas omitimos
-        ``authorization_endpoint``, ``token_endpoint`` e ``grant_types_supported``
-        para que clientes não tentem iniciar fluxos OAuth inexistentes.
+        Quando OAuth está desabilitado, publica apenas ``issuer`` e omite
+        ``authorization_endpoint``/``token_endpoint`` para que clientes não
+        tentem iniciar fluxos inexistentes (comportamento legado preservado).
         """
+        mcp_server: MCP_HTTPServer = self.server.mcp_http_server
         base = self._base_url_from_request()
-        metadata = {
-            "issuer": base,
-            "scopes_supported": [],
-        }
-        body_bytes = json.dumps(metadata).encode("utf-8")
-        self.send_response(200)
-        self._send_cors()
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body_bytes)))
-        self.end_headers()
-        self.wfile.write(body_bytes)
+        if not mcp_server.oauth.enabled:
+            self._send_json(200, {"issuer": mcp_server.oauth.issuer_for(base), "scopes_supported": []})
+            return
+        self._send_json(200, mcp_server.oauth.authorization_server_metadata(base))
+
+    # ------------------------------------------------------------------
+    # Endpoints OAuth
+    # ------------------------------------------------------------------
+
+    @property
+    def _oauth(self) -> OAuthProvider:
+        """Provider OAuth do servidor HTTP associado."""
+        return self.server.mcp_http_server.oauth
+
+    def _read_body(self, limit: int = _MAX_BODY_SIZE) -> bytes | None:
+        """Lê o corpo da requisição, respondendo 413 se exceder *limit*."""
+        try:
+            content_length = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            content_length = 0
+        if content_length > limit:
+            self._send_error_response(413, -32600, "Request body too large")
+            return None
+        return self.rfile.read(content_length) if content_length else b""
+
+    def _read_form(self) -> dict[str, list[str]] | None:
+        """Lê e parseia um corpo ``application/x-www-form-urlencoded``."""
+        raw = self._read_body()
+        if raw is None:
+            return None
+        return parse_qs(raw.decode("utf-8", errors="replace"), keep_blank_values=True)
+
+    def _basic_auth_credentials(self) -> tuple[str, str] | None:
+        """Extrai credenciais de ``Authorization: Basic`` do endpoint de token."""
+        header = str(self.headers.get("Authorization") or "").strip()
+        if not header.lower().startswith("basic "):
+            return None
+        try:
+            decoded = base64.b64decode(header[6:].strip(), validate=True).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            return None
+        client_id, _, client_secret = decoded.partition(":")
+        return client_id, client_secret
+
+    def _send_json(self, status: int, payload: dict, extra_headers: dict | None = None) -> None:
+        """Envia uma resposta JSON com CORS e ``Content-Length``."""
+        body_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        try:
+            self.send_response(status)
+            self._send_cors()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            for name, value in (extra_headers or {}).items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body_bytes)))
+            self.end_headers()
+            self.wfile.write(body_bytes)
+        except (BrokenPipeError, ConnectionResetError):
+            _logger.debug("MCP HTTP: client disconnected during JSON response")
+
+    def _send_html(self, status: int, markup: str) -> None:
+        """Envia uma página HTML (tela de consentimento OAuth)."""
+        body_bytes = markup.encode("utf-8")
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            # A tela de consentimento nunca deve ser embutida por terceiros
+            # (clickjacking) nem vazar a URL de autorização via Referer.
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Content-Length", str(len(body_bytes)))
+            self.end_headers()
+            self.wfile.write(body_bytes)
+        except (BrokenPipeError, ConnectionResetError):
+            _logger.debug("MCP HTTP: client disconnected during HTML response")
+
+    def _send_redirect(self, location: str) -> None:
+        """Envia um redirect 302 para *location*."""
+        try:
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError):
+            _logger.debug("MCP HTTP: client disconnected during redirect")
+
+    def _send_oauth_error(self, exc: OAuthError) -> None:
+        """Serializa um ``OAuthError`` como resposta JSON de erro OAuth."""
+        headers = {}
+        if exc.status == 401:
+            headers["WWW-Authenticate"] = 'Basic realm="quimera-mcp"'
+        self._send_json(exc.status, exc.to_dict(), extra_headers=headers)
+
+    def _handle_oauth_authorize_get(self, parsed: Any) -> None:
+        """``GET /oauth/authorize`` — valida o pedido e exibe o consentimento."""
+        if not self._oauth.enabled:
+            self._send_json(404, {"error": "invalid_request", "error_description": "OAuth desabilitado"})
+            return
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        try:
+            request = self._oauth.begin_authorization(params)
+        except OAuthRedirectError as exc:
+            self._send_redirect(
+                self._oauth.error_redirect(exc.redirect_uri, exc.state, exc.error, exc.description)
+            )
+            return
+        except OAuthError as exc:
+            self._send_oauth_error(exc)
+            return
+        if self._oauth.config.auto_approve and not self._oauth.config.passcode:
+            self._send_redirect(self._oauth.approve_authorization(request))
+            return
+        self._send_html(200, self._oauth.render_consent_page(request))
+
+    def _handle_oauth_authorize_post(self) -> None:
+        """``POST /oauth/authorize`` — aplica a decisão humana do consentimento."""
+        if not self._oauth.enabled:
+            self._send_json(404, {"error": "invalid_request", "error_description": "OAuth desabilitado"})
+            return
+        form = self._read_form()
+        if form is None:
+            return
+        request_id = (form.get("request_id") or [""])[0].strip()
+        try:
+            request = self._oauth.pending_request(request_id)
+        except OAuthError as exc:
+            self._send_oauth_error(exc)
+            return
+        decision = (form.get("decision") or [""])[0].strip()
+        if decision != "allow":
+            self._send_redirect(self._oauth.deny_authorization(request))
+            return
+        passcode = (form.get("passcode") or [""])[0]
+        if not self._oauth.check_passcode(passcode):
+            _logger.warning(
+                "MCP OAuth: passcode incorreto no consentimento client=%s", request.client_id
+            )
+            self._send_html(
+                401,
+                self._oauth.render_consent_page(request, error="Código de acesso incorreto."),
+            )
+            return
+        try:
+            self._send_redirect(self._oauth.approve_authorization(request))
+        except OAuthError as exc:
+            self._send_oauth_error(exc)
+
+    def _handle_oauth_token(self) -> None:
+        """``POST /oauth/token`` — emite tokens para os grants suportados."""
+        form = self._read_form()
+        if form is None:
+            return
+        try:
+            payload = self._oauth.issue_token(form, basic_auth=self._basic_auth_credentials())
+        except OAuthError as exc:
+            self._send_oauth_error(exc)
+            return
+        self._send_json(200, payload)
+
+    def _handle_oauth_register(self) -> None:
+        """``POST /oauth/register`` — Dynamic Client Registration (RFC 7591)."""
+        raw = self._read_body()
+        if raw is None:
+            return
+        try:
+            payload = json.loads(raw.decode("utf-8")) if raw else {}
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            self._send_json(400, {"error": "invalid_client_metadata", "error_description": str(exc)})
+            return
+        if not isinstance(payload, dict):
+            self._send_json(
+                400,
+                {"error": "invalid_client_metadata", "error_description": "corpo deve ser objeto JSON"},
+            )
+            return
+        try:
+            client = self._oauth.register_client(payload)
+        except OAuthError as exc:
+            self._send_json(exc.status, exc.to_dict())
+            return
+        self._send_json(201, client.registration_response())
+
+    def _handle_oauth_revoke(self) -> None:
+        """``POST /oauth/revoke`` — revogação de token (RFC 7009)."""
+        form = self._read_form()
+        if form is None:
+            return
+        try:
+            self._oauth.revoke(form, basic_auth=self._basic_auth_credentials())
+        except OAuthError as exc:
+            self._send_oauth_error(exc)
+            return
+        self._send_json(200, {})
+
+    def _handle_oauth_introspect(self) -> None:
+        """``POST /oauth/introspect`` — introspecção de token (RFC 7662)."""
+        form = self._read_form()
+        if form is None:
+            return
+        try:
+            payload = self._oauth.introspect(form, basic_auth=self._basic_auth_credentials())
+        except OAuthError as exc:
+            self._send_oauth_error(exc)
+            return
+        self._send_json(200, payload)
 
     # ------------------------------------------------------------------
     # GET /sse
     # ------------------------------------------------------------------
 
-    def _handle_sse(self) -> None:
-        if not self._is_authorized():
-            self._send_error_response(401, -32001, "Unauthorized")
-            return
+    def _handle_sse(self, auth: AuthContext | None = None) -> None:
+        if auth is None:
+            auth = self._require_auth()
+            if auth is None:
+                return
         session_id = str(uuid.uuid4())
         sse_queue: queue.Queue = queue.Queue()
 
@@ -331,6 +583,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             "http_delegate_auto_approve": mcp_server._http_profile in ("agent", "all"),
         }
         self._apply_quimera_run_headers(mcp_server._http_sessions[session_id])
+        self._apply_auth_context(mcp_server._http_sessions[session_id], auth)
 
         try:
             self.send_response(200)
@@ -374,24 +627,102 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
     # POST /message
     # ------------------------------------------------------------------
 
-    def _is_authorized(self) -> bool:
-        token = (getattr(self.server.mcp_http_server._mcp, "_auth_token", None) or "").strip()
-        if not token:
-            return True
-        auth = self.headers.get("Authorization", "")
-        x_token = self.headers.get("X-Quimera-MCP-Token", "")
-        return auth == f"Bearer {token}" or x_token == token
+    def _bearer_token(self) -> str:
+        """Extrai o Bearer token do header ``Authorization``, se presente."""
+        header = str(self.headers.get("Authorization") or "").strip()
+        if header[:7].lower() == "bearer ":
+            return header[7:].strip()
+        return ""
+
+    def _authenticate(self) -> AuthContext:
+        """Autentica a requisição por token estático de header ou Bearer OAuth.
+
+        Os dois esquemas coexistem: o token estático (``Authorization: Bearer
+        <token>`` ou ``X-Quimera-MCP-Token``) continua válido, e qualquer Bearer
+        que não corresponda a ele é validado contra o Authorization Server
+        embutido. Quando nenhum dos dois está configurado, o acesso é liberado
+        (bind loopback de desenvolvimento).
+        """
+        oauth = self._oauth
+        static_token = (
+            getattr(self.server.mcp_http_server._mcp, "_auth_token", None) or ""
+        ).strip()
+        bearer = self._bearer_token()
+        header_token = str(self.headers.get("X-Quimera-MCP-Token") or "").strip()
+        if static_token and (
+            secrets.compare_digest(bearer, static_token)
+            or secrets.compare_digest(header_token, static_token)
+        ):
+            return AuthContext(authenticated=True, mode="static_token")
+        if oauth.enabled and bearer:
+            return oauth.authenticate_bearer(bearer)
+        if not static_token and not oauth.enabled:
+            return AuthContext(authenticated=True, mode="anonymous")
+        if oauth.enabled and not static_token:
+            return AuthContext(
+                authenticated=False,
+                mode="oauth",
+                error="invalid_request",
+                error_description="Bearer token OAuth ausente",
+            )
+        return AuthContext(authenticated=False, mode="static_token", error="invalid_token")
+
+    def _require_auth(self) -> AuthContext | None:
+        """Aplica a autenticação, respondendo 401 quando ela falha.
+
+        Returns:
+            O ``AuthContext`` autenticado, ou ``None`` se a resposta 401 já foi
+            enviada (o chamador deve retornar imediatamente).
+        """
+        auth = self._authenticate()
+        if auth.authenticated:
+            return auth
+        self._send_unauthorized(auth)
+        return None
+
+    def _send_unauthorized(self, auth: AuthContext) -> None:
+        """Responde 401 com ``WWW-Authenticate`` apontando ao metadata RFC 9728."""
+        challenge = self._oauth.www_authenticate(
+            self._base_url_from_request(),
+            error=auth.error,
+            description=auth.error_description,
+        )
+        error_resp = {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32001, "message": auth.error_description or "Unauthorized"},
+        }
+        self._send_json(401, error_resp, extra_headers={"WWW-Authenticate": challenge})
+
+    def _apply_auth_context(self, state: dict, auth: AuthContext) -> None:
+        """Registra a identidade autenticada e o escopo efetivo na sessão MCP."""
+        state["auth_mode"] = auth.mode
+        if auth.client_id:
+            state["oauth_client_id"] = auth.client_id
+        if auth.scope:
+            state["oauth_scope"] = auth.scope
+        mcp_server: MCP_HTTPServer = self.server.mcp_http_server
+        if not auth.tool_profile:
+            return
+        state["http_profile"] = auth.tool_profile
+        state["http_delegate_auto_approve"] = auth.tool_profile in ("agent", "all")
+        disabled = mcp_server.disabled_tools_for_profile(auth.tool_profile)
+        if disabled:
+            existing = state.get("quimera_disabled_tools") or ()
+            if isinstance(existing, str):
+                existing = tuple(part.strip() for part in existing.split(",") if part.strip())
+            state["quimera_disabled_tools"] = tuple(sorted(set(existing) | set(disabled)))
 
     def _handle_mcp_stream(self) -> None:
-        if not self._is_authorized():
-            self._send_error_response(401, -32001, "Unauthorized")
+        auth = self._require_auth()
+        if auth is None:
             return
         # Streamable HTTP GET: keep a server-to-client SSE stream for a session.
-        return self._handle_sse()
+        return self._handle_sse(auth)
 
     def _handle_mcp_post(self) -> None:
-        if not self._is_authorized():
-            self._send_error_response(401, -32001, "Unauthorized")
+        auth = self._require_auth()
+        if auth is None:
             return
         proto = self.headers.get("MCP-Protocol-Version")
         content_length = int(self.headers.get("Content-Length", 0))
@@ -450,6 +781,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
                 "http_delegate_auto_approve": mcp_server._http_profile in ("agent", "all"),
             }
         self._apply_quimera_run_headers(state)
+        self._apply_auth_context(state, auth)
         out = StringIO()
         _set_mcp_state(out, state)
         try:
@@ -477,8 +809,8 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             _logger.debug("MCP HTTP: client disconnected during /mcp response")
 
     def _handle_message(self) -> None:
-        if not self._is_authorized():
-            self._send_error_response(401, -32001, "Unauthorized")
+        auth = self._require_auth()
+        if auth is None:
             return
         content_length = int(self.headers.get("Content-Length", 0))
         if content_length > _MAX_BODY_SIZE:
@@ -535,6 +867,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         state["http_profile"] = mcp_server._http_profile
         state["http_delegate_auto_approve"] = mcp_server._http_profile in ("agent", "all")
         self._apply_quimera_run_headers(state)
+        self._apply_auth_context(state, auth)
         _set_mcp_state(out, state)
 
         try:
@@ -621,10 +954,12 @@ class MCP_HTTPServer:
         port: int | None = None,
         allowed_tools: Iterable[str] | None = DEFAULT_HTTP_READ_ONLY_TOOLS,
         cors_origins: str | Iterable[str] | None = None,
+        oauth: OAuthProvider | OAuthConfig | None = None,
     ) -> None:
         self._mcp = mcp_server
         self._mcp.set_allowed_tools(allowed_tools)
         self._http_profile = self._profile_name_for_allowed_tools(allowed_tools)
+        self._oauth = self._resolve_oauth(oauth)
         self._cors_origins = self._normalize_cors_origins(cors_origins)
         self._host = host or os.environ.get(
             _QUIMERA_MCP_HTTP_HOST, _DEFAULT_HOST
@@ -645,6 +980,46 @@ class MCP_HTTPServer:
         self._startup_lock = threading.Lock()
         self._startup_abandoned = threading.Event()
 
+
+    @staticmethod
+    def _resolve_oauth(oauth: OAuthProvider | OAuthConfig | None) -> OAuthProvider:
+        """Normaliza o argumento ``oauth`` para um ``OAuthProvider``.
+
+        ``None`` produz um provider desabilitado, mantendo apenas o esquema de
+        token estático em header.
+        """
+        if isinstance(oauth, OAuthProvider):
+            return oauth
+        if isinstance(oauth, OAuthConfig):
+            return OAuthProvider(oauth)
+        return OAuthProvider(OAuthConfig())
+
+    @property
+    def oauth(self) -> OAuthProvider:
+        """Authorization Server embutido (desabilitado quando não configurado)."""
+        return self._oauth
+
+    def disabled_tools_for_profile(self, profile: str) -> frozenset[str]:
+        """Tools a bloquear quando o escopo do token restringe o perfil do transporte.
+
+        Args:
+            profile: Nome do perfil derivado do escopo OAuth concedido.
+
+        Returns:
+            Conjunto de tools publicadas pelo transporte que ficam fora do
+            perfil do token; vazio quando o escopo não restringe nada.
+        """
+        scope_tools = HTTP_TOOL_PROFILES.get(profile)
+        if scope_tools is None:
+            return frozenset()
+        server_tools = self.allowed_tools
+        if server_tools is None:
+            try:
+                server_tools = frozenset(self._mcp._executor.registry.names())
+            except Exception:
+                _logger.debug("MCP OAuth: registry indisponível para restringir perfil %r", profile)
+                return frozenset()
+        return frozenset(server_tools - scope_tools)
 
     @staticmethod
     def _profile_name_for_allowed_tools(allowed_tools: Iterable[str] | None) -> str:
@@ -791,6 +1166,7 @@ def create_server(
     port: int | None = None,
     allowed_tools: Iterable[str] | None = DEFAULT_HTTP_READ_ONLY_TOOLS,
     cors_origins: str | Iterable[str] | None = None,
+    oauth: OAuthProvider | OAuthConfig | None = None,
 ) -> MCP_HTTPServer:
     """Cria uma instância de MCP_HTTPServer sem iniciá-la.
 
@@ -802,6 +1178,8 @@ def create_server(
             publica apenas tools de leitura; use ``None`` para expor todas.
         cors_origins: Origens CORS permitidas. Quando omitido, lê
             ``QUIMERA_MCP_HTTP_CORS_ORIGINS`` e usa ``*`` como padrão de desenvolvimento.
+        oauth: ``OAuthProvider`` ou ``OAuthConfig`` do Authorization Server
+            embutido. ``None`` mantém apenas o token estático de header.
 
     Returns:
         MCP_HTTPServer configurado mas não iniciado.
@@ -812,4 +1190,5 @@ def create_server(
         port=port,
         allowed_tools=allowed_tools,
         cors_origins=cors_origins,
+        oauth=oauth,
     )

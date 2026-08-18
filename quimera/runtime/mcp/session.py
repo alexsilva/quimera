@@ -6,6 +6,7 @@ import os
 import secrets
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from quimera.runtime.mcp.http_server import (
@@ -14,6 +15,7 @@ from quimera.runtime.mcp.http_server import (
     HTTP_TOOL_PROFILES,
     MCP_HTTPServer,
 )
+from quimera.runtime.mcp.oauth import OAuthProvider, build_provider_from_cli
 from quimera.runtime.mcp.server import MCPServer
 
 MCPTransport = Literal["socket", "http"]
@@ -32,6 +34,7 @@ class EmbeddedMCPRuntime:
     external_mcp_http_url: str | None = None
     external_mcp_token: str | None = None
     external_mcp_allowed_tools: frozenset[str] | None = None
+    external_mcp_oauth: OAuthProvider | None = None
     transport: MCPTransport | None = None
     token: str | None = None
     mcp_server: MCPServer | None = None
@@ -84,6 +87,42 @@ def _default_socket_path(workspace: Any) -> str:
     return str(workspace.tmp.root / f"mcp-{rand_suffix}.sock")
 
 
+def _default_oauth_store_path(workspace: Any) -> Path | None:
+    """Arquivo de persistência OAuth do workspace (clients dinâmicos e refresh)."""
+    state_dir = getattr(workspace, "state_dir", None)
+    return Path(state_dir) / "mcp_oauth.json" if state_dir else None
+
+
+def build_oauth_provider(
+    workspace: Any,
+    *,
+    enabled: bool = False,
+    issuer: str | None = None,
+    client_specs: Iterable[str] | None = None,
+    redirect_uris: Iterable[str] | None = None,
+    passcode_env: str | None = None,
+    auto_approve: bool | None = None,
+    allow_dynamic_registration: bool | None = None,
+    store_path: str | None = None,
+) -> OAuthProvider:
+    """Constrói o ``OAuthProvider`` do MCP HTTP externo para este workspace.
+
+    O store padrão fica em ``<workspace>/state/mcp_oauth.json``, de modo que
+    clients registrados dinamicamente e refresh tokens sobrevivam a reinícios da
+    sessão sem exigir configuração.
+    """
+    return build_provider_from_cli(
+        enabled=enabled,
+        issuer=issuer,
+        client_specs=client_specs,
+        redirect_uris=redirect_uris,
+        passcode_env=passcode_env,
+        auto_approve=auto_approve,
+        allow_dynamic_registration=allow_dynamic_registration,
+        store_path=store_path or _default_oauth_store_path(workspace),
+    )
+
+
 def start_embedded_mcp(
     app: Any,
     workspace: Any,
@@ -96,6 +135,7 @@ def start_embedded_mcp(
     token_env: str | None = "QUIMERA_MCP_TOKEN",
     http_allowed_tools: str | Iterable[str] | None = DEFAULT_HTTP_TOOL_PROFILE,
     external_http_enabled: bool = False,
+    oauth: OAuthProvider | None = None,
 ) -> EmbeddedMCPRuntime:
     """Inicia o MCP interno obrigatório e, opcionalmente, o MCP HTTP externo.
 
@@ -103,6 +143,10 @@ def start_embedded_mcp(
     todas as ferramentas registradas no ``ToolExecutor``. O HTTP externo é uma
     instância separada de ``MCPServer`` para clientes remotos, com allowlist
     aplicada somente nessa instância.
+
+    Quando *oauth* está habilitado, o transporte HTTP externo publica o
+    Authorization Server embutido; o token estático de header continua aceito em
+    paralelo, sem quebrar clientes já configurados.
     """
     session_state = _prompt_session_state(app)
 
@@ -117,6 +161,7 @@ def start_embedded_mcp(
             session_state["mcp_http_url"] = ""
             session_state["mcp_internal_socket_path"] = ""
             session_state["mcp_external_http_url"] = ""
+            session_state["mcp_external_oauth_enabled"] = False
         setattr(app, "mcp_socket_path", None)
         setattr(app, "mcp_http_url", None)
         setattr(app, "internal_mcp_socket_path", None)
@@ -160,6 +205,7 @@ def start_embedded_mcp(
             host=http_host,
             port=http_port,
             allowed_tools=external_mcp_allowed_tools,
+            oauth=oauth,
         )
         external_mcp_http_server.start_background()
         external_mcp_http_url = f"http://{http_host}:{http_port}/mcp"
@@ -171,12 +217,16 @@ def start_embedded_mcp(
         setattr(app, "mcp_http_url", None)
         setattr(app, "external_mcp_http_url", None)
 
+    oauth_enabled = bool(
+        external_mcp_http_server is not None and external_mcp_http_server.oauth.enabled
+    )
     if isinstance(session_state, dict):
         session_state["mcp_enabled"] = True
         session_state["mcp_socket_path"] = resolved_socket_path
         session_state["mcp_http_url"] = external_mcp_http_url or ""
         session_state["mcp_internal_socket_path"] = resolved_socket_path
         session_state["mcp_external_http_url"] = external_mcp_http_url or ""
+        session_state["mcp_external_oauth_enabled"] = oauth_enabled
 
     return EmbeddedMCPRuntime(
         enabled=True,
@@ -188,6 +238,9 @@ def start_embedded_mcp(
         external_mcp_http_url=external_mcp_http_url,
         external_mcp_token=external_mcp_token,
         external_mcp_allowed_tools=external_mcp_allowed_tools,
+        external_mcp_oauth=(
+            external_mcp_http_server.oauth if external_mcp_http_server is not None else None
+        ),
         transport="socket",
         token=internal_mcp_token,
         mcp_server=internal_mcp_server,

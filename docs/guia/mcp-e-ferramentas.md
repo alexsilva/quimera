@@ -14,6 +14,8 @@ Transportes suportados:
 
 Quando há token de sessão, clientes socket enviam uma primeira linha JSON com `quimera_auth_token`. No HTTP, o token pode ser enviado como Bearer token. A variável padrão para token fixo é `QUIMERA_MCP_TOKEN`, customizável com `--mcp-token-env`.
 
+O transporte HTTP aceita **dois esquemas simultâneos**: o token estático de header (acima) e OAuth 2.1 (ver [OAuth 2.1 no MCP HTTP](#oauth-21-no-mcp-http)). Qualquer um dos dois autoriza a requisição, então habilitar OAuth não quebra clientes já configurados com token fixo.
+
 ## Métodos MCP principais
 
 O servidor implementa, entre outros:
@@ -80,20 +82,133 @@ A ferramenta `delegate` permite que um agente delegue uma tarefa a outro agente 
 
 Cada delegação executa em um `AgentClient` isolado criado por chamada (dispatch de background), com cancel_event próprio: o agente delegado nunca interfere na execução ativa do agente que delegou, e delegações concorrentes não corrompem estado uma da outra. Cancelar o fluxo principal (ESC/Ctrl+C) também cancela as delegações em andamento. O client isolado herda o comportamento de pausa de idle timeout durante tools longas e o supervisor de processos da sessão, garantindo que subprocessos delegados sejam encerrados no shutdown.
 
-## ChatGPT Secure MCP Tunnel via HTTP
+## OAuth 2.1 no MCP HTTP
 
-O Quimera expõe dois endpoints de discovery padrão para compatibilidade com clientes OAuth-aware como o `tunnel-client` da OpenAI.
+O Quimera embute um Authorization Server completo no próprio servidor MCP HTTP. Nenhum serviço externo nem banco é necessário. A dependência Python `cryptography` só é exigida se você optar por criptografar o arquivo de persistência do store (ver [Persistência do store](#persistencia-do-store)).
 
-### Endpoints de discovery
+### Ligar em um comando
+
+```bash
+quimera --mcp-http --mcp-oauth
+```
+
+Isso é suficiente para um cliente MCP OAuth-aware (Claude, Cursor, ChatGPT tunnel-client) conectar sozinho: ele descobre o servidor por RFC 9728, registra-se dinamicamente por RFC 7591, abre a tela de consentimento no navegador e recebe o token. Não há `client_id` para copiar nem arquivo para editar.
+
+### Endpoints
 
 | Endpoint | RFC | Descrição |
 |---|---|---|
-| `GET /.well-known/oauth-protected-resource/mcp` | RFC 9728 | Declara que `/mcp` é um recurso protegido. |
-| `GET /.well-known/oauth-authorization-server` | RFC 8414 | Metadados mínimos do servidor (apenas `issuer` e `scopes_supported`). |
+| `GET /.well-known/oauth-protected-resource[/mcp]` | RFC 9728 | Declara `/mcp` como recurso protegido e aponta o Authorization Server. |
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 | Metadados do AS: endpoints, grants, escopos e PKCE. |
+| `GET /oauth/authorize` | RFC 6749 | Tela de consentimento (HTML autocontido). |
+| `POST /oauth/authorize` | — | Decisão do usuário (autorizar/negar). |
+| `POST /oauth/token` | RFC 6749 | `authorization_code`, `refresh_token`, `client_credentials`. |
+| `POST /oauth/register` | RFC 7591 | Registro dinâmico de clients. |
+| `POST /oauth/revoke` | RFC 7009 | Revogação de access/refresh token. |
+| `POST /oauth/introspect` | RFC 7662 | Introspecção restrita ao client autenticado. |
 
-> **Atenção:** esses endpoints existem apenas para discovery/compatibilidade. O Quimera **não implementa** fluxo OAuth completo — não há `authorization_endpoint`, `token_endpoint` nem code-flow. A autenticação real é sempre via Bearer token pré-configurado.
+Os dois endpoints de discovery são **públicos** (não exigem `Authorization`) e não expõem tokens ou segredos. Os demais operam somente com `--mcp-oauth`; sem a flag, retornam `404` e o discovery volta ao formato legado (só `issuer`), preservando o comportamento anterior.
 
-Esses endpoints são **públicos** (não exigem `Authorization`) e não expõem tokens, segredos ou dados internos.
+Requisições não autenticadas em `/mcp` respondem `401` com `WWW-Authenticate` contendo `resource_metadata`, que é o gatilho da auto-descoberta do cliente.
+
+### Garantias do fluxo
+
+- **PKCE `S256` obrigatório** — `plain` só é aceito se `require_pkce=False`.
+- **Código de uso único**, com TTL de 5 minutos.
+- **Refresh token rotativo**: o anterior é invalidado a cada renovação e não pode ampliar o escopo original.
+- **Redirect URI** validado por igualdade exata; portas efêmeras de loopback são aceitas (RFC 8252). `http://` só é permitido em loopback.
+- **Audience binding** via parâmetro `resource` (RFC 8707).
+- Access tokens são opacos e ficam **somente em memória** (somem no restart). Clients dinâmicos e refresh tokens são persistidos em disco e sobrevivem a reinícios — ver [Persistência do store](#persistencia-do-store).
+
+### Escopos e perfis de ferramentas
+
+O escopo concedido pode **restringir** o perfil de tools abaixo do configurado em `--mcp-http-allow-tools` (nunca ampliá-lo):
+
+| Escopo | Efeito |
+|---|---|
+| `mcp` | Herda o perfil configurado no servidor (padrão). |
+| `mcp:read-local` | Leitura local, sem acesso à rede. |
+| `mcp:read` | Leitura local + `web_search`/`web_fetch`. |
+| `mcp:agent` | Leitura, `replace_text`, git e `delegate`. |
+| `mcp:all` | Todas as tools publicadas pelo transporte. |
+
+As tools fora do escopo desaparecem de `tools/list` e são recusadas em `tools/call`.
+
+### Opções de configuração
+
+| Flag | Variável de ambiente | Efeito |
+|---|---|---|
+| `--mcp-oauth` | `QUIMERA_MCP_OAUTH=1` | Habilita o Authorization Server. |
+| `--mcp-oauth-issuer URL` | `QUIMERA_MCP_OAUTH_ISSUER` | URL pública do issuer (necessária atrás de proxy/túnel). |
+| `--mcp-oauth-client ID[:SECRET]` | `QUIMERA_MCP_OAUTH_CLIENTS` | Client estático; com `SECRET` habilita `client_credentials`. |
+| `--mcp-oauth-redirect-uri URI` | `QUIMERA_MCP_OAUTH_REDIRECT_URIS` | Redirects permitidos aos clients estáticos. |
+| `--mcp-oauth-passcode-env VAR` | `QUIMERA_MCP_OAUTH_PASSCODE` | Código exigido na tela de consentimento. |
+| `--mcp-oauth-auto-approve` | `QUIMERA_MCP_OAUTH_AUTO_APPROVE=1` | Dispensa o consentimento (só desenvolvimento local). |
+| `--mcp-oauth-no-register` | `QUIMERA_MCP_OAUTH_ALLOW_REGISTER=0` | Desliga RFC 7591; exige clients estáticos. |
+| `--mcp-oauth-store PATH` | `QUIMERA_MCP_OAUTH_STORE` | Arquivo JSON de clients/refresh tokens. |
+| — | `QUIMERA_MCP_OAUTH_STORE_KEY` | Passphrase para criptografar o store em disco (Fernet). |
+| — | `QUIMERA_MCP_OAUTH_ACCESS_TTL` | TTL do access token (padrão `3600`). |
+| — | `QUIMERA_MCP_OAUTH_REFRESH_TTL` | TTL do refresh token (padrão 30 dias). |
+
+Flags têm precedência sobre o ambiente. `--mcp-oauth-passcode-env` aponta por padrão para `QUIMERA_MCP_OAUTH_PASSCODE`: se a variável estiver definida, o consentimento passa a exigir o código; caso contrário, basta clicar em **Autorizar**. Um passcode configurado tem precedência sobre `--mcp-oauth-auto-approve`.
+
+### Persistência do store
+
+O Authorization Server grava em disco **apenas** clients registrados dinamicamente e refresh tokens. Access tokens e códigos de autorização ficam só em memória e são perdidos no restart (o client recupera o acesso com o refresh token, se ainda for válido).
+
+| Aspecto | Comportamento |
+|---|---|
+| Caminho padrão | `<workspace>/state/mcp_oauth.json` (ou `--mcp-oauth-store` / `QUIMERA_MCP_OAUTH_STORE`) |
+| Permissões | `0600` após cada gravação atômica |
+| Sem `QUIMERA_MCP_OAUTH_STORE_KEY` | JSON em **texto claro**: `client_secret` de clients dinâmicos e valores de refresh tokens são legíveis no arquivo |
+| Com `QUIMERA_MCP_OAUTH_STORE_KEY` | Payload criptografado com Fernet (prefixo `quimera-oauth-fernet:v1:`); a chave é derivada da passphrase via PBKDF2-SHA256 |
+| Dependência | Extra opcional `oauth-store` (`cryptography>=42`). Sem o pacote, a chave é ignorada e o store permanece em claro, com warning no log |
+| Store cifrado sem a chave correta | Load vazio (não quebra o servidor; clients/refresh precisam ser recriados) |
+| Migração | Arquivo antigo em claro continua legível; na próxima gravação com a chave definida ele é regravado já criptografado |
+
+**Uso recomendado** quando o workspace pode ser copiado, sincronizado ou acessado por outros usuários do host:
+
+```bash
+pip install 'quimera[oauth-store]'   # ou: pip install cryptography
+export QUIMERA_MCP_OAUTH_STORE_KEY='passphrase-longa-e-secreta'
+quimera --mcp-http --mcp-oauth
+```
+
+Em uso estritamente local (loopback, disco privado, um único operador), o modo em claro com `0600` costuma ser suficiente. Em qualquer exposição além da máquina local, combine store cifrado com passcode de consentimento e, se possível, `--mcp-oauth-no-register`.
+
+### Exposição pública com túnel
+
+Atrás de proxy, o issuer precisa ser a URL HTTPS externa. Duas formas:
+
+```bash
+# 1. Explícita (recomendada)
+quimera --mcp-http --mcp-oauth --mcp-oauth-issuer https://quimera.exemplo.dev
+
+# 2. Automática, se o proxy enviar X-Forwarded-Proto e X-Forwarded-Host
+quimera --mcp-http --mcp-oauth
+```
+
+Com exposição pública, defina também `QUIMERA_MCP_OAUTH_PASSCODE` — sem ele, qualquer um que alcance a tela de consentimento pode conceder acesso ao workspace.
+
+### Acesso máquina-a-máquina
+
+Para scripts e CI, um client confidencial substitui o token fixo por tokens de vida curta:
+
+```bash
+quimera --mcp-http --mcp-oauth --mcp-oauth-client ci-runner:$CI_SECRET
+
+curl -s -X POST http://127.0.0.1:9090/oauth/token \
+  -d grant_type=client_credentials \
+  -d client_id=ci-runner \
+  -d client_secret="$CI_SECRET" \
+  -d scope=mcp:read-local
+```
+
+O `access_token` retornado vai em `Authorization: Bearer <token>` nas chamadas a `/mcp`.
+
+## ChatGPT Secure MCP Tunnel via HTTP
+
+Clientes OAuth-aware como o `tunnel-client` da OpenAI funcionam de duas formas: com o fluxo OAuth completo (`--mcp-oauth`, acima) ou apenas com discovery + Bearer token pré-configurado, descrito abaixo.
 
 ### Configuração do servidor HTTP
 
@@ -125,8 +240,10 @@ curl http://127.0.0.1:9095/health
 
 ### Autenticação
 
-O Quimera usa tokens Bearer pré-configurados. Configure antes de iniciar o servidor:
+Sem `--mcp-oauth`, o Quimera usa tokens Bearer pré-configurados. Configure antes de iniciar o servidor:
 
 - Defina `QUIMERA_MCP_TOKEN` (ou use `--mcp-token-env`) com um token forte.
 - Inclua `Authorization: Bearer <token>` em todas as requisições MCP.
 - O header alternativo `X-Quimera-MCP-Token: <token>` também é aceito.
+
+Esse esquema continua válido mesmo com `--mcp-oauth` ativo — os dois coexistem.

@@ -6,7 +6,7 @@ import sys
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -1055,7 +1055,10 @@ def test_main_mcp_http_adds_external_http_without_replacing_internal_socket(monk
         host="127.0.0.1",
         port=9090,
         allowed_tools=DEFAULT_HTTP_READ_ONLY_TOOLS,
+        oauth=ANY,
     )
+    # Sem --mcp-oauth, o provider é construído mas permanece desabilitado.
+    assert mock_http_cls.call_args.kwargs["oauth"].enabled is False
     mock_http.start_background.assert_called_once_with()
     assert _FakeApp.last_instance.mcp_socket_calls == [called_path]
     assert _FakeApp.last_instance.mcp_http_calls == []

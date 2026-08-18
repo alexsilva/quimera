@@ -25,7 +25,7 @@ from . import themes as _themes
 from .app import QuimeraApp
 from .ui.textual import TextualUiBridge, run_textual_quimera_app
 from .app.simple_input_gate import SimpleInputGate
-from .runtime.mcp import start_embedded_mcp
+from .runtime.mcp import build_oauth_provider, start_embedded_mcp
 from .runtime.mcp.client import start_mcp_clients
 from .config import ConfigManager
 from .workspace import Workspace
@@ -411,6 +411,73 @@ def main():
         help="Allowlist de tools para MCP HTTP externo: read-local (sem rede), read (padrão), agent, all ou lista CSV de nomes.",
     )
     parser.add_argument(
+        "--mcp-oauth",
+        dest="mcp_oauth",
+        action="store_true",
+        default=False,
+        help=(
+            "Habilita o Authorization Server OAuth 2.1 no MCP HTTP externo "
+            "(PKCE + registro dinâmico de clients). O token de header continua válido."
+        ),
+    )
+    parser.add_argument(
+        "--mcp-oauth-issuer",
+        dest="mcp_oauth_issuer",
+        default=None,
+        metavar="URL",
+        help="URL pública do issuer OAuth; obrigatória atrás de proxy/túnel (ex: https://x.ngrok.app).",
+    )
+    parser.add_argument(
+        "--mcp-oauth-client",
+        dest="mcp_oauth_clients",
+        action="append",
+        default=None,
+        metavar="ID[:SECRET]",
+        help=(
+            "Registra um client OAuth estático. Com SECRET o client também aceita "
+            "client_credentials (token rotativo máquina-a-máquina). Pode ser repetido."
+        ),
+    )
+    parser.add_argument(
+        "--mcp-oauth-redirect-uri",
+        dest="mcp_oauth_redirect_uris",
+        action="append",
+        default=None,
+        metavar="URI",
+        help="Redirect URI permitido aos clients estáticos de --mcp-oauth-client. Pode ser repetido.",
+    )
+    parser.add_argument(
+        "--mcp-oauth-passcode-env",
+        dest="mcp_oauth_passcode_env",
+        default="QUIMERA_MCP_OAUTH_PASSCODE",
+        metavar="VAR",
+        help=(
+            "Variável de ambiente com o código exigido na tela de consentimento "
+            "(padrão: QUIMERA_MCP_OAUTH_PASSCODE). Ausente ⇒ consentimento sem código."
+        ),
+    )
+    parser.add_argument(
+        "--mcp-oauth-auto-approve",
+        dest="mcp_oauth_auto_approve",
+        action="store_true",
+        default=False,
+        help="Dispensa a tela de consentimento OAuth (apenas para desenvolvimento local).",
+    )
+    parser.add_argument(
+        "--mcp-oauth-no-register",
+        dest="mcp_oauth_allow_register",
+        action="store_false",
+        default=True,
+        help="Desabilita o registro dinâmico de clients (RFC 7591); exige --mcp-oauth-client.",
+    )
+    parser.add_argument(
+        "--mcp-oauth-store",
+        dest="mcp_oauth_store",
+        default=None,
+        metavar="PATH",
+        help="Arquivo JSON de clients/refresh tokens OAuth (padrão: <workspace>/state/mcp_oauth.json).",
+    )
+    parser.add_argument(
         "--mcp-client",
         dest="mcp_clients",
         action="append",
@@ -635,6 +702,17 @@ def main():
             token_env=args.mcp_token_env,
             http_allowed_tools=args.mcp_http_allow_tools,
             external_http_enabled=args.mcp_http,
+            oauth=build_oauth_provider(
+                workspace,
+                enabled=args.mcp_oauth,
+                issuer=args.mcp_oauth_issuer,
+                client_specs=args.mcp_oauth_clients,
+                redirect_uris=args.mcp_oauth_redirect_uris,
+                passcode_env=args.mcp_oauth_passcode_env,
+                auto_approve=args.mcp_oauth_auto_approve or None,
+                allow_dynamic_registration=None if args.mcp_oauth_allow_register else False,
+                store_path=args.mcp_oauth_store,
+            ),
         )
 
         _run_app_ui(app, textual_bridge, isatty)
