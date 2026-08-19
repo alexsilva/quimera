@@ -155,6 +155,63 @@ class WorkspaceMemoryStore:
             yield data
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
+
+    def delete(
+        self,
+        *,
+        namespace: str,
+        key: str | None = None,
+    ) -> dict[str, Any]:
+        """Remove uma chave ou um namespace inteiro."""
+        namespace = self._validate_token(namespace, field_name="namespace", max_len=_MAX_NAMESPACE_LEN)
+        normalized_key = None
+        if key is not None:
+            normalized_key = self._validate_token(key, field_name="key", max_len=_MAX_KEY_LEN)
+        now = _utc_now()
+        with self._exclusive_session() as data:
+            changed = self._prune_expired(data, now)
+            entries = data.setdefault("entries", {})
+            removed = 0
+            if normalized_key is None:
+                namespace_entries = entries.pop(namespace, None)
+                if isinstance(namespace_entries, dict):
+                    removed = len(namespace_entries)
+            else:
+                namespace_entries = entries.get(namespace)
+                if isinstance(namespace_entries, dict) and normalized_key in namespace_entries:
+                    namespace_entries.pop(normalized_key, None)
+                    removed = 1
+                    if not namespace_entries:
+                        entries.pop(namespace, None)
+            if removed or changed:
+                revision = int(data.get("revision", 0)) + 1
+                data["revision"] = revision
+                data["updated_at"] = _isoformat(now)
+                self._write_data(data)
+            else:
+                revision = int(data.get("revision", 0))
+        return {
+            "revision": revision,
+            "namespace": namespace,
+            "key": normalized_key,
+            "removed": removed,
+        }
+
+    def list_namespaces(self) -> dict[str, Any]:
+        """Lista namespaces ativos e contagem de chaves."""
+        now = _utc_now()
+        with self._exclusive_session() as data:
+            self._prune_expired(data, now)
+            entries = data.get("entries", {})
+            namespaces = []
+            if isinstance(entries, dict):
+                for name in sorted(entries.keys()):
+                    namespace_entries = entries.get(name)
+                    count = len(namespace_entries) if isinstance(namespace_entries, dict) else 0
+                    namespaces.append({"namespace": name, "keys": count})
+            revision = int(data.get("revision", 0))
+        return {"revision": revision, "namespaces": namespaces}
+
     def _read_data(self) -> dict[str, Any]:
         if not self._memory_file.exists():
             return {"revision": 0, "updated_at": None, "entries": {}}

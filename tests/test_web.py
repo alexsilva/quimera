@@ -7,7 +7,8 @@ import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.models import ToolCall
-from quimera.runtime.tools.web import WebTool
+from quimera.runtime.policy import ToolPolicyError
+from quimera.runtime.tools.web import WebTool, WebToolValidator
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +266,48 @@ def test_web_fetch_timeout_parameter(web_tool, mock_curl):
     assert result.ok is True
     called_timeout = mock_curl.call_args[1].get("timeout", 30)
     assert called_timeout == 15
+
+
+def test_http_request_rejects_url_without_host(web_tool):
+    validator = WebToolValidator(web_tool.config)
+    with pytest.raises(ToolPolicyError, match="URL http/https válida com host"):
+        validator.validate(ToolCall(name="http_request", arguments={"url": "https://"}))
+
+
+def test_http_request_rejects_non_global_resolved_address(web_tool):
+    with patch(
+        "quimera.runtime.tools.web.socket.getaddrinfo",
+        return_value=[(2, 1, 6, "", ("100.64.0.1", 443))],
+    ), patch("quimera.runtime.tools.web.subprocess.run") as run:
+        result = web_tool.http_request(
+            ToolCall(name="http_request", arguments={"url": "https://example.com"})
+        )
+
+    assert result.ok is False
+    assert "não público" in (result.error or "")
+    run.assert_not_called()
+
+
+def test_http_request_pins_validated_address_with_curl_resolve(web_tool):
+    completed = MagicMock(
+        stdout="HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nok",
+        stderr="",
+        returncode=0,
+    )
+    with patch(
+        "quimera.runtime.tools.web.socket.getaddrinfo",
+        return_value=[(2, 1, 6, "", ("93.184.216.34", 443))],
+    ), patch("quimera.runtime.tools.web.subprocess.run", return_value=completed) as run:
+        result = web_tool.http_request(
+            ToolCall(name="http_request", arguments={"url": "https://example.com/api"})
+        )
+
+    assert result.ok is True
+    args = run.call_args.args[0]
+    resolve_index = args.index("--resolve")
+    assert args[resolve_index + 1] == "example.com:443:93.184.216.34"
+    assert result.exit_code == 200
+    assert result.content == "ok"
 
 
 # ---------------------------------------------------------------------------

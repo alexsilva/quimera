@@ -117,10 +117,10 @@ def test_policy_shell_empty(shell_validator):
         shell_validator.validate(call)
 
 
-def test_policy_run_shell_command_alias(policy):
-    """Verifica que policy run shell command alias."""
-    call = ToolCall(name="run_shell_command", arguments={"command": "ls"})
-    policy.validate(call)
+def test_policy_run_shell_command_alias_removed(policy):
+    """Alias legado run_shell_command não deve mais existir na policy de mutação."""
+    assert "run_shell_command" not in policy._MUTATION_TOOLS
+    assert policy.requires_approval(ToolCall(name="run_shell_command", arguments={})) is False
 
 
 def test_policy_exec_command_empty(shell_validator):
@@ -204,7 +204,6 @@ def test_policy_requires_approval(policy):
     """Verifica que policy requires approval."""
     assert policy.requires_approval(ToolCall(name="write_file", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="apply_patch", arguments={})) is True
-    assert policy.requires_approval(ToolCall(name="run_shell_command", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="tasks", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="read_file", arguments={})) is False
 
@@ -495,6 +494,56 @@ def test_policy_memory_retrieve_rejects_invalid_tags(policy):
                 arguments={"tags": ["ok", ""]},
             )
         )
+
+
+def test_policy_update_shared_state_valid_payload_does_not_run_shell_validation(policy):
+    policy.validate(
+        ToolCall(name="update_shared_state", arguments={"updates": {"phase": "x"}})
+    )
+
+
+def test_policy_http_request_approval_depends_on_method(policy):
+    assert policy.requires_approval(
+        ToolCall(name="http_request", arguments={"url": "https://example.com", "method": "GET"})
+    ) is False
+    assert policy.requires_approval(
+        ToolCall(name="http_request", arguments={"url": "https://example.com", "method": "HEAD"})
+    ) is False
+    for method in ("POST", "PUT", "PATCH", "DELETE"):
+        assert policy.requires_approval(
+            ToolCall(name="http_request", arguments={"url": "https://example.com", "method": method})
+        ) is True
+
+
+def test_policy_memory_delete_requires_approval(policy):
+    assert policy.requires_approval(
+        ToolCall(name="memory_delete", arguments={"namespace": "workspace"})
+    ) is True
+
+
+def test_policy_update_shared_state_valid_payload_does_not_run_shell_validation(policy):
+    policy.validate(
+        ToolCall(name="update_shared_state", arguments={"updates": {"phase": "x"}})
+    )
+
+
+def test_policy_http_request_approval_depends_on_method(policy):
+    assert policy.requires_approval(
+        ToolCall(name="http_request", arguments={"url": "https://example.com", "method": "GET"})
+    ) is False
+    assert policy.requires_approval(
+        ToolCall(name="http_request", arguments={"url": "https://example.com", "method": "HEAD"})
+    ) is False
+    for method in ("POST", "PUT", "PATCH", "DELETE"):
+        assert policy.requires_approval(
+            ToolCall(name="http_request", arguments={"url": "https://example.com", "method": method})
+        ) is True
+
+
+def test_policy_memory_delete_requires_approval(policy):
+    assert policy.requires_approval(
+        ToolCall(name="memory_delete", arguments={"namespace": "workspace"})
+    ) is True
 
 
 def test_policy_write_stdin_valid(shell_validator):

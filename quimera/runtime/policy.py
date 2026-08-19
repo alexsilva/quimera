@@ -50,7 +50,6 @@ class ToolPolicy:
             "apply_patch",
             "remove_file",
             "run_shell",
-            "run_shell_command",  # alias legado
             "exec_command",
             "write_stdin",
             "poll_command_session",
@@ -70,6 +69,7 @@ class ToolPolicy:
             "browser_mouse",
             "browser_evaluate",
             "browser_screenshot",
+            "memory_delete",
         }
     )
 
@@ -141,6 +141,11 @@ class ToolPolicy:
         """Retorna True quando a tool requer aprovação humana antes de ser executada."""
         if call.name == "tasks":
             return self.config.require_approval_for_task_creation
+        if call.name == "http_request":
+            method = str(call.arguments.get("method", "GET")).strip().upper() or "GET"
+            if method in {"GET", "HEAD"}:
+                return False
+            return self.config.require_approval_for_mutations
         if call.name in self._MUTATION_TOOLS:
             return self.config.require_approval_for_mutations
         if call.name in self._external_mcp_tools:
@@ -206,17 +211,3 @@ class ToolPolicy:
             raise ToolPolicyError(
                 f"update_shared_state aceita no máximo {MAX_AGENT_UPDATE_KEYS} campos por chamada"
             )
-
-    def _validate_run_shell_command(self, call: ToolCall) -> None:
-        """Valida o alias legado `run_shell_command` com política mínima de shell."""
-        command = str(call.arguments.get("command", "")).strip()
-        if not command:
-            raise ToolPolicyError("run_shell_command requer um comando não vazio")
-        policy = self.config.workspace_policy
-        if policy is not None and policy.shell_allow_chaining:
-            return
-        for op in self._SHELL_CHAIN_OPERATORS:
-            if op in command:
-                raise ToolPolicyError(
-                    f"Comando bloqueado: operador de encadeamento proibido: '{op}'"
-                )

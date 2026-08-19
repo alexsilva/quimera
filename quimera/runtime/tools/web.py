@@ -61,7 +61,7 @@ def fetch_url_text(url: str, *, timeout: int = 30) -> str:
     return WebTool._strip_html(result.stdout)
 
 
-class WebTool(ToolBase, tool_prefix="web"):
+class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)):
     """Implementa `WebTool` — busca na web usando curl."""
     _MAX_URLS = 5
     _HTTP_SCHEME = "http://"
@@ -83,6 +83,109 @@ class WebTool(ToolBase, tool_prefix="web"):
         if not raw.startswith(self._URL_SCHEMES):
             raw = self._HTTPS_SCHEME + raw
         return raw
+
+
+    def http_request(self, call: ToolCall) -> ToolResult:
+        """Requisição HTTP genérica (GET/POST/PUT/PATCH/DELETE) com corpo e headers."""
+        try:
+            url, parsed, resolved_ip = self._resolve_public_http_target(
+                str(call.arguments.get("url", ""))
+            )
+        except ValueError as exc:
+            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
+        method_name = str(call.arguments.get("method", "GET")).strip().upper() or "GET"
+        if method_name not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
+            return ToolResult(ok=False, tool_name=call.name, error=f"método HTTP não suportado: {method_name}")
+        timeout = int(call.arguments.get("timeout", 30) or 30)
+        timeout = max(1, min(timeout, 120))
+        headers = call.arguments.get("headers") or {}
+        if not isinstance(headers, dict):
+            return ToolResult(ok=False, tool_name=call.name, error="headers deve ser um objeto")
+        body = call.arguments.get("body")
+        json_body = call.arguments.get("json")
+        args = [
+            "curl", "-sS", "-i", "--max-redirs", "0", "-m", str(timeout),
+            "-A", "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
+            "-X", method_name,
+        ]
+        host = parsed.hostname or ""
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        curl_ip = f"[{resolved_ip}]" if ":" in resolved_ip else resolved_ip
+        args.extend(["--resolve", f"{host}:{port}:{curl_ip}"])
+        for key, value in headers.items():
+            args.extend(["-H", f"{key}: {value}"])
+        if json_body is not None:
+            payload = json.dumps(json_body, ensure_ascii=False)
+            args.extend(["-H", "Content-Type: application/json", "-d", payload])
+        elif body is not None:
+            args.extend(["-d", str(body)])
+        args.append(url)
+        try:
+            result = subprocess.run(args, capture_output=True, text=True, timeout=timeout + 5)
+        except subprocess.TimeoutExpired:
+            return ToolResult(ok=False, tool_name=call.name, error=f"http_request excedeu timeout de {timeout}s")
+        raw = result.stdout or ""
+        header_text, _, body_text = raw.partition("\r\n\r\n")
+        if not body_text:
+            header_text, _, body_text = raw.partition("\n\n")
+        status_code = None
+        first = header_text.splitlines()[0] if header_text else ""
+        parts = first.split()
+        if len(parts) >= 2 and parts[1].isdigit():
+            status_code = int(parts[1])
+        max_chars = 50_000
+        truncated = len(body_text) > max_chars
+        visible = body_text[:max_chars]
+        payload = {
+            "url": url,
+            "method": method_name,
+            "status_code": status_code,
+            "headers": header_text,
+            "body": visible,
+            "truncated": truncated,
+            "curl_exit_code": result.returncode,
+        }
+        ok = result.returncode == 0 and status_code is not None and 200 <= status_code < 400
+        return ToolResult(
+            ok=ok,
+            tool_name=call.name,
+            content=visible if visible else (result.stderr or header_text),
+            exit_code=status_code,
+            truncated=truncated,
+            error=None if ok else (result.stderr or first or "http_request falhou"),
+            data=payload,
+        )
+
+    def _resolve_public_http_target(
+        self, raw_url: str
+    ) -> tuple[str, urllib.parse.ParseResult, str]:
+        """Valida URL pública e fixa um endereço já verificado para evitar DNS rebinding."""
+        url = self._resolve_url(raw_url)
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("http_request requer URL http/https válida com host")
+        try:
+            infos = socket.getaddrinfo(
+                parsed.hostname,
+                parsed.port or (443 if parsed.scheme == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
+        except OSError as exc:
+            raise ValueError(f"Falha ao resolver host: {parsed.hostname}") from exc
+        addresses: list[str] = []
+        for info in infos:
+            address = str(info[4][0])
+            if address not in addresses:
+                addresses.append(address)
+        if not addresses:
+            raise ValueError(f"Falha ao resolver host: {parsed.hostname}")
+        for address in addresses:
+            ip = ipaddress.ip_address(address)
+            if not ip.is_global:
+                raise ValueError(
+                    f"Acesso a IP não público não permitido (SSRF): {address}"
+                )
+        return url, parsed, addresses[0]
 
     def web_search(self, call: ToolCall) -> ToolResult:
         """Executa uma busca na web usando curl.
@@ -356,10 +459,34 @@ class WebToolValidator(ValidatableTool):
             return
         raise ToolPolicyError("web_fetch requer 'url' não vazia")
 
+    def _validate_http_request(self, call: ToolCall) -> None:
+        url = str(call.arguments.get("url", "")).strip()
+        if not url:
+            raise ToolPolicyError("http_request requer 'url'")
+        resolved = url if url.startswith(("http://", "https://")) else f"https://{url}"
+        parsed = urllib.parse.urlparse(resolved)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ToolPolicyError("http_request requer URL http/https válida com host")
+        method_name = str(call.arguments.get("method", "GET")).strip().upper() or "GET"
+        if method_name not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
+            raise ToolPolicyError(f"http_request.method inválido: {method_name}")
+        headers = call.arguments.get("headers")
+        if headers is not None and not isinstance(headers, dict):
+            raise ToolPolicyError("http_request.headers deve ser objeto")
+        if "timeout" in call.arguments:
+            try:
+                t = int(call.arguments["timeout"])
+            except (TypeError, ValueError) as exc:
+                raise ToolPolicyError("http_request.timeout deve ser inteiro positivo") from exc
+            if t <= 0:
+                raise ToolPolicyError("http_request.timeout deve ser inteiro positivo")
+
+
 
 _WEB_TOOL_NAMES = [
     "web_search",
     "web_fetch",
+    "http_request",
 ]
 
 

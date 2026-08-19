@@ -93,7 +93,6 @@ DEBATE_MODE = ExecutionMode(
         "apply_patch",
         "remove_file",
         "run_shell",
-        "run_shell_command",
         "exec_command",
         "poll_command_session",
         "write_stdin",

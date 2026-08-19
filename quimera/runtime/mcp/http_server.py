@@ -119,6 +119,7 @@ HTTP_READ_LOCAL_TOOLS = frozenset({
     "list_jobs",
     "get_job",
     "memory_retrieve",
+    "memory_list_namespaces",
     "todo_list",
     # Git read-only tools
     "git_status",
@@ -138,6 +139,8 @@ HTTP_AGENT_TOOLS = frozenset({
     *HTTP_READ_TOOLS,
     "replace_text",
     "memory_save",
+    "memory_delete",
+    "http_request",
     "delegate",
     "list_agents",
     "tasks",

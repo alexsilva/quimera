@@ -64,6 +64,30 @@ class MemoryTools(ToolBase, tool_prefix="memory"):
         }
         return ToolResult(ok=True, tool_name=call.name, content=str(payload), data=payload)
 
+
+    def memory_delete(self, call: ToolCall) -> ToolResult:
+        """Remove uma chave ou um namespace inteiro da memória."""
+        try:
+            store = self._get_store()
+            result = store.delete(
+                namespace=str(call.arguments.get("namespace", "")),
+                key=call.arguments.get("key"),
+            )
+        except (ValueError, RuntimeError) as exc:
+            return ToolResult(ok=False, tool_name=call.name, content="", error=str(exc))
+        payload = {"ok": True, **result}
+        return ToolResult(ok=True, tool_name=call.name, content=str(payload), data=payload)
+
+    def memory_list_namespaces(self, call: ToolCall) -> ToolResult:
+        """Lista namespaces ativos e quantidade de chaves."""
+        try:
+            store = self._get_store()
+            result = store.list_namespaces()
+        except (ValueError, RuntimeError) as exc:
+            return ToolResult(ok=False, tool_name=call.name, content="", error=str(exc))
+        payload = {"ok": True, **result}
+        return ToolResult(ok=True, tool_name=call.name, content=str(payload), data=payload)
+
     def _get_store(self) -> WorkspaceMemoryStore:
         """Retorna (criando se necessário) o store de memória do workspace."""
         memory_file = self.config.memory_file
@@ -157,6 +181,21 @@ class MemoryToolsValidator(ValidatableTool):
             if limit_int <= 0:
                 raise ToolPolicyError("memory_retrieve.limit deve ser inteiro positivo")
 
+
+    def _validate_memory_delete(self, call: ToolCall) -> None:
+        namespace = call.arguments.get("namespace")
+        if not isinstance(namespace, str) or not namespace.strip():
+            raise ToolPolicyError("memory_delete requer 'namespace' não vazio")
+        self._validate_memory_token(namespace, field_name="namespace")
+        key = call.arguments.get("key")
+        if key is not None:
+            if not isinstance(key, str) or not key.strip():
+                raise ToolPolicyError("memory_delete.key deve ser string não vazia")
+            self._validate_memory_token(key, field_name="key")
+
+    def _validate_memory_list_namespaces(self, call: ToolCall) -> None:
+        return
+
     def _validate_memory_token(self, value: str, *, field_name: str) -> None:
         """Valida que um token de memória não contém paths nem caracteres inválidos."""
         if value.startswith("/") or "/" in value or "\\" in value:
@@ -171,6 +210,8 @@ class MemoryToolsValidator(ValidatableTool):
 _MEMORY_TOOL_NAMES = [
     "memory_save",
     "memory_retrieve",
+    "memory_delete",
+    "memory_list_namespaces",
 ]
 
 

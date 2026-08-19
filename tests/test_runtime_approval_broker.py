@@ -181,6 +181,32 @@ def test_exec_command_approval_summary_does_not_duplicate_command(tmp_path):
     assert "flags: tty" in summary
 
 
+def test_http_request_risk_depends_on_method_and_mutations_prompt(tmp_path):
+    approval = MagicMock()
+    approval.approve.return_value = False
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
+
+    assert executor.approval_broker.classify(
+        ToolCall(name="http_request", arguments={"url": "https://example.com", "method": "GET"})
+    ) == RiskLevel.NETWORK
+    assert executor.approval_broker.classify(
+        ToolCall(name="http_request", arguments={"url": "https://example.com", "method": "POST"})
+    ) == RiskLevel.WRITE
+    assert executor.approval_broker.classify(
+        ToolCall(name="http_request", arguments={"url": "https://example.com", "method": "DELETE"})
+    ) == RiskLevel.DESTRUCTIVE
+    assert executor.would_require_approval(
+        ToolCall(name="http_request", arguments={"url": "https://example.com", "method": "DELETE"})
+    ) is True
+
+
+def test_memory_delete_is_destructive_and_requires_approval(tmp_path):
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    call = ToolCall(name="memory_delete", arguments={"namespace": "workspace"})
+    assert executor.approval_broker.classify(call) == RiskLevel.DESTRUCTIVE
+    assert executor.would_require_approval(call) is True
+
+
 def test_git_add_approval_summary_is_not_redundant(tmp_path):
     """Summary de approval deve evitar origem/tool repetidas para rota simples."""
     approval = MagicMock()

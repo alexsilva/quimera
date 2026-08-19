@@ -24,9 +24,36 @@ def test_shell_tool_run_basic(config):
         mock_run.return_value = MagicMock(stdout="hello\n", stderr="", returncode=0)
         result = tool.run_shell(call)
         assert result.ok is True
-        assert result.content == "stdout:\nhello\n"
+        assert "exit_code: 0" in result.content
+        assert "stdout:\nhello\n" in result.content
+        assert result.exit_code == 0
+        assert result.data["exit_code"] == 0
+        assert result.data["timed_out"] is False
+        assert "duration_ms" in result.data
         assert result.data["command"] == "echo hello"
         assert result.data["stdout"] == "hello\n"
+
+
+def test_run_shell_timeout_preserves_partial_bytes_and_nullable_exit_code(config):
+    tool = ShellTool(config)
+    timeout = shell_module.subprocess.TimeoutExpired(
+        cmd="slow",
+        timeout=0.1,
+        output=b"partial stdout\n",
+        stderr=b"partial stderr\n",
+    )
+    with patch("subprocess.run", side_effect=timeout):
+        result = tool.run_shell(
+            ToolCall(name="run_shell", arguments={"command": "slow", "timeout": 0.1})
+        )
+
+    assert result.ok is False
+    assert result.exit_code is None
+    assert result.truncated is False
+    assert result.data["stdout"] == "partial stdout\n"
+    assert result.data["stderr"] == "partial stderr\n"
+    assert result.data["timed_out"] is True
+    assert "partial stdout" in result.content
 
 
 def test_shell_tool_with_staging_warning(config):

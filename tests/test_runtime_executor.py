@@ -171,6 +171,40 @@ def test_executor_memory_retrieve_filters_by_prefix_and_tags(tmp_path):
     assert [entry["key"] for entry in retrieve.data["entries"]] == ["decision.api"]
 
 
+def test_executor_memory_list_namespaces_and_delete_roundtrip(tmp_path):
+    approval = MagicMock()
+    approval.approve.return_value = True
+    executor = ToolExecutor(
+        ToolRuntimeConfig(
+            workspace_root=tmp_path,
+            memory_file=tmp_path / "state" / "memory.json",
+        ),
+        approval,
+    )
+    executor.execute(
+        ToolCall(
+            name="memory_save",
+            arguments={"namespace": "workspace", "key": "summary", "value": "hello"},
+        )
+    )
+
+    listed = executor.execute(ToolCall(name="memory_list_namespaces", arguments={}))
+    deleted = executor.execute(
+        ToolCall(name="memory_delete", arguments={"namespace": "workspace", "key": "summary"})
+    )
+    retrieved = executor.execute(
+        ToolCall(name="memory_retrieve", arguments={"namespace": "workspace"})
+    )
+
+    assert listed.ok is True
+    assert listed.data["namespaces"] == [{"namespace": "workspace", "keys": 1}]
+    assert deleted.ok is True
+    assert deleted.data["removed"] == 1
+    assert retrieved.ok is True
+    assert retrieved.data["entries"] == []
+    approval.approve.assert_called_once()
+
+
 def test_task_executor_skips_review_claim_when_agent_is_not_operational(tmp_path):
     """Verifica que Test task executor skips review claim when agent is not operational."""
     repository = MagicMock()

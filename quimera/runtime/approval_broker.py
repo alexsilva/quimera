@@ -237,7 +237,7 @@ class ApprovalBroker:
         "browser_screenshot",
     })
     _SHELL_TOOLS = frozenset({
-        "run_shell", "run_shell_command", "exec_command", "poll_command_session",
+        "run_shell", "exec_command", "poll_command_session",
     })
     _DESTRUCTIVE_TOOLS = frozenset({"remove_file"})
     _PATH_TOOLS = frozenset({
@@ -267,6 +267,15 @@ class ApprovalBroker:
         """Classifica o nível de risco da ferramenta (delegate, destructive, shell, write, network ou read)."""
         if call.name == "delegate":
             return RiskLevel.DELEGATION
+        if call.name == "http_request":
+            method = str(call.arguments.get("method", "GET")).strip().upper() or "GET"
+            if method == "DELETE":
+                return RiskLevel.DESTRUCTIVE
+            if method in {"POST", "PUT", "PATCH"}:
+                return RiskLevel.WRITE
+            return RiskLevel.NETWORK
+        if call.name == "memory_delete":
+            return RiskLevel.DESTRUCTIVE
         if call.name in self._DESTRUCTIVE_TOOLS:
             return RiskLevel.DESTRUCTIVE
         if call.name in self._SHELL_TOOLS:
@@ -556,7 +565,7 @@ class ApprovalBroker:
         ]
 
     def _serialization_keys(self, call: ToolCall) -> list[str]:
-        if call.name in {"run_shell", "run_shell_command", "exec_command"}:
+        if call.name in {"run_shell", "exec_command"}:
             return [f"workspace:{self.config.workspace_root}"]
         if call.name in {"write_stdin", "poll_command_session", "close_command_session"}:
             session_id = call.arguments.get("session_id")
@@ -764,7 +773,7 @@ def _positive_int_or_none(value: Any) -> int | None:
 
 
 def _extract_command(call: ToolCall) -> str | None:
-    if call.name in {"run_shell", "run_shell_command"}:
+    if call.name in {"run_shell"}:
         return str(call.arguments.get("command", "")).strip() or None
     if call.name == "exec_command":
         return (

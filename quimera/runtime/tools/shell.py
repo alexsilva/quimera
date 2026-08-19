@@ -136,36 +136,103 @@ class ShellTool(ToolBase):
         command = str(call.arguments["command"])
         workdir = self._resolve_workdir(call.arguments.get("workdir"))
         command = self._rewrite_command_for_local_venv(command, workdir)
+        timeout_seconds = self._resolve_timeout_seconds(call.arguments.get("timeout"))
         started = time.perf_counter()
-        proc = subprocess.run(
-            command,
-            shell=True,
-            cwd=str(workdir),
-            capture_output=True,
-            text=True,
-            timeout=self.config.command_timeout_seconds,
-        )
+        try:
+            proc = subprocess.run(
+                command,
+                shell=True,
+                cwd=str(workdir),
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            stdout = self._coerce_timeout_stream(exc.stdout)
+            stderr = self._coerce_timeout_stream(exc.stderr)
+            visible_stdout = stdout[: self.config.max_output_chars]
+            visible_stderr = stderr[: self.config.max_output_chars]
+            payload = {
+                "command": command,
+                "cwd": str(workdir),
+                "stdout": visible_stdout,
+                "stderr": visible_stderr,
+                "stdout_chars": len(stdout),
+                "stderr_chars": len(stderr),
+                "max_output_chars": self.config.max_output_chars,
+                "exit_code": None,
+                "duration_ms": duration_ms,
+                "truncated": (
+                    len(stdout) > self.config.max_output_chars
+                    or len(stderr) > self.config.max_output_chars
+                ),
+                "timeout_seconds": timeout_seconds,
+                "timed_out": True,
+            }
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                content=self._format_shell_content(
+                    stdout=visible_stdout,
+                    stderr=visible_stderr,
+                    exit_code=None,
+                    duration_ms=duration_ms,
+                    truncated=(
+                        len(stdout) > self.config.max_output_chars
+                        or len(stderr) > self.config.max_output_chars
+                    ),
+                    cwd=str(workdir),
+                    timed_out=True,
+                    timeout_seconds=timeout_seconds,
+                ),
+                exit_code=None,
+                duration_ms=duration_ms,
+                truncated=(
+                    len(stdout) > self.config.max_output_chars
+                    or len(stderr) > self.config.max_output_chars
+                ),
+                error=f"comando excedeu timeout de {timeout_seconds}s",
+                data=payload,
+            )
         duration_ms = int((time.perf_counter() - started) * 1000)
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
         visible_stdout = stdout[: self.config.max_output_chars]
         visible_stderr = stderr[: self.config.max_output_chars]
+        truncated = len(stdout) > self.config.max_output_chars or len(stderr) > self.config.max_output_chars
         payload = {
             "command": command,
             "cwd": str(workdir),
             "stdout": visible_stdout,
             "stderr": visible_stderr,
+            "stdout_chars": len(stdout),
+            "stderr_chars": len(stderr),
+            "max_output_chars": self.config.max_output_chars,
+            "exit_code": proc.returncode,
+            "duration_ms": duration_ms,
+            "truncated": truncated,
+            "timeout_seconds": timeout_seconds,
+            "timed_out": False,
             "diff": self._build_output_diff(
                 visible_stdout,
                 visible_stderr,
                 completed=True,
             ),
         }
-        truncated = len(stdout) > self.config.max_output_chars or len(stderr) > self.config.max_output_chars
         return ToolResult(
             ok=proc.returncode == 0,
             tool_name=call.name,
-            content=self._format_shell_content(stdout=visible_stdout, stderr=visible_stderr),
+            content=self._format_shell_content(
+                stdout=visible_stdout,
+                stderr=visible_stderr,
+                exit_code=proc.returncode,
+                duration_ms=duration_ms,
+                truncated=truncated,
+                cwd=str(workdir),
+                timed_out=False,
+                timeout_seconds=timeout_seconds,
+            ),
             exit_code=proc.returncode,
             duration_ms=duration_ms,
             truncated=truncated,
@@ -328,6 +395,28 @@ class ShellTool(ToolBase):
             truncated=len(stdout) > self.config.max_output_chars or len(stderr) > self.config.max_output_chars,
             data=payload,
         )
+
+    def _resolve_timeout_seconds(self, raw_timeout: object) -> float:
+        """Resolve timeout por chamada, limitado ao máximo configurado."""
+        default = float(self.config.command_timeout_seconds)
+        if raw_timeout is None:
+            return default
+        try:
+            value = float(raw_timeout)
+        except (TypeError, ValueError) as exc:
+            raise ToolPolicyError("timeout deve ser número positivo (segundos)") from exc
+        if value <= 0:
+            raise ToolPolicyError("timeout deve ser número positivo (segundos)")
+        return min(value, default)
+
+    @staticmethod
+    def _coerce_timeout_stream(value: object) -> str:
+        """Normaliza stdout/stderr parciais de TimeoutExpired para texto."""
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
 
     def _resolve_workdir(self, raw_workdir: str | None) -> Path:
         """Resolve o diretório de trabalho do comando dentro da workspace."""
@@ -738,19 +827,36 @@ class ShellTool(ToolBase):
         stderr: str,
         session_id: int | None = None,
         status: str | None = None,
+        exit_code: int | None = None,
+        duration_ms: int | None = None,
+        truncated: bool | None = None,
+        cwd: str | None = None,
+        timed_out: bool | None = None,
+        timeout_seconds: float | None = None,
     ) -> str:
-        """Monta conteúdo textual enxuto para o modelo."""
+        """Monta conteúdo textual estruturado para o modelo."""
         parts: list[str] = []
         if session_id is not None:
             parts.append(f"session_id: {session_id}")
         if status:
             parts.append(f"status: {status}")
+        if cwd:
+            parts.append(f"cwd: {cwd}")
+        if exit_code is not None:
+            parts.append(f"exit_code: {exit_code}")
+        if duration_ms is not None:
+            parts.append(f"duration_ms: {duration_ms}")
+        if timeout_seconds is not None:
+            parts.append(f"timeout_seconds: {timeout_seconds}")
+        if timed_out:
+            parts.append("timed_out: true")
+        if truncated:
+            parts.append("truncated: true")
         if stdout:
-            parts.append(f"stdout:\n{stdout}")
+            parts.append("stdout:" + "\n" + stdout)
         if stderr:
-            parts.append(f"stderr:\n{stderr}")
+            parts.append("stderr:" + "\n" + stderr)
         return "\n\n".join(parts)
-
 
 class ShellToolValidator(ValidatableTool):
     """Validação de policy para as ferramentas shell."""
@@ -768,6 +874,13 @@ class ShellToolValidator(ValidatableTool):
         raw_workdir = call.arguments.get("workdir")
         if raw_workdir is not None:
             self._resolve_workspace_path(str(raw_workdir))
+        if "timeout" in call.arguments:
+            try:
+                value = float(call.arguments["timeout"])
+            except (TypeError, ValueError) as exc:
+                raise ToolPolicyError("run_shell.timeout deve ser número positivo") from exc
+            if value <= 0:
+                raise ToolPolicyError("run_shell.timeout deve ser número positivo")
 
     def _validate_exec_command(self, call: ToolCall) -> None:
         """Valida uma chamada interativa de execução de comando."""
