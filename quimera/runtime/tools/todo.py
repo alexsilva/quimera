@@ -188,11 +188,16 @@ class TodoToolsValidator(ValidatableTool):
         """todo_list não exige argumentos."""
 
 
+_TODO_TOOL_NAMES = [
+    "todo_write",
+    "todo_list",
+]
+
+
 def register(registry, policy, config) -> None:
     """Registra todas as tools de todo no registry e a validação na policy."""
     todo_tools = TodoTools(config)
     todo_validator = TodoToolsValidator(config)
-    tool_names = [name for name in dir(TodoTools) if name.startswith("todo_")]
-    for name in tool_names:
+    for name in _TODO_TOOL_NAMES:
         registry.register(name, getattr(todo_tools, name))
-    policy.register_tool_validator(tool_names, todo_validator)
+    policy.register_tool_validator(list(_TODO_TOOL_NAMES), todo_validator)

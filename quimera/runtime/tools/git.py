@@ -12,6 +12,18 @@ from .base import ToolBase, ValidatableTool
 _SAFE_REF_RE = re.compile(r'^[a-zA-Z0-9._\-/]+$')
 _SAFE_REMOTE_RE = re.compile(r'^[a-zA-Z0-9._\-]+$')
 
+_GIT_TOOL_NAMES = [
+    "git_status",
+    "git_log",
+    "git_diff",
+    "git_branch",
+    "git_fetch",
+    "git_add",
+    "git_commit",
+    "git_checkout",
+    "git_push",
+]
+
 
 class GitTool(ToolBase, tool_prefix="git"):
     """Operações git com output estruturado."""
@@ -468,7 +480,6 @@ def register(registry, policy, config) -> None:
     """Registra todas as tools git no registry e a validação na policy."""
     git_tool = GitTool(config)
     git_validator = GitToolValidator(config)
-    tool_names = [name for name in dir(GitTool) if name.startswith("git_")]
-    for name in tool_names:
+    for name in _GIT_TOOL_NAMES:
         registry.register(name, getattr(git_tool, name))
-    policy.register_tool_validator(tool_names, git_validator)
+    policy.register_tool_validator(list(_GIT_TOOL_NAMES), git_validator)

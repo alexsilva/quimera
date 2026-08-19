@@ -361,13 +361,13 @@ def test_policy_git_fetch_invalid_remote(policy):
 
 
 def test_policy_requires_approval_for_mutations(policy):
-    for name in ("git_add", "git_commit", "git_checkout", "git_push"):
+    for name in ("git_add", "git_commit", "git_checkout", "git_push", "git_fetch"):
         call = _call(name, message="m", branch="main", remote="origin")
         assert policy.requires_approval(call) == policy.config.require_approval_for_mutations
 
 
 def test_policy_no_approval_for_read_ops(policy):
-    for name in ("git_status", "git_log", "git_diff", "git_branch", "git_fetch"):
+    for name in ("git_status", "git_log", "git_diff", "git_branch"):
         call = _call(name)
         assert not policy.requires_approval(call)
 

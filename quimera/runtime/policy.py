@@ -41,6 +41,37 @@ class ToolPolicy:
 
     _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "|", "`", "$(")
     _POLICY_BYPASS_TOOLS: set[str] = set()
+    #: Tools que alteram o workspace, o sistema, o browser ou a rede de forma
+    #: irreversível/sensível e, portanto, passam por approval de mutação.
+    _MUTATION_TOOLS: frozenset[str] = frozenset(
+        {
+            "write_file",
+            "replace_text",
+            "apply_patch",
+            "remove_file",
+            "run_shell",
+            "run_shell_command",  # alias legado
+            "exec_command",
+            "write_stdin",
+            "poll_command_session",
+            "close_command_session",
+            "delegate",
+            "git_add",
+            "git_commit",
+            "git_checkout",
+            "git_push",
+            "git_fetch",
+            "browser_start",
+            "browser_close",
+            "browser_navigate",
+            "browser_click",
+            "browser_type",
+            "browser_press",
+            "browser_mouse",
+            "browser_evaluate",
+            "browser_screenshot",
+        }
+    )
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de ToolPolicy."""
@@ -99,29 +130,18 @@ class ToolPolicy:
 
     def requires_path_permission(self, call: ToolCall) -> bool:
         """Retorna True quando a tool precisa validar permissão de path."""
-        return call.name in {"read_file", "list_files", "grep_search", "remove_file"}
+        return call.name in {
+            "read_file",
+            "list_files",
+            "grep_search",
+            "remove_file",
+        }
 
     def requires_approval(self, call: ToolCall) -> bool:
         """Retorna True quando a tool requer aprovação humana antes de ser executada."""
         if call.name == "tasks":
             return self.config.require_approval_for_task_creation
-        if call.name in {
-            "write_file",
-            "apply_patch",
-            "run_shell",
-            "run_shell_command",
-            "exec_command",
-            "poll_command_session",
-            "close_command_session",
-            "remove_file",
-            "write_stdin",
-            "delegate",
-            "git_add",
-            "git_commit",
-            "git_checkout",
-            "git_push",
-            "browser_screenshot",
-        }:
+        if call.name in self._MUTATION_TOOLS:
             return self.config.require_approval_for_mutations
         if call.name in self._external_mcp_tools:
             return self.config.require_approval_for_mutations

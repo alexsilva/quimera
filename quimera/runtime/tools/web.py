@@ -357,11 +357,16 @@ class WebToolValidator(ValidatableTool):
         raise ToolPolicyError("web_fetch requer 'url' não vazia")
 
 
+_WEB_TOOL_NAMES = [
+    "web_search",
+    "web_fetch",
+]
+
+
 def register(registry, policy, config) -> None:
     """Registra todas as tools web no registry e a validação na policy."""
     web_tool = WebTool(config)
     web_validator = WebToolValidator(config)
-    tool_names = [name for name in dir(WebTool) if name.startswith("web_")]
-    for name in tool_names:
+    for name in _WEB_TOOL_NAMES:
         registry.register(name, getattr(web_tool, name))
-    policy.register_tool_validator(tool_names, web_validator)
+    policy.register_tool_validator(list(_WEB_TOOL_NAMES), web_validator)

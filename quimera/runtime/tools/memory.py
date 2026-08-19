@@ -168,11 +168,16 @@ class MemoryToolsValidator(ValidatableTool):
             )
 
 
+_MEMORY_TOOL_NAMES = [
+    "memory_save",
+    "memory_retrieve",
+]
+
+
 def register(registry, policy, config) -> None:
     """Registra todas as tools de memória no registry e a validação na policy."""
     memory_tools = MemoryTools(config)
     memory_validator = MemoryToolsValidator(config)
-    tool_names = [name for name in dir(MemoryTools) if name.startswith("memory_")]
-    for name in tool_names:
+    for name in _MEMORY_TOOL_NAMES:
         registry.register(name, getattr(memory_tools, name))
-    policy.register_tool_validator(tool_names, memory_validator)
+    policy.register_tool_validator(list(_MEMORY_TOOL_NAMES), memory_validator)

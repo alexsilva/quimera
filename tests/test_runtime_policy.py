@@ -387,24 +387,56 @@ def test_policy_check_path_permission_outside_for_remove_file(policy):
 
 def test_policy_requires_approval_for_all_mutational_tools(policy):
     """Todas as ferramentas mutacionais requerem aprovação."""
-    mutational = [
-        "write_file",
-        "apply_patch",
-        "run_shell",
-        "run_shell_command",
-        "exec_command",
-        "close_command_session",
-        "remove_file",
-        "write_stdin",
-    ]
+    mutational = sorted(policy._MUTATION_TOOLS)
     for tool_name in mutational:
         assert policy.requires_approval(ToolCall(name=tool_name, arguments={})) is True, \
             f"{tool_name} deveria requerer aprovação"
 
 
+def test_policy_requires_approval_for_replace_text_and_browser_mutators(policy):
+    """replace_text e ações de browser mutantes devem passar por approval."""
+    for tool_name in (
+        "replace_text",
+        "browser_close",
+        "browser_click",
+        "browser_type",
+        "browser_evaluate",
+        "browser_navigate",
+        "git_fetch",
+    ):
+        assert policy.requires_approval(ToolCall(name=tool_name, arguments={})) is True
+
+
+def test_write_tools_do_not_offer_external_path_permission(policy):
+    """Escritas externas são rejeitadas pelo handler e não devem sugerir grant de path."""
+    for tool_name in ("write_file", "replace_text"):
+        call = ToolCall(name=tool_name, arguments={"path": "../outside.txt"})
+        assert policy.requires_path_permission(call) is False
+        assert policy.check_path_permission(call) is None
+
+
 def test_policy_does_not_require_approval_for_read_tools(policy):
     """Ferramentas de leitura não requerem aprovação."""
-    readonly = ["read_file", "list_files", "grep_search", "list_tasks", "list_jobs", "get_job", "memory_save", "memory_retrieve", "todo_list"]
+    readonly = [
+        "read_file",
+        "list_files",
+        "grep_search",
+        "list_tasks",
+        "list_jobs",
+        "get_job",
+        "memory_save",
+        "memory_retrieve",
+        "todo_list",
+        "todo_write",
+        "web_search",
+        "web_fetch",
+        "git_status",
+        "browser_status",
+        "browser_snapshot",
+        "ask_user",
+        "update_shared_state",
+        "list_agents",
+    ]
     for tool_name in readonly:
         assert policy.requires_approval(ToolCall(name=tool_name, arguments={})) is False, \
             f"{tool_name} NÃO deveria requerer aprovação"
@@ -412,7 +444,13 @@ def test_policy_does_not_require_approval_for_read_tools(policy):
 
 def test_policy_check_path_permission_none_for_non_path_tools(policy):
     """check_path_permission retorna None para ferramentas que não operam em paths."""
-    non_path_tools = ["run_shell", "write_file", "apply_patch", "write_stdin"]
+    non_path_tools = [
+        "run_shell",
+        "write_file",
+        "replace_text",
+        "apply_patch",
+        "write_stdin",
+    ]
     for tool_name in non_path_tools:
         call = ToolCall(name=tool_name, arguments={})
         assert policy.check_path_permission(call) is None
