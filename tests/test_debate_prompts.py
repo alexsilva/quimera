@@ -38,7 +38,7 @@ def test_contribution_prompt_includes_context_in_snapshot():
     )
     snapshot = _snapshot(prompt)
     assert snapshot["context"] == "bug intermitente no feed"
-    assert "unverified claim" in prompt
+    assert "background supplied by the requester" in prompt
 
 
 def test_contribution_prompt_omits_empty_context():
@@ -52,7 +52,7 @@ def test_contribution_prompt_omits_empty_context():
     assert _snapshot(prompt)["context"] is None
 
 
-def test_contribution_prompt_shares_current_round_and_urges_independence():
+def test_contribution_prompt_shares_current_round_for_direct_reply():
     earlier = DebateContribution(
         debate_id="deb-1",
         round_index=1,
@@ -71,10 +71,10 @@ def test_contribution_prompt_shares_current_round_and_urges_independence():
     assert [item["agent"] for item in snapshot["current_round_contributions"]] == [
         "claude"
     ]
-    assert "Stay independent" in prompt
+    assert "Engage with those arguments" in prompt
 
 
-def test_contribution_prompt_suggests_read_only_without_quimera_tool_names():
+def test_contribution_prompt_makes_tools_optional_without_quimera_tool_names():
     prompt = build_contribution_prompt(
         _session(),
         round_index=1,
@@ -84,8 +84,8 @@ def test_contribution_prompt_suggests_read_only_without_quimera_tool_names():
     )
     assert "grep_search" not in prompt
     assert "web_fetch" not in prompt
-    assert "read-only investigation" in prompt
-    assert "whatever tools your environment provides" in prompt
+    assert "Tool use is optional" in prompt
+    assert "delay a useful response" in prompt
 
 
 def test_synthesis_prompt_includes_context_in_snapshot():
@@ -97,4 +97,4 @@ def test_synthesis_prompt_includes_context_in_snapshot():
     )
     snapshot = _snapshot(prompt)
     assert snapshot["context"] == "bug intermitente no feed"
-    assert "must not be cited as evidence" in prompt
+    assert "not to redo their investigation" in prompt

@@ -6,19 +6,14 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from pathlib import PurePosixPath
 from typing import Any, Iterable
-from urllib.parse import urlsplit
 
 
 MAX_DEBATE_RESPONSE_CHARS = 128_000
 MAX_DEBATE_TEXT_CHARS = 20_000
 MAX_DEBATE_LIST_ITEMS = 32
 MAX_DEBATE_WORK_ITEMS = 50
-MAX_DEBATE_EVIDENCE_ITEMS = 12
-MAX_DEBATE_EVIDENCE_LINE = 1_000_000
 _WORK_ITEM_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
-_EVIDENCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _TASK_TYPES = frozenset(
     {
         "architecture",
@@ -69,20 +64,6 @@ class DebateLimits:
 
 
 @dataclass(frozen=True, slots=True)
-class DebateEvidence:
-    id: str
-    source: str
-    line_start: int
-    line_end: int
-    excerpt: str
-    claim: str
-    kind: str = "file"
-
-    def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass(frozen=True, slots=True)
 class WorkItem:
     id: str
     title: str
@@ -92,7 +73,6 @@ class WorkItem:
     dependencies: tuple[str, ...] = ()
     acceptance_criteria: tuple[str, ...] = ()
     priority: str = "medium"
-    evidence_ids: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -111,8 +91,6 @@ class DebateContribution:
     vote: str = "abstain"
     critical_objection: bool = False
     work_items: tuple[WorkItem, ...] = ()
-    evidence: tuple[DebateEvidence, ...] = ()
-    evidence_ids: tuple[str, ...] = ()
     raw_response: str = field(default="", repr=False)
 
     def as_dict(self, *, include_raw: bool = False) -> dict[str, Any]:
@@ -138,9 +116,6 @@ class DebateContribution:
             for item in self.work_items:
                 owner = f" -> {item.assigned_to}" if item.assigned_to else ""
                 lines.append(f"- `{item.id}` {item.title}{owner}")
-        if self.evidence:
-            lines.extend(["", "**Evidencias verificadas**"])
-            lines.extend(_render_evidence(item) for item in self.evidence)
         vote = {
             "support": "apoio",
             "oppose": "oposicao",
@@ -164,8 +139,6 @@ class DebateSynthesis:
     confidence: float = 0.0
     consensus_reached: bool = False
     work_items: tuple[WorkItem, ...] = ()
-    evidence: tuple[DebateEvidence, ...] = ()
-    evidence_ids: tuple[str, ...] = ()
     raw_response: str = field(default="", repr=False)
 
     def as_dict(self, *, include_raw: bool = False) -> dict[str, Any]:
@@ -200,9 +173,6 @@ class DebateSynthesis:
             lines.extend(
                 ["", "**Dissensos**", *[f"- {item}" for item in dict.fromkeys(dissent)]]
             )
-        if self.evidence:
-            lines.extend(["", "**Evidencias verificadas**"])
-            lines.extend(_render_evidence(item) for item in self.evidence)
         if final:
             result = "consenso" if status == DebateStatus.CONVERGED else "sem consenso"
             lines.extend(
@@ -266,15 +236,9 @@ def contribution_from_response(
     agent: str,
 ) -> DebateContribution:
     payload = extract_json_object(response)
-    evidence = _evidence_items(payload.get("evidence"), required=True)
-    available_evidence = {item.id for item in evidence}
     position = _required_text(payload, "position")
     proposal = _text(payload.get("proposal"), field_name="proposal")
-    work_items = _work_items(
-        payload.get("work_items", ()),
-        available_evidence=available_evidence,
-        require_evidence=True,
-    )
+    work_items = _work_items(payload.get("work_items", ()))
     vote = _text(payload.get("vote") or "abstain", field_name="vote").lower()
     if vote not in {"support", "oppose", "abstain", "propose"}:
         raise DebateProtocolError(f"vote invalido: {vote}")
@@ -290,12 +254,6 @@ def contribution_from_response(
         vote=vote,
         critical_objection=_boolean(payload, "critical_objection", default=False),
         work_items=work_items,
-        evidence=evidence,
-        evidence_ids=_evidence_ids(
-            payload.get("evidence_ids"),
-            available_evidence=available_evidence,
-            required=True,
-        ),
         raw_response=str(response or ""),
     )
 
@@ -308,13 +266,7 @@ def synthesis_from_response(
     moderator: str,
 ) -> DebateSynthesis:
     payload = extract_json_object(response)
-    evidence = _evidence_items(payload.get("evidence"), required=True)
-    available_evidence = {item.id for item in evidence}
-    work_items = _work_items(
-        payload.get("work_items", ()),
-        available_evidence=available_evidence,
-        require_evidence=True,
-    )
+    work_items = _work_items(payload.get("work_items", ()))
     validate_work_items(work_items)
     return DebateSynthesis(
         debate_id=debate_id,
@@ -333,12 +285,6 @@ def synthesis_from_response(
         confidence=_confidence(payload.get("confidence"), required=True),
         consensus_reached=_boolean(payload, "consensus_reached"),
         work_items=work_items,
-        evidence=evidence,
-        evidence_ids=_evidence_ids(
-            payload.get("evidence_ids"),
-            available_evidence=available_evidence,
-            required=True,
-        ),
         raw_response=str(response or ""),
     )
 
@@ -379,8 +325,6 @@ def validate_work_items(items: Iterable[WorkItem]) -> None:
 def synthesis_from_dict(payload: dict[str, Any] | None) -> DebateSynthesis | None:
     if not payload:
         return None
-    evidence = _evidence_items(payload.get("evidence"), required=False)
-    available_evidence = {item.id for item in evidence}
     return DebateSynthesis(
         debate_id=_text(payload.get("debate_id"), field_name="debate_id"),
         round_index=int(payload.get("round_index") or 0),
@@ -397,17 +341,7 @@ def synthesis_from_dict(payload: dict[str, Any] | None) -> DebateSynthesis | Non
         ),
         confidence=_confidence(payload.get("confidence")),
         consensus_reached=_stored_bool(payload.get("consensus_reached", False)),
-        work_items=_work_items(
-            payload.get("work_items", ()),
-            available_evidence=available_evidence,
-            require_evidence=False,
-        ),
-        evidence=evidence,
-        evidence_ids=_evidence_ids(
-            payload.get("evidence_ids"),
-            available_evidence=available_evidence,
-            required=False,
-        ),
+        work_items=_work_items(payload.get("work_items", ())),
         raw_response=_text(
             payload.get("raw_response"),
             field_name="raw_response",
@@ -416,12 +350,7 @@ def synthesis_from_dict(payload: dict[str, Any] | None) -> DebateSynthesis | Non
     )
 
 
-def _work_items(
-    value: Any,
-    *,
-    available_evidence: set[str] | None = None,
-    require_evidence: bool = False,
-) -> tuple[WorkItem, ...]:
+def _work_items(value: Any) -> tuple[WorkItem, ...]:
     if value in (None, ""):
         return ()
     if not isinstance(value, (list, tuple)):
@@ -463,11 +392,6 @@ def _work_items(
             raise DebateProtocolError(
                 f"task_type invalido no work_item {item_id}: {task_type}"
             )
-        item_evidence_ids = _evidence_ids(
-            raw.get("evidence_ids"),
-            available_evidence=available_evidence or set(),
-            required=require_evidence,
-        )
         items.append(
             WorkItem(
                 id=item_id,
@@ -489,109 +413,9 @@ def _work_items(
                     field_name="work_item.acceptance_criteria",
                 ),
                 priority=priority,
-                evidence_ids=item_evidence_ids,
             )
         )
     return tuple(items)
-
-
-def _evidence_items(value: Any, *, required: bool) -> tuple[DebateEvidence, ...]:
-    if value in (None, ""):
-        if required:
-            raise DebateProtocolError("evidence deve conter ao menos uma evidencia")
-        return ()
-    if not isinstance(value, (list, tuple)):
-        raise DebateProtocolError("evidence deve ser uma lista")
-    if not value and required:
-        raise DebateProtocolError("evidence deve conter ao menos uma evidencia")
-    if len(value) > MAX_DEBATE_EVIDENCE_ITEMS:
-        raise DebateProtocolError(
-            f"evidence excede o limite de {MAX_DEBATE_EVIDENCE_ITEMS} itens"
-        )
-    result: list[DebateEvidence] = []
-    seen: set[str] = set()
-    for raw in value:
-        if not isinstance(raw, dict):
-            raise DebateProtocolError("cada evidence deve ser um objeto")
-        evidence_id = _required_text(raw, "id", max_chars=64)
-        if not _EVIDENCE_ID_RE.fullmatch(evidence_id):
-            raise DebateProtocolError(f"evidence possui id invalido: {evidence_id}")
-        if evidence_id in seen:
-            raise DebateProtocolError(f"evidence possui id duplicado: {evidence_id}")
-        seen.add(evidence_id)
-        source = _required_text(raw, "source", max_chars=500)
-        if source.startswith(("http://", "https://")):
-            parsed = urlsplit(source)
-            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                raise DebateProtocolError(
-                    f"evidence possui URL invalida: {source}"
-                )
-            kind = "web"
-            line_start = 0
-            line_end = 0
-        else:
-            source_path = PurePosixPath(source)
-            if source_path.is_absolute() or ".." in source_path.parts:
-                raise DebateProtocolError(f"evidence possui source inseguro: {source}")
-            kind = "file"
-            line_start = _positive_int(raw.get("line_start"), "evidence.line_start")
-            line_end = _positive_int(raw.get("line_end"), "evidence.line_end")
-            if line_end > MAX_DEBATE_EVIDENCE_LINE:
-                raise DebateProtocolError(
-                    f"evidence.line_end excede o limite de {MAX_DEBATE_EVIDENCE_LINE}"
-                )
-            if line_end < line_start:
-                raise DebateProtocolError("evidence.line_end deve ser >= line_start")
-            if line_end - line_start > 40:
-                raise DebateProtocolError(
-                    "evidence nao pode abranger mais de 41 linhas"
-                )
-        result.append(
-            DebateEvidence(
-                id=evidence_id,
-                source=source,
-                line_start=line_start,
-                line_end=line_end,
-                excerpt=_required_text(raw, "excerpt", max_chars=1_200),
-                claim=_required_text(raw, "claim", max_chars=1_200),
-                kind=kind,
-            )
-        )
-    return tuple(result)
-
-
-def _evidence_ids(
-    value: Any,
-    *,
-    available_evidence: set[str],
-    required: bool,
-) -> tuple[str, ...]:
-    ids = _text_items(value, field_name="evidence_ids")
-    if required and not ids:
-        raise DebateProtocolError("evidence_ids deve referenciar ao menos uma evidencia")
-    unknown = sorted(set(ids) - available_evidence)
-    if unknown:
-        raise DebateProtocolError(
-            "evidence_ids contem referencias desconhecidas: " + ", ".join(unknown)
-        )
-    return tuple(dict.fromkeys(ids))
-
-
-def _positive_int(value: Any, field_name: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise DebateProtocolError(f"{field_name} deve ser inteiro positivo")
-    return value
-
-
-def _render_evidence(evidence: DebateEvidence) -> str:
-    if evidence.kind == "web":
-        return f"- <{evidence.source}> - {evidence.claim}"
-    lines = (
-        str(evidence.line_start)
-        if evidence.line_start == evidence.line_end
-        else f"{evidence.line_start}-{evidence.line_end}"
-    )
-    return f"- `{evidence.source}:{lines}` - {evidence.claim}"
 
 
 def _required_text(

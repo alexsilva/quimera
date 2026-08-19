@@ -2,7 +2,6 @@ from dataclasses import replace
 
 from quimera.debate.models import (
     DebateLimits,
-    DebateEvidence,
     DebateMode,
     DebateSession,
     DebateStatus,
@@ -39,24 +38,12 @@ def test_repository_persists_result_and_workflow(tmp_path):
         moderator="claude",
         summary="sintese",
         verdict="plano",
-        evidence=(
-            DebateEvidence(
-                "E1",
-                "quimera/debate/service.py",
-                1,
-                1,
-                "Asynchronous coordinator",
-                "o servico coordena debates",
-            ),
-        ),
-        evidence_ids=("E1",),
         work_items=(
             WorkItem(
                 "T1",
                 "base",
                 "implementar base",
                 assigned_to="codex",
-                evidence_ids=("E1",),
             ),
             WorkItem(
                 "T2",
@@ -64,7 +51,6 @@ def test_repository_persists_result_and_workflow(tmp_path):
                 "revisar",
                 assigned_to="claude",
                 dependencies=("T1",),
-                evidence_ids=("E1",),
             ),
         ),
     )
@@ -83,9 +69,6 @@ def test_repository_persists_result_and_workflow(tmp_path):
     assert loaded.status == DebateStatus.EXHAUSTED
     assert loaded.result is not None
     assert loaded.result.verdict == "plano"
-    assert loaded.result.evidence[0].source == "quimera/debate/service.py"
-    assert loaded.result.evidence_ids == ("E1",)
-    assert loaded.result.work_items[0].evidence_ids == ("E1",)
     assert [item.id for item in repository.get_work_items(session.id)] == ["T1", "T2"]
 
 

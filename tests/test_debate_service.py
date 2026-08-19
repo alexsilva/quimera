@@ -5,7 +5,6 @@ import pytest
 
 from quimera.debate.commands import DebateCommand
 from quimera.debate.models import (
-    DebateEvidence,
     DebateMode,
     DebateProtocolError,
     DebateStatus,
@@ -18,9 +17,16 @@ from quimera.tasks.repository import TaskRepository
 class _Renderer:
     def __init__(self):
         self.messages = []
+        self.transient = []
 
     def show_message(self, agent, content):
         self.messages.append((agent, content))
+
+    def update_agent_transient(self, agent, message):
+        self.transient.append(("start", agent, message))
+
+    def clear_agent_transient(self, agent):
+        self.transient.append(("clear", agent, ""))
 
     def flush_quick(self):
         return True
@@ -91,7 +97,11 @@ class _Dispatch:
                 {**_contribution(agent, vote="propose"), "confidence": "0.9"}
             )
         if self.invalid_evidence_once and ":participant:" in delegation_id:
-            payload = _contribution(agent, vote="propose")
+            round_two = ":r2:" in delegation_id
+            payload = _contribution(
+                agent,
+                vote=self.round_two_vote if round_two else "propose",
+            )
             payload["evidence"][0]["excerpt"] = "trecho inventado"
             return json.dumps(payload)
         if "TIPO_DE_CHAMADA: debate_synthesis" in prompt:
@@ -323,12 +333,35 @@ def test_debate_runs_two_rounds_and_converges(tmp_path):
     assert all(call[1]["show_delegation"] is False for call in calls)
     assert all(call[1]["emit_run_deltas"] is False for call in calls)
     assert all(
-        "whatever tools your environment provides" in call[1]["request_override"]
-        and '"evidence"' in call[1]["request_override"]
+        "tool use is optional" in call[1]["request_override"].lower()
         for call in calls
     )
     assert any("Resultado: **consenso**" in content for _, content in renderer.messages)
     assert len(persisted) == 1
+
+
+def test_debate_shows_agent_running_without_streaming_output(tmp_path):
+    service, repository, _, renderer, calls, _, _ = _make_service(tmp_path)
+    session = service.start(
+        DebateCommand(action="start", topic="mostrar execucao", timeout_seconds=2)
+    )
+
+    assert service.wait(5)
+    assert repository.get_session(session.id).status == DebateStatus.CONVERGED
+
+    starts = [(agent, message) for kind, agent, message in renderer.transient if kind == "start"]
+    clears = [agent for kind, agent, _ in renderer.transient if kind == "clear"]
+    assert starts[:3] == [
+        ("alpha", "respondendo no debate..."),
+        ("beta", "respondendo no debate..."),
+        ("gamma", "respondendo no debate..."),
+    ]
+    assert ("alpha", "sintetizando o debate...") in starts
+    assert clears.count("alpha") >= 2
+    assert "beta" in clears
+    assert "gamma" in clears
+    assert all(call[1]["show_output"] is False for call in calls)
+    assert all(call[1]["emit_run_deltas"] is False for call in calls)
 
 
 def test_round_runs_sequentially_and_shares_same_round_contributions(tmp_path):
@@ -514,7 +547,7 @@ def test_invalid_protocol_gets_one_repair_attempt(tmp_path):
     assert len(repair_calls) == len(set(repair_calls))
 
 
-def test_unverifiable_evidence_gets_one_repair_attempt(tmp_path):
+def test_unverifiable_optional_evidence_does_not_trigger_repair(tmp_path):
     service, repository, _, _, calls, _, _ = _make_service(
         tmp_path, invalid_evidence_once=True
     )
@@ -529,97 +562,7 @@ def test_unverifiable_evidence_gets_one_repair_attempt(tmp_path):
         for _, options in calls
         if "participant-repair" in options["delegation"]["delegation_id"]
     ]
-    assert len(repair_calls) == 6
-
-
-def test_evidence_verifier_rejects_symlink_escape_and_sensitive_files(tmp_path):
-    service, *_ = _make_service(tmp_path)
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    service._workspace_root = workspace.resolve()
-    outside = tmp_path / "outside.py"
-    outside.write_text("outside_value = True\n", encoding="utf-8")
-    (workspace / "escape.py").symlink_to(outside)
-    (workspace / ".env").write_text("SECRET=value\n", encoding="utf-8")
-
-    with pytest.raises(DebateProtocolError, match="fora do workspace"):
-        service._verify_evidence(
-            (
-                DebateEvidence(
-                    "E1", "escape.py", 1, 1, "outside_value = True", "escape"
-                ),
-            )
-        )
-    with pytest.raises(DebateProtocolError, match="arquivo sensivel"):
-        service._verify_evidence(
-            (DebateEvidence("E1", ".env", 1, 1, "SECRET=value", "secret"),)
-        )
-
-
-def test_web_evidence_verified_against_fetched_page_with_cache(tmp_path):
-    service, *_ = _make_service(tmp_path)
-    fetches = []
-
-    def fetcher(url):
-        fetches.append(url)
-        return "A documentacao oficial recomenda pipeline em vez de barreiras.\nOutra frase."
-
-    service._web_fetcher = fetcher
-    evidence = (
-        DebateEvidence(
-            "E1",
-            "https://example.com/docs",
-            0,
-            0,
-            "documentacao oficial recomenda pipeline",
-            "doc recomenda pipeline",
-            kind="web",
-        ),
-        DebateEvidence(
-            "E2",
-            "https://example.com/docs",
-            0,
-            0,
-            "pipeline em vez de barreiras",
-            "doc desaconselha barreiras",
-            kind="web",
-        ),
-    )
-
-    service._verify_evidence(evidence)
-
-    assert fetches == ["https://example.com/docs"]
-
-
-def test_web_evidence_rejects_mismatch_short_excerpt_and_fetch_failure(tmp_path):
-    service, *_ = _make_service(tmp_path)
-
-    def make(excerpt):
-        return (
-            DebateEvidence(
-                "E1",
-                "https://example.com/docs",
-                0,
-                0,
-                excerpt,
-                "afirmacao",
-                kind="web",
-            ),
-        )
-
-    service._web_fetcher = lambda url: "conteudo real da pagina publicada hoje"
-    with pytest.raises(DebateProtocolError, match="nao corresponde ao conteudo"):
-        service._verify_evidence(make("trecho que nao existe na pagina citada"))
-
-    with pytest.raises(DebateProtocolError, match="curto demais"):
-        service._verify_evidence(make("curto"))
-
-    def broken(url):
-        raise TimeoutError("timeout de rede")
-
-    service._web_fetcher = broken
-    with pytest.raises(DebateProtocolError, match="falha ao buscar"):
-        service._verify_evidence(make("trecho longo o suficiente para verificar"))
+    assert repair_calls == []
 
 
 def test_debate_fails_when_repair_cannot_restore_quorum(tmp_path):

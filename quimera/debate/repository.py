@@ -10,7 +10,6 @@ from typing import Any
 
 from .models import (
     DebateContribution,
-    DebateEvidence,
     DebateLimits,
     DebateMode,
     DebateSession,
@@ -279,11 +278,6 @@ class DebateRepository:
                         WorkItem(**_work_item_kwargs(item))
                         for item in payload.get("work_items") or ()
                     ),
-                    evidence=tuple(
-                        DebateEvidence(**_evidence_kwargs(item))
-                        for item in payload.get("evidence") or ()
-                    ),
-                    evidence_ids=tuple(payload.get("evidence_ids") or ()),
                     raw_response=row["raw_response"] or "",
                 )
             )
@@ -472,16 +466,4 @@ def _work_item_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
         "dependencies": tuple(payload.get("dependencies") or ()),
         "acceptance_criteria": tuple(payload.get("acceptance_criteria") or ()),
         "priority": str(payload.get("priority") or "medium"),
-        "evidence_ids": tuple(payload.get("evidence_ids") or ()),
-    }
-
-
-def _evidence_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": str(payload.get("id") or ""),
-        "source": str(payload.get("source") or ""),
-        "line_start": int(payload.get("line_start") or 0),
-        "line_end": int(payload.get("line_end") or 0),
-        "excerpt": str(payload.get("excerpt") or ""),
-        "claim": str(payload.get("claim") or ""),
     }

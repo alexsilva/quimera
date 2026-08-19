@@ -3,7 +3,6 @@
 from .commands import DebateCommand, DebateCommandError, parse_debate_command
 from .models import (
     DebateContribution,
-    DebateEvidence,
     DebateLimits,
     DebateMode,
     DebateProtocolError,
@@ -19,7 +18,6 @@ __all__ = [
     "DebateCommand",
     "DebateCommandError",
     "DebateContribution",
-    "DebateEvidence",
     "DebateLimits",
     "DebateMode",
     "DebateProtocolError",

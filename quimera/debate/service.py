@@ -16,7 +16,6 @@ from typing import Any, Callable
 from ..constants import TaskStatus, TaskType
 from ..domain.execution import ExecutionControlSource
 from ..runtime.tools.files import set_staging_root
-from ..runtime.tools.web import fetch_url_text
 from .commands import (
     MAX_DEBATE_CONTEXT_CHARS,
     DebateCommand,
@@ -25,7 +24,6 @@ from .commands import (
 )
 from .models import (
     DebateContribution,
-    DebateEvidence,
     DebateLimits,
     DebateMode,
     DebateProtocolError,
@@ -103,9 +101,6 @@ class DebateService:
 
     DEFAULT_PARTICIPANTS = 3
     MAX_PARTICIPANTS = 5
-    MAX_EVIDENCE_SOURCE_BYTES = 5_000_000
-    MAX_WEB_EVIDENCE_CHARS = 2_000_000
-    MIN_WEB_EXCERPT_CHARS = 24
 
     def __init__(
         self,
@@ -124,7 +119,6 @@ class DebateService:
         show_system: Callable[[str], None] | None = None,
         show_warning: Callable[[str], None] | None = None,
         show_error: Callable[[str], None] | None = None,
-        web_fetcher: Callable[[str], str] | None = None,
         history_provider: Callable[[], list] | None = None,
     ) -> None:
         self._repository = repository
@@ -141,7 +135,6 @@ class DebateService:
         self._show_system = show_system or (lambda _message: None)
         self._show_warning = show_warning or (lambda _message: None)
         self._show_error = show_error or (lambda _message: None)
-        self._web_fetcher = web_fetcher or fetch_url_text
         self._history_provider = history_provider
         self._repository.recover_expired()
         self._state_lock = threading.RLock()
@@ -456,6 +449,10 @@ class DebateService:
         for round_index in range(1, session.limits.max_rounds + 1):
             self._raise_if_cancelled(root_cancel)
             remaining = self._remaining_seconds(session, deadline)
+            self._show_system(
+                f"[debate {session.id}] rodada {round_index}/{session.limits.max_rounds}: "
+                f"ouvindo {len(session.participants)} agentes em sequencia."
+            )
             self._repository.set_status(
                 session.id,
                 DebateStatus.RUNNING,
@@ -560,6 +557,7 @@ class DebateService:
             handle = _CallHandle.create()
             key = f"r{round_index}:{agent}"
             self._register_call(key, handle, root_cancel)
+            self._show_agent_running(agent, "respondendo no debate...")
             future = _submit_daemon_future(
                 f"debate-{session.id}-r{round_index}-{agent}",
                 self._run_participant,
@@ -590,6 +588,7 @@ class DebateService:
             finally:
                 if root_cancel.is_set() or not future.done():
                     handle.cancel()
+                self._clear_agent_running(agent)
                 self._unregister_call(key)
         self._raise_if_cancelled(root_cancel)
         return tuple(contributions), failures
@@ -623,7 +622,6 @@ class DebateService:
                 round_index=round_index,
                 agent=agent,
             )
-            self._verify_evidence(contribution.evidence)
             self._validate_contribution(contribution, candidate)
         except DebateProtocolError as exc:
             repaired = self._call_agent(
@@ -641,7 +639,6 @@ class DebateService:
                 round_index=round_index,
                 agent=agent,
             )
-            self._verify_evidence(contribution.evidence)
             self._validate_contribution(contribution, candidate)
         self._render_agent(contribution.agent, contribution.render())
         return contribution
@@ -659,6 +656,7 @@ class DebateService:
         handle = _CallHandle.create()
         key = f"r{round_index}:synthesis:{session.moderator}"
         self._register_call(key, handle, root_cancel)
+        self._show_agent_running(session.moderator, "sintetizando o debate...")
         prompt = build_synthesis_prompt(
             session,
             round_index=round_index,
@@ -686,6 +684,7 @@ class DebateService:
         finally:
             if root_cancel.is_set() or not future.done():
                 handle.cancel()
+            self._clear_agent_running(session.moderator)
             self._unregister_call(key)
 
     def _synthesis_worker(
@@ -713,7 +712,6 @@ class DebateService:
                 round_index=round_index,
                 moderator=session.moderator,
             )
-            self._verify_evidence(synthesis.evidence)
             self._validate_synthesis(session, synthesis)
             return synthesis
         except DebateProtocolError as exc:
@@ -732,7 +730,6 @@ class DebateService:
                 round_index=round_index,
                 moderator=session.moderator,
             )
-            self._verify_evidence(synthesis.evidence)
             self._validate_synthesis(session, synthesis)
             return synthesis
 
@@ -922,115 +919,6 @@ class DebateService:
                 "work_items atribuidos a agentes invalidos: " + ", ".join(invalid)
             )
 
-    def _verify_evidence(self, evidence_items: tuple[DebateEvidence, ...]) -> None:
-        """Verify cited excerpts against immutable reads (workspace or web)."""
-        web_cache: dict[str, str] = {}
-        for evidence in evidence_items:
-            if evidence.kind == "web":
-                self._verify_web_evidence(evidence, web_cache)
-                continue
-            source = (self._workspace_root / evidence.source).resolve()
-            try:
-                source.relative_to(self._workspace_root)
-            except ValueError as exc:
-                raise DebateProtocolError(
-                    f"evidence {evidence.id} aponta para fora do workspace"
-                ) from exc
-            if self._is_sensitive_evidence_path(source):
-                raise DebateProtocolError(
-                    f"evidence {evidence.id} aponta para arquivo sensivel"
-                )
-            if not source.is_file():
-                raise DebateProtocolError(
-                    f"evidence {evidence.id} aponta para arquivo inexistente: {evidence.source}"
-                )
-            try:
-                if source.stat().st_size > self.MAX_EVIDENCE_SOURCE_BYTES:
-                    raise DebateProtocolError(
-                        f"evidence {evidence.id} aponta para arquivo grande demais"
-                    )
-            except OSError as exc:
-                raise DebateProtocolError(
-                    f"evidence {evidence.id} nao pode ser inspecionada: {evidence.source}"
-                ) from exc
-            selected: list[str] = []
-            last_line = 0
-            try:
-                with source.open("r", encoding="utf-8", errors="replace") as handle:
-                    for line_number, line in enumerate(handle, start=1):
-                        if line_number > evidence.line_end:
-                            break
-                        last_line = line_number
-                        if line_number >= evidence.line_start:
-                            selected.append(line)
-            except OSError as exc:
-                raise DebateProtocolError(
-                    f"evidence {evidence.id} nao pode ser lida: {evidence.source}"
-                ) from exc
-            if last_line < evidence.line_end or not selected:
-                raise DebateProtocolError(
-                    f"evidence {evidence.id} cita linhas fora do arquivo: {evidence.source}"
-                )
-            excerpt = self._normalize_evidence_text(evidence.excerpt)
-            actual = self._normalize_evidence_text("".join(selected))
-            if len(excerpt) < 8 or excerpt not in actual:
-                raise DebateProtocolError(
-                    f"evidence {evidence.id} nao corresponde ao trecho citado em "
-                    f"{evidence.source}:{evidence.line_start}-{evidence.line_end}"
-                )
-
-    def _verify_web_evidence(
-        self, evidence: DebateEvidence, cache: dict[str, str]
-    ) -> None:
-        """Refetch the cited URL and require the excerpt in the live page text."""
-        excerpt = self._normalize_evidence_text(evidence.excerpt)
-        if len(excerpt) < self.MIN_WEB_EXCERPT_CHARS:
-            raise DebateProtocolError(
-                f"evidence {evidence.id} tem excerpt curto demais para "
-                f"verificacao web (minimo {self.MIN_WEB_EXCERPT_CHARS} caracteres)"
-            )
-        if evidence.source not in cache:
-            try:
-                page = self._web_fetcher(evidence.source)
-            except Exception as exc:
-                raise DebateProtocolError(
-                    f"evidence {evidence.id} nao pode ser verificada; "
-                    f"falha ao buscar {evidence.source}: {exc}"
-                ) from exc
-            cache[evidence.source] = self._normalize_evidence_text(
-                str(page or "")[: self.MAX_WEB_EVIDENCE_CHARS]
-            )
-        if excerpt not in cache[evidence.source]:
-            raise DebateProtocolError(
-                f"evidence {evidence.id} nao corresponde ao conteudo atual de "
-                f"{evidence.source}"
-            )
-
-    @staticmethod
-    def _normalize_evidence_text(value: str) -> str:
-        return " ".join(str(value or "").split())
-
-    @staticmethod
-    def _is_sensitive_evidence_path(path: Path) -> bool:
-        lowered_parts = {part.lower() for part in path.parts}
-        name = path.name.lower()
-        return (
-            ".git" in lowered_parts
-            or name.startswith(".env")
-            or name
-            in {
-                ".netrc",
-                ".npmrc",
-                ".pypirc",
-                "credentials.json",
-                "secrets.json",
-                "id_rsa",
-                "id_ed25519",
-            }
-            or path.suffix.lower()
-            in {".pem", ".key", ".p12", ".pfx", ".keystore"}
-        )
-
     def _render_agent(self, agent: str, content: str) -> None:
         if self._renderer is None or not content.strip():
             return
@@ -1042,6 +930,20 @@ class DebateService:
         )
         if callable(flush):
             flush()
+
+    def _show_agent_running(self, agent: str, message: str) -> None:
+        if self._renderer is None:
+            return
+        update = getattr(self._renderer, "update_agent_transient", None)
+        if callable(update):
+            update(agent, message)
+
+    def _clear_agent_running(self, agent: str) -> None:
+        if self._renderer is None:
+            return
+        clear = getattr(self._renderer, "clear_agent_transient", None)
+        if callable(clear):
+            clear(agent)
 
     def _persist_final(
         self,
