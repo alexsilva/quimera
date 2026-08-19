@@ -28,7 +28,7 @@ class DebateCommand:
     topic: str = ""
     include_context: bool = False
     mode: DebateMode = DebateMode.VERDICT
-    agents: tuple[str, ...] = ()
+    agents: int | str | None = None
     rounds: int = 2
     timeout_seconds: float = 900.0
     quorum: int | None = None
@@ -56,7 +56,7 @@ def parse_debate_command(command: str) -> DebateCommand:
         choices=[mode.value for mode in DebateMode],
         default=DebateMode.VERDICT.value,
     )
-    parser.add_argument("--agents", default="")
+    parser.add_argument("--agents", default=None)
     parser.add_argument("--context", action="store_true")
     parser.add_argument("--rounds", type=int, default=2)
     parser.add_argument("--timeout", type=float, default=900.0)
@@ -72,15 +72,22 @@ def parse_debate_command(command: str) -> DebateCommand:
         raise DebateCommandError("--timeout deve estar entre 30 e 1800 segundos")
     if namespace.quorum is not None and namespace.quorum < 2:
         raise DebateCommandError("--quorum deve ser pelo menos 2")
-    agents = tuple(
-        dict.fromkeys(
-            item.strip().lower().lstrip("/")
-            for item in namespace.agents.split(",")
-            if item.strip()
-        )
-    )
-    if len(agents) > 5:
-        raise DebateCommandError("/debate aceita no maximo 5 agentes")
+    agents: int | str | None = None
+    if namespace.agents is not None:
+        raw_agents = str(namespace.agents).strip()
+        if raw_agents == "*":
+            agents = "*"
+        else:
+            try:
+                agents = int(raw_agents)
+            except ValueError as exc:
+                raise DebateCommandError(
+                    "--agents aceita apenas uma quantidade entre 2 e 5 ou '*'"
+                ) from exc
+            if not 2 <= agents <= 5:
+                raise DebateCommandError(
+                    "--agents deve estar entre 2 e 5, ou usar '*' para todos"
+                )
     topic = " ".join(namespace.topic).strip()
     if not topic:
         raise DebateCommandError(_usage())
@@ -116,7 +123,7 @@ def _parse_control(action: str, args: list[str]) -> DebateCommand:
 
 def _usage() -> str:
     return (
-        "Uso: /debate [--mode verdict|workflow] [--agents a,b,c] "
+        "Uso: /debate [--mode verdict|workflow] [--agents 2..5|*] "
         "[--rounds 2] [--timeout 900] [--quorum 2] [--context] <tema> "
         "(--context inclui o historico recente do chat no debate)"
     )

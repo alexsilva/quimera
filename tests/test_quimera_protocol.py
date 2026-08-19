@@ -1054,6 +1054,17 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("--mode verdict ", suggestions)
         self.assertIn("--mode workflow ", suggestions)
 
+        self.assertEqual(
+            app._command_argument_resolver(CMD_DEBATE, "--agents"),
+            [
+                "--agents 2 ",
+                "--agents 3 ",
+                "--agents 4 ",
+                "--agents 5 ",
+                "--agents * ",
+            ],
+        )
+
     def test_policy_command_argument_resolver_suggests_presets(self):
         """Verifica que policy command argument resolver suggests presets."""
         app = QuimeraApp.__new__(QuimeraApp)

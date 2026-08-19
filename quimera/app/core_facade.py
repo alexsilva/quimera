@@ -162,6 +162,14 @@ class CoreFacadeMixin:
         if command == CMD_BUGS:
             return ["list", "show", "close", "analyze", "stats"]
         if command == CMD_DEBATE:
+            if partial.startswith("--agents"):
+                return [
+                    "--agents 2 ",
+                    "--agents 3 ",
+                    "--agents 4 ",
+                    "--agents 5 ",
+                    "--agents * ",
+                ]
             return [
                 "status",
                 "cancel",

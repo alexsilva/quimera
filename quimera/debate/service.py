@@ -830,13 +830,16 @@ class DebateService:
         with self._state_lock:
             self._active_calls.pop(key, None)
 
-    def _select_participants(self, requested: tuple[str, ...]) -> tuple[str, ...]:
+    def _select_participants(self, requested: int | str | None) -> tuple[str, ...]:
         active = self._normalized_active_agents()
-        if requested:
-            missing = [agent for agent in requested if agent not in active]
-            if missing:
-                raise ValueError("agentes nao ativos: " + ", ".join(missing))
-            participants = requested
+        if requested == "*":
+            participants = tuple(active)
+        elif isinstance(requested, int):
+            if len(active) < requested:
+                raise ValueError(
+                    f"/debate solicitou {requested} agentes, mas apenas {len(active)} estao ativos"
+                )
+            participants = tuple(active[:requested])
         else:
             participants = tuple(active[: self.DEFAULT_PARTICIPANTS])
         if len(participants) < 2:

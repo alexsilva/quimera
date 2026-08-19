@@ -581,6 +581,20 @@ def test_debate_fails_when_repair_cannot_restore_quorum(tmp_path):
     assert "quorum nao atingido" in loaded.error
 
 
+def test_select_participants_by_count_and_all(tmp_path):
+    service, *_ = _make_service(tmp_path)
+
+    assert service._select_participants(2) == ("alpha", "beta")
+    assert service._select_participants("*") == ("alpha", "beta", "gamma")
+
+
+def test_select_participants_rejects_count_above_active_pool(tmp_path):
+    service, *_ = _make_service(tmp_path)
+
+    with pytest.raises(ValueError, match="apenas 3 estao ativos"):
+        service._select_participants(4)
+
+
 def test_timeout_is_global_across_round_and_synthesis(tmp_path):
     service, repository, _, _, _, _, _ = _make_service(tmp_path, delay=0.03)
     session = service.start(
