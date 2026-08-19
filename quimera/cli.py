@@ -458,7 +458,7 @@ def main():
         dest="mcp_oauth_store",
         default=None,
         metavar="PATH",
-        help="Arquivo JSON de estado OAuth (padrão: <workspace>/state/mcp_oauth.json).",
+        help="Arquivo JSON de estado OAuth (padrão: <base_dir>/state/mcp_oauth.json — global do app).",
     )
     parser.add_argument(
         "--mcp-client",

@@ -81,9 +81,14 @@ def _default_socket_path(workspace: Any) -> str:
 
 
 def _default_oauth_store_path(workspace: Any) -> Path | None:
-    """Arquivo de persistência OAuth do workspace (clients dinâmicos e refresh)."""
-    state_dir = getattr(workspace, "state_dir", None)
-    return Path(state_dir) / "mcp_oauth.json" if state_dir else None
+    """Resolve o arquivo de persistência OAuth global via ``workspace.oauth_store_file``.
+
+    O caminho em si (``<base_dir>/state/mcp_oauth.json``) é responsabilidade da
+    classe ``Workspace``, que já centraliza os demais paths do app. Retorna
+    ``None`` quando o workspace informado não expõe essa property (ex.: mocks
+    de teste sem ``base_dir``).
+    """
+    return getattr(workspace, "oauth_store_file", None)
 
 
 def build_oauth_provider(
@@ -97,11 +102,11 @@ def build_oauth_provider(
     allow_dynamic_registration: bool | None = None,
     store_path: str | None = None,
 ) -> OAuthProvider:
-    """Constrói o ``OAuthProvider`` do MCP HTTP externo para este workspace.
+    """Constrói o ``OAuthProvider`` do MCP HTTP externo.
 
-    O store padrão fica em ``<workspace>/state/mcp_oauth.json``, de modo que
-    clients registrados dinamicamente e refresh tokens sobrevivam a reinícios da
-    sessão sem exigir configuração.
+    O store padrão fica em ``<base_dir>/state/mcp_oauth.json`` (global do app),
+    de modo que clients registrados dinamicamente e refresh tokens sobrevivam a
+    reinícios de sessão e a troca de workspace sem exigir reautorização.
     """
     return build_provider_from_cli(
         enabled=True,

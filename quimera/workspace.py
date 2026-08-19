@@ -290,6 +290,16 @@ class Workspace:
         """Caminho do arquivo de variáveis de ambiente de modelo."""
         return self.base_dir / ".env"
 
+    @property
+    def oauth_store_file(self) -> Path:
+        """Arquivo de persistência OAuth global (clients dinâmicos e refresh tokens).
+
+        Fica em ``<base_dir>/state/mcp_oauth.json``, fora da árvore por-workspace,
+        para que a autorização de clientes MCP HTTP sobreviva a troca de
+        workspace e a reinícios de sessão.
+        """
+        return self.base_dir / "state" / "mcp_oauth.json"
+
     def _ensure_dirs(self):
         """Cria os diretórios persistentes do workspace, registrando warnings em caso de falha."""
         dirs = [
@@ -300,6 +310,7 @@ class Workspace:
             self._root / "data" / "logs" / "sessions",
             self._root / "state",
             self.base_dir / "index",
+            self.base_dir / "state",
         ]
         for d in dirs:
             try:

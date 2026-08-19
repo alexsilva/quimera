@@ -155,7 +155,7 @@ O Authorization Server grava em disco clients registrados dinamicamente, access 
 
 | Aspecto | Comportamento |
 |---|---|
-| Caminho padrão | `<workspace>/state/mcp_oauth.json` (ou `--mcp-oauth-store` / `QUIMERA_MCP_OAUTH_STORE`) |
+| Caminho padrão | `<base_dir>/state/mcp_oauth.json` (global do app, ex.: `~/.local/share/quimera/state/`; ou `--mcp-oauth-store` / `QUIMERA_MCP_OAUTH_STORE`) |
 | Permissões | `0600` após cada gravação atômica |
 | Sem `QUIMERA_MCP_OAUTH_STORE_KEY` | JSON em **texto claro**: `client_secret`, access tokens e refresh tokens são legíveis no arquivo |
 | Com `QUIMERA_MCP_OAUTH_STORE_KEY` | Payload criptografado com Fernet (prefixo `quimera-oauth-fernet:v1:`); a chave é derivada da passphrase via PBKDF2-SHA256 |
@@ -163,7 +163,7 @@ O Authorization Server grava em disco clients registrados dinamicamente, access 
 | Store cifrado sem a chave correta | Load vazio (não quebra o servidor; clients/refresh precisam ser recriados) |
 | Migração | Arquivo antigo em claro continua legível; na próxima gravação com a chave definida ele é regravado já criptografado |
 
-**Uso recomendado** quando o workspace pode ser copiado, sincronizado ou acessado por outros usuários do host:
+**Uso recomendado** quando o diretório global do app (`~/.local/share/quimera`) pode ser copiado, sincronizado ou acessado por outros usuários do host:
 
 ```bash
 pip install 'quimera[oauth-store]'   # ou: pip install cryptography
