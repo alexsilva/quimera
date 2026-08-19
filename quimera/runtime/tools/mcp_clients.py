@@ -31,7 +31,7 @@ class ExternalMCPToolValidator:
             )
 
 
-def set_bridge(bridge: MCPClientBridge) -> None:
+def set_bridge(bridge: MCPClientBridge | None) -> None:
     global _bridge
     _bridge = bridge
 
@@ -76,3 +76,37 @@ def register(
             len(registered),
             ", ".join(registered),
         )
+
+
+def refresh_registration(executor, bridge: MCPClientBridge | None = None) -> list[str]:
+    """Sincroniza as tools MCP externas do executor com o bridge atual.
+
+    Remove handlers/schemas da configuração anterior e registra novamente as
+    sessões atualmente conectadas. É o caminho usado pelo gerenciamento em
+    runtime para conectar, reconectar e remover MCPs sem reiniciar o Quimera.
+    """
+    from quimera.runtime.drivers.tool_schemas import (
+        get_bridge_schemas,
+        set_bridge_schemas,
+    )
+
+    current_bridge = bridge if bridge is not None else _bridge
+    previous_names = [
+        str(schema.get("function", {}).get("name") or "")
+        for schema in get_bridge_schemas()
+    ]
+    previous_names = [name for name in previous_names if name]
+    executor.registry.unregister_many(previous_names)
+    executor.policy.unregister_tool_validators(previous_names)
+    executor.policy.unregister_external_mcp_tools(previous_names)
+
+    if current_bridge is None:
+        set_bridge_schemas([])
+        return []
+
+    registered = current_bridge.register_handlers(executor.registry)
+    if registered:
+        executor.policy.register_tool_validator(registered, ExternalMCPToolValidator())
+        executor.policy.register_external_mcp_tools(registered)
+    set_bridge_schemas(current_bridge.get_schemas())
+    return registered

@@ -22,6 +22,7 @@ from quimera.ui.textual.prompt_preview_screen import (
     PromptPreviewScreen,
 )
 from quimera.ui.textual.connection_screen import ConnectionScreen
+from quimera.ui.textual.mcp_screen import MCPConnectionsScreen
 from quimera.ui.textual.renderer import TextualRenderer, _TextualStatus
 import quimera.ui.textual.renderables as renderables
 from quimera.ui.textual.renderables import (
@@ -32,6 +33,224 @@ from quimera.ui.textual.renderables import (
 )
 from quimera.ui.textual.terminal_modes import _external_textual_window
 from quimera.ui.textual.widgets import _UnifiedFeed
+
+
+def test_mcp_connections_screen_mounts_and_shows_three_roles(tmp_path):
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import Button, DataTable, Label
+
+    from quimera.runtime.mcp.client import MCPClientBridge
+    from quimera.runtime.mcp.http_server import ConnectedMCPClient
+    from quimera.runtime.tools.mcp_clients import set_bridge
+
+    set_bridge(MCPClientBridge())
+    config_file = tmp_path / "mcp-config.json"
+    config_file.write_text(
+        '{"mcp_clients":["wiki=http://localhost:3100/mcp"]}',
+        encoding="utf-8",
+    )
+    quimera_app = SimpleNamespace(
+        workspace=SimpleNamespace(mcp_config_file=config_file),
+        tool_executor=Mock(),
+        mcp_socket_path="/tmp/quimera.sock",
+        mcp_http_url="http://127.0.0.1:9090/mcp",
+        external_mcp_http_server=SimpleNamespace(
+            connected_clients=lambda: [
+                ConnectedMCPClient(
+                    session_id="session-chatgpt",
+                    client_id="quimera-client-id",
+                    client_name="ChatGPT",
+                    scope="mcp:agent",
+                    profile="agent",
+                    initialized=True,
+                )
+            ]
+        ),
+    )
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(120, 34)) as pilot:
+            app.push_screen(MCPConnectionsScreen(quimera_app, app))
+            await pilot.pause()
+
+            screen = app.screen
+            assert isinstance(screen, MCPConnectionsScreen)
+            assert "ativo" in str(screen.query_one("#mcp_socket_state", Label).render())
+            http_state = screen.query_one("#mcp_http_state", Label).render()
+            assert "MCP HTTP OAuth" in str(http_state)
+            assert "OAuth obrigatório" not in str(http_state)
+            incoming_table = screen.query_one("#mcp_incoming_table", DataTable)
+            assert incoming_table.row_count == 1
+            assert str(incoming_table.get_row_at(0)[3]) == "autorizado"
+            assert "1 autorizados" in str(
+                screen.query_one("#mcp_incoming_summary", Label).render()
+            )
+            table = screen.query_one("#mcp_table", DataTable)
+            assert table.row_count == 1
+            close_button = screen.query_one("#mcp_close_top", Button)
+            assert str(close_button.label) == "×"
+            assert screen.query_one("#mcp_clients_panel").display is True
+            assert screen.query_one("#mcp_servers_panel").display is False
+            assert screen.query_one("#mcp_revoke_client", Button).region.bottom <= app.size.height
+            assert screen.query_one("#mcp_revoke_client", Button).disabled is False
+
+            await pilot.resize_terminal(96, 18)
+            await pilot.pause()
+            assert screen.query_one("#mcp_close_top", Button).region.bottom <= app.size.height
+            assert incoming_table.region.height >= 1
+            assert screen.query_one("#mcp_revoke_client", Button).region.bottom <= app.size.height
+
+            await pilot.click("#mcp_tab_servers")
+            await pilot.pause()
+            assert screen.query_one("#mcp_clients_panel").display is False
+            assert screen.query_one("#mcp_servers_panel").display is True
+            assert screen.query_one("#mcp_new", Button).region.bottom <= app.size.height
+            assert table.region.height >= 1
+            assert screen.query_one("#mcp_edit", Button).disabled is False
+            assert screen.query_one("#mcp_reconnect", Button).disabled is False
+            assert screen.query_one("#mcp_disconnect", Button).disabled is False
+            assert screen.query_one("#mcp_remove", Button).disabled is False
+
+            await pilot.click("#mcp_close_top")
+            await pilot.pause()
+            assert not isinstance(app.screen, MCPConnectionsScreen)
+
+    asyncio.run(run_test())
+
+
+def test_mcp_incoming_summary_counts_authorized_not_connected(tmp_path):
+    """O resumo da aba Clientes conta apenas authorized, não connected/initialized."""
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import DataTable, Label
+
+    from quimera.runtime.mcp.client import MCPClientBridge
+    from quimera.runtime.mcp.http_server import ConnectedMCPClient
+    from quimera.runtime.tools.mcp_clients import set_bridge
+
+    set_bridge(MCPClientBridge())
+    config_file = tmp_path / "mcp-config.json"
+    config_file.write_text('{"mcp_clients":[]}', encoding="utf-8")
+    clients = [
+        ConnectedMCPClient(
+            session_id="",
+            client_id="chatgpt",
+            client_name="ChatGPT",
+            scope="mcp",
+            profile="",
+            initialized=False,
+            connected=False,
+            authorized=True,
+        ),
+        ConnectedMCPClient(
+            session_id="",
+            client_id="grok",
+            client_name="Grok",
+            scope="mcp",
+            profile="",
+            initialized=False,
+            connected=False,
+            authorized=True,
+        ),
+        ConnectedMCPClient(
+            session_id="sess-pending",
+            client_id="pending",
+            client_name="Pending",
+            scope="mcp",
+            profile="",
+            initialized=False,
+            connected=True,
+            authorized=False,
+        ),
+    ]
+    quimera_app = SimpleNamespace(
+        workspace=SimpleNamespace(mcp_config_file=config_file),
+        tool_executor=Mock(),
+        mcp_socket_path="",
+        mcp_http_url="http://127.0.0.1:9090/mcp",
+        external_mcp_http_server=SimpleNamespace(
+            known_clients=lambda: clients,
+            connected_clients=lambda: [c for c in clients if c.connected],
+        ),
+    )
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(120, 34)) as pilot:
+            app.push_screen(MCPConnectionsScreen(quimera_app, app))
+            await pilot.pause()
+
+            screen = app.screen
+            assert isinstance(screen, MCPConnectionsScreen)
+            assert "Clientes autorizados" in str(
+                screen.query_one("#mcp_incoming_title", Label).render()
+            )
+            summary = str(screen.query_one("#mcp_incoming_summary", Label).render())
+            assert summary == "2 autorizados"
+            assert "conectado" not in summary
+
+            incoming_table = screen.query_one("#mcp_incoming_table", DataTable)
+            assert incoming_table.row_count == 3
+            states = {str(incoming_table.get_row_at(i)[3]) for i in range(3)}
+            assert states == {"autorizado", "não autorizado"}
+
+            await pilot.resize_terminal(96, 18)
+            await pilot.pause()
+            assert screen.query_one("#mcp_incoming_summary", Label).region.bottom <= app.size.height
+
+    asyncio.run(run_test())
+
+
+def test_mcp_server_editor_is_separate_modal(tmp_path):
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import Input, Label, Select
+
+    from quimera.config import ConfigManager
+    from quimera.ui.textual.mcp_screen import MCPServerEditorScreen
+
+    manager = Mock()
+    manager.config = ConfigManager(tmp_path / "mcp-config.json")
+    info = SimpleNamespace(
+        name="github",
+        transport="remote",
+        endpoint="https://example.test/mcp",
+        connected=True,
+    )
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(100, 28)) as pilot:
+            app.push_screen(MCPServerEditorScreen(manager, app, info))
+            await pilot.pause()
+
+            screen = app.screen
+            assert isinstance(screen, MCPServerEditorScreen)
+            assert "Editar servidor MCP" in str(
+                screen.query_one("#mcp_editor_title", Label).render()
+            )
+            assert screen.query_one("#mcp_editor_name", Input).value == "github"
+            name_input = screen.query_one("#mcp_editor_name", Input)
+            transport_select = screen.query_one("#mcp_editor_transport", Select)
+            endpoint_input = screen.query_one("#mcp_editor_endpoint", Input)
+            assert transport_select.value == "remote"
+            assert (
+                endpoint_input.value
+                == "https://example.test/mcp"
+            )
+            assert name_input.region.bottom <= transport_select.region.y
+            assert transport_select.region.bottom <= endpoint_input.region.y
+
+            await pilot.click("#mcp_editor_close")
+            await pilot.pause()
+            assert not isinstance(app.screen, MCPServerEditorScreen)
+
+    asyncio.run(run_test())
 
 
 def _events(model: TextualFeedModel):

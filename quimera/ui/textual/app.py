@@ -98,6 +98,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         from quimera.app.completion_dropdown import CompletionDropdown
         from quimera.ui.textual.config_screen import ConfigScreen
         from quimera.ui.textual.connection_screen import ConnectionScreen
+        from quimera.ui.textual.mcp_screen import MCPConnectionsScreen
         from quimera.ui.textual.prompt_preview_screen import PromptPreviewScreen
         from quimera.ui.textual.widgets import (
             _BreadcrumbWidget,
@@ -134,6 +135,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             ("pagedown", "feed_page_down", "Rolar feed abaixo"),
             ("f10", "open_config", "Configurações"),
             ("ctrl+comma", "open_config", "Configurações"),
+            ("f9", "open_mcp", "MCP Hub"),
         ]
 
         def __init__(self) -> None:
@@ -209,10 +211,15 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             """Comandos da command palette do Textual."""
             yield from super().get_system_commands(screen)
             yield SystemCommand("Configurações", "Abrir tela de configurações", self.action_open_config)
+            yield SystemCommand("MCP Hub", "Gerenciar conexões e transportes MCP", self.action_open_mcp)
 
         def action_open_config(self) -> None:
             """Abre a janela popup de configurações."""
             self.push_screen(ConfigScreen(quimera_app, self))
+
+        def action_open_mcp(self) -> None:
+            """Abre o hub de conexões MCP."""
+            self.push_screen(MCPConnectionsScreen(quimera_app, self))
 
         def on_unmount(self) -> None:
             gate = getattr(quimera_app, "input_gate", None)

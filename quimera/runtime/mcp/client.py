@@ -646,6 +646,47 @@ class MCPClientBridge:
         )
         return session
 
+    def replace_connection(
+        self, name: str, transport: MCPTransport
+    ) -> MCPClientSession:
+        """Conecta a nova sessão antes de substituir uma conexão existente.
+
+        A troca é transacional do ponto de vista do bridge: se o novo handshake
+        falhar, a sessão antiga continua registrada e utilizável.
+        """
+        new_session = MCPClientSession(transport, name=name)
+        new_session.connect()
+        with self._lock:
+            old_session = self._sessions.get(name)
+            self._sessions[name] = new_session
+            self._started = True
+        if old_session is not None:
+            try:
+                old_session.disconnect()
+            except Exception as exc:
+                _logger.warning(
+                    "MCP bridge: erro ao encerrar conexão anterior '%s': %s",
+                    name,
+                    exc,
+                )
+        _logger.info(
+            "MCP bridge: '%s' reconectado (%s)", name, transport.transport_type
+        )
+        return new_session
+
+    def disconnect_connection(self, name: str) -> bool:
+        """Desconecta uma sessão específica e a remove do bridge."""
+        with self._lock:
+            session = self._sessions.pop(name, None)
+            self._started = bool(self._sessions)
+        if session is None:
+            return False
+        try:
+            session.disconnect()
+        finally:
+            _logger.info("MCP bridge: '%s' desconectado", name)
+        return True
+
     def register_handlers(self, registry) -> list[str]:
         """Descobre tools de todas as sessões e registra handlers no ToolRegistry.
 
@@ -673,6 +714,14 @@ class MCPClientBridge:
                     continue
 
                 local_name = f"{effective_prefix}{tool_name}"
+                if local_name in registry.names():
+                    _logger.warning(
+                        "MCP bridge '%s': tool '%s' ignorada porque o nome local '%s' já existe",
+                        session_name,
+                        tool_name,
+                        local_name,
+                    )
+                    continue
                 description = tool.get("description", "")
                 input_schema = tool.get(
                     "inputSchema", {"type": "object", "properties": {}}

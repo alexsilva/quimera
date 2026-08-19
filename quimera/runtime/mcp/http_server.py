@@ -40,6 +40,7 @@ import threading
 import uuid
 import secrets
 from collections.abc import Iterable
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
 from typing import Any
@@ -57,6 +58,20 @@ from quimera.runtime.mcp.server import MCPServer
 _logger = logging.getLogger(__name__)
 
 _MAX_BODY_SIZE = 1024 * 1024  # 1MB
+
+
+@dataclass(frozen=True)
+class ConnectedMCPClient:
+    """Client OAuth conhecido pelo transporte MCP HTTP."""
+
+    session_id: str
+    client_id: str
+    client_name: str
+    scope: str
+    profile: str
+    initialized: bool
+    connected: bool = True
+    authorized: bool = True
 
 
 class _QuietThreadingHTTPServer(ThreadingHTTPServer):
@@ -81,6 +96,19 @@ _QUIMERA_MCP_HTTP_PORT = "QUIMERA_MCP_HTTP_PORT"
 _QUIMERA_MCP_HTTP_CORS_ORIGINS = "QUIMERA_MCP_HTTP_CORS_ORIGINS"
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8080
+
+
+@dataclass(frozen=True)
+class ActiveMCPHTTPClient:
+    """Snapshot de um client MCP autenticado com sessão HTTP ativa."""
+
+    session_id: str
+    oauth_client_id: str
+    oauth_client_name: str
+    mcp_client_name: str
+    mcp_client_version: str
+    scope: str
+    protocol_version: str
 
 HTTP_READ_LOCAL_TOOLS = frozenset({
     "list_files",
@@ -977,6 +1005,139 @@ class MCP_HTTPServer:
     def oauth(self) -> OAuthProvider:
         """Authorization Server embutido (desabilitado quando não configurado)."""
         return self._oauth
+
+    def connected_clients(self) -> list[ConnectedMCPClient]:
+        """Retorna os clients atualmente conectados ao MCP HTTP.
+
+        A visão é derivada das sessões MCP vivas, não do cadastro persistido de
+        clients OAuth. Assim a UI distingue autorização registrada de conexão
+        realmente ativa.
+        """
+        with self._sse_lock:
+            sessions = list(self._http_sessions.items())
+
+        clients: list[ConnectedMCPClient] = []
+        for session_id, state in sessions:
+            client_info = state.get("client_info") or {}
+            clients.append(
+                ConnectedMCPClient(
+                    session_id=str(session_id),
+                    client_id=str(state.get("oauth_client_id") or ""),
+                    client_name=str(client_info.get("name") or ""),
+                    scope=str(state.get("oauth_scope") or ""),
+                    profile=str(state.get("http_profile") or ""),
+                    initialized=bool(state.get("initialized")),
+                    connected=True,
+                    authorized=True,
+                )
+            )
+        return clients
+
+    def known_clients(self) -> list[ConnectedMCPClient]:
+        """Retorna clients OAuth registrados, enriquecidos com sessões ativas.
+
+        A UI usa essa visão para não fazer um client autorizado desaparecer
+        entre requests ou durante uma reconexão. Quando há sessão ativa, os
+        dados da sessão prevalecem sobre os metadados persistidos do client.
+        """
+        active = self.connected_clients()
+        result: list[ConnectedMCPClient] = []
+        active_by_id: dict[str, ConnectedMCPClient] = {}
+        anonymous_sessions: list[ConnectedMCPClient] = []
+
+        for client in active:
+            if not client.client_id:
+                anonymous_sessions.append(client)
+                continue
+            current = active_by_id.get(client.client_id)
+            if current is None or (client.initialized and not current.initialized):
+                active_by_id[client.client_id] = client
+
+        result.extend(active_by_id.values())
+        result.extend(anonymous_sessions)
+        seen_ids = set(active_by_id)
+
+        for client_id, oauth_client in self._oauth.clients.items():
+            if client_id in seen_ids:
+                active_client = active_by_id[client_id]
+                if not active_client.client_name and oauth_client.client_name:
+                    replacement = ConnectedMCPClient(
+                        session_id=active_client.session_id,
+                        client_id=active_client.client_id,
+                        client_name=str(oauth_client.client_name),
+                        scope=active_client.scope or str(oauth_client.scope or ""),
+                        profile=active_client.profile,
+                        initialized=active_client.initialized,
+                        connected=True,
+                        authorized=True,
+                    )
+                    result[result.index(active_client)] = replacement
+                continue
+            authorized = self._oauth.has_client_authorization(client_id)
+            if oauth_client.dynamic and not authorized:
+                continue
+            result.append(
+                ConnectedMCPClient(
+                    session_id="",
+                    client_id=str(client_id),
+                    client_name=str(oauth_client.client_name or client_id),
+                    scope=str(oauth_client.scope or ""),
+                    profile="",
+                    initialized=False,
+                    connected=False,
+                    authorized=authorized,
+                )
+            )
+        return result
+
+    def revoke_client_authorization(self, client_id: str) -> int:
+        """Revoga o grant OAuth de um client e encerra suas sessões HTTP."""
+        removed = self._oauth.revoke_client_authorization(client_id)
+        queues_to_close: list[queue.Queue] = []
+        with self._sse_lock:
+            session_ids = [
+                session_id
+                for session_id, state in self._http_sessions.items()
+                if str(state.get("oauth_client_id") or "") == client_id
+            ]
+            for session_id in session_ids:
+                self._http_sessions.pop(session_id, None)
+                sse_queue = self._sse_clients.pop(session_id, None)
+                if sse_queue is not None:
+                    queues_to_close.append(sse_queue)
+        for sse_queue in queues_to_close:
+            sse_queue.put(None)
+        return removed + len(session_ids)
+
+    def active_clients(self) -> list[ActiveMCPHTTPClient]:
+        """Retorna snapshot das sessões MCP HTTP autenticadas atualmente."""
+        with self._sse_lock:
+            states = [dict(state) for state in self._http_sessions.values()]
+        oauth_clients = self._oauth.clients
+        result: list[ActiveMCPHTTPClient] = []
+        for state in states:
+            oauth_client_id = str(state.get("oauth_client_id") or "").strip()
+            client_info = state.get("client_info")
+            if not isinstance(client_info, dict):
+                client_info = {}
+            oauth_client = oauth_clients.get(oauth_client_id)
+            oauth_client_name = ""
+            if oauth_client is not None:
+                oauth_client_name = str(
+                    oauth_client.client_name or oauth_client.client_id or ""
+                ).strip()
+            result.append(
+                ActiveMCPHTTPClient(
+                    session_id=str(state.get("session_id") or "").strip(),
+                    oauth_client_id=oauth_client_id,
+                    oauth_client_name=oauth_client_name,
+                    mcp_client_name=str(client_info.get("name") or "").strip(),
+                    mcp_client_version=str(client_info.get("version") or "").strip(),
+                    scope=str(state.get("oauth_scope") or "").strip(),
+                    protocol_version=str(state.get("protocol_version") or "").strip(),
+                )
+            )
+        return result
 
     def disabled_tools_for_profile(self, profile: str) -> frozenset[str]:
         """Tools a bloquear quando o escopo do token restringe o perfil do transporte.

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+import pytest
+
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.drivers.tool_schemas import get_bridge_schemas, resolve_tool_schemas, set_bridge_schemas
 from quimera.runtime.executor import ToolExecutor
@@ -13,6 +17,7 @@ from quimera.runtime.mcp.client import (
     parse_mcp_client_spec,
     start_mcp_clients,
 )
+from quimera.runtime.mcp.manager import MCPConnectionManager, describe_mcp_client_spec
 from quimera.runtime.models import ToolCall, ToolResult
 from quimera.runtime.tools.mcp_clients import set_bridge
 
@@ -318,6 +323,123 @@ def test_start_mcp_clients_connects_and_persists_merged_specs(monkeypatch):
         "github": {"GITHUB_TOKEN": "new-token"},
     }
     assert runtime.specs == tuple(expected_specs)
+
+
+def test_describe_mcp_client_spec_separa_transporte_e_endpoint():
+    info = describe_mcp_client_spec(
+        "github=remote:https://api.githubcopilot.com/mcp/",
+        connected=True,
+    )
+
+    assert info.name == "github"
+    assert info.transport == "remote"
+    assert info.endpoint == "https://api.githubcopilot.com/mcp/"
+    assert info.connected is True
+
+
+def test_manager_disconnect_remove_tools_vivas_e_preserva_config(monkeypatch):
+    captured = {"clients": ["jira=stdio:jira-cmd"], "env": []}
+
+    class FakeConfig:
+        @property
+        def mcp_clients(self):
+            return list(captured["clients"])
+
+        @property
+        def mcp_client_env(self):
+            return list(captured["env"])
+
+        def set_mcp_clients(self, specs):
+            captured["clients"] = list(specs or [])
+
+        def set_mcp_client_env(self, specs):
+            captured["env"] = list(specs or [])
+
+    class FakeSession:
+        def disconnect(self):
+            captured["disconnected"] = True
+
+        def list_tools(self):
+            return []
+
+    bridge = MCPClientBridge()
+    bridge._sessions["jira"] = FakeSession()
+    bridge._started = True
+    set_bridge(bridge)
+
+    executor = MagicMock()
+    executor.registry = MagicMock()
+    executor.policy = MagicMock()
+    monkeypatch.setattr(
+        "quimera.runtime.mcp.manager.refresh_registration",
+        lambda current_executor, current_bridge: captured.update(refreshed=True),
+    )
+
+    manager = MCPConnectionManager(config=FakeConfig(), executor=executor)
+    assert manager.disconnect("jira") is True
+
+    assert captured["disconnected"] is True
+    assert captured["refreshed"] is True
+    assert captured["clients"] == ["jira=stdio:jira-cmd"]
+    assert manager.list_connections()[0].connected is False
+
+
+def test_manager_remove_desconecta_e_apaga_specs(monkeypatch):
+    captured = {
+        "clients": ["jira=stdio:jira-cmd", "github=stdio:github-cmd"],
+        "env": ["jira=TOKEN=abc", "github=TOKEN=def"],
+    }
+
+    class FakeConfig:
+        @property
+        def mcp_clients(self):
+            return list(captured["clients"])
+
+        @property
+        def mcp_client_env(self):
+            return list(captured["env"])
+
+        def set_mcp_clients(self, specs):
+            captured["clients"] = list(specs or [])
+
+        def set_mcp_client_env(self, specs):
+            captured["env"] = list(specs or [])
+
+    bridge = MCPClientBridge()
+    bridge._sessions["jira"] = MagicMock()
+    bridge._started = True
+    set_bridge(bridge)
+    monkeypatch.setattr(
+        "quimera.runtime.mcp.manager.refresh_registration",
+        lambda current_executor, current_bridge: [],
+    )
+
+    manager = MCPConnectionManager(config=FakeConfig(), executor=MagicMock())
+    manager.remove("jira")
+
+    assert captured["clients"] == ["github=stdio:github-cmd"]
+    assert captured["env"] == ["github=TOKEN=def"]
+    assert "jira" not in bridge.sessions
+
+
+def test_bridge_replace_connection_preserva_antiga_se_novo_handshake_falha(monkeypatch):
+    bridge = MCPClientBridge()
+    old_session = MagicMock()
+    bridge._sessions["jira"] = old_session
+    bridge._started = True
+    transport = MagicMock()
+    transport.transport_type = "stdio"
+
+    def fail_connect(self):
+        raise ConnectionError("falhou")
+
+    monkeypatch.setattr(MCPClientSession, "connect", fail_connect)
+
+    with pytest.raises(ConnectionError, match="falhou"):
+        bridge.replace_connection("jira", transport)
+
+    assert bridge.sessions["jira"] is old_session
+    old_session.disconnect.assert_not_called()
 
 
 # Sequência de stderr que o ``mcp-remote`` realmente emite ao subir uma conexão

@@ -22,6 +22,8 @@ import pytest
 from quimera.runtime.mcp.http_server import HTTP_READ_LOCAL_TOOLS, MCP_HTTPServer
 from quimera.runtime.mcp.oauth import (
     GRANT_CLIENT_CREDENTIALS,
+    IssuedToken,
+    OAuthClient,
     OAuthConfig,
     OAuthError,
     OAuthProvider,
@@ -56,6 +58,89 @@ def _wait_for_server(host: str, port: int, timeout: float = 5.0) -> None:
                 return
         except OSError:
             time.sleep(0.05)
+
+
+def test_revoke_client_authorization_invalidates_all_tokens_but_keeps_client():
+    provider = OAuthProvider(
+        OAuthConfig(
+            enabled=True,
+            clients=(OAuthClient(client_id="chatgpt", client_name="ChatGPT"),),
+        )
+    )
+    provider._access_tokens["access-1"] = IssuedToken(
+        token="access-1",
+        client_id="chatgpt",
+        scope="mcp",
+        resource="",
+        expires_at=time.time() + 3600,
+    )
+    provider._refresh_tokens["refresh-1"] = IssuedToken(
+        token="refresh-1",
+        client_id="chatgpt",
+        scope="mcp",
+        resource="",
+        expires_at=time.time() + 7200,
+        kind="refresh",
+    )
+
+    assert provider.has_client_authorization("chatgpt") is True
+
+    removed = provider.revoke_client_authorization("chatgpt")
+
+    assert removed == 2
+    assert provider.has_client_authorization("chatgpt") is False
+    assert provider.find_client("chatgpt") is not None
+
+
+def test_revoke_client_authorization_removes_dynamic_client():
+    provider = OAuthProvider(OAuthConfig(enabled=True))
+    provider._clients["dynamic-client"] = OAuthClient(
+        client_id="dynamic-client",
+        client_name="ChatGPT",
+        dynamic=True,
+    )
+    provider._access_tokens["access-dynamic"] = IssuedToken(
+        token="access-dynamic",
+        client_id="dynamic-client",
+        scope="mcp",
+        resource="",
+        expires_at=time.time() + 3600,
+    )
+
+    removed = provider.revoke_client_authorization("dynamic-client")
+
+    assert removed == 2
+    assert provider.has_client_authorization("dynamic-client") is False
+    assert provider.find_client("dynamic-client") is None
+
+
+def test_revoke_dynamic_client_compacts_persisted_store(tmp_path):
+    store = tmp_path / "mcp_oauth.json"
+    provider = OAuthProvider(OAuthConfig(enabled=True, store_path=store))
+    client = provider.register_client(
+        {
+            "client_name": "Grok",
+            "redirect_uris": ["http://127.0.0.1:5599/cb"],
+        }
+    )
+    provider._access_tokens["access-grok"] = IssuedToken(
+        token="access-grok",
+        client_id=client.client_id,
+        scope="mcp",
+        resource="",
+        expires_at=time.time() + 3600,
+    )
+    with provider._lock:
+        provider._persist_locked()
+
+    provider.revoke_client_authorization(client.client_id)
+
+    payload = json.loads(store.read_text(encoding="utf-8"))
+    assert payload["clients"] == []
+    assert payload["access_tokens"] == []
+    assert payload["refresh_tokens"] == []
+
+
 
 
 class _Response:
@@ -380,6 +465,123 @@ class TestDynamicRegistration:
         assert restored.client_name == "persistente"
         assert restored.redirect_uris == ("http://127.0.0.1:5599/cb",)
 
+    def test_restart_compacta_registros_dinamicos_equivalentes_antigos(self, tmp_path):
+        """Stores antigos não devem manter N registros órfãos do mesmo client."""
+        store = tmp_path / "mcp_oauth.json"
+        old = OAuthClient(
+            client_id="quimera-old",
+            client_name="Grok",
+            redirect_uris=("http://127.0.0.1:5599/cb",),
+            created_at=100.0,
+            dynamic=True,
+        )
+        newest = OAuthClient(
+            client_id="quimera-new",
+            client_name="Grok",
+            redirect_uris=("http://127.0.0.1:5599/cb",),
+            created_at=200.0,
+            dynamic=True,
+        )
+        store.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "clients": [old.to_dict(), newest.to_dict()],
+                    "access_tokens": [],
+                    "refresh_tokens": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        provider = OAuthProvider(OAuthConfig(enabled=True, store_path=store))
+
+        assert provider.find_client("quimera-old") is None
+        assert provider.find_client("quimera-new") is not None
+        payload = json.loads(store.read_text(encoding="utf-8"))
+        assert [client["client_id"] for client in payload["clients"]] == ["quimera-new"]
+
+    def test_restart_preserva_client_com_token_ao_compactar_equivalentes(self, tmp_path):
+        """Client com token vivo não pode ser removido em favor de duplicata mais nova."""
+        store = tmp_path / "mcp_oauth.json"
+        old = OAuthClient(
+            client_id="quimera-old",
+            client_name="Grok",
+            redirect_uris=("http://127.0.0.1:5599/cb",),
+            created_at=100.0,
+            dynamic=True,
+        )
+        newest = OAuthClient(
+            client_id="quimera-new",
+            client_name="Grok",
+            redirect_uris=("http://127.0.0.1:5599/cb",),
+            created_at=200.0,
+            dynamic=True,
+        )
+        access = IssuedToken(
+            token="tok-old-access",
+            client_id="quimera-old",
+            scope="mcp",
+            resource="",
+            expires_at=time.time() + 3600,
+        )
+        refresh = IssuedToken(
+            token="tok-old-refresh",
+            client_id="quimera-old",
+            scope="mcp",
+            resource="",
+            expires_at=time.time() + 7200,
+            kind="refresh",
+        )
+        store.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "clients": [old.to_dict(), newest.to_dict()],
+                    "access_tokens": [access.to_dict()],
+                    "refresh_tokens": [refresh.to_dict()],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        provider = OAuthProvider(OAuthConfig(enabled=True, store_path=store))
+
+        assert provider.find_client("quimera-old") is not None
+        assert provider.find_client("quimera-new") is not None
+        assert provider.validate_access_token("tok-old-access") is not None
+        assert provider.has_client_authorization("quimera-old") is True
+
+    def test_restart_rehidrata_client_orfao_referenciado_por_token(self, tmp_path):
+        """Token válido sem registro de client no store ainda autentica após restart."""
+        store = tmp_path / "mcp_oauth.json"
+        access = IssuedToken(
+            token="tok-orphan-access",
+            client_id="quimera-orphan",
+            scope="mcp",
+            resource="",
+            expires_at=time.time() + 3600,
+        )
+        store.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "clients": [],
+                    "access_tokens": [access.to_dict()],
+                    "refresh_tokens": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        provider = OAuthProvider(OAuthConfig(enabled=True, store_path=store))
+
+        restored = provider.validate_access_token("tok-orphan-access")
+        assert restored is not None
+        assert restored.client_id == "quimera-orphan"
+        assert provider.find_client("quimera-orphan") is not None
+        assert provider.authenticate_bearer("tok-orphan-access").authenticated is True
+
 
 # ---------------------------------------------------------------------------
 # Fluxo authorization_code + PKCE
@@ -440,6 +642,83 @@ class TestAuthorizationCodeFlow:
         restored = second.validate_access_token(tokens["access_token"])
         assert restored is not None
         assert restored.client_id == client["client_id"]
+
+    def test_bearer_mcp_sobrevive_a_restart_do_provider(self, tmp_path):
+        """O mesmo access token deve autenticar /mcp após recriar o OAuthProvider."""
+        store = tmp_path / "mcp_oauth.json"
+        first = OAuthProvider(OAuthConfig(enabled=True, store_path=store))
+        httpd = _start_server(first)
+        try:
+            client = _register_client(httpd)
+            verifier, challenge = _pkce_pair()
+            code = _authorize_and_get_code(httpd, client["client_id"], challenge)
+            tokens = _post_form(
+                httpd,
+                "/oauth/token",
+                {
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "client_id": client["client_id"],
+                    "code_verifier": verifier,
+                    "redirect_uri": "http://127.0.0.1:5599/cb",
+                },
+            ).json()
+            access = tokens["access_token"]
+            before = _request(
+                httpd,
+                "POST",
+                "/mcp",
+                body=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "restart-test", "version": "1.0"},
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {access}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+            )
+            assert before.status == 200, before.text
+        finally:
+            httpd.shutdown()
+
+        second = OAuthProvider(OAuthConfig(enabled=True, store_path=store))
+        httpd2 = _start_server(second)
+        try:
+            after = _request(
+                httpd2,
+                "POST",
+                "/mcp",
+                body=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "restart-test", "version": "1.0"},
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {access}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+            )
+            assert after.status == 200, after.text
+            assert second.validate_access_token(access) is not None
+        finally:
+            httpd2.shutdown()
 
     def test_access_token_expirado_nao_sobrevive_a_restart(self, tmp_path):
         """Persistência não deve prolongar a validade de access token expirado."""

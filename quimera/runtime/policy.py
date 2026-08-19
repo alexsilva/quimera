@@ -55,6 +55,11 @@ class ToolPolicy:
         for name in tool_names:
             self._tool_validators[name] = tool
 
+    def unregister_tool_validators(self, tool_names: list[str] | tuple[str, ...] | set[str]) -> None:
+        """Remove validadores associados às tools informadas."""
+        for name in tool_names:
+            self._tool_validators.pop(name, None)
+
     def register_external_mcp_tools(self, tool_names: list[str]) -> None:
         """Registra tools importadas de servidores MCP externos.
 
@@ -63,6 +68,10 @@ class ToolPolicy:
         mutantes.
         """
         self._external_mcp_tools.update(tool_names)
+
+    def unregister_external_mcp_tools(self, tool_names: list[str] | tuple[str, ...] | set[str]) -> None:
+        """Remove tools MCP externas do conjunto sujeito à governança externa."""
+        self._external_mcp_tools.difference_update(tool_names)
 
     def validate(self, call: ToolCall) -> None:
         """Valida a chamada: despacha para o validator registrado ou para _validate_<name>."""

@@ -25,7 +25,7 @@ from quimera.runtime.mcp.http_server import (
     _SSEQueueOutput,
 )
 from quimera.runtime.mcp.session import parse_http_allowed_tools
-from quimera.runtime.mcp.oauth import OAuthConfig
+from quimera.runtime.mcp.oauth import IssuedToken, OAuthClient, OAuthConfig, OAuthProvider
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolResult
@@ -133,6 +133,148 @@ def test_http_shutdown_joins_background_thread():
     assert not thread.is_alive()
     assert httpd._thread is None
     assert httpd.httpd is None
+
+
+def test_connected_clients_exposes_authenticated_http_session():
+    """Hub MCP deve enxergar clients de entrada autenticados no HTTP."""
+    httpd = MCP_HTTPServer(_make_mcp_server(), host="127.0.0.1", port=0)
+    httpd._http_sessions["session-1"] = {
+        "oauth_client_id": "client-1",
+        "client_info": {"name": "ChatGPT"},
+        "oauth_scope": "mcp:agent",
+        "http_profile": "agent",
+        "initialized": True,
+    }
+
+    clients = httpd.connected_clients()
+
+    assert len(clients) == 1
+    assert clients[0].session_id == "session-1"
+    assert clients[0].client_id == "client-1"
+    assert clients[0].client_name == "ChatGPT"
+    assert clients[0].scope == "mcp:agent"
+
+
+def test_revoke_client_authorization_closes_http_and_sse_sessions():
+    provider = OAuthProvider(
+        OAuthConfig(
+            enabled=True,
+            clients=(OAuthClient(client_id="chatgpt", client_name="ChatGPT"),),
+        )
+    )
+    httpd = MCP_HTTPServer(
+        _make_mcp_server(),
+        host="127.0.0.1",
+        port=0,
+        oauth=provider,
+    )
+    sse_queue = queue.Queue()
+    httpd._http_sessions["session-1"] = {
+        "oauth_client_id": "chatgpt",
+        "initialized": True,
+    }
+    httpd._sse_clients["session-1"] = sse_queue
+
+    httpd.revoke_client_authorization("chatgpt")
+
+    assert "session-1" not in httpd._http_sessions
+    assert "session-1" not in httpd._sse_clients
+    assert sse_queue.get_nowait() is None
+
+
+def test_known_clients_includes_registered_oauth_client_without_live_session():
+    """Hub deve manter client OAuth registrado visível entre sessões HTTP."""
+    provider = OAuthProvider(
+        OAuthConfig(
+            enabled=True,
+            clients=(
+                OAuthClient(
+                    client_id="chatgpt-client",
+                    client_name="ChatGPT",
+                    scope="mcp:agent",
+                ),
+            ),
+        )
+    )
+    httpd = MCP_HTTPServer(
+        _make_mcp_server(),
+        host="127.0.0.1",
+        port=0,
+        oauth=provider,
+    )
+
+    clients = httpd.known_clients()
+
+    assert len(clients) == 1
+    assert clients[0].client_id == "chatgpt-client"
+    assert clients[0].client_name == "ChatGPT"
+    assert clients[0].scope == "mcp:agent"
+    assert clients[0].connected is False
+    assert clients[0].initialized is False
+
+
+def test_known_clients_hides_dynamic_client_without_authorization():
+    provider = OAuthProvider(OAuthConfig(enabled=True))
+    provider._clients["old-grok"] = OAuthClient(
+        client_id="old-grok",
+        client_name="Grok",
+        dynamic=True,
+    )
+    provider._clients["active-chatgpt"] = OAuthClient(
+        client_id="active-chatgpt",
+        client_name="ChatGPT",
+        dynamic=True,
+    )
+    provider._access_tokens["access-chatgpt"] = IssuedToken(
+        token="access-chatgpt",
+        client_id="active-chatgpt",
+        scope="mcp",
+        resource="",
+        expires_at=time.time() + 3600,
+    )
+    httpd = MCP_HTTPServer(
+        _make_mcp_server(),
+        host="127.0.0.1",
+        port=0,
+        oauth=provider,
+    )
+
+    clients = httpd.known_clients()
+
+    assert [client.client_id for client in clients] == ["active-chatgpt"]
+
+
+def test_known_clients_collapses_multiple_sessions_for_same_oauth_client():
+    """Hub representa um client OAuth uma vez, mesmo com múltiplas sessões HTTP."""
+    provider = OAuthProvider(
+        OAuthConfig(
+            enabled=True,
+            clients=(OAuthClient(client_id="chatgpt", client_name="ChatGPT"),),
+        )
+    )
+    httpd = MCP_HTTPServer(
+        _make_mcp_server(),
+        host="127.0.0.1",
+        port=0,
+        oauth=provider,
+    )
+    httpd._http_sessions["session-a"] = {
+        "oauth_client_id": "chatgpt",
+        "client_info": {"name": "ChatGPT"},
+        "initialized": False,
+    }
+    httpd._http_sessions["session-b"] = {
+        "oauth_client_id": "chatgpt",
+        "client_info": {"name": "ChatGPT"},
+        "initialized": True,
+    }
+
+    clients = httpd.known_clients()
+
+    assert len(clients) == 1
+    assert clients[0].client_id == "chatgpt"
+    assert clients[0].initialized is True
+    assert clients[0].connected is True
 
 
 def test_http_start_timeout_marks_late_startup_as_abandoned():

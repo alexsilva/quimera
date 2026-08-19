@@ -664,17 +664,15 @@ class OAuthProvider:
         self._clients.update(stored_clients)
         for client in self._config.clients:
             self._clients[client.client_id] = client
-        known_clients = set(self._clients)
-        self._access_tokens = {
-            token.token: token
-            for token in stored_access.values()
-            if token.client_id in known_clients
-        }
-        self._refresh_tokens = {
-            token.token: token
-            for token in stored_refresh.values()
-            if token.client_id in known_clients
-        }
+        # Tokens são autoritativos: carregar antes da compactação e sem filtrar
+        # por client_id conhecido. Um bearer válido não pode sumir só porque o
+        # registro do client foi compactado/perdido no store.
+        self._access_tokens = dict(stored_access)
+        self._refresh_tokens = dict(stored_refresh)
+        self._rehydrate_clients_from_tokens()
+        with self._lock:
+            if self._compact_dynamic_clients_locked():
+                self._persist_locked()
 
     # ------------------------------------------------------------------
     # Estado e configuração
@@ -857,6 +855,8 @@ class OAuthProvider:
             dynamic=True,
         )
         with self._lock:
+            fingerprint = self._dynamic_client_fingerprint(client)
+            self._purge_stale_dynamic_family_locked(fingerprint)
             self._clients[client.client_id] = client
             self._persist_locked()
         _logger.info(
@@ -1305,6 +1305,68 @@ deste workspace.</p>
             if changed:
                 self._persist_locked()
 
+    def revoke_client_authorization(self, client_id: str) -> int:
+        """Revoga toda autorização concedida a um client conhecido.
+
+        Clients estáticos permanecem cadastrados para permitir nova autorização
+        futura. Clients registrados dinamicamente são removidos junto com o
+        grant, evitando acumular registros obsoletos a cada novo ciclo de
+        registro/autorização.
+
+        Returns:
+            Quantidade de credenciais/fluxos removidos.
+        """
+        normalized = str(client_id or "").strip()
+        if not normalized:
+            raise ValueError("client_id obrigatório")
+        with self._lock:
+            removed = 0
+            client = self._clients.get(normalized)
+            dynamic_fingerprint = (
+                self._dynamic_client_fingerprint(client)
+                if client is not None and client.dynamic
+                else None
+            )
+            for token, issued in list(self._access_tokens.items()):
+                if issued.client_id == normalized:
+                    self._access_tokens.pop(token, None)
+                    removed += 1
+            for token, issued in list(self._refresh_tokens.items()):
+                if issued.client_id == normalized:
+                    self._refresh_tokens.pop(token, None)
+                    removed += 1
+            for request_id, pending in list(self._pending.items()):
+                if pending.client_id == normalized:
+                    self._pending.pop(request_id, None)
+                    removed += 1
+            for code, authorization_code in list(self._codes.items()):
+                if authorization_code.client_id == normalized:
+                    self._codes.pop(code, None)
+                    removed += 1
+            if client is not None and client.dynamic:
+                self._clients.pop(normalized, None)
+                removed += 1
+            if dynamic_fingerprint is not None:
+                removed += self._purge_stale_dynamic_family_locked(dynamic_fingerprint)
+            if removed:
+                self._persist_locked()
+            return removed
+
+    def has_client_authorization(self, client_id: str) -> bool:
+        """Indica se há access/refresh token ainda válido para o client."""
+        normalized = str(client_id or "").strip()
+        if not normalized:
+            return False
+        now = time.time()
+        with self._lock:
+            return any(
+                token.client_id == normalized and not token.is_expired(now)
+                for token in self._access_tokens.values()
+            ) or any(
+                token.client_id == normalized and not token.is_expired(now)
+                for token in self._refresh_tokens.values()
+            )
+
     def introspect(
         self,
         form: Mapping[str, list[str] | str],
@@ -1393,6 +1455,92 @@ deste workspace.</p>
             expired = [key for key, item in store.items() if item.is_expired(now)]
             for key in expired:
                 store.pop(key, None)
+
+    @staticmethod
+    def _dynamic_client_fingerprint(client: OAuthClient) -> tuple:
+        """Identidade estável de um registro dinâmico, sem incluir ``client_id``.
+
+        Clients MCP como ChatGPT/Grok podem repetir RFC 7591 e receber um novo
+        ``client_id`` a cada autorização. O fingerprint permite reconhecer
+        registros equivalentes e compactar apenas duplicatas obsoletas.
+        """
+        normalized_scope = tuple(sorted(normalize_scope(client.scope).split()))
+        return (
+            str(client.client_name or "").strip(),
+            tuple(sorted(str(uri) for uri in client.redirect_uris)),
+            tuple(sorted(str(grant) for grant in client.grant_types)),
+            normalized_scope,
+            client.token_endpoint_auth_method,
+        )
+
+    def _live_client_ids_locked(self) -> set[str]:
+        """Retorna client_ids com token ou fluxo de autorização ainda vivo."""
+        self._purge_expired_locked()
+        live = {token.client_id for token in self._access_tokens.values()}
+        live.update(token.client_id for token in self._refresh_tokens.values())
+        live.update(request.client_id for request in self._pending.values())
+        live.update(code.client_id for code in self._codes.values())
+        return live
+
+    def _rehydrate_clients_from_tokens(self) -> None:
+        """Garante client_id referenciado por token vivo mesmo se o registro sumiu.
+
+        Útil quando stores antigos perderam o client dinâmico na compactação, mas
+        ainda guardam access/refresh válidos. Sem o registro, refresh e o Hub
+        quebrariam mesmo com bearer ainda aceitável.
+        """
+        for token in list(self._access_tokens.values()) + list(self._refresh_tokens.values()):
+            client_id = str(token.client_id or "").strip()
+            if not client_id or client_id in self._clients:
+                continue
+            self._clients[client_id] = OAuthClient(
+                client_id=client_id,
+                client_name=client_id,
+                scope=str(token.scope or SCOPE_DEFAULT),
+                created_at=0.0,
+                dynamic=True,
+            )
+
+    def _purge_stale_dynamic_family_locked(self, fingerprint: tuple) -> int:
+        """Remove registros equivalentes sem grant/fluxo ativo."""
+        live_ids = self._live_client_ids_locked()
+        removed = 0
+        for client_id, candidate in list(self._clients.items()):
+            if not candidate.dynamic:
+                continue
+            if self._dynamic_client_fingerprint(candidate) != fingerprint:
+                continue
+            if client_id in live_ids:
+                continue
+            self._clients.pop(client_id, None)
+            removed += 1
+        return removed
+
+    def _compact_dynamic_clients_locked(self) -> int:
+        """Compacta duplicatas históricas sem invalidar registros reutilizáveis.
+
+        Para cada família equivalente, todos os registros com autorização viva
+        são preservados. Dos registros sem grant vivo, mantém no máximo o mais
+        recente. Isso reduz stores antigos sem quebrar a persistência de RFC 7591.
+        """
+        live_ids = self._live_client_ids_locked()
+        groups: dict[tuple, list[OAuthClient]] = {}
+        for client in self._clients.values():
+            if client.dynamic:
+                groups.setdefault(self._dynamic_client_fingerprint(client), []).append(client)
+
+        removed = 0
+        for clients in groups.values():
+            stale = [client for client in clients if client.client_id not in live_ids]
+            if len(stale) <= 1:
+                continue
+            newest = max(stale, key=lambda item: (item.created_at, item.client_id))
+            for client in stale:
+                if client.client_id == newest.client_id:
+                    continue
+                self._clients.pop(client.client_id, None)
+                removed += 1
+        return removed
 
     def _persist_locked(self) -> None:
         """Persiste o estado durável. Requer ``self._lock``."""

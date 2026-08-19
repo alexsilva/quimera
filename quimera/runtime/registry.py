@@ -19,6 +19,15 @@ class ToolRegistry:
         """Executa register."""
         self._handlers[name] = handler
 
+    def unregister(self, name: str) -> None:
+        """Remove uma ferramenta registrada, se existir."""
+        self._handlers.pop(name, None)
+
+    def unregister_many(self, names: list[str] | tuple[str, ...] | set[str]) -> None:
+        """Remove várias ferramentas registradas sem falhar por nomes ausentes."""
+        for name in names:
+            self.unregister(name)
+
     def get(self, name: str) -> ToolHandler:
         """Retorna get."""
         try:

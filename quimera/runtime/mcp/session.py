@@ -156,6 +156,7 @@ def start_embedded_mcp(
         setattr(app, "mcp_http_url", None)
         setattr(app, "internal_mcp_socket_path", None)
         setattr(app, "external_mcp_http_url", None)
+        setattr(app, "external_mcp_http_server", None)
         return EmbeddedMCPRuntime(enabled=False)
 
     if transport not in {"socket", "http"}:
@@ -203,9 +204,11 @@ def start_embedded_mcp(
         # preferir o socket interno mesmo quando o HTTP externo está ativo.
         setattr(app, "mcp_http_url", external_mcp_http_url)
         setattr(app, "external_mcp_http_url", external_mcp_http_url)
+        setattr(app, "external_mcp_http_server", external_mcp_http_server)
     else:
         setattr(app, "mcp_http_url", None)
         setattr(app, "external_mcp_http_url", None)
+        setattr(app, "external_mcp_http_server", None)
 
     oauth_enabled = bool(
         external_mcp_http_server is not None and external_mcp_http_server.oauth.enabled
