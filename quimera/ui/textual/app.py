@@ -38,6 +38,7 @@ from quimera.ui.textual.feed_model import TextualFeedModel
 _logger = logging.getLogger(__name__)
 
 from quimera.ui.textual.renderables import (
+    COMPACT_FEED_KINDS,
     _build_question_overlay,
     _build_window_overlay_payload,
     _clear_question_overlay_widget,
@@ -523,7 +524,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         def _sync_feed(self, *, force: bool = False, scroll_end: bool = False) -> None:
             """Reconcilia histórico e execuções vivas na mesma área rolável."""
             feed = self.query_one("#feed", _UnifiedFeed)
-            entries: list[tuple[int, bool, object]] = []
+            entries: list[tuple[int, bool, object, bool]] = []
             active_tokens: set[int] = set()
             for item in self._feed_model.items:
                 token = id(item.event)
@@ -534,7 +535,14 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     if renderable is not None:
                         self._feed_renderable_cache[token] = renderable
                 if renderable is not None:
-                    entries.append((token, item.transient, renderable))
+                    entries.append(
+                        (
+                            token,
+                            item.transient,
+                            renderable,
+                            item.event.kind in COMPACT_FEED_KINDS,
+                        )
+                    )
 
             self._feed_renderable_cache = {
                 token: renderable

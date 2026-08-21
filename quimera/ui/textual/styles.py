@@ -28,6 +28,9 @@ TEXTUAL_APP_CSS = """
             height: auto;
             margin-bottom: 1;
         }
+        .feed-entry.-compact {
+            margin-bottom: 0;
+        }
         #toolbar {
             height: 1;
             padding: 0 1;

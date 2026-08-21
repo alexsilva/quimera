@@ -2903,6 +2903,65 @@ def test_textual_feed_entries_have_uniform_spacing():
     assert "margin-bottom: 1;" in entry_css
 
 
+def test_textual_feed_compact_entries_have_no_spacing():
+    from quimera.ui.textual.styles import TEXTUAL_APP_CSS
+
+    compact_css = TEXTUAL_APP_CSS.split(".feed-entry.-compact {", 1)[1].split("}", 1)[0]
+
+    assert "margin-bottom: 0;" in compact_css
+
+
+def test_textual_boot_header_kinds_are_compact():
+    from quimera.ui.textual.renderables import COMPACT_FEED_KINDS
+
+    # Linhas de boot (banner, "Projeto:", "MCP ...") ficam coladas entre si;
+    # turnos de conversa continuam com a margem uniforme do feed.
+    assert {"banner", "muted", "plain", "system"} <= COMPACT_FEED_KINDS
+    assert "user_message" not in COMPACT_FEED_KINDS
+    assert "agent_message" not in COMPACT_FEED_KINDS
+
+
+def test_textual_unified_feed_applies_compact_class_per_entry():
+    import asyncio
+
+    from textual.app import App, ComposeResult
+
+    class FeedApp(App):
+        def compose(self) -> ComposeResult:
+            yield _UnifiedFeed(id="feed")
+
+    async def run_test() -> None:
+        app = FeedApp()
+        async with app.run_test(size=(60, 16)) as pilot:
+            feed = app.query_one("#feed", _UnifiedFeed)
+            feed.sync_entries(
+                [
+                    (1, False, "Projeto: /tmp/projeto", True),
+                    (2, False, "resposta de agente", False),
+                ]
+            )
+            await pilot.pause()
+
+            slots = list(feed.children)
+            assert slots[0].has_class("-compact")
+            assert not slots[1].has_class("-compact")
+
+            # Reuso do slot por outro tipo de entrada atualiza a classe.
+            feed.sync_entries(
+                [
+                    (3, False, "resposta de agente", False),
+                    (4, False, "MCP interno iniciado", True),
+                ]
+            )
+            await pilot.pause()
+
+            assert list(feed.children) == slots
+            assert not slots[0].has_class("-compact")
+            assert slots[1].has_class("-compact")
+
+    asyncio.run(run_test())
+
+
 def test_textual_feed_reserves_at_least_ten_lines_for_agent_output():
     from quimera.ui.textual.styles import TEXTUAL_APP_CSS
 
@@ -2941,8 +3000,8 @@ def test_textual_unified_feed_replaces_parallel_runs_in_their_original_slots():
             feed = app.query_one("#feed", _UnifiedFeed)
             feed.sync_entries(
                 [
-                    (1, True, "agente A executando"),
-                    (2, True, "agente B executando"),
+                    (1, True, "agente A executando", False),
+                    (2, True, "agente B executando", False),
                 ]
             )
             await pilot.pause()
@@ -2950,8 +3009,8 @@ def test_textual_unified_feed_replaces_parallel_runs_in_their_original_slots():
 
             feed.sync_entries(
                 [
-                    (3, False, "resposta final A"),
-                    (4, True, "agente B usando ferramenta"),
+                    (3, False, "resposta final A", False),
+                    (4, True, "agente B usando ferramenta", False),
                 ]
             )
             await pilot.pause()
@@ -2962,8 +3021,8 @@ def test_textual_unified_feed_replaces_parallel_runs_in_their_original_slots():
 
             feed.sync_entries(
                 [
-                    (3, False, "resposta final A"),
-                    (5, False, "resposta final B"),
+                    (3, False, "resposta final A", False),
+                    (5, False, "resposta final B", False),
                 ]
             )
             await pilot.pause()
@@ -2992,14 +3051,16 @@ def test_textual_unified_feed_handles_middle_removal_clear_and_resync():
             feed = app.query_one("#feed", _UnifiedFeed)
             feed.sync_entries(
                 [
-                    (1, False, "mensagem A"),
-                    (2, True, "agente B executando"),
-                    (3, False, "mensagem C"),
+                    (1, False, "mensagem A", False),
+                    (2, True, "agente B executando", False),
+                    (3, False, "mensagem C", False),
                 ]
             )
             await pilot.pause()
 
-            feed.sync_entries([(1, False, "mensagem A"), (3, False, "mensagem C")])
+            feed.sync_entries(
+                [(1, False, "mensagem A", False), (3, False, "mensagem C", False)]
+            )
             await pilot.pause()
 
             assert [str(slot.render()) for slot in feed.children] == [
@@ -3014,7 +3075,7 @@ def test_textual_unified_feed_handles_middle_removal_clear_and_resync():
             assert feed._entry_widgets == []
             assert feed._entry_tokens == []
 
-            feed.sync_entries([(4, True, "novo agente executando")])
+            feed.sync_entries([(4, True, "novo agente executando", False)])
             await pilot.pause()
 
             assert [str(slot.render()) for slot in feed.children] == [
@@ -3037,7 +3098,9 @@ def test_textual_unified_feed_updates_single_matching_slot_only():
         app = FeedApp()
         async with app.run_test(size=(60, 16)) as pilot:
             feed = app.query_one("#feed", _UnifiedFeed)
-            feed.sync_entries([(1, True, "executando"), (2, False, "fixo")])
+            feed.sync_entries(
+                [(1, True, "executando", False), (2, False, "fixo", False)]
+            )
             await pilot.pause()
 
             assert feed.update_entry(0, 1, "pulso atualizado") is True

@@ -40,7 +40,7 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
 
     def sync_entries(
         self,
-        entries: Iterable[tuple[int, bool, object]],
+        entries: Iterable[tuple[int, bool, object, bool]],
         *,
         force: bool = False,
     ) -> None:
@@ -49,9 +49,11 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
         shared = min(len(desired), len(self._entry_widgets))
 
         for index in range(shared):
-            token, transient, renderable = desired[index]
+            token, transient, renderable, compact = desired[index]
+            widget = self._entry_widgets[index]
             if force or transient or token != self._entry_tokens[index]:
-                self._entry_widgets[index].update(renderable)
+                widget.update(renderable)
+            widget.set_class(compact, "-compact")
             self._entry_tokens[index] = token
 
         if len(desired) < len(self._entry_widgets):
@@ -61,13 +63,16 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
             del self._entry_tokens[len(desired):]
         elif len(desired) > len(self._entry_widgets):
             new_widgets = [
-                _FeedEntry(renderable, classes="feed-entry")
-                for _, _, renderable in desired[len(self._entry_widgets):]
+                _FeedEntry(
+                    renderable,
+                    classes="feed-entry -compact" if compact else "feed-entry",
+                )
+                for _, _, renderable, compact in desired[len(self._entry_widgets):]
             ]
             self.mount(*new_widgets)
             self._entry_widgets.extend(new_widgets)
             self._entry_tokens.extend(
-                token for token, _, _ in desired[len(self._entry_tokens):]
+                token for token, _, _, _ in desired[len(self._entry_tokens):]
             )
 
     def update_entry(self, index: int, token: int, renderable: object) -> bool:

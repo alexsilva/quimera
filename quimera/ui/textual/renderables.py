@@ -36,6 +36,10 @@ _TRANSPORT_MARKERS = {
     _MCP_HTTP_TRANSPORT: "☁",
 }
 
+# Eventos de linha única (banner, avisos de boot/sistema) formam blocos visuais
+# contíguos: não recebem a margem vertical aplicada aos turnos de conversa.
+COMPACT_FEED_KINDS = frozenset({"banner", "muted", "plain", "system", "theme_changed"})
+
 
 def _resolve_transport_label(payload, agent: str | None = None) -> str:
     """Resolve label from payload, prefixing a discreet transport icon for MCP HTTP.
