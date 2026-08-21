@@ -25,3 +25,4 @@ planning/
 build/
 *.egg-info/
 .tinyide
+analisis/
