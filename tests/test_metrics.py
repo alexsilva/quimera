@@ -156,57 +156,6 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         self.assertEqual(summary["long_response_rate"], 0.5)
         self.assertGreater(summary["avg_response_chars"], 100)
 
-    def test_generate_feedback_low_data(self):
-        """Verifica que não gera feedback com poucos dados."""
-        tracker = BehaviorMetricsTracker()
-
-        # Menos de 3 respostas
-        tracker.record_response("claude", 1.0)
-        tracker.record_response("claude", 2.0)
-
-        feedback = tracker.generate_feedback("claude")
-        self.assertEqual(feedback, "")
-
-    def test_generate_feedback_high_invalid_rate(self):
-        """Verifica feedback para taxa alta de delegations inválidos."""
-        tracker = BehaviorMetricsTracker()
-
-        # 5 respostas com 3 delegations inválidos de 5 (60%)
-        for i in range(5):
-            tracker.record_response("codex", 1.0, has_next_step=True)
-            tracker.record_delegation_sent("codex", is_invalid=(i < 3))
-
-        feedback = tracker.generate_feedback("codex")
-
-        self.assertIn("DELEGAÇÃO INVÁLIDA", feedback)
-        self.assertIn("60%", feedback)
-
-    def test_generate_feedback_low_next_step_rate(self):
-        """Verifica feedback para poucos próximos passos claros."""
-        tracker = BehaviorMetricsTracker()
-
-        # 10 respostas, apenas 2 com próximo passo (20%)
-        for i in range(10):
-            tracker.record_response("claude", 1.0, has_next_step=(i < 2))
-
-        feedback = tracker.generate_feedback("claude")
-
-        self.assertIn("PRÓXIMO PASSO", feedback)
-        self.assertIn("20%", feedback)
-
-    def test_generate_feedback_circular_detection(self):
-        """Verifica feedback para delegações circulares."""
-        tracker = BehaviorMetricsTracker()
-
-        # Simular respostas e delegações circulares
-        for _ in range(4):
-            tracker.record_response("codex", 1.0, has_next_step=True)
-            tracker.record_delegation_received("codex", is_circular=True)
-
-        feedback = tracker.generate_feedback("codex")
-
-        self.assertIn("circulares", feedback.lower())
-
     def test_persistence(self):
         """Verifica se o ciclo save -> reload -> load funciona corretamente."""
         import tempfile
@@ -278,88 +227,11 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         self.assertEqual(summaries[0]["agent"], "a")
         self.assertEqual(summaries[1]["agent"], "b")
 
-    def test_get_position_summary(self):
-        """Verifica geração de resumo de posição com vários alertas."""
+    def test_feedback_layer_is_absent(self):
+        """A camada de feedback/diagnóstico não existe mais no tracker."""
         tracker = BehaviorMetricsTracker()
-        metrics = tracker.get_agent("test")
-
-        # Sem dados
-        self.assertEqual(tracker.get_position_summary("test"), "")
-
-        # Com dados e alertas
-        for _ in range(10):
-            metrics.record_response(40.0, is_empty=True)  # latency > 30, empty > 0.2
-        metrics.record_delegation_sent(is_invalid=True)
-        metrics.record_delegation_sent(is_invalid=True)  # rate > 0.3
-        metrics.record_delegation_received(is_circular=True)
-        for _ in range(4):
-            metrics.record_synthesis(needed_correction=True)  # count >= 3, corrections > 0.5
-
-        summary = tracker.get_position_summary("test")
-        self.assertIn("HISTÓRICO", summary)
-        self.assertIn("Atenção:", summary)
-        self.assertIn("latência alta", summary)
-        self.assertIn("delegações inválidas", summary)
-        self.assertIn("respostas vazias", summary)  # line 227
-        self.assertIn("delegações circulares", summary)
-        self.assertIn("sínteses com correção", summary)  # line 231
-
-    def test_generate_feedback_for_tool_failures(self):
-        """Feedback deve destacar falhas de tool use."""
-        tracker = BehaviorMetricsTracker()
-        for _ in range(5):
-            tracker.record_response("tooly", 1.0, has_next_step=True)
-        tracker.record_tool_call("tooly", ok=False, is_invalid=True)
-        tracker.record_tool_call("tooly", ok=False)
-        tracker.record_tool_call("tooly", ok=True)
-        tracker.record_tool_loop_abort("tooly")
-
-        feedback = tracker.generate_feedback("tooly")
-
-        self.assertIn("FALHAS NO USO DE FERRAMENTAS", feedback)
-        self.assertIn("FERRAMENTAS INVÁLIDAS", feedback)
-        self.assertIn("LOOP DE FERRAMENTA ABORTADO", feedback)
-
-    def test_generate_feedback_all_branches(self):
-        """Verifica todos os ramos de feedback."""
-        tracker = BehaviorMetricsTracker()
-        metrics = tracker.get_agent("test")
-
-        # 1. Respostas vazias
-        for _ in range(5):
-            metrics.record_response(1.0, is_empty=True)
-
-        # 2. Redundâncias
-        for _ in range(3):
-            metrics.record_response(1.0, is_redundant=True)
-
-        # 3. Síntese requer correção (line 293)
-        for _ in range(4):
-            metrics.record_synthesis(needed_correction=True)
-
-        # 4. Baixa taxa de sucesso em delegations (line 321)
-        # delegations_sent > 3
-        for _ in range(5):
-            metrics.record_delegation_sent(is_invalid=True)
-        # success = 0/5 = 0.0 < 0.7
-
-        feedback = tracker.generate_feedback("test")
-        self.assertIn("RESPOSTAS VAZIAS", feedback)
-        self.assertIn("RESPOSTAS REDUNDANTES", feedback)
-        self.assertIn("SÍNTESES IMPRECISAS", feedback)
-        self.assertIn("BAIXA TAXA DE SUCESSO", feedback)
-
-    def test_generate_feedback_for_verbose_agent(self):
-        """Feedback deve sugerir respostas mais curtas quando houver prolixidade."""
-        tracker = BehaviorMetricsTracker()
-
-        for _ in range(5):
-            tracker.record_response("codex", 1.0, response_text="x" * 320)
-
-        feedback = tracker.generate_feedback("codex")
-
-        self.assertIn("RESPOSTAS LONGAS", feedback)
-        self.assertIn("2-4 frases", feedback)
+        for name in ("generate_feedback", "get_position_summary", "collect_warnings"):
+            self.assertFalse(hasattr(tracker, name), name)
 
 
 class TestSessionMetricsService(unittest.TestCase):
@@ -382,6 +254,47 @@ class TestSessionMetricsService(unittest.TestCase):
         self.assertEqual(state.metrics.total_responses, 1)
         self.assertEqual(state.metrics.responses_with_clear_next_step, 0)
         self.assertEqual(state.metrics.consecutive_redundant_responses, 1)
+
+    def test_agent_metric_uses_response_text_for_behavior_metrics(self):
+        """Com texto disponível, tamanho e próximo passo vêm do conteúdo real."""
+        tracker = BehaviorMetricsTracker()
+        app = SimpleNamespace(
+            session_state={},
+            history=[],
+            behavior_metrics=tracker,
+        )
+        text = "Ajuste aplicado em quimera/metrics.py. Próximo passo: rodar a suíte."
+
+        SessionMetricsService.record_agent_metric(app, "claude", "succeeded", 2.0, text)
+
+        metrics = tracker.get_agent("claude")
+        self.assertEqual(metrics.responses_total, 1)
+        self.assertEqual(metrics.responses_empty, 0)
+        self.assertEqual(metrics.next_steps_claros, 1)
+        self.assertEqual(metrics.avg_response_chars, float(len(text)))
+        self.assertEqual(metrics.responses_code_context, 1)
+
+    def test_agent_metric_marks_empty_text_as_empty_response(self):
+        """Texto vazio conta como resposta vazia mesmo com dispatch bem-sucedido."""
+        tracker = BehaviorMetricsTracker()
+        app = SimpleNamespace(session_state={}, history=[], behavior_metrics=tracker)
+
+        SessionMetricsService.record_agent_metric(app, "codex", "succeeded", 1.0, "   ")
+
+        metrics = tracker.get_agent("codex")
+        self.assertEqual(metrics.responses_empty, 1)
+        self.assertEqual(metrics.next_steps_claros, 0)
+
+    def test_agent_metric_without_text_keeps_dispatch_semantics(self):
+        """Sem texto (chamador legado), o resultado do dispatch continua valendo."""
+        tracker = BehaviorMetricsTracker()
+        app = SimpleNamespace(session_state={}, history=[], behavior_metrics=tracker)
+
+        SessionMetricsService.record_agent_metric(app, "codex", "failed", 0.0)
+
+        metrics = tracker.get_agent("codex")
+        self.assertEqual(metrics.responses_empty, 1)
+        self.assertEqual(metrics.total_response_chars, 0)
 
 
 class TestPromptMetricsFeedback(unittest.TestCase):

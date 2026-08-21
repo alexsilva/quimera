@@ -32,8 +32,14 @@ class SessionMetricsService:
         return ok, normalized_error_type == "policy", normalized_error_type
 
     @staticmethod
-    def record_agent_metric(app, agent, metric_name, latency):
-        """Registra agent metric."""
+    def record_agent_metric(app, agent, metric_name, latency, response_text=None):
+        """Registra agent metric.
+
+        `response_text` é o texto realmente devolvido pelo agente. Quando
+        presente, as métricas de comportamento são derivadas do conteúdo
+        (tamanho, próximo passo, redundância) em vez de inferidas do
+        resultado booleano do dispatch.
+        """
         metrics = app.session_state.get("agent_metrics", {})
         if agent not in metrics:
             metrics[agent] = {
@@ -62,12 +68,37 @@ class SessionMetricsService:
         app.session_state["agent_metrics"] = metrics
 
         if hasattr(app, "behavior_metrics") and app.behavior_metrics and metric_name in ("succeeded", "failed"):
+            SessionMetricsService._record_behavior_response(
+                app,
+                agent,
+                metric_name,
+                latency,
+                response_text,
+            )
+
+    @staticmethod
+    def _record_behavior_response(app, agent, metric_name, latency, response_text):
+        """Alimenta o tracker persistido com o conteúdo real da resposta."""
+        if response_text is None:
+            # Chamador legado (ex.: registro de falha de agente): sem texto
+            # disponível, só resta o resultado booleano do dispatch.
             app.behavior_metrics.record_response(
                 agent,
                 latency,
                 has_next_step=metric_name == "succeeded",
                 is_empty=metric_name == "failed",
             )
+            return
+        text = str(response_text)
+        history = getattr(app, "history", None) or []
+        app.behavior_metrics.record_response(
+            agent,
+            latency,
+            has_next_step=SessionMetricsService.has_clear_next_step(text),
+            is_empty=not text.strip(),
+            is_redundant=SessionMetricsService.is_response_redundant(text, history),
+            response_text=text,
+        )
 
     @staticmethod
     def record_tool_event(

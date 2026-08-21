@@ -44,6 +44,7 @@ from quimera.ui.commands import (  # noqa: F401
     CMD_TASK,
     CMD_DEBATE,
     CMD_BUGS,
+    CMD_STATS,
     CMD_RESET,
     CMD_APPROVE,
     CMD_APPROVE_ALL,

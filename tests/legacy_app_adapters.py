@@ -59,9 +59,9 @@ def dispatch_services_from_app(app, **kwargs):
         persist_message_fn=lambda agent, text: getattr(
             getattr(app, 'session_services', None), 'persist_message', lambda a, t: None
         )(agent, text),
-        record_session_metric=lambda agent, metric, elapsed: (
+        record_session_metric=lambda agent, metric, elapsed, response_text=None: (
             getattr(getattr(app, 'session_metrics', None), 'record_agent_metric', lambda *a: None)(
-                app, agent, metric, elapsed
+                app, agent, metric, elapsed, response_text
             )
         ),
         record_tool_event_fn=lambda agent, **kw: (
@@ -262,6 +262,7 @@ def system_layer_from_app(app, **overrides):
         task_command_handler=getattr(task_services, "handle_task_command", None),
         debate_command_handler=getattr(getattr(app, "debate_service", None), "handle_command", None),
         bugs_command_handler=getattr(app, "_handle_bugs_command", None),
+        stats_command_handler=getattr(app, "_handle_stats_command", None),
         session_state_manager=getattr(app, "session_state_mgr", None),
         approval_handler_getter=lambda: getattr(app, "_approval_handler", None),
         context_manager=getattr(app, "context_manager", None),

@@ -104,12 +104,6 @@ Só ACEITE com prova concreta de conclusão.
 </shared_state>
 <!-- ENDIF:shared_state_json -->
 
-<!-- IF:metrics -->
-<agent_metrics title="Suas métricas (apenas referência)">
-{metrics}
-</agent_metrics>
-<!-- ENDIF:metrics -->
-
 <!-- IF:completed_task_results -->
 <completed_tasks title="Tarefas concluídas">
 {completed_task_results}

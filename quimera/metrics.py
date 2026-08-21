@@ -1,13 +1,17 @@
-"""Sistema de métricas de comportamento dos agentes.
+"""Sistema de métricas de entrega dos agentes.
 
-Rastreia métricas de eficiência colaborativa:
+Coleta e persiste dados brutos de entrega, sem qualquer camada de
+interpretação ou feedback:
 - Taxa de delegação inválida (payload malformado)
 - Taxa de delegação circular detectada
 - Número de turnos sem progresso (respostas vazias/irrelevantes)
 - Frequência de próximos passos claros
 - Tempo médio de resposta por agente
 - Taxa de síntese que requer correção
- - Em caso de falta de contexto suficiente, o roteamento deve delegar a tarefa a outro agente, não improvisar.
+- Uso e falhas de ferramentas
+
+Os dados são consultados pelo humano via `/stats`
+(ver `quimera/metrics_report.py`) e nunca injetados no prompt.
 """
 import json
 import atexit
@@ -366,167 +370,27 @@ class BehaviorMetricsTracker:
             for name in sorted(self._metrics.keys())
         ]
 
-    def get_position_summary(self, agent_name: str) -> str:
-        """Retorna resumo da posição do agente baseado no histórico persistido.
+    def known_agents(self) -> list[str]:
+        """Retorna os agentes com métricas acumuladas, em ordem alfabética."""
+        return sorted(self._metrics.keys())
 
-        Diferente de generate_feedback (que só ativa com thresholds), este método
-        SEMPRE mostra o estado atual quando há métricas acumuladas.
-        """
-        metrics = self.get_agent(agent_name)
-        if metrics.responses_total == 0:
-            return ""
+    def has_metrics(self, agent_name: str) -> bool:
+        """Indica se já existem métricas registradas para o agente."""
+        return agent_name in self._metrics
 
-        parts = [
-            f"- SEU HISTÓRICO ({metrics.responses_total} respostas em sessões anteriores):",
-            f"  Latência média: {metrics.avg_latency_seconds:.1f}s | "
-            f"Delegações: {metrics.delegations_sent} enviadas, {metrics.delegations_received} recebidas | "
-            f"Próximos passos claros: {metrics.next_step_clarity_rate:.0%} | "
-            f"Ferramentas: {metrics.tool_calls_total} chamadas, sucesso {metrics.tool_success_rate:.0%} | "
-            f"Tamanho médio: {metrics.avg_response_chars:.0f} chars",
-        ]
+    def reset_agent(self, agent_name: str) -> bool:
+        """Descarta as métricas de um agente, persistindo a remoção."""
+        if agent_name not in self._metrics:
+            return False
+        del self._metrics[agent_name]
+        self._mark_dirty()
+        return True
 
-        warnings = []
-        if metrics.invalid_delegation_rate > 0.3:
-            warnings.append(f"delegações inválidas {metrics.invalid_delegation_rate:.0%}")
-        if metrics.empty_response_rate > 0.2:
-            warnings.append(f"respostas vazias {metrics.empty_response_rate:.0%}")
-        if metrics.delegations_circular_detected > 0:
-            warnings.append(f"{metrics.delegations_circular_detected} delegações circulares")
-        if metrics.synthesis_requests >= 3 and metrics.synthesis_corrections / metrics.synthesis_requests > 0.5:
-            warnings.append(f"sínteses com correção {metrics.synthesis_corrections}/{metrics.synthesis_requests}")
-        if metrics.avg_latency_seconds > 30 and metrics.response_count >= 5:
-            warnings.append(f"latência alta ({metrics.avg_latency_seconds:.1f}s)")
-        if metrics.invalid_tool_calls > 0:
-            warnings.append(f"{metrics.invalid_tool_calls} chamadas de ferramenta inválidas")
-        if metrics.tool_loop_abortions > 0:
-            warnings.append(f"{metrics.tool_loop_abortions} abortos de loop de ferramenta")
-        if metrics.long_response_rate > 0.4 and metrics.responses_total >= 5:
-            warnings.append(f"respostas longas {metrics.long_response_rate:.0%}")
-
-        if warnings:
-            parts.append(f"  Atenção: {', '.join(warnings)}")
-
-        return "\n".join(parts)
-
-    def generate_feedback(self, agent_name: str) -> str:
-        """Gera feedback acionável baseado nas métricas do agente."""
-        metrics = self.get_agent(agent_name)
-
-        if metrics.responses_total < 3:
-            return ""  # Não há dados suficientes
-
-        feedback_parts = []
-
-        # Taxa de delegação inválida alta
-        if metrics.invalid_delegation_rate > 0.3:
-            feedback_parts.append(
-                f"- ALTA TAXA DE DELEGAÇÃO INVÁLIDA ({metrics.invalid_delegation_rate:.0%}):\n"
-                "  Use a tool `delegate` (MCP) para delegar, com `target_agent`, `request` e `context`.\n"
-                "  Para múltiplas delegações, faça chamadas independentes (uma tarefa por chamada).\n"
-
-                "  Se faltar contexto suficiente, isso indica falha no roteamento inicial; não improvise, delegue.\n"
-                "  Só tente executar quando a tarefa e o contexto estiverem claros."
-            )
-
-        # Respostas vazias frequentes
-        if metrics.empty_response_rate > 0.2:
-            feedback_parts.append(
-                f"- RESPOSTAS VAZIAS ({metrics.empty_response_rate:.0%}):\n"
-                "  Garanta que sua resposta contém informação concreta e próxima ação.\n"
-                "  Cada resposta deve avançar a tarefa."
-            )
-
-        # Falta de próximos passos claros
-        if metrics.next_step_clarity_rate < 0.3 and metrics.responses_total >= 5:
-            feedback_parts.append(
-                f"- FALTA PRÓXIMO PASSO ({metrics.next_step_clarity_rate:.0%} das respostas):\n"
-                "  Finalize sempre indicando o que fazer a seguir: continuar, pedir input, ou finalizar."
-            )
-
-        # Redundância detectada
-        if metrics.redundancias_detectadas > 2:
-            feedback_parts.append(
-                f"- RESPOSTAS REDUNDANTES ({metrics.redundancias_detectadas}x):\n"
-                "  Construa sobre o trabalho anterior, não repita o que já foi dito.\n"
-                "  Se outro agente já resolveu, complemente ou avance."
-            )
-
-        if metrics.long_response_rate > 0.4 and metrics.responses_total >= 5:
-            feedback_parts.append(
-                f"- RESPOSTAS LONGAS ({metrics.respostas_longas}/{metrics.responses_total}):\n"
-                "  Responda de forma mais curta e objetiva.\n"
-                "  Prefira 2-4 frases, resultado primeiro e detalhe só se for pedido."
-            )
-
-        # Síntese requer correção frequentemente
-        if metrics.synthesis_requests >= 3 and (
-                metrics.synthesis_corrections / metrics.synthesis_requests > 0.5
-        ):
-            feedback_parts.append(
-                f"- SÍNTESES IMPRECISAS ({metrics.synthesis_corrections}/{metrics.synthesis_requests}):\n"
-                "  Incorpore a resposta do agente delegado, não a repita.\n"
-                "  Avance o diálogo em vez de resumir."
-            )
-
-        # Tempo de resposta muito alto
-        if metrics.avg_latency_seconds > 30 and metrics.response_count >= 5:
-            feedback_parts.append(
-                f"- LATÊNCIA ALTA ({metrics.avg_latency_seconds:.1f}s média):\n"
-                "  Considere respostas mais diretas e menos análise."
-            )
-
-        if metrics.tool_calls_total == 0 and metrics.responses_code_context >= 3:
-            feedback_parts.append(
-                "- ZERO USO DE FERRAMENTAS:\n"
-                "  Para tarefas com arquivos/código, DEVE usar ferramentas de leitura/busca para verificar fatos antes de responder.\n"
-                "  Use list_files/grep_search/read_file — não invente respostas baseado apenas no prompt.\n"
-            )
-
-        if metrics.tool_calls_total >= 3 and metrics.tool_success_rate < 0.7:
-            feedback_parts.append(
-                f"- FALHAS NO USO DE FERRAMENTAS ({metrics.tool_calls_failed}/{metrics.tool_calls_total}):\n"
-                "  Use apenas nomes e argumentos exatamente como definidos no schema.\n"
-                "  Se uma ferramenta falhar, ajuste o payload antes de tentar novamente."
-            )
-
-        if metrics.invalid_tool_calls > 0:
-            feedback_parts.append(
-                f"- FERRAMENTAS INVÁLIDAS ({metrics.invalid_tool_calls}x):\n"
-                "  Não invente nomes de ferramentas. Reutilize apenas os nomes expostos pelo runtime."
-            )
-
-        if metrics.tool_loop_abortions > 0:
-            feedback_parts.append(
-                f"- LOOP DE FERRAMENTA ABORTADO ({metrics.tool_loop_abortions}x):\n"
-                "  Converja mais rápido após o resultado da ferramenta. Responda quando a evidência já for suficiente."
-            )
-
-        # Detecção circular alta
-        if metrics.delegations_circular_detected > 1:
-            feedback_parts.append(
-                f"- DELEGAÇÕES CIRCULARES ({metrics.delegations_circular_detected}x):\n"
-                "  Verifique a cadeia antes de delegar. Se já participou, resolva diretamente."
-            )
-
-        # Taxa de sucesso baixa
-        if metrics.delegations_sent > 3:
-            success_rate = (metrics.delegations_sent - metrics.delegations_invalid) / metrics.delegations_sent
-            if success_rate < 0.7:
-                feedback_parts.append(
-                    f"- BAIXA TAXA DE SUCESSO EM DELEGAÇÕES ({success_rate:.0%}):\n"
-                    "  Revise o formato do payload ou resolva sem delegar."
-                )
-
-        summary = (
-            f"- STATUS OPERACIONAL: {metrics.responses_total} turnos registrados.\n"
-            f"  Latência média: {metrics.avg_latency_seconds:.1f}s | "
-            f"Próximo passo claro: {metrics.next_step_clarity_rate:.0%} | "
-            f"Sucesso em ferramentas: {metrics.tool_success_rate:.0%} | "
-            f"Tamanho médio: {metrics.avg_response_chars:.0f} chars"
-        )
-
-        if not feedback_parts:
-            return summary
-
-        header = summary + "\n" + "\n".join(feedback_parts)
-        return header
+    def reset_all(self) -> int:
+        """Descarta as métricas de todos os agentes e devolve quantos foram removidos."""
+        removed = len(self._metrics)
+        if not removed:
+            return 0
+        self._metrics.clear()
+        self._mark_dirty()
+        return removed

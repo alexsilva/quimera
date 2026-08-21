@@ -281,14 +281,19 @@ class AppDispatchServices:
         counter_lock = self._call(self._counter_lock)
         session_state = self._session_state
 
-        def _update_session(agent: str, success: bool, elapsed: float):
+        def _update_session(agent: str, success: bool, elapsed: float, response_text: str = ""):
             if session_state is not None:
                 session_state.record_delegation(success)
             ss = self._session_meta()
             if ss:
                 ss["total_latency"] = ss.get("total_latency", 0.0) + elapsed
             if self._record_session_metric:
-                self._record_session_metric(agent, "succeeded" if success else "failed", elapsed)
+                self._record_session_metric(
+                    agent,
+                    "succeeded" if success else "failed",
+                    elapsed,
+                    response_text,
+                )
 
         return AgentGateway(
             agent_client=self._get_agent_client(),

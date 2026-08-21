@@ -13,6 +13,7 @@ from .inputs import AskUserPrompter
 from .lifecycle import AppLifecycle
 from .prompt_formatter import PromptFormatter
 from .state import ExecutionModeState
+from .stats_services import StatsServices
 from .turn import TurnManager
 from .worker import ChatWorker
 from .. import profiles
@@ -21,7 +22,8 @@ from ..constants import (
     CMD_AGENTS, CMD_ALIASES, CMD_BUGS, CMD_CLEAR, CMD_CONNECT, CMD_DEBATE,
     CMD_DISCONNECT, CMD_CONTEXT, CMD_EDIT, CMD_EXIT,
     CMD_APPROVE, CMD_APPROVE_ALL, CMD_FILE_PREFIX, CMD_HELP,
-    CMD_POLICY, CMD_PROMPT, CMD_RELOAD, CMD_RESET, CMD_TASK, CMD_CONFIG,
+    CMD_POLICY, CMD_PROMPT, CMD_RELOAD, CMD_RESET, CMD_STATS, CMD_TASK,
+    CMD_CONFIG,
     MSG_SESSION_LOG,
 )
 from ..modes import MODES
@@ -130,6 +132,7 @@ class CoreFacadeMixin:
             CMD_PROMPT,
             CMD_RELOAD,
             CMD_RESET,
+            CMD_STATS,
             CMD_TASK,
             CMD_CONFIG,
             *CMD_ALIASES,
@@ -161,6 +164,8 @@ class CoreFacadeMixin:
             return self.system_layer.list_connected_agents()
         if command == CMD_BUGS:
             return ["list", "show", "close", "analyze", "stats"]
+        if command == CMD_STATS:
+            return ["json", "reset", *sorted(self.agent_pool)]
         if command == CMD_DEBATE:
             if partial.startswith("--agents"):
                 return [
@@ -620,6 +625,15 @@ class CoreFacadeMixin:
             command,
             app_session_state=self.__dict__.get("session_state")
         )
+
+    def _handle_stats_command(self, command: str) -> bool:
+        """Encaminha `/stats` para o serviço de métricas de comportamento."""
+        stats_services = StatsServices(
+            metrics_tracker=self.__dict__.get("behavior_metrics"),
+            show_muted_message=self.system_layer.show_muted_message,
+            show_warning_message=self.system_layer.show_warning_message,
+        )
+        return stats_services.handle_stats_command(command)
 
     def handle_command(self, user_input: str) -> bool:
         """Fachada compatível para comandos slash."""

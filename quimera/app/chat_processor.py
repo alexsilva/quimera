@@ -255,7 +255,7 @@ def run_chat_loop(
                     continue
                 user = content
 
-            _cmd_result = app.handle_command(user)
+            _cmd_result = _handle_command_safely(app, user)
             if _cmd_result is True:
                 continue
             elif isinstance(_cmd_result, str):
@@ -386,6 +386,26 @@ def run_chat_loop(
             lifecycle.close(interrupted=interrupted_shutdown or forced_shutdown)
         finally:
             _tty.restore_control_echo()
+
+
+def _handle_command_safely(app, user_input: str):
+    """Executa `handle_command` isolando falhas do comando do loop de chat.
+
+    Uma exception dentro de um handler de comando não deve derrubar a aplicação:
+    o erro é registrado, exibido como aviso no feed e a entrada é considerada
+    consumida (retorna ``True``) para não vazar o comando como mensagem de chat.
+    """
+    try:
+        return app.handle_command(user_input)
+    except KeyboardInterrupt:
+        raise
+    except Exception as error:
+        logger.exception("falha ao processar comando: %s", user_input)
+        display = getattr(app, "system_layer", app)
+        show_warning_message = getattr(display, "show_warning_message", None)
+        if callable(show_warning_message):
+            show_warning_message(f"[erro] falha ao processar comando: {error}")
+        return True
 
 
 def _remaining_shutdown_time(deadline: float | None) -> float:

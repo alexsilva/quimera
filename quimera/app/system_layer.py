@@ -24,6 +24,7 @@ from ..constants import (
     CMD_PROMPT,
     CMD_RELOAD,
     CMD_RESET,
+    CMD_STATS,
     CMD_TASK,
     CMD_DEBATE,
     CMD_CONFIG,
@@ -72,6 +73,7 @@ class SystemLayerDependencies:
     task_command_handler: Callable | None = None
     debate_command_handler: Callable | None = None
     bugs_command_handler: Callable | None = None
+    stats_command_handler: Callable | None = None
     session_state_manager: Any = None
     approval_handler_getter: Callable | None = None
     context_manager: Any = None
@@ -129,6 +131,7 @@ class AppSystemLayer:
         task_command_handler=None,
         debate_command_handler=None,
         bugs_command_handler=None,
+        stats_command_handler=None,
         session_state_manager=None,
         approval_handler_getter=None,
         context_manager=None,
@@ -171,6 +174,7 @@ class AppSystemLayer:
         self.task_command_handler = task_command_handler
         self.debate_command_handler = debate_command_handler
         self.bugs_command_handler = bugs_command_handler
+        self.stats_command_handler = stats_command_handler
         self.session_state_manager = session_state_manager
         self.approval_handler_getter = approval_handler_getter or (lambda: None)
         self.context_manager = context_manager
@@ -486,6 +490,12 @@ class AppSystemLayer:
             if callable(self.bugs_command_handler):
                 return bool(self.bugs_command_handler(command))
             self._display.show_warning_message("Comando /bugs indisponível nesta sessão.")
+            return True
+
+        if command == CMD_STATS or command.startswith(f"{CMD_STATS} "):
+            if callable(self.stats_command_handler):
+                return bool(self.stats_command_handler(command))
+            self._display.show_warning_message("Comando /stats indisponível nesta sessão.")
             return True
 
         if command == CMD_CONNECT or command.startswith(f"{CMD_CONNECT} "):

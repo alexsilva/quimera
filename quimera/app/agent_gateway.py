@@ -324,6 +324,6 @@ class AgentGateway:
                 metadata=finish_metadata,
             )
         )
-        self._update_session(agent, bool(result), elapsed)
+        self._update_session(agent, bool(result), elapsed, str(result or ""))
         logger.debug("[GATEWAY] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
         return result

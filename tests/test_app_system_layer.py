@@ -20,6 +20,7 @@ from quimera.constants import (
     CMD_PROMPT,
     CMD_RELOAD,
     CMD_RESET,
+    CMD_STATS,
 )
 from quimera.profiles import ExecutionProfile
 from quimera.profiles.base import CliConnection, OpenAIConnection
@@ -952,6 +953,44 @@ def test_handle_command_bugs_dispatches_to_handler():
     handler.assert_called_once_with(CMD_BUGS)
 
 
+def test_handle_command_stats_dispatches_to_handler():
+    """Verifica que /stats é encaminhado ao handler de métricas."""
+    app = make_app()
+    handler = Mock(return_value=True)
+    layer = system_layer_from_app(app, stats_command_handler=handler)
+
+    assert layer.handle_command(f"{CMD_STATS} claude") is True
+
+    handler.assert_called_once_with(f"{CMD_STATS} claude")
+
+
+def test_handle_command_stats_uses_facade_handler_end_to_end():
+    """Regressão: `/stats` via facade real não pode depender de atributos inexistentes no app."""
+    from quimera.app.core_facade import CoreFacadeMixin
+    from quimera.metrics import BehaviorMetricsTracker
+
+    app = make_app()
+    tracker = BehaviorMetricsTracker()
+    tracker.record_response("claude", 1.5, has_next_step=True)
+    app.behavior_metrics = tracker
+    app._handle_stats_command = CoreFacadeMixin._handle_stats_command.__get__(app)
+    layer = system_layer_from_app(app)
+    app.system_layer = layer
+
+    assert layer.handle_command(CMD_STATS) is True
+
+    assert any("claude" in msg for msg in app.renderer.neutral_messages)
+
+
+def test_handle_command_stats_without_handler_warns():
+    """Verifica que /stats sem handler avisa o humano."""
+    app = make_app()
+    layer = system_layer_from_app(app)
+
+    assert layer.handle_command(CMD_STATS) is True
+    assert app.renderer.warning_messages[-1] == "Comando /stats indisponível nesta sessão."
+
+
 def test_handle_command_bugs_without_handler_warns():
     """Verifica que Test handle command bugs without handler warns."""
     app = make_app()
@@ -1510,3 +1549,48 @@ def test_handle_debate_command_delegates_to_debate_service():
 
     assert layer.handle_command("/debate avaliar arquitetura") is True
     app.debate_service.handle_command.assert_called_once_with("/debate avaliar arquitetura")
+
+
+def test_handle_command_safely_converts_handler_crash_into_warning():
+    """Exception em handler de comando vira aviso no feed, sem derrubar o loop."""
+    from quimera.app.chat_processor import _handle_command_safely
+
+    app = make_app()
+    layer = system_layer_from_app(
+        app,
+        stats_command_handler=Mock(side_effect=RuntimeError("boom")),
+    )
+    app.system_layer = layer
+    app.handle_command = layer.handle_command
+
+    assert _handle_command_safely(app, CMD_STATS) is True
+
+    assert "boom" in app.renderer.warning_messages[-1]
+
+
+def test_handle_command_safely_propagates_keyboard_interrupt():
+    """Ctrl+C precisa continuar chegando ao loop de chat."""
+    from quimera.app.chat_processor import _handle_command_safely
+
+    app = make_app()
+    layer = system_layer_from_app(
+        app,
+        stats_command_handler=Mock(side_effect=KeyboardInterrupt),
+    )
+    app.system_layer = layer
+    app.handle_command = layer.handle_command
+
+    with pytest.raises(KeyboardInterrupt):
+        _handle_command_safely(app, CMD_STATS)
+
+
+def test_handle_command_safely_returns_handler_result():
+    """Sem exception, o resultado do handler passa intacto."""
+    from quimera.app.chat_processor import _handle_command_safely
+
+    app = make_app()
+    layer = system_layer_from_app(app)
+    app.system_layer = layer
+    app.handle_command = layer.handle_command
+
+    assert _handle_command_safely(app, "/nao-existe") is False

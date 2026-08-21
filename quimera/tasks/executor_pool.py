@@ -662,10 +662,10 @@ class TaskExecutorPool:
 
         metrics_view = _BackgroundMetricsView(self.get_session_state)
 
-        def _record_session_metric(agent, metric, elapsed):
+        def _record_session_metric(agent, metric, elapsed, response_text=None):
             record = getattr(self.get_session_metrics(), "record_agent_metric", None)
             if callable(record):
-                record(metrics_view, agent, metric, elapsed)
+                record(metrics_view, agent, metric, elapsed, response_text)
 
         def _record_tool_event(agent, **kw):
             record = getattr(self.get_session_metrics(), "record_tool_event", None)

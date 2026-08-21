@@ -140,6 +140,7 @@ python quimera.py --help
 - `/approve-all` (ou `/aa`): aprova automaticamente mutações subsequentes.
 - `/policy`: mostra/edita política de tools.
 - `/bugs`: lista/reporta bugs.
+- `/stats [<agente>|json|reset]`: consulta ou zera as métricas de entrega coletadas dos agentes.
 - `/reload`: recarrega agentes/profiles.
 - `/reset [state|history|all]`: limpa `shared_state`, histórico ou ambos.
 - `/clear`, `/help` (ou `/g`), `/exit`.

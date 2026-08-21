@@ -92,8 +92,8 @@ def normalize_agent_name(agent):
 
 
 def _make_record_agent_metric(session_metrics, app):
-    def _fn(agent, metric, elapsed):
-        session_metrics.record_agent_metric(app, agent, metric, elapsed)
+    def _fn(agent, metric, elapsed, response_text=None):
+        session_metrics.record_agent_metric(app, agent, metric, elapsed, response_text)
     return _fn
 
 
@@ -394,6 +394,7 @@ class AppAssembler:
                 read_user_input=app.read_user_input,
                 task_command_handler=None,
                 bugs_command_handler=app._handle_bugs_command,
+                stats_command_handler=app._handle_stats_command,
                 session_state_manager=session_state_mgr,
                 approval_handler_getter=app.get_approval_handler,
                 context_manager=context_manager,
@@ -579,7 +580,6 @@ class AppAssembler:
             active_agents=plat.agent_pool.agents,
             active_agents_provider=plat.agent_pool.list_agents,
             orchestrator_provider=plat.agent_pool.get_orchestrator,
-            metrics_tracker=behavior_metrics,
         )
         sess.system_layer._prompt_builder = prompt_builder
         auto_summarize_threshold = sess.configured_auto_summarize_threshold

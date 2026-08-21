@@ -25,14 +25,12 @@ class PromptBuilder:
             active_agents=None,
             active_agents_provider=None,
             orchestrator_provider=None,
-            metrics_tracker=None,
     ):
         self.context_manager = context_manager
         self.session_state = session_state or {}
         self.active_agents = list(active_agents) if active_agents is not None else profiles.all_names()
         self.active_agents_provider = active_agents_provider
         self.orchestrator_provider = orchestrator_provider
-        self.metrics_tracker = metrics_tracker
         self.memory_selector = MemorySelector(history_window, user_name)
         self.shared_state_presenter = SharedStatePresenter()
         self.delegate_presenter = DelegatePresenter()
@@ -169,11 +167,8 @@ class PromptBuilder:
             recent_conversation = ""
             shared_state_json, completed_task_results = "", ""
 
-        metrics = ""
-        if self.metrics_tracker:
-            feedback = self.metrics_tracker.generate_feedback(agent)
-            if feedback:
-                metrics = feedback
+        # As métricas de comportamento não são mais injetadas no prompt: elas
+        # permanecem sendo coletadas e ficam disponíveis ao humano via `/stats`.
         execution_state = self._build_execution_state_block(shared_state)
         execution_mode_prompt = self.execution_mode_presenter.present(execution_mode)
         evidence_context_raw = self._build_evidence_context(shared_state, session_id)
@@ -218,7 +213,6 @@ class PromptBuilder:
             delegation_raw=delegation_fields["delegation_raw"],
             execution_state=execution_state,
             recent_conversation=recent_conversation,
-            metrics=metrics,
             execution_mode_prompt=execution_mode_prompt,
             evidence_context_raw=evidence_context_raw,
             bug_context_raw=bug_context_raw,

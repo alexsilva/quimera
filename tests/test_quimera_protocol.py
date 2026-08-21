@@ -5539,84 +5539,29 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertNotIn('<response_prefix title="PREFIXO DE RESPOSTA">', prompt)
         self.assertNotIn("</response_prefix>", prompt)
 
-    def test_behavior_metrics_generate_feedback_empty_when_few_responses(self):
-        """generate_feedback deve retornar vazio com menos de 3 respostas."""
+    def test_behavior_metrics_has_no_feedback_layer(self):
+        """O tracker só coleta dados de entrega; não gera feedback nem alertas."""
         from quimera.metrics import BehaviorMetricsTracker
 
         tracker = BehaviorMetricsTracker()
-        tracker.record_response("claude", 1.0)
-        tracker.record_response("claude", 1.0)
+        for name in ("generate_feedback", "get_position_summary", "collect_warnings"):
+            self.assertFalse(hasattr(tracker, name), name)
 
-        feedback = tracker.generate_feedback("claude")
-        self.assertEqual(feedback, "")
-
-    def test_behavior_metrics_generate_feedback_with_synthesis_correction(self):
-        """Feedback deve indicar sínteses imprecisas quando correction rate é alto."""
-        from quimera.metrics import BehaviorMetricsTracker
-
-        tracker = BehaviorMetricsTracker()
-        for i in range(5):
-            tracker.record_response("claude", 1.0)
-        for i in range(4):
-            tracker.record_synthesis("claude", needed_correction=True)
-
-        feedback = tracker.generate_feedback("claude")
-        self.assertIn("SÍNTESES IMPRECISAS", feedback)
-
-    def test_behavior_metrics_generate_feedback_for_invalid_delegation_context_gap(self):
-        """Feedback de delegation inválido deve tratar falta de contexto como erro de roteamento."""
-        from quimera.metrics import BehaviorMetricsTracker
-
-        tracker = BehaviorMetricsTracker()
-        for _ in range(5):
-            tracker.record_response("claude", 1.0)
-        for _ in range(2):
-            tracker.record_delegation_sent("claude", is_invalid=True)
-
-        feedback = tracker.generate_feedback("claude")
-        self.assertIn("ALTA TAXA DE DELEGAÇÃO INVÁLIDA", feedback)
-        self.assertIn("faltar contexto suficiente", feedback)
-        self.assertIn("falha no roteamento inicial", feedback)
-        self.assertIn("delegue", feedback)
-        self.assertIn("não improvise", feedback)
-        self.assertNotIn("resolva você mesmo", feedback)
-
-    def test_prompt_builder_injects_metrics_when_tracker_has_data(self):
-        """PromptBuilder deve incluir bloco de métricas com framing de referência quando há feedback do tracker."""
-        from quimera.metrics import BehaviorMetricsTracker
-
-        tracker = BehaviorMetricsTracker()
-        # Gera dados suficientes para acionar feedback (>= 3 respostas + sínteses com correção)
-        for _ in range(5):
-            tracker.record_response("claude", 1.0)
-        for _ in range(4):
-            tracker.record_synthesis("claude", needed_correction=True)
-
-        builder = PromptBuilder(DummyContextManager(), history_window=3, metrics_tracker=tracker)
-        prompt = builder.build("claude", [])
-
-        self.assertIn('<agent_metrics title="Suas métricas (apenas referência)">', prompt)
-        self.assertIn("</agent_metrics>", prompt)
-        self.assertIn("SÍNTESES IMPRECISAS", prompt)
-
-    def test_prompt_builder_omits_metrics_when_no_tracker(self):
-        """PromptBuilder sem metrics_tracker não deve incluir bloco de métricas."""
+    def test_prompt_builder_never_injects_metrics_block(self):
+        """Métricas são dados de consulta do humano (/stats), não entram no prompt."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         prompt = builder.build("claude", [])
 
-        self.assertNotIn('<agent_metrics title="Suas métricas (apenas referência)">', prompt)
+        self.assertNotIn("<agent_metrics", prompt)
+        self.assertNotIn("STATUS OPERACIONAL", prompt)
 
-    def test_prompt_builder_omits_metrics_when_insufficient_data(self):
-        """PromptBuilder não deve incluir métricas se generate_feedback retornar vazio."""
+    def test_prompt_builder_rejects_metrics_tracker_argument(self):
+        """PromptBuilder não recebe mais tracker de métricas."""
         from quimera.metrics import BehaviorMetricsTracker
 
         tracker = BehaviorMetricsTracker()
-        tracker.record_response("claude", 1.0)  # apenas 1 resposta — abaixo do threshold
-
-        builder = PromptBuilder(DummyContextManager(), history_window=3, metrics_tracker=tracker)
-        prompt = builder.build("claude", [])
-
-        self.assertNotIn('<agent_metrics title="Suas métricas (apenas referência)">', prompt)
+        with self.assertRaises(TypeError):
+            PromptBuilder(DummyContextManager(), history_window=3, metrics_tracker=tracker)
 
 
 class AppProtocolDirectTests(unittest.TestCase):
