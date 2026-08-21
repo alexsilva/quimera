@@ -483,15 +483,12 @@ def _render_event(event: TextualUiEvent):
         label = str(payload.get("label", "Alex")) if isinstance(payload, dict) else "Alex"
         style = str(payload.get("style", "green") or "green") if isinstance(payload, dict) else "green"
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME) if isinstance(payload, dict) else themes.DEFAULT_THEME
-        return Padding(
-            _render_turn_block(
-                theme_name,
-                label,
-                style,
-                content=content,
-                render_mode="plain",
-            ),
-            pad=(1, 0, 1, 0),
+        return _render_turn_block(
+            theme_name,
+            label,
+            style,
+            content=content,
+            render_mode="plain",
         )
     if event.kind == "agent_message":
         payload = event.payload or {}

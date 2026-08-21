@@ -26,6 +26,7 @@ TEXTUAL_APP_CSS = """
         .feed-entry {
             width: 1fr;
             height: auto;
+            margin-bottom: 1;
         }
         #toolbar {
             height: 1;

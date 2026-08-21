@@ -2885,9 +2885,22 @@ def test_textual_bridge_echoes_agent_prefixed_prompt_without_prefix():
 def test_textual_user_message_renders_as_chat_turn():
     rendered = _render_event(TextualUiEvent("user_message", {"content": "oi", "label": "Alex"}))
 
-    assert isinstance(rendered, Padding)
-    assert rendered.top == 1
-    assert rendered.bottom == 1
+    # O espaçamento entre mensagens é uniforme via CSS (.feed-entry), então o
+    # turno do usuário não recebe Padding especial próprio.
+    assert not isinstance(rendered, Padding)
+    console = Console(width=60, record=True)
+    console.print(rendered)
+    output = console.export_text()
+    assert "Alex" in output
+    assert "oi" in output
+
+
+def test_textual_feed_entries_have_uniform_spacing():
+    from quimera.ui.textual.styles import TEXTUAL_APP_CSS
+
+    entry_css = TEXTUAL_APP_CSS.split(".feed-entry {", 1)[1].split("}", 1)[0]
+
+    assert "margin-bottom: 1;" in entry_css
 
 
 def test_textual_feed_reserves_at_least_ten_lines_for_agent_output():
