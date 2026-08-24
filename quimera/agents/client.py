@@ -6,6 +6,7 @@ import os
 import queue
 import threading
 import time
+import uuid
 from collections import deque
 from contextlib import nullcontext
 from datetime import datetime, timezone
@@ -94,6 +95,7 @@ class AgentClient:
         self._agent_running = False
         self._running_agent = None
         self._current_proc = None
+        self._process_scope_id = f"agent-client:{uuid.uuid4().hex}"
         self._cancel_listeners: list = []
         self.session_id = session_id
         self.workspace_tmp_root = Path(workspace_tmp_root) if workspace_tmp_root is not None else None
@@ -501,7 +503,7 @@ class AgentClient:
                 _logger.debug("cancel_active_work: falha ao terminar current_proc", exc_info=True)
         if self.process_supervisor is not None:
             try:
-                self.process_supervisor.terminate_all()
+                self.process_supervisor.terminate_scope(self._process_scope_id)
             except Exception:
                 _logger.debug("cancel_active_work: falha ao terminar processos supervisionados", exc_info=True)
 
@@ -654,7 +656,12 @@ class AgentClient:
                 return None
         self._current_proc = proc
         if self.process_supervisor is not None:
-            self.process_supervisor.register(proc, owner=agent or "cli", label=cmd[0] if cmd else None)
+            self.process_supervisor.register(
+                proc,
+                owner=agent or "cli",
+                label=cmd[0] if cmd else None,
+                scope_id=self._process_scope_id,
+            )
 
         result_holder = {
             "stdout_chunks": deque(),

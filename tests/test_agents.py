@@ -174,6 +174,8 @@ def test_codex_profile_injects_mcp_server_before_stdin_sentinel():
             'mcp_servers.quimera.command="python"',
             "-c",
             f"mcp_servers.quimera.args={expected_args}",
+            "-c",
+            "mcp_servers.quimera.tool_timeout_sec=600",
             "-",
         ]
     finally:
@@ -207,6 +209,8 @@ def test_codex_profile_does_not_duplicate_existing_mcp_override():
             "--json",
             "-c",
             'mcp_servers.quimera.command="python"',
+            "-c",
+            "mcp_servers.quimera.tool_timeout_sec=600",
         ]
     finally:
         profile._connection_override = original_override
@@ -2733,6 +2737,20 @@ def test_call_api_cancel_waits_for_driver_thread_before_releasing_run(renderer):
     event = renderer.show_execution_control.call_args.args[0]
     assert event.status.value == "cancelled"
     assert event.source.value == "user"
+    process_supervisor.terminate_all.assert_not_called()
+
+
+def test_cancel_active_work_terminates_only_client_process_scope(renderer):
+    """Cancelar um delegado não pode encerrar processos de outros clients."""
+    process_supervisor = MagicMock()
+    parent = AgentClient(renderer, process_supervisor=process_supervisor)
+    delegate = AgentClient(renderer, process_supervisor=process_supervisor)
+
+    assert delegate._process_scope_id != parent._process_scope_id
+
+    delegate.cancel_active_work()
+
+    process_supervisor.terminate_scope.assert_called_once_with(delegate._process_scope_id)
     process_supervisor.terminate_all.assert_not_called()
 
 

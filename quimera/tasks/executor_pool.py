@@ -619,7 +619,8 @@ class TaskExecutorPool:
             workspace_tmp_root=workspace_tmp_root,
             # Herdados do client do chat: sem pause_idle_if, um delegado em
             # silêncio aguardando tool longa morre por idle timeout; sem
-            # supervisor, seus subprocessos escapam do terminate_all().
+            # supervisor, seus subprocessos escapam do shutdown global. Cada
+            # AgentClient usa um scope próprio para cancelamento isolado.
             process_supervisor=getattr(chat_agent_client, "process_supervisor", None),
             pause_idle_if=get_pause_idle_if(chat_agent_client),
         )

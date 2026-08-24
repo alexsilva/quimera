@@ -9,6 +9,9 @@ if TYPE_CHECKING:
     from .workspace_policy import WorkspacePolicy
 
 
+DEFAULT_MCP_TOOL_TIMEOUT_SECONDS = 600
+
+
 @dataclass(slots=True)
 class ToolRuntimeConfig:
     """Implementa `ToolRuntimeConfig`."""
@@ -17,7 +20,7 @@ class ToolRuntimeConfig:
     memory_file: Path | None = None
     artifacts_root: Path | None = None
     command_timeout_seconds: int = 20
-    mcp_tool_timeout_seconds: int = 600
+    mcp_tool_timeout_seconds: int = DEFAULT_MCP_TOOL_TIMEOUT_SECONDS
     delegate_parallel_timeout_seconds: int = 600
     interactive_command_default_yield_ms: int = 1000
     max_output_chars: int = 1_000_000

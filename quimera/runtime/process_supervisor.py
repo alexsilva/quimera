@@ -35,6 +35,7 @@ class ManagedProcess:
     label: str | None = None
     run_id: str | None = None
     call_id: str | None = None
+    scope_id: str | None = None
     created_at: float = field(default_factory=time.monotonic)
 
 
@@ -65,6 +66,7 @@ class ProcessSupervisor:
         label: str | None = None,
         run_id: str | None = None,
         call_id: str | None = None,
+        scope_id: str | None = None,
     ) -> ManagedProcess | None:
         """Registra um subprocesso recém-criado.
 
@@ -91,6 +93,7 @@ class ProcessSupervisor:
             label=label,
             run_id=run_id,
             call_id=call_id,
+            scope_id=scope_id,
         )
 
         with self._lock:
@@ -149,6 +152,25 @@ class ProcessSupervisor:
         if not snapshot:
             return
         _logger.info("process_supervisor: terminate_all em %d processo(s)", len(snapshot))
+        self._terminate_snapshot(snapshot, clear_registry=True)
+
+    def terminate_scope(self, scope_id: str) -> None:
+        """Encerra somente processos pertencentes a um escopo de execução."""
+        if not scope_id:
+            return
+        with self._lock:
+            snapshot = [
+                process
+                for process in self._processes.values()
+                if process.scope_id == scope_id
+            ]
+        if not snapshot:
+            return
+        _logger.info(
+            "process_supervisor: terminate_scope=%s em %d processo(s)",
+            scope_id,
+            len(snapshot),
+        )
         self._terminate_snapshot(snapshot, clear_registry=True)
 
     # ------------------------------------------------------------------
