@@ -2659,6 +2659,99 @@ def test_textual_feed_replaces_delegate_preview_with_delegation_card():
     assert model.last_change.redraw is True
 
 
+def _delegation_event(delegation_id="dlg-1", task="revisar patch"):
+    """Cria evento de delegação equivalente ao emitido pelo renderer Textual."""
+    return TextualUiEvent(
+        "delegation",
+        {
+            "from_label": "Codex",
+            "to_label": "Sonnet",
+            "task": task,
+            "delegation_id": delegation_id,
+            "chain": ["codex", "sonnet"],
+        },
+    )
+
+
+def test_textual_feed_delegation_is_transient_artifact():
+    model = TextualFeedModel()
+
+    model.apply(_delegation_event())
+
+    assert [item.event.kind for item in model.items] == ["delegation"]
+    assert model.items[0].transient is True
+
+
+def test_textual_feed_delegated_feed_stays_below_its_delegation():
+    model = TextualFeedModel()
+    delegated = {"label": "Sonnet", "run_id": "run-b", "delegation_id": "dlg-1"}
+
+    model.apply(TextualUiEvent("agent_update", {"label": "Codex", "content": "delegando"}, agent="codex"))
+    model.apply(_delegation_event())
+    model.apply(TextualUiEvent("agent_update", {"label": "Qwen", "content": "outro turno"}, agent="qwen"))
+    model.apply(TextualUiEvent("stream_start", delegated, agent="sonnet"))
+    model.apply(TextualUiEvent("stream_chunk", {**delegated, "text": "lendo arquivos"}, agent="sonnet"))
+
+    kinds = [item.event.kind for item in model.items]
+    agents = [item.event.agent for item in model.items]
+    assert kinds[1] == "delegation"
+    assert agents[2] == "sonnet"
+    assert agents[3] == "qwen"
+
+
+def test_textual_feed_removes_delegation_group_on_visual_reset():
+    model = TextualFeedModel()
+    delegated = {"label": "Sonnet", "run_id": "run-b", "delegation_id": "dlg-1"}
+
+    model.apply(_delegation_event())
+    model.apply(TextualUiEvent("stream_start", delegated, agent="sonnet"))
+    model.apply(TextualUiEvent("stream_chunk", {**delegated, "text": "trabalhando"}, agent="sonnet"))
+    changed = model.apply(TextualUiEvent("visual_reset", delegated, agent="sonnet"))
+
+    assert changed is True
+    assert model.items == []
+    assert model.has_transients is False
+
+
+def test_textual_feed_delegated_final_message_is_not_persisted():
+    model = TextualFeedModel()
+    delegated = {"label": "Sonnet", "run_id": "run-b", "delegation_id": "dlg-1"}
+
+    model.apply(TextualUiEvent("user_message", {"content": "faz isso", "label": ">>>"}))
+    model.apply(_delegation_event())
+    model.apply(TextualUiEvent("stream_start", delegated, agent="sonnet"))
+    model.apply(TextualUiEvent("agent_message", {**delegated, "content": "feito"}, agent="sonnet"))
+
+    assert [item.event.kind for item in model.items] == ["user_message"]
+
+
+def test_textual_feed_removes_delegation_group_on_final_lifecycle():
+    model = TextualFeedModel()
+    delegated = {"label": "Sonnet", "run_id": "run-b", "delegation_id": "dlg-1"}
+
+    model.apply(_delegation_event())
+    model.apply(TextualUiEvent("stream_start", delegated, agent="sonnet"))
+    model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            {**delegated, **_agent_lifecycle_payload("concluído", status=AgentLifecycleStatus.COMPLETED)},
+            agent="sonnet",
+        )
+    )
+
+    assert model.items == []
+
+
+def test_textual_feed_keeps_regular_agent_message_persistent():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("stream_start", {"label": "Codex"}, agent="codex"))
+    model.apply(TextualUiEvent("agent_message", {"label": "Codex", "content": "resposta"}, agent="codex"))
+
+    assert [item.event.kind for item in model.items] == ["agent_message"]
+    assert model.items[0].transient is False
+
+
 def test_transient_overlay_replace_reads_previous_lines_when_executed():
     from quimera.ui.overlay import TransientOverlay
 
