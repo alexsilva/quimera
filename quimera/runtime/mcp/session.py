@@ -49,7 +49,12 @@ def _prompt_session_state(app: Any) -> dict | None:
 
 
 def _resolve_internal_token() -> str:
-    return secrets.token_urlsafe(32)
+    # token_urlsafe pode começar com '-', que clientes CLI interpretam como
+    # flag ao repassar o token em linha de comando. Regenera até evitar isso.
+    token = secrets.token_urlsafe(32)
+    while token.startswith("-"):
+        token = secrets.token_urlsafe(32)
+    return token
 
 
 def parse_http_allowed_tools(value: str | Iterable[str] | None) -> frozenset[str] | None:

@@ -38,7 +38,6 @@ from quimera.ui.textual.feed_model import TextualFeedModel
 _logger = logging.getLogger(__name__)
 
 from quimera.ui.textual.renderables import (
-    COMPACT_FEED_KINDS,
     _build_question_overlay,
     _build_window_overlay_payload,
     _clear_question_overlay_widget,
@@ -540,7 +539,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                             token,
                             item.transient,
                             renderable,
-                            item.event.kind in COMPACT_FEED_KINDS,
+                            bool(item.event.compact),
                         )
                     )
 
@@ -727,6 +726,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
     try:
         QuimeraTextualApp().run(mouse=not _is_android())
     finally:
+        bridge.submission_tracker.close()
         _restore_terminal_modes()
 
     # Após o Textual sair (tela alternativa restaurada), drena eventos pendentes

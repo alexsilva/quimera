@@ -32,6 +32,7 @@ class RendererBase:
     """Base de renderers: no-ops e fallbacks textuais para o contrato opcional."""
 
     supports_agent_feed = False
+    supports_submission_status = False
     #: True quando o renderer tem canal estruturado para atividade de agente
     #: (retry/failover); False manda os chamadores usarem o caminho textual
     #: prompt-aware (show_*_message) em vez de notify_*.
@@ -56,6 +57,10 @@ class RendererBase:
 
     def show_banner(self, message):
         self.show_system(message)
+
+    def show_boot_message(self, message):
+        """Exibe uma linha informativa pertencente ao bloco de inicialização."""
+        self.show_system_neutral(message)
 
     def show_system_neutral(self, message):
         self.show_system(message)
@@ -139,6 +144,10 @@ class RendererBase:
         return None
 
     def clear_agent_transient(self, agent):
+        return None
+
+    def update_submission_status(self, submission_id, status, **metadata):
+        """Atualiza o estado associado ao turno humano, quando suportado."""
         return None
 
     def commit_agent_stream(self, agent, render_mode="auto"):

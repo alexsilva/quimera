@@ -4,6 +4,7 @@ from __future__ import annotations
 import queue
 import threading
 
+from quimera.app.submission_tracker import SubmittedInput, SubmissionRecord, SubmissionTracker
 from quimera.agents.capabilities import is_agent_running
 import quimera.themes as themes
 from quimera.constants import CMD_EXIT
@@ -37,8 +38,10 @@ class TextualUiBridge:
         self._active_agent_labels: dict[str, str] = {}
         self._active_agent_styles: dict[str, str] = {}
         self._direct_input_depth = 0
+        self._direct_input_owners: dict[int, tuple[threading.Thread, int]] = {}
         self._textual_thread_id: int | None = None
         self._lock = threading.Lock()
+        self.submission_tracker = SubmissionTracker(self._emit_submission_status)
 
     def attach_textual_app(self, textual_app) -> None:
         """Registra a instância Textual ativa."""
@@ -79,12 +82,27 @@ class TextualUiBridge:
         if self._try_inject_active_agent(text):
             self._emit_user_message(text)
             return
-        self._emit_user_message(text)
-        self.input_queue.put(value)
-
-    def _emit_user_message(self, text: str) -> None:
-        """Espelha mensagens humanas no feed antes de despachar para o agente."""
         clean = self._visible_user_message(text)
+        submission = None
+        queued_value = value
+        if self._should_track_submission(text, clean):
+            with self._lock:
+                watch = self.textual_app is not None
+            submission = self.submission_tracker.start(emit=False, watch=watch)
+            self._register_submission(submission.submission_id)
+            queued_value = SubmittedInput(value, submission.submission_id)
+        self._emit_user_message(text, clean=clean, submission=submission)
+        self.input_queue.put(queued_value)
+
+    def _emit_user_message(
+        self,
+        text: str,
+        *,
+        clean: str | None = None,
+        submission: SubmissionRecord | None = None,
+    ) -> None:
+        """Espelha mensagens humanas no feed antes de despachar para o agente."""
+        clean = self._visible_user_message(text) if clean is None else clean
         if not clean:
             return
         label = "Alex"
@@ -92,12 +110,41 @@ class TextualUiBridge:
             user_name = getattr(self.quimera_app, "user_name", None)
         if str(user_name or "").strip():
             label = str(user_name).strip()
-        self.emit(
-            TextualUiEvent(
-                "user_message",
-                {"content": clean, "label": label, "style": "green", "theme": themes.DEFAULT_THEME},
-            )
-        )
+        payload = {
+            "content": clean,
+            "label": label,
+            "style": "green",
+            "theme": themes.DEFAULT_THEME,
+        }
+        if submission is not None:
+            payload["submission_id"] = submission.submission_id
+            payload["submission"] = submission.as_payload()
+        self.emit(TextualUiEvent("user_message", payload))
+
+    @staticmethod
+    def _should_track_submission(text: str, visible_text: str) -> bool:
+        """Rastreia chats normais e prompts direcionados, não comandos de controle."""
+        clean = str(text or "").strip()
+        if not visible_text or not clean:
+            return False
+        if not clean.startswith("/"):
+            return True
+        return clean.split(maxsplit=1)[0].casefold() != "/debate"
+
+    def _emit_submission_status(self, payload: dict[str, object]) -> None:
+        """Publica atualização para substituir o estado no turno já existente."""
+        self.emit(TextualUiEvent("submission_status", payload))
+
+    def update_submission_status(self, submission_id: str, status: str, **metadata):
+        """Atualiza uma submissão a partir do scheduler/lifecycle."""
+        return self.submission_tracker.transition(submission_id, status, **metadata)
+
+    def _register_submission(self, submission_id: str) -> None:
+        with self._lock:
+            lifecycle = getattr(self.quimera_app, "chat_lifecycle", None)
+        register = getattr(lifecycle, "register_submission", None)
+        if callable(register):
+            register(submission_id)
 
     def _visible_user_message(self, text: str) -> str:
         """Remove prefixo de agente e oculta comandos de controle do feed."""
@@ -141,17 +188,46 @@ class TextualUiBridge:
     def begin_direct_input(self) -> None:
         """Força submissões seguintes a irem para o prompt inline ativo."""
         with self._lock:
-            self._direct_input_depth += 1
+            self._prune_direct_input_owners_locked()
+            thread = threading.current_thread()
+            owner_id = thread.ident or id(thread)
+            _owner, depth = self._direct_input_owners.get(owner_id, (thread, 0))
+            self._direct_input_owners[owner_id] = (thread, depth + 1)
+            self._sync_direct_input_depth_locked()
 
     def end_direct_input(self) -> None:
         """Libera roteamento direto quando o prompt inline termina."""
         with self._lock:
-            self._direct_input_depth = max(0, self._direct_input_depth - 1)
+            thread = threading.current_thread()
+            owner_id = thread.ident or id(thread)
+            owned = self._direct_input_owners.get(owner_id)
+            if owned is not None:
+                if owned[1] <= 1:
+                    self._direct_input_owners.pop(owner_id, None)
+                else:
+                    self._direct_input_owners[owner_id] = (owned[0], owned[1] - 1)
+            self._sync_direct_input_depth_locked()
 
     def is_direct_input_active(self) -> bool:
         """Retorna True se há prompt inline aguardando resposta."""
         with self._lock:
+            self._prune_direct_input_owners_locked()
             return self._direct_input_depth > 0
+
+    def _prune_direct_input_owners_locked(self) -> None:
+        stale = [
+            owner_id
+            for owner_id, (thread, _depth) in self._direct_input_owners.items()
+            if not thread.is_alive()
+        ]
+        for owner_id in stale:
+            self._direct_input_owners.pop(owner_id, None)
+        self._sync_direct_input_depth_locked()
+
+    def _sync_direct_input_depth_locked(self) -> None:
+        self._direct_input_depth = sum(
+            depth for _thread, depth in self._direct_input_owners.values()
+        )
 
     def set_input_value(self, value: str) -> None:
         """Atualiza snapshot thread-safe do buffer editável atual."""

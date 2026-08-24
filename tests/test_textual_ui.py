@@ -1634,7 +1634,130 @@ def test_textual_bridge_submit_input_echoes_user_before_queueing_message():
 
     assert events[0][0] == "user_message"
     assert events[0][1]["content"] == "revise"
-    assert bridge.input_queue.get_nowait() == "revise"
+    queued = bridge.input_queue.get_nowait()
+    assert queued == "revise"
+    assert queued.submission_id == events[0][1]["submission_id"]
+    assert events[0][1]["submission"]["status"] == "accepted"
+    app.chat_lifecycle.register_submission.assert_called_once_with(queued.submission_id)
+
+
+def test_textual_feed_updates_submission_inside_existing_user_turn():
+    model = TextualFeedModel()
+    model.apply(
+        TextualUiEvent(
+            "user_message",
+            {
+                "content": "revise",
+                "submission_id": "submission:1",
+                "submission": {
+                    "submission_id": "submission:1",
+                    "status": "accepted",
+                    "elapsed_seconds": 0,
+                },
+            },
+        )
+    )
+
+    changed = model.apply(
+        TextualUiEvent(
+            "submission_status",
+            {
+                "submission_id": "submission:1",
+                "status": "queued",
+                "queue_position": 2,
+                "elapsed_seconds": 1,
+            },
+        )
+    )
+
+    assert changed is True
+    assert len(model.items) == 1
+    assert model.items[0].event.payload["submission"]["status"] == "queued"
+    assert model.items[0].event.payload["submission"]["queue_position"] == 2
+
+
+def test_textual_feed_ignores_out_of_order_submission_revision():
+    model = TextualFeedModel()
+    model.apply(
+        TextualUiEvent(
+            "user_message",
+            {
+                "content": "revise",
+                "submission_id": "submission:1",
+                "submission": {
+                    "submission_id": "submission:1",
+                    "status": "accepted",
+                    "revision": 0,
+                },
+            },
+        )
+    )
+    model.apply(
+        TextualUiEvent(
+            "submission_status",
+            {
+                "submission_id": "submission:1",
+                "status": "completed",
+                "revision": 2,
+            },
+        )
+    )
+
+    changed = model.apply(
+        TextualUiEvent(
+            "submission_status",
+            {
+                "submission_id": "submission:1",
+                "status": "running",
+                "revision": 1,
+            },
+        )
+    )
+
+    assert changed is False
+    assert model.items[0].event.payload["submission"]["status"] == "completed"
+
+
+def test_textual_user_turn_renders_submission_status_below_prompt():
+    from io import StringIO
+
+    output = StringIO()
+    console = Console(file=output, force_terminal=False, width=80)
+    renderable = _render_event(
+        TextualUiEvent(
+            "user_message",
+            {
+                "content": "revise",
+                "label": "Alex",
+                "style": "green",
+                "submission": {
+                    "status": "queued",
+                    "queue_position": 2,
+                    "elapsed_seconds": 1,
+                },
+            },
+        )
+    )
+
+    console.print(renderable)
+
+    text = output.getvalue()
+    assert text.index("revise") < text.index("Na fila · posição 2")
+
+
+def test_textual_bridge_prunes_direct_input_owned_by_finished_thread():
+    import threading
+
+    bridge = TextualUiBridge()
+    owner = threading.Thread(target=bridge.begin_direct_input)
+    owner.start()
+    owner.join(timeout=1)
+
+    bridge.submit_input("novo prompt")
+
+    assert bridge.direct_input_queue.empty()
+    assert bridge.input_queue.get_nowait() == "novo prompt"
+    assert bridge.is_direct_input_active() is False
 
 
 def test_textual_bridge_injects_input_into_active_agent_stdin():
@@ -2029,6 +2152,7 @@ def test_textual_renderer_exposes_legacy_visual_methods():
     )
 
     assert [event.kind for event in emitted] == ["banner", "approval", "delegation", "turn_summary"]
+    assert emitted[0].compact is True
     assert emitted[-1].payload["total"] == 1
     assert emitted[-1].payload["ok_count"] == 1
 
@@ -2911,14 +3035,39 @@ def test_textual_feed_compact_entries_have_no_spacing():
     assert "margin-bottom: 0;" in compact_css
 
 
-def test_textual_boot_header_kinds_are_compact():
-    from quimera.ui.textual.renderables import COMPACT_FEED_KINDS
+def test_textual_only_boot_events_are_compact():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
 
-    # Linhas de boot (banner, "Projeto:", "MCP ...") ficam coladas entre si;
-    # turnos de conversa continuam com a margem uniforme do feed.
-    assert {"banner", "muted", "plain", "system"} <= COMPACT_FEED_KINDS
-    assert "user_message" not in COMPACT_FEED_KINDS
-    assert "agent_message" not in COMPACT_FEED_KINDS
+    renderer.show_banner("Quimera")
+    renderer.show_boot_message("Projeto: /tmp/projeto")
+    renderer.show_system_neutral("mensagem neutra durante o chat")
+    renderer.show_system("mensagem de sistema durante o chat")
+    renderer.show_plain("mensagem simples durante o chat")
+
+    assert [event.compact for event in emitted] == [True, True, False, False, False]
+
+
+def test_textual_restored_and_live_messages_share_normal_spacing():
+    model = TextualFeedModel()
+    assert model.hydrate_from_history(
+        [
+            {"role": "user", "content": "mensagem antiga"},
+            {"role": "claude", "content": "resposta antiga"},
+        ]
+    )
+    model.apply(TextualUiEvent("user_message", {"content": "mensagem nova"}))
+    model.apply(
+        TextualUiEvent(
+            "agent_message",
+            {"content": "resposta nova", "label": "Claude"},
+            agent="claude",
+        )
+    )
+
+    assert all(item.event.compact is False for item in model.items)
 
 
 def test_textual_unified_feed_applies_compact_class_per_entry():

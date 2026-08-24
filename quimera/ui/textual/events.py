@@ -12,3 +12,4 @@ class TextualUiEvent:
     kind: str
     payload: Any = None
     agent: str | None = None
+    compact: bool = False

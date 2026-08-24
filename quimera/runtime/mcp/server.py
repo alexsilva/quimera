@@ -32,7 +32,10 @@ from typing import IO, Any
 
 from quimera.app.agent_run_events import AgentRunEvent, coerce_agent_run_sink
 from quimera.runtime.approval import ApprovalManager, TrustedToolExecutionContext
-from quimera.runtime.config import ToolRuntimeConfig
+from quimera.runtime.config import (
+    DEFAULT_DELEGATE_TIMEOUT_SECONDS,
+    ToolRuntimeConfig,
+)
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
 from quimera.runtime.drivers.tool_schemas import resolve_tool_schemas
@@ -737,7 +740,7 @@ class MCPServer:
             "future": future,
             "out": out,
             "started_at": started_at,
-            "deadline_at": started_at + self._configured_tool_timeout(),
+            "deadline_at": started_at + self._configured_tool_timeout(tool_name),
             "tool_name": tool_name,
             "arg_keys": arg_keys,
             "trusted_context": trusted_context,
@@ -751,17 +754,46 @@ class MCPServer:
 
         return None
 
-    def _configured_tool_timeout(self) -> float:
-        """Retorna timeout MCP válido, tolerando executors de compatibilidade."""
-        raw_timeout = getattr(
-            getattr(self._executor, "config", None),
-            "mcp_tool_timeout_seconds",
-            600,
-        )
+    # Folga acima do deadline interno da delegação: garante que o timeout
+    # estruturado do delegate (por step) sempre dispara antes do teto do
+    # servidor, que atua apenas como backstop.
+    _DELEGATE_DEADLINE_GRACE_SECONDS = 120.0
+
+    @staticmethod
+    def _coerce_timeout(raw: object, fallback: float) -> float:
+        # isinstance evita objetos com __float__ sintético (ex.: mocks de
+        # executors de compatibilidade), que passariam num float() cru.
+        if not isinstance(raw, (int, float, str)):
+            return fallback
         try:
-            timeout = float(raw_timeout)
+            return float(raw)
         except (TypeError, ValueError):
-            timeout = 600.0
+            return fallback
+
+    def _configured_tool_timeout(self, tool_name: str | None = None) -> float:
+        """Retorna timeout MCP válido, tolerando executors de compatibilidade.
+
+        ``delegate`` tem orçamento próprio: um delegado tem direito ao tempo
+        integral de processamento configurado em
+        ``delegate_parallel_timeout_seconds``, e o teto do servidor fica acima
+        dele para nunca matar uma delegação ativa antes do relógio interno.
+        """
+        config = getattr(self._executor, "config", None)
+        timeout = self._coerce_timeout(
+            getattr(config, "mcp_tool_timeout_seconds", 600), 600.0
+        )
+        if tool_name == "delegate":
+            delegate_timeout = self._coerce_timeout(
+                getattr(
+                    config,
+                    "delegate_parallel_timeout_seconds",
+                    DEFAULT_DELEGATE_TIMEOUT_SECONDS,
+                ),
+                float(DEFAULT_DELEGATE_TIMEOUT_SECONDS),
+            )
+            timeout = max(
+                timeout, delegate_timeout + self._DELEGATE_DEADLINE_GRACE_SECONDS
+            )
         return max(1.0, timeout)
 
     def _call_deadline(self, call: dict) -> float:
@@ -772,7 +804,9 @@ class MCPServer:
         """
         deadline = call.get("deadline_at")
         if deadline is None:
-            deadline = call["started_at"] + self._configured_tool_timeout()
+            deadline = call["started_at"] + self._configured_tool_timeout(
+                call.get("tool_name")
+            )
             call["deadline_at"] = deadline
         return deadline
 
@@ -798,6 +832,8 @@ class MCPServer:
         _logger.debug("MCP tools/call timeout tool=%s", call["tool_name"])
         call["cancel_event"].set()
         duration_ms = int((time.perf_counter() - call["started_at"]) * 1000)
+        timeout_s = int(self._configured_tool_timeout(call["tool_name"]))
+        message = f"Tool '{call['tool_name']}' timed out after {timeout_s}s"
         self._emit_tool_run_event(
             "tool_failed",
             call.get("trusted_context"),
@@ -806,13 +842,13 @@ class MCPServer:
             arg_keys=call.get("arg_keys") or [],
             duration_ms=duration_ms,
             ok=False,
-            error="Tool execution timed out",
+            error=message,
         )
         with self._cancel_lock:
             self._cancel_events.pop(request_key, None)
             self._cancel_events.pop(msg_id, None)
         self._discard_pending_call(call)
-        return self._err(msg_id, -32603, "Tool execution timed out")
+        return self._err(msg_id, -32603, message)
 
     def _resolve_tool_response(
         self, call: dict, wait_timeout: float | None = None

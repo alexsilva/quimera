@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+import threading
+
 from .chat_round import ChatRoundContext
+
+
+logger = logging.getLogger(__name__)
 
 
 class ChatLifecycle:
@@ -41,19 +47,89 @@ class ChatLifecycle:
         self._parse_response = parse_response
         self._ui_event_queue = None
         self._refresh_parallel_toolbar = refresh_parallel_toolbar
+        self._submission_futures: dict[int, tuple[object, str, bool]] = {}
+        self._active_submission_ids: set[str] = set()
+        self._cancelled_submission_ids: set[str] = set()
+        self._running_submission_ids: set[str] = set()
+        self._submission_lock = threading.RLock()
 
     def bind_ui_event_queue(self, ui_event_queue) -> None:
         """Vincula a fila de eventos de UI materializada pelo loop de chat."""
         self._ui_event_queue = ui_event_queue
 
-    def process_message(self, user):
+    def update_submission_status(self, submission_id: str, status: str, **metadata):
+        """Publica transição do prompt quando o renderer oferece esse canal."""
+        if not submission_id:
+            return None
+        normalized = str(status or "").strip().lower()
+        with self._submission_lock:
+            if (
+                submission_id in self._cancelled_submission_ids
+                and normalized not in {"cancelled", "completed", "failed"}
+            ):
+                return None
+            if normalized in {"completed", "failed"}:
+                self._active_submission_ids.discard(submission_id)
+                self._cancelled_submission_ids.discard(submission_id)
+            elif normalized == "cancelled":
+                self._active_submission_ids.discard(submission_id)
+                self._cancelled_submission_ids.add(submission_id)
+            else:
+                self._active_submission_ids.add(submission_id)
+        if getattr(
+            self._renderer, "supports_submission_status", False
+        ) is not True:
+            return None
+        return self._renderer.update_submission_status(submission_id, status, **metadata)
+
+    def register_submission(self, submission_id: str) -> None:
+        """Registra aceitação antes de o loop de chat materializar a fila."""
+        if not submission_id:
+            return
+        with self._submission_lock:
+            self._active_submission_ids.add(submission_id)
+
+    def _is_submission_cancelled(self, submission_id: str) -> bool:
+        with self._submission_lock:
+            return bool(
+                submission_id and submission_id in self._cancelled_submission_ids
+            )
+
+    def process_message(self, user, *, submission_id: str = ""):
         """Executa process chat message com controle de turno."""
+        if self._is_submission_cancelled(submission_id):
+            self.update_submission_status(submission_id, "cancelled")
+            return
         agent_client = self._agent_client
         if agent_client is not None:
             agent_client.reset_cancel_state()
+        if submission_id:
+            with self._submission_lock:
+                self._running_submission_ids.add(submission_id)
+            self.update_submission_status(submission_id, "running")
         try:
             self._do_process_message(user)
+        except KeyboardInterrupt:
+            self.update_submission_status(submission_id, "cancelled")
+            raise
+        except Exception as error:
+            self.update_submission_status(
+                submission_id,
+                "failed",
+                message=self._submission_error_message(error),
+            )
+            raise
+        else:
+            is_cancelled = getattr(agent_client, "is_cancelled", None)
+            cancelled = bool(callable(is_cancelled) and is_cancelled())
+            self.update_submission_status(
+                submission_id,
+                "cancelled" if cancelled else "completed",
+            )
         finally:
+            if submission_id:
+                with self._submission_lock:
+                    self._running_submission_ids.discard(submission_id)
             if (
                 self._turn_manager is not None
                 and self._turn_manager.is_ai_turn
@@ -82,16 +158,23 @@ class ChatLifecycle:
         if agent_client is not None:
             agent_client.cancel_active_work()
             agent_client._show_cancelled_once()
+        with self._submission_lock:
+            active_submission_ids = list(self._active_submission_ids)
+            futures = list(self._submission_futures.values())
+        for submission_id in active_submission_ids:
+            self.update_submission_status(submission_id, "cancelled")
+        for future, _submission_id, _slot_reserved in futures:
+            future.cancel()
         if self._renderer is not None:
             self._renderer.reset_visual_state()
         if self._turn_manager is not None:
             self._turn_manager.reset()
         self._refresh_parallel_toolbar()
 
-    def process_async_message(self, user):
+    def process_async_message(self, user, *, submission_id: str = ""):
         """Processa um prompt vindo da fila assíncrona e libera o slot ao final."""
         try:
-            self.process_message(user)
+            self.process_message(user, submission_id=submission_id)
         finally:
             remaining = self._runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
             self._runtime_state.release_chat_slot()
@@ -103,7 +186,7 @@ class ChatLifecycle:
             ):
                 self._turn_manager.next_turn()
 
-    def process_queued_message(self, user):
+    def process_queued_message(self, user, *, submission_id: str = ""):
         """Promove um prompt pendente quando um worker do executor fica livre."""
         slot_semaphore = getattr(self._runtime_state, "chat_slot_semaphore", None)
         if slot_semaphore is not None:
@@ -114,7 +197,8 @@ class ChatLifecycle:
                 self._refresh_parallel_toolbar
             )
             promoted = True
-            self.process_message(user)
+            self.update_submission_status(submission_id, "starting")
+            self.process_message(user, submission_id=submission_id)
         finally:
             if promoted:
                 remaining = self._runtime_state.decrement_chat_inflight(
@@ -134,16 +218,41 @@ class ChatLifecycle:
                 )
                 self._runtime_state.release_chat_slot()
 
-    def submit_async_message(self, user, *, slot_reserved=True):
+    def submit_async_message(self, user, *, slot_reserved=True, submission_id: str = ""):
         """Submete um prompt já reservado para a pool de execução do chat."""
         chat_executor = getattr(self._runtime_state, "chat_executor", None)
         if chat_executor is None:
             raise RuntimeError("chat executor não inicializado")
+        if self._is_submission_cancelled(submission_id):
+            self._release_unstarted_slot(slot_reserved)
+            with self._submission_lock:
+                self._cancelled_submission_ids.discard(submission_id)
+            return None
         try:
             target = self.process_async_message if slot_reserved else self.process_queued_message
-            chat_executor.submit(target, user)
+            if slot_reserved:
+                self.update_submission_status(submission_id, "starting")
+            submit_kwargs = {"submission_id": submission_id} if submission_id else {}
+            future = chat_executor.submit(target, user, **submit_kwargs)
+            with self._submission_lock:
+                self._submission_futures[id(future)] = (
+                    future,
+                    submission_id,
+                    slot_reserved,
+                )
+            future.add_done_callback(
+                lambda completed, sid=submission_id, reserved=slot_reserved: (
+                    self._on_submission_done(completed, sid, reserved)
+                )
+            )
             self._refresh_parallel_toolbar()
-        except Exception:
+            return future
+        except Exception as error:
+            self.update_submission_status(
+                submission_id,
+                "failed",
+                message=self._submission_error_message(error),
+            )
             if slot_reserved:
                 self._runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
                 self._runtime_state.release_chat_slot()
@@ -152,14 +261,15 @@ class ChatLifecycle:
             self._refresh_parallel_toolbar()
             raise
 
-    def process_sync_message_with_slot(self, user):
+    def process_sync_message_with_slot(self, user, *, submission_id: str = ""):
         """Executa um prompt no thread principal ocupando um slot de concorrência."""
         slot_semaphore = getattr(self._runtime_state, "chat_slot_semaphore", None)
         if slot_semaphore is not None:
             slot_semaphore.acquire()
         self._runtime_state.increment_chat_inflight(self._refresh_parallel_toolbar)
         try:
-            self.process_message(user)
+            self.update_submission_status(submission_id, "starting")
+            self.process_message(user, submission_id=submission_id)
         finally:
             self._runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
             self._runtime_state.release_chat_slot()
@@ -167,3 +277,56 @@ class ChatLifecycle:
     def drain_ui_events(self, ui_queue) -> None:
         """Consome todos os RenderEvents pendentes na fila e chama renderer na main thread."""
         self._ui_event_handler.drain_ui_events(ui_queue)
+
+    def _on_submission_done(
+        self,
+        future,
+        submission_id: str,
+        slot_reserved: bool,
+    ) -> None:
+        """Observa Future para impedir falhas anteriores ao lifecycle visual."""
+        with self._submission_lock:
+            self._submission_futures.pop(id(future), None)
+        if future.cancelled():
+            self.update_submission_status(submission_id, "cancelled")
+            self._release_unstarted_slot(slot_reserved)
+            with self._submission_lock:
+                self._cancelled_submission_ids.discard(submission_id)
+            return
+        try:
+            error = future.exception()
+        except Exception as callback_error:
+            error = callback_error
+        if error is None:
+            with self._submission_lock:
+                self._cancelled_submission_ids.discard(submission_id)
+            return
+        message = self._submission_error_message(error)
+        logger.error(
+            "falha assíncrona no chat submission_id=%s: %s",
+            submission_id or "sem-id",
+            message,
+        )
+        self.update_submission_status(submission_id, "failed", message=message)
+        if getattr(self._renderer, "supports_submission_status", False) is not True:
+            self._system_layer.show_error_message(
+                f"[erro] falha ao iniciar execução do chat: {message}"
+            )
+
+    def _release_unstarted_slot(self, slot_reserved: bool) -> None:
+        """Libera contadores quando uma Future é cancelada antes de executar."""
+        if slot_reserved:
+            self._runtime_state.decrement_chat_inflight(
+                self._refresh_parallel_toolbar
+            )
+            self._runtime_state.release_chat_slot()
+        else:
+            self._runtime_state.decrement_chat_pending(
+                self._refresh_parallel_toolbar
+            )
+        self._refresh_parallel_toolbar()
+
+    @staticmethod
+    def _submission_error_message(error: BaseException) -> str:
+        message = str(error or "").strip() or type(error).__name__
+        return message if len(message) <= 240 else f"{message[:237]}..."

@@ -82,6 +82,7 @@ class TextualRenderer(RendererBase):
     """Renderer compatível com a API usada pelo Quimera, emitindo para Textual."""
 
     supports_agent_feed = True
+    supports_submission_status = True
     supports_structured_agent_activity = True
 
     def __init__(self, bridge: TextualUiBridge) -> None:
@@ -122,6 +123,10 @@ class TextualRenderer(RendererBase):
     def set_profile_resolver(self, resolver: Callable) -> None:
         """Define callback para resolver (color, label) por agente."""
         self._profile_resolver = resolver
+
+    def update_submission_status(self, submission_id: str, status: str, **metadata):
+        """Encaminha o lifecycle do prompt para o turno humano no feed."""
+        return self._bridge.update_submission_status(submission_id, status, **metadata)
 
     def set_orchestrator(self, agent_name: str | None) -> None:
         """Define qual agente é o orquestrador ativo."""
@@ -399,10 +404,20 @@ class TextualRenderer(RendererBase):
 
     def show_banner(self, message: str) -> None:
         """Exibe banner de boas-vindas/logo no feed Textual."""
-        self._bridge.emit(TextualUiEvent("banner", strip_ansi(str(message)).strip("\r\n")))
+        self._bridge.emit(
+            TextualUiEvent(
+                "banner",
+                strip_ansi(str(message)).strip("\r\n"),
+                compact=True,
+            )
+        )
+
+    def show_boot_message(self, message: str) -> None:
+        """Exibe uma linha compacta pertencente apenas ao cabeçalho de boot."""
+        self._bridge.emit(TextualUiEvent("muted", str(message), compact=True))
 
     def show_system_neutral(self, message: str) -> None:
-        """Exibe mensagem neutra."""
+        """Exibe mensagem neutra com o espaçamento normal do feed."""
         self._bridge.emit(TextualUiEvent("muted", str(message)))
 
     def show_notification(self, message: str, *, severity: str = "information", timeout: float | None = None) -> None:

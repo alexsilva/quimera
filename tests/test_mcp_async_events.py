@@ -411,7 +411,7 @@ class TestTimeout:
 
         response = server._resolve_tool_response(call, wait_timeout=0.01)
 
-        assert response["error"]["message"] == "Tool execution timed out"
+        assert response["error"]["message"].startswith("Tool 'read_file' timed out")
         assert cancel_event.is_set()
         assert 77 not in server._cancel_events
         assert call not in server._pending_calls
@@ -440,7 +440,7 @@ class TestTimeout:
 
         assert time.perf_counter() - started_at < 0.2
         assert cancel_event.is_set()
-        assert responses[0]["error"]["message"] == "Tool execution timed out"
+        assert responses[0]["error"]["message"].startswith("Tool 'read_file' timed out")
 
     def test_timeout_does_not_crash_server(self):
         """Timeout não crasha o servidor — chamadas seguintes funcionam."""
@@ -473,7 +473,7 @@ class TestTimeout:
             second_call, wait_timeout=0.01
         )
 
-        assert first_response["error"]["message"] == "Tool execution timed out"
+        assert first_response["error"]["message"].startswith("Tool 'read_file' timed out")
         assert second_response["result"]["content"][0]["text"] == "second"
 
     def test_flush_pending_expires_stalled_call(self):
@@ -505,7 +505,7 @@ class TestTimeout:
             responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
             assert len(responses) == 1
             assert responses[0]["id"] == 11
-            assert responses[0]["error"]["message"] == "Tool execution timed out"
+            assert responses[0]["error"]["message"].startswith("Tool 'read_file' timed out")
             assert call["cancel_event"].is_set()
             with server._pending_lock:
                 assert all(c["msg_id"] != 11 for c in server._pending_calls)
@@ -570,7 +570,7 @@ class TestTimeout:
             assert elapsed < 3
             responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
             assert len(responses) == 1
-            assert responses[0]["error"]["message"] == "Tool execution timed out"
+            assert responses[0]["error"]["message"].startswith("Tool 'read_file' timed out")
             assert call["cancel_event"].is_set()
             with server._pending_lock:
                 assert server._pending_calls == []
@@ -601,11 +601,68 @@ class TestTimeout:
             assert elapsed < 5
             assert len(responses) == 1
             assert responses[0]["id"] == 14
-            assert responses[0]["error"]["message"] == "Tool execution timed out"
+            assert responses[0]["error"]["message"].startswith("Tool 'read_file' timed out")
             with server._pending_lock:
                 assert server._pending_calls == []
         finally:
             release.set()
+
+
+class TestDelegateTimeoutContract:
+    """Delegado tem direito ao orçamento integral de processamento.
+
+    O teto do servidor para `delegate` deve ficar acima do deadline interno
+    da delegação (`delegate_parallel_timeout_seconds`), garantindo que o erro
+    estruturado venha sempre do relógio interno — o servidor é só backstop.
+    """
+
+    def test_delegate_deadline_exceeds_parallel_timeout(self):
+        """Teto do delegate fica acima do timeout interno; demais tools inalteradas."""
+        executor = _make_executor(tool_names=["delegate", "read_file"])
+        executor.config.mcp_tool_timeout_seconds = 600
+        executor.config.delegate_parallel_timeout_seconds = 3600
+        server = _make_server(executor)
+
+        assert server._configured_tool_timeout("delegate") > 3600
+        assert server._configured_tool_timeout("read_file") == 600.0
+        assert server._configured_tool_timeout() == 600.0
+
+    def test_delegate_deadline_defaults_without_valid_config(self):
+        """Executor de compatibilidade (config mockada) ainda garante o orçamento."""
+        executor = _make_executor(tool_names=["delegate"])
+        server = _make_server(executor)
+
+        assert server._configured_tool_timeout("delegate") >= 3600
+
+    def test_call_deadline_fallback_uses_tool_name(self):
+        """Chamadas antigas sem deadline_at derivam o teto correto por tool."""
+        executor = _make_executor(tool_names=["delegate", "read_file"])
+        executor.config.mcp_tool_timeout_seconds = 600
+        executor.config.delegate_parallel_timeout_seconds = 3600
+        server = _make_server(executor)
+
+        started = time.perf_counter()
+        delegate_call = {"started_at": started, "tool_name": "delegate"}
+        plain_call = {"started_at": started, "tool_name": "read_file"}
+
+        assert server._call_deadline(delegate_call) - started > 3600
+        assert server._call_deadline(plain_call) - started == 600.0
+
+    def test_config_default_gives_delegate_one_hour(self):
+        """Default de delegate_parallel_timeout_seconds acompanha o novo orçamento."""
+        from pathlib import Path
+
+        from quimera.runtime.config import (
+            DEFAULT_DELEGATE_TIMEOUT_SECONDS,
+            DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS,
+            ToolRuntimeConfig,
+        )
+
+        config = ToolRuntimeConfig(workspace_root=Path("/tmp"))
+        assert config.delegate_parallel_timeout_seconds == DEFAULT_DELEGATE_TIMEOUT_SECONDS
+        assert DEFAULT_DELEGATE_TIMEOUT_SECONDS == 3600
+        # Cliente MCP expira sempre depois do teto do servidor (3600 + folga).
+        assert DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS > 3600 + 120
 
 
 class TestHighThroughput:

@@ -245,6 +245,8 @@ class TextualFeedModel:
             return False
         if event.kind in {"question", "question_clear"}:
             return False
+        if event.kind == "submission_status":
+            return self._apply_submission_status(event)
         if event.kind == "visual_reset":
             return self._apply_visual_reset(event)
         if event.kind == "agent_message":
@@ -330,6 +332,46 @@ class TextualFeedModel:
         self._items.append(item)
         self._last_change = TextualFeedChange(True, appended=item)
         return True
+
+    def _apply_submission_status(self, event: TextualUiEvent) -> bool:
+        """Substitui o status dentro do turno humano correlacionado."""
+        status_payload = dict(event.payload or {}) if isinstance(event.payload, dict) else {}
+        submission_id = str(status_payload.get("submission_id") or "")
+        if not submission_id:
+            return False
+        for index in range(len(self._items) - 1, -1, -1):
+            item = self._items[index]
+            if item.event.kind != "user_message" or not isinstance(item.event.payload, dict):
+                continue
+            payload = dict(item.event.payload)
+            if str(payload.get("submission_id") or "") != submission_id:
+                continue
+            current_status = payload.get("submission")
+            current_revision = (
+                int(current_status.get("revision", -1))
+                if isinstance(current_status, dict)
+                else -1
+            )
+            incoming_revision = int(
+                status_payload.get("revision", current_revision + 1)
+            )
+            if incoming_revision <= current_revision:
+                self._last_change = TextualFeedChange(False)
+                return False
+            payload["submission"] = status_payload
+            replacement = TextualFeedItem(
+                TextualUiEvent(
+                    "user_message",
+                    payload,
+                    agent=item.event.agent,
+                ),
+                transient=False,
+            )
+            self._items[index] = replacement
+            self._last_change = TextualFeedChange(True, redraw=True)
+            return True
+        self._last_change = TextualFeedChange(False)
+        return False
 
     def _agent_key(self, event: TextualUiEvent) -> str:
         payload = event.payload if isinstance(event.payload, dict) else {}

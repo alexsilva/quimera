@@ -175,7 +175,7 @@ def test_codex_profile_injects_mcp_server_before_stdin_sentinel():
             "-c",
             f"mcp_servers.quimera.args={expected_args}",
             "-c",
-            "mcp_servers.quimera.tool_timeout_sec=600",
+            "mcp_servers.quimera.tool_timeout_sec=7200",
             "-",
         ]
     finally:
@@ -210,7 +210,7 @@ def test_codex_profile_does_not_duplicate_existing_mcp_override():
             "-c",
             'mcp_servers.quimera.command="python"',
             "-c",
-            "mcp_servers.quimera.tool_timeout_sec=600",
+            "mcp_servers.quimera.tool_timeout_sec=7200",
         ]
     finally:
         profile._connection_override = original_override
@@ -321,7 +321,7 @@ def test_base_agent_profile_prefers_socket_when_socket_and_http_are_set():
 
     assert cmd == ["agent", "--mcp-socket", "/tmp/quimera.sock", "-"]
     assert "--mcp-http" not in cmd
-    assert profile._build_token_args() == ["--token", "internal-token"]
+    assert profile._build_token_args() == ["--token=internal-token"]
 
 
 def test_claude_profile_prefers_socket_when_socket_and_http_are_set():
@@ -344,7 +344,7 @@ def test_claude_profile_prefers_socket_when_socket_and_http_are_set():
         assert server["command"] == "python"
         assert "--connect-socket" in server["args"]
         assert "/tmp/quimera.sock" in server["args"]
-        assert "internal-token" in server["args"]
+        assert "--token=internal-token" in server["args"]
         assert "type=http" not in config_raw
         assert "https://external.example/mcp" not in config_raw
     finally:
@@ -395,7 +395,7 @@ def test_opencode_profile_prefers_local_socket_env_when_socket_and_http_are_set(
         assert server["type"] == "local"
         assert "--connect-socket" in server["command"]
         assert "/tmp/quimera.sock" in server["command"]
-        assert "internal-token" in server["command"]
+        assert "--token=internal-token" in server["command"]
         assert '"type": "remote"' not in config_raw
         assert "https://external.example/mcp" not in config_raw
     finally:

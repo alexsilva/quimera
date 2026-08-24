@@ -18,6 +18,7 @@ from .session_bootstrap import (
     resolve_render_debug_log_path,
     resolve_session_log_path,
 )
+from .submission_tracker import submission_id_of
 from .turn import TurnManager
 from .worker import ChatWorker, ChatWorkItem
 from ..runtime.tools.mcp_clients import get_bridge as get_mcp_client_bridge
@@ -77,7 +78,11 @@ def run_chat_loop(
     app.renderer.show_banner(WelcomePresenter.build_welcome_message())
     workspace = getattr(app, "workspace", None)
     project_path = str(getattr(workspace, "cwd", Path.cwd()))
-    _show_neutral = app.renderer.show_system_neutral
+    _show_neutral = getattr(
+        app.renderer,
+        "show_boot_message",
+        app.renderer.show_system_neutral,
+    )
     _show_neutral(f"Projeto: {project_path}")
     restore_notice = getattr(app.storage, "pop_restore_notice", lambda: None)()
     if restore_notice:
@@ -239,6 +244,8 @@ def run_chat_loop(
                     break
                 continue
 
+            submission_id = submission_id_of(user)
+
             if user == CMD_EXIT:
                 break
 
@@ -257,6 +264,7 @@ def run_chat_loop(
 
             _cmd_result = _handle_command_safely(app, user)
             if _cmd_result is True:
+                chat_lifecycle.update_submission_status(submission_id, "completed")
                 continue
             elif isinstance(_cmd_result, str):
                 user = _cmd_result
@@ -269,13 +277,20 @@ def run_chat_loop(
                     acquired_async_slot = chat_slot_semaphore.acquire(blocking=False)
                 if acquired_async_slot:
                     app.runtime_state.increment_chat_inflight(app._refresh_parallel_toolbar)
+                    chat_lifecycle.update_submission_status(submission_id, "queued")
                     if (
                         hasattr(app, "turn_manager")
                         and app.turn_manager.is_human_turn
                     ):
                         app.turn_manager.next_turn()
                     _pending_async_slot = True
-                    chat_queue.put(ChatWorkItem(user, slot_reserved=True))
+                    chat_queue.put(
+                        ChatWorkItem(
+                            user,
+                            slot_reserved=True,
+                            submission_id=submission_id,
+                        )
+                    )
                     _pending_async_slot = False
                     app._refresh_parallel_toolbar()
                     deadline = time.monotonic() + 0.05
@@ -284,14 +299,27 @@ def run_chat_loop(
                 else:
                     if hasattr(app, "turn_manager") and app.turn_manager.is_human_turn:
                         app.turn_manager.next_turn()
-                    app.runtime_state.increment_chat_pending(app._refresh_parallel_toolbar)
-                    chat_queue.put(ChatWorkItem(user, slot_reserved=False))
+                    queue_position = app.runtime_state.increment_chat_pending(
+                        app._refresh_parallel_toolbar
+                    )
+                    chat_lifecycle.update_submission_status(
+                        submission_id,
+                        "queued",
+                        queue_position=queue_position,
+                    )
+                    chat_queue.put(
+                        ChatWorkItem(
+                            user,
+                            slot_reserved=False,
+                            submission_id=submission_id,
+                        )
+                    )
                     app._refresh_parallel_toolbar()
             else:
                 if hasattr(app, "turn_manager"):
                     app.turn_manager.next_turn()
                 try:
-                    chat_lifecycle.process_message(user)
+                    chat_lifecycle.process_message(user, submission_id=submission_id)
                 except KeyboardInterrupt:
                     chat_lifecycle.handle_local_interrupt()
                     continue

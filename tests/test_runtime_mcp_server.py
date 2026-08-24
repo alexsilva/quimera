@@ -1107,8 +1107,7 @@ class TestProfileTokenIntegration:
         args = profile.mcp_server_args("/tmp/test.sock")
         args_json = next(v for i, v in enumerate(args) if args[i - 1] == "-c" and "mcp_servers.quimera.args=" in v)
         proxy_cmd = json.loads(args_json.split("=", 1)[1])
-        assert "--token" in proxy_cmd
-        assert "mytoken" in proxy_cmd
+        assert "--token=mytoken" in proxy_cmd
         assert proxy_cmd[proxy_cmd.index("--agent-name") + 1] == "codex"
 
     def test_codex_sem_token_nao_inclui_token_arg(self):
@@ -1122,7 +1121,7 @@ class TestProfileTokenIntegration:
         args = profile.mcp_server_args("/tmp/test.sock")
         args_json = next(v for i, v in enumerate(args) if args[i - 1] == "-c" and "mcp_servers.quimera.args=" in v)
         proxy_cmd = json.loads(args_json.split("=", 1)[1])
-        assert "--token" not in proxy_cmd
+        assert not any(str(part).startswith("--token") for part in proxy_cmd)
 
     def test_claude_inclui_token_no_mcp_config(self):
         """Verifica que Test claude inclui token no mcp config."""
@@ -1135,8 +1134,7 @@ class TestProfileTokenIntegration:
         config_json = args[1]  # "--mcp-config", <json>
         config = json.loads(config_json)
         proxy_args = config["mcpServers"]["quimera"]["args"]
-        assert "--token" in proxy_args
-        assert "claudetoken" in proxy_args
+        assert "--token=claudetoken" in proxy_args
         assert proxy_args[proxy_args.index("--agent-name") + 1] == "claude"
 
     def test_claude_sem_token_nao_inclui_token_arg(self):
@@ -1149,7 +1147,7 @@ class TestProfileTokenIntegration:
         args = profile.mcp_server_args("/tmp/test.sock")
         config = json.loads(args[1])
         proxy_args = config["mcpServers"]["quimera"]["args"]
-        assert "--token" not in proxy_args
+        assert not any(str(part).startswith("--token") for part in proxy_args)
 
     def test_opencode_inclui_token_na_config(self):
         """Verifica que Test opencode inclui token na config."""
@@ -1162,8 +1160,7 @@ class TestProfileTokenIntegration:
         env = profile.env_for_cli()
         config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
         cmd = config["mcp"]["quimera"]["command"]
-        assert "--token" in cmd
-        assert "opencodetoken" in cmd
+        assert "--token=opencodetoken" in cmd
         assert cmd[cmd.index("--agent-name") + 1] == "opencode"
 
     def test_opencode_sem_token_nao_inclui_token_arg(self):
@@ -1177,7 +1174,7 @@ class TestProfileTokenIntegration:
         env = profile.env_for_cli()
         config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
         cmd = config["mcp"]["quimera"]["command"]
-        assert "--token" not in cmd
+        assert not any(str(part).startswith("--token") for part in cmd)
 
     def test_set_mcp_socket_config_configura_path_e_token(self):
         """Verifica que Test set mcp socket config configura path e token."""
@@ -1250,11 +1247,11 @@ class TestProfileTokenIntegration:
         assert profile._mcp_token is None
 
     def test_build_token_args_retorna_lista_com_token(self):
-        """_build_token_args deve retornar ['--token', token] quando token está definido."""
+        """_build_token_args deve retornar ['--token=<token>'] quando token está definido."""
         from quimera.profiles.base import ExecutionProfile
         profile = ExecutionProfile(name="test", prefix="/test", style=("white", "Test"))
         object.__setattr__(profile, "_mcp_token", "tok123")
-        assert profile._build_token_args() == ["--token", "tok123"]
+        assert profile._build_token_args() == ["--token=tok123"]
 
     def test_build_token_args_retorna_lista_vazia_sem_token(self):
         """_build_token_args deve retornar [] quando token é None."""

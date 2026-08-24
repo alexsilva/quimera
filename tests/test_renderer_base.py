@@ -19,6 +19,7 @@ CONTRACT = [
     "show_warning",
     "show_error",
     "show_banner",
+    "show_boot_message",
     "show_system_neutral",
     "show_approval",
     "show_feed",
@@ -78,6 +79,7 @@ class TestRendererBaseContract(unittest.TestCase):
     def test_optional_displays_fall_back_to_show_system(self):
         renderer = _RecordingRenderer()
         renderer.show_banner("banner")
+        renderer.show_boot_message("boot")
         renderer.show_system_neutral("neutral")
         renderer.show_approval("approval")
         renderer.show_feed("feed", agent="claude", muted=True)
@@ -87,7 +89,7 @@ class TestRendererBaseContract(unittest.TestCase):
         renderer.show_message("claude", "msg")
         self.assertEqual(
             renderer.system_messages,
-            ["banner", "neutral", "approval", "feed", "agent", "warn", "err", "msg"],
+            ["banner", "boot", "neutral", "approval", "feed", "agent", "warn", "err", "msg"],
         )
 
     def test_notify_fallbacks_use_canonical_formatters(self):

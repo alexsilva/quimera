@@ -10,6 +10,12 @@ if TYPE_CHECKING:
 
 
 DEFAULT_MCP_TOOL_TIMEOUT_SECONDS = 600
+# Delegações rodam trabalho longo (revisões, análises) e têm orçamento próprio,
+# muito acima do teto das tools comuns.
+DEFAULT_DELEGATE_TIMEOUT_SECONDS = 3600
+# O cliente MCP (ex.: Codex) deve expirar sempre DEPOIS do servidor, para que
+# o erro estruturado venha do servidor e nunca do cliente abandonando a chamada.
+DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS = 2 * DEFAULT_DELEGATE_TIMEOUT_SECONDS
 
 
 @dataclass(slots=True)
@@ -21,7 +27,7 @@ class ToolRuntimeConfig:
     artifacts_root: Path | None = None
     command_timeout_seconds: int = 20
     mcp_tool_timeout_seconds: int = DEFAULT_MCP_TOOL_TIMEOUT_SECONDS
-    delegate_parallel_timeout_seconds: int = 600
+    delegate_parallel_timeout_seconds: int = DEFAULT_DELEGATE_TIMEOUT_SECONDS
     interactive_command_default_yield_ms: int = 1000
     max_output_chars: int = 1_000_000
     max_file_read_chars: int = 20_000

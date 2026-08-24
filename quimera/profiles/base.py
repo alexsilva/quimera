@@ -380,7 +380,10 @@ class ExecutionProfile:
         """
         token = (self._mcp_token or "").strip()
         if token:
-            return ["--token", token]
+            # Forma --token=<valor>: um token começando com '-' (possível com
+            # token_urlsafe) seria rejeitado pelo argparse do proxy se fosse
+            # passado como argumento separado.
+            return [f"--token={token}"]
         return []
 
     def env_for_cli(self) -> dict:

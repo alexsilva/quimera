@@ -10,7 +10,7 @@ from quimera.profiles.spy_utils import (
     normalize_spy_text,
     truncate_spy_text,
 )
-from quimera.runtime.config import DEFAULT_MCP_TOOL_TIMEOUT_SECONDS
+from quimera.runtime.config import DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS
 
 _CODEX_STDERR_NOISE_PATTERNS = (
     r"\bOrphan function call output for call id:\s*call_[A-Za-z0-9]+\b",
@@ -198,7 +198,7 @@ class CodexProfile(ExecutionProfile):
             "-c",
             f"mcp_servers.quimera.args={args_toml}",
             "-c",
-            f"mcp_servers.quimera.tool_timeout_sec={DEFAULT_MCP_TOOL_TIMEOUT_SECONDS}",
+            f"mcp_servers.quimera.tool_timeout_sec={DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS}",
         ]
 
     def mcp_http_server_args(self, url: str) -> list[str]:
@@ -218,7 +218,7 @@ class CodexProfile(ExecutionProfile):
                 return base_cmd
             timeout_args = [
                 "-c",
-                f"{timeout_key}={DEFAULT_MCP_TOOL_TIMEOUT_SECONDS}",
+                f"{timeout_key}={DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS}",
             ]
             if base_cmd and base_cmd[-1] == "-":
                 return [*base_cmd[:-1], *timeout_args, base_cmd[-1]]

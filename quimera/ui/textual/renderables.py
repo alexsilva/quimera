@@ -36,11 +36,6 @@ _TRANSPORT_MARKERS = {
     _MCP_HTTP_TRANSPORT: "☁",
 }
 
-# Eventos de linha única (banner, avisos de boot/sistema) formam blocos visuais
-# contíguos: não recebem a margem vertical aplicada aos turnos de conversa.
-COMPACT_FEED_KINDS = frozenset({"banner", "muted", "plain", "system", "theme_changed"})
-
-
 def _resolve_transport_label(payload, agent: str | None = None) -> str:
     """Resolve label from payload, prefixing a discreet transport icon for MCP HTTP.
 
@@ -475,6 +470,46 @@ def _clear_question_overlay_widget(overlay) -> None:
     overlay.display = False
 
 
+def _build_submission_status_renderable(payload):
+    """Monta uma linha compacta de estado vinculada ao turno humano."""
+    if not isinstance(payload, dict):
+        return None
+    status = str(payload.get("status") or "").strip().lower()
+    elapsed = max(0, int(float(payload.get("elapsed_seconds") or 0)))
+    queue_position = payload.get("queue_position")
+    detail = str(payload.get("message") or "").strip()
+    labels = {
+        "accepted": ("Aceita", "dim"),
+        "queued": ("Na fila", "yellow"),
+        "starting": ("Preparando execução", "yellow"),
+        "running": ("Executando", "cyan"),
+        "waiting": (detail or "Aguardando início", "yellow"),
+        "completed": ("Concluída", "green"),
+        "failed": ("Falhou", "red"),
+        "cancelled": ("Cancelada", "yellow"),
+    }
+    label, style = labels.get(status, (status, "dim"))
+    if not label:
+        return None
+    if status == "queued" and queue_position:
+        label = f"{label} · posição {queue_position}"
+    if status == "failed" and detail:
+        label = f"{label} · {detail}"
+    if status in {"completed", "failed", "cancelled"}:
+        label = f"{label} · {_format_submission_elapsed(elapsed)}"
+    return _gutter_row("·", style, Text(label, style=style, overflow="fold"))
+
+
+def _format_submission_elapsed(seconds: int) -> str:
+    """Formata duração sem variar a largura do turno durante a execução."""
+    if seconds < 1:
+        return "<1s"
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, remainder = divmod(seconds, 60)
+    return f"{minutes}m {remainder:02d}s"
+
+
 
 def _render_event(event: TextualUiEvent):
     """Converte eventos do bridge para renderables Rich."""
@@ -487,13 +522,16 @@ def _render_event(event: TextualUiEvent):
         label = str(payload.get("label", "Alex")) if isinstance(payload, dict) else "Alex"
         style = str(payload.get("style", "green") or "green") if isinstance(payload, dict) else "green"
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME) if isinstance(payload, dict) else themes.DEFAULT_THEME
-        return _render_turn_block(
+        turn = _render_turn_block(
             theme_name,
             label,
             style,
             content=content,
             render_mode="plain",
         )
+        submission = payload.get("submission") if isinstance(payload, dict) else None
+        status = _build_submission_status_renderable(submission)
+        return Group(turn, status) if status is not None else turn
     if event.kind == "agent_message":
         payload = event.payload or {}
         content = str(payload.get("content", ""))

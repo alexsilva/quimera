@@ -20,6 +20,7 @@ class ChatWorkItem:
 
     message: object
     slot_reserved: bool = True
+    submission_id: str = ""
 
 
 class ChatWorker:
@@ -76,10 +77,10 @@ class ChatWorker:
         """Processa uma mensagem sem derrubar a thread em caso de erro."""
         try:
             if isinstance(msg, ChatWorkItem):
-                self._agent_executor(
-                    msg.message,
-                    slot_reserved=msg.slot_reserved,
-                )
+                kwargs = {"slot_reserved": msg.slot_reserved}
+                if msg.submission_id:
+                    kwargs["submission_id"] = msg.submission_id
+                self._agent_executor(msg.message, **kwargs)
             else:
                 self._agent_executor(msg)
         except Exception as exc:
