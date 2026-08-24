@@ -35,6 +35,26 @@ DEFAULT_CODEX_CLOUD_BASE_URL = "https://chatgpt.com/backend-api/codex"
 # correspondente quando `store=false`.
 _MAX_REASONING_ITEMS = 256
 
+# Equivalente à seção "Preamble messages" do system prompt do Codex CLI.
+# Sem esta instrução, os modelos gpt-5.6-* reduzem o canal commentary
+# (exibido como thinking) a títulos curtos em vez de narrar o progresso.
+PREAMBLE_INSTRUCTIONS = """## Preamble messages
+
+Before making tool calls, send a brief preamble to the user explaining what \
+you're about to do. When sending preamble messages, follow these principles:
+
+- **Logically group related actions**: if you're about to run several related \
+commands, describe them together in one preamble rather than sending a \
+separate note for each.
+- **Keep it concise**: be no more than 1-2 sentences (8-12 words for quick \
+updates).
+- **Build on prior context**: if this is not your first tool call, use the \
+preamble message to connect the dots with what's been done so far and create \
+a sense of momentum and clarity for the user to understand your next actions.
+- **Keep your tone light, friendly and curious**: add small touches of \
+personality in preambles to feel collaborative and engaging.
+- Write every preamble in the same language as the conversation."""
+
 
 def _content_parts_to_text(content) -> str:
     """Extrai texto de content chat-style (str ou lista de partes)."""
@@ -187,6 +207,7 @@ class CodexCloudDriver(OpenAICompatDriver):
                     "output": _content_parts_to_text(content),
                 })
 
+        instructions.append(PREAMBLE_INSTRUCTIONS)
         body: dict = {
             "model": self.model,
             "instructions": "\n\n".join(instructions),
@@ -306,6 +327,9 @@ class CodexCloudDriver(OpenAICompatDriver):
         raw_tool_calls: list[dict] = []
         pending_reasoning: dict | None = None
         reasoning_open = False
+        # Itens de mensagem com phase=commentary (narração de progresso dos
+        # modelos gpt-5.6-*): exibidos como thinking, fora do texto final.
+        commentary_item_ids: set[str] = set()
 
         def _emit(piece: str) -> None:
             if on_text_chunk is not None and piece:
@@ -331,12 +355,28 @@ class CodexCloudDriver(OpenAICompatDriver):
                 continue
             etype = event.get("type")
 
+            if etype == "response.output_item.added":
+                item = event.get("item") or {}
+                if item.get("type") == "message" and item.get("phase") == "commentary":
+                    item_id = str(item.get("id") or "")
+                    if item_id:
+                        commentary_item_ids.add(item_id)
+                continue
+
             if etype == "response.output_text.delta":
                 delta = str(event.get("delta") or "")
-                if delta:
-                    _close_reasoning()
-                    text += delta
-                    _emit(delta)
+                if not delta:
+                    continue
+                if str(event.get("item_id") or "") in commentary_item_ids:
+                    if not reasoning_open:
+                        _emit("<think>" + delta)
+                        reasoning_open = True
+                    else:
+                        _emit(delta)
+                    continue
+                _close_reasoning()
+                text += delta
+                _emit(delta)
                 continue
 
             if etype in {
@@ -361,7 +401,9 @@ class CodexCloudDriver(OpenAICompatDriver):
             if etype == "response.output_item.done":
                 item = event.get("item") or {}
                 itype = item.get("type")
-                if itype == "reasoning":
+                if itype == "message" and str(item.get("id") or "") in commentary_item_ids:
+                    _close_reasoning()
+                elif itype == "reasoning":
                     pending_reasoning = item
                 elif itype == "function_call":
                     call_id = str(item.get("call_id") or "")

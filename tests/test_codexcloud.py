@@ -20,6 +20,7 @@ from quimera.profiles.codexcloud import (
 )
 from quimera.runtime.codex_auth import CodexAuthError, CodexCloudAuth
 from quimera.runtime.drivers.codexcloud import (
+    PREAMBLE_INSTRUCTIONS,
     CodexCloudDriver,
     _chat_tools_to_responses_tools,
 )
@@ -227,7 +228,7 @@ def test_build_responses_payload_maps_roles_and_tools():
     body = driver._build_responses_payload(messages, tools)
 
     assert body["model"] == "gpt-5.5"
-    assert body["instructions"] == "regra 1\n\nregra 2"
+    assert body["instructions"] == "regra 1\n\nregra 2\n\n" + PREAMBLE_INSTRUCTIONS
     assert body["store"] is False and body["stream"] is True
     types = [item["type"] for item in body["input"]]
     assert types == ["message", "message", "reasoning", "function_call", "function_call_output"]
@@ -241,6 +242,13 @@ def test_build_responses_payload_maps_roles_and_tools():
         "parameters": {"type": "object"},
         "strict": False,
     }]
+    driver.close()
+
+
+def test_build_responses_payload_appends_preamble_without_system():
+    driver = _make_driver(lambda request: httpx.Response(500))
+    body = driver._build_responses_payload([{"role": "user", "content": "oi"}], [])
+    assert body["instructions"] == PREAMBLE_INSTRUCTIONS
     driver.close()
 
 
@@ -301,6 +309,72 @@ def test_responses_turn_streams_text_and_reasoning():
     assert text == "Olá, mundo"
     assert tool_calls == []
     assert chunks == ["<think>pensando", "</think>", "Olá", ", mundo"]
+    driver.close()
+
+
+def test_responses_turn_streams_commentary_as_thinking():
+    """Modelos gpt-5.6-* narram progresso via message phase=commentary.
+
+    Sequência real capturada do backend Codex com gpt-5.6-sol: o commentary
+    chega como response.output_text.delta de um item message cujo added traz
+    phase=commentary. Deve virar bloco <think> e ficar fora do texto final.
+    """
+    events = [
+        {"type": "response.created"},
+        {"type": "response.output_item.added", "item": {
+            "type": "message", "phase": "commentary", "id": "msg-c1",
+        }},
+        {"type": "response.output_text.delta", "item_id": "msg-c1", "delta": "Vou listar"},
+        {"type": "response.output_text.delta", "item_id": "msg-c1", "delta": " os arquivos."},
+        {"type": "response.output_item.done", "item": {
+            "type": "message", "phase": "commentary", "id": "msg-c1",
+        }},
+        {"type": "response.output_item.added", "item": {
+            "type": "message", "phase": "final_answer", "id": "msg-f1",
+        }},
+        {"type": "response.output_text.delta", "item_id": "msg-f1", "delta": "São 3 arquivos."},
+        {"type": "response.completed", "response": {"usage": {}}},
+    ]
+    driver = _make_driver(lambda request: httpx.Response(200, text=_sse(events)))
+    chunks: list[str] = []
+
+    text, tool_calls = driver._responses_turn(
+        [{"role": "user", "content": "oi"}], [], on_text_chunk=chunks.append
+    )
+
+    assert text == "São 3 arquivos."
+    assert tool_calls == []
+    assert chunks == ["<think>Vou listar", " os arquivos.", "</think>", "São 3 arquivos."]
+    driver.close()
+
+
+def test_responses_turn_closes_commentary_before_function_call():
+    """Commentary seguido de function_call fecha o <think> na fronteira do item."""
+    events = [
+        {"type": "response.output_item.added", "item": {
+            "type": "message", "phase": "commentary", "id": "msg-c1",
+        }},
+        {"type": "response.output_text.delta", "item_id": "msg-c1", "delta": "Consultando src."},
+        {"type": "response.output_item.done", "item": {
+            "type": "message", "phase": "commentary", "id": "msg-c1",
+        }},
+        {"type": "response.output_item.done", "item": {
+            "type": "function_call", "call_id": "call-1",
+            "name": "listar_arquivos", "arguments": '{"path": "src"}',
+        }},
+        {"type": "response.completed", "response": {"usage": {}}},
+    ]
+    driver = _make_driver(lambda request: httpx.Response(200, text=_sse(events)))
+    chunks: list[str] = []
+
+    text, tool_calls = driver._responses_turn(
+        [{"role": "user", "content": "oi"}], [], on_text_chunk=chunks.append
+    )
+
+    assert text == ""
+    assert chunks == ["<think>Consultando src.", "</think>"]
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["id"] == "call-1"
     driver.close()
 
 
