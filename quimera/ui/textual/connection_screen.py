@@ -15,6 +15,11 @@ from quimera.profiles.base import CliConnection, OpenAIConnection
 class ConnectionScreen(ModalScreen[None]):
     """Edita a conexão de um agente sem usar o input principal do chat."""
 
+    PROVIDER_OPTIONS = (
+        ("OpenAI compatível", "openai_compat"),
+        ("Codex Cloud", "codexcloud"),
+    )
+
     CSS = """
     ConnectionScreen { align: center middle; background: rgba(0, 0, 0, 0.65); }
     #connection_dialog {
@@ -47,6 +52,15 @@ class ConnectionScreen(ModalScreen[None]):
             raise ValueError(f"Agente '{agent_name}' não encontrado para configuração.")
         self.current = self.profile.effective_connection()
 
+    @classmethod
+    def _normalize_provider(cls, provider: str) -> str:
+        """Normaliza aliases antigos para um provider selecionável."""
+        normalized = str(provider or "").strip().lower()
+        if normalized == "openai":
+            return "openai_compat"
+        available = {value for _, value in cls.PROVIDER_OPTIONS}
+        return normalized if normalized in available else "openai_compat"
+
     def compose(self) -> ComposeResult:
         is_cli = isinstance(self.current, CliConnection)
         cli = self.current if is_cli else CliConnection(cmd=list(getattr(self.profile, "cmd", []) or []))
@@ -65,7 +79,12 @@ class ConnectionScreen(ModalScreen[None]):
 
                 with Vertical(id="conn_openai_fields", classes="hidden" if is_cli else ""):
                     yield Label("Provider")
-                    yield Input(value=api.provider, id="conn_provider")
+                    yield Select(
+                        self.PROVIDER_OPTIONS,
+                        value=self._normalize_provider(api.provider),
+                        allow_blank=False,
+                        id="conn_provider",
+                    )
                     yield Label("Modelo")
                     yield Input(value=api.model, id="conn_model")
                     yield Label("Base URL")
@@ -137,7 +156,9 @@ class ConnectionScreen(ModalScreen[None]):
                     model=model,
                     base_url=base_url,
                     api_key_env=api_key_env,
-                    provider=self.query_one("#conn_provider", Input).value.strip() or "openai_compat",
+                    provider=str(
+                        self.query_one("#conn_provider", Select).value
+                    ),
                     supports_native_tools=self.query_one("#conn_native_tools", Switch).value,
                     max_connections=max_connections,
                     extra_body=extra_body,

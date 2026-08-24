@@ -1914,6 +1914,38 @@ def test_connection_screen_fields_show_scrollbar_when_content_overflows():
     asyncio.run(run_test())
 
 
+def test_connection_screen_provider_is_select_with_supported_providers():
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import Select
+
+    from quimera.profiles.base import OpenAIConnection
+
+    async def run_test() -> None:
+        connection = OpenAIConnection(provider="codexcloud")
+        profile = SimpleNamespace(effective_connection=Mock(return_value=connection))
+        profile_resolver = Mock()
+        profile_resolver.get.return_value = profile
+        quimera_app = SimpleNamespace(
+            system_layer=SimpleNamespace(profile_resolver=profile_resolver),
+        )
+        app = App()
+
+        async with app.run_test(size=(80, 30)) as pilot:
+            app.push_screen(ConnectionScreen(quimera_app, Mock(), "openai"))
+            await pilot.pause()
+
+            provider = app.screen.query_one("#conn_provider", Select)
+            assert provider.value == "codexcloud"
+            assert provider._options == [
+                ("OpenAI compatível", "openai_compat"),
+                ("Codex Cloud", "codexcloud"),
+            ]
+
+    asyncio.run(run_test())
+
+
 def test_textual_input_gate_is_active_while_textual_is_mounted():
     gate = TextualInputGate(TextualUiBridge())
 
