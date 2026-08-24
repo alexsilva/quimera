@@ -181,6 +181,17 @@ class DriverRepl:
     def _update_driver(self) -> None:
         """Atualiza o driver com a conexão atual."""
         connection = self._get_current_connection()
+        if str(getattr(connection, "provider", "") or "").strip().lower() == "codexcloud":
+            from .codexcloud import CodexCloudDriver
+
+            self.driver = CodexCloudDriver(
+                model=connection.model,
+                base_url=connection.base_url,
+                timeout=getattr(connection, "request_timeout", None),
+                tool_use_reliability=getattr(self.profile, "tool_use_reliability", "medium"),
+                extra_body=connection.extra_body,
+            )
+            return
         api_key = "ollama"
         if connection.api_key_env:
             api_key = os.environ.get(connection.api_key_env, "")
@@ -205,6 +216,10 @@ class DriverRepl:
 
     def ensure_backend_available(self, timeout: float = 2.0) -> None:
         """Executa ensure backend available."""
+        if str(getattr(self.connection, "provider", "") or "").strip().lower() == "codexcloud":
+            # O backend Codex não expõe /models sem auth; o driver valida
+            # credenciais na primeira requisição real.
+            return
         probe_url = self._probe_url()
         request = urllib_request.Request(probe_url, method="GET")
         try:

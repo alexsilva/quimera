@@ -2,7 +2,7 @@
 import json
 import re
 import shlex
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable, FrozenSet, List, Optional, Tuple, Union
 
@@ -288,13 +288,19 @@ class ExecutionProfile:
         color, label = self.style
         return (color, f"{self.icon}  {label}")
 
-    def configure_with_model(self, model_id: str) -> "CliConnection":
-        """Retorna nova CliConnection com model_id substituído no placeholder --model=."""
+    def configure_with_model(self, model_id: str) -> "Connection":
+        """Retorna nova conexão com o model_id substituído.
+
+        Para perfis CLI, troca o placeholder --model= no cmd; para perfis API
+        (OpenAIConnection), troca apenas o campo model preservando o restante.
+        """
         conn = self.effective_connection()
-        if not isinstance(conn, CliConnection):
-            raise ValueError(f"Profile '{self.name}' não usa driver CLI.")
         if not (model_id or "").strip():
             raise ValueError("model_id não pode ser vazio.")
+        if isinstance(conn, OpenAIConnection):
+            return replace(conn, model=model_id)
+        if not isinstance(conn, CliConnection):
+            raise ValueError(f"Profile '{self.name}' não usa driver CLI.")
         if not any(arg.startswith("--model=") for arg in conn.cmd):
             raise ValueError(f"Profile '{self.name}' não tem placeholder --model= no cmd.")
         new_cmd = [

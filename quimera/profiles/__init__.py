@@ -24,6 +24,7 @@ def enable_test_profiles() -> tuple[str, ...]:
 from . import antigravity as _antigravity  # noqa: F401
 from . import claude as _claude  # noqa: F401
 from . import codex as _codex  # noqa: F401
+from . import codexcloud as _codexcloud  # noqa: F401
 from . import opencode as _opencode  # noqa: F401
 from .base import apply_connections  # noqa: F401
 

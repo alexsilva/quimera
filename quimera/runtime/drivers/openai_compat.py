@@ -144,6 +144,11 @@ def _categorize_api_exception(exc: Exception) -> tuple[str, float | None] | None
     Retorna ``("rate_limit", retry_after)``, ``("transient", None)``,
     ``("fatal", None)`` ou ``None`` para erros não reconhecidos.
     """
+    # Erros já categorizados por drivers derivados (ex: codexcloud) passam direto.
+    if isinstance(exc, TransientAPIError):
+        return ("rate_limit" if exc.rate_limited else "transient"), exc.retry_after
+    if isinstance(exc, FatalAPIError):
+        return "fatal", None
     if _OAIRateLimitError is not Exception and isinstance(exc, _OAIRateLimitError):
         return "rate_limit", _api_retry_after(exc)
     if _OAIAuthError is not Exception and isinstance(exc, _OAIAuthError):

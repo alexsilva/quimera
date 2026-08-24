@@ -1,6 +1,5 @@
 """Tests for quimera/profiles/base.py."""
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -271,12 +270,18 @@ def test_render_style():
     assert p.render_style == ("red", "🚀  Rocket")
 
 
-def test_configure_with_model_not_cli():
+def test_configure_with_model_openai_replaces_only_model():
     p = _make_profile(driver="openai_compat", model="gpt-4", base_url="http://x", api_key_env="K")
     # Set override to OpenAI so effective_connection is OpenAIConnection
-    object.__setattr__(p, "_connection_override", OpenAIConnection())
-    with pytest.raises(ValueError, match="não usa driver CLI"):
-        p.configure_with_model("gpt-3")
+    original = OpenAIConnection(provider="codexcloud", extra_body={"reasoning": {"effort": "xhigh"}})
+    object.__setattr__(p, "_connection_override", original)
+    conn = p.configure_with_model("gpt-3")
+    assert isinstance(conn, OpenAIConnection)
+    assert conn.model == "gpt-3"
+    assert conn.provider == "codexcloud"
+    assert conn.extra_body == {"reasoning": {"effort": "xhigh"}}
+    assert conn.base_url == original.base_url
+    assert original.model == "gpt-4o"  # conexão original não é mutada
 
 
 def test_configure_with_model_empty_model_id():
@@ -421,7 +426,7 @@ def test_set_connection_no_persist():
 def test_set_connection_with_persist_dynamic(tmp_path):
     f = tmp_path / "conn.json"
     f.write_text(json.dumps({}), encoding="utf-8")
-    profile = register_connection_profile("sco_dyn1")
+    register_connection_profile("sco_dyn1")
     conn = OpenAIConnection(model="gpt-4", base_url="http://x", api_key_env="K")
     with patch("quimera.profiles.base._get_connections_file", return_value=f):
         set_connection("sco_dyn1", conn, persist=True)
@@ -702,9 +707,6 @@ def test_apply_connections_profile_none_after_register(tmp_path):
     }
     # Use a valid name not previously registered
     f.write_text(json.dumps({"tempagent99": conn_data}), encoding="utf-8")
-
-    original_get = __import__("quimera.profiles.base", fromlist=["_registry"])
-    call_count = [0]
 
     def patched_register(name, metadata=None, registry=None):
         # Register succeeds but we simulate the next _registry.get returning None

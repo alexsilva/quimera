@@ -6,6 +6,10 @@ def __getattr__(name: str):
         from .openai_compat import OpenAICompatDriver
 
         return OpenAICompatDriver
+    if name == "CodexCloudDriver":
+        from .codexcloud import CodexCloudDriver
+
+        return CodexCloudDriver
     raise AttributeError(name)
 
-__all__ = ["OpenAICompatDriver"]
+__all__ = ["CodexCloudDriver", "OpenAICompatDriver"]

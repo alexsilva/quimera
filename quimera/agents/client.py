@@ -1256,33 +1256,50 @@ class AgentClient:
             self.invalidate_api_driver(agent)
         is_first_call = agent not in self._api_drivers
         if is_first_call:
-            global OpenAICompatDriver
-            if OpenAICompatDriver is None:
-                from quimera.runtime.drivers.openai_compat import OpenAICompatDriver as _OpenAICompatDriver
+            provider = str(getattr(connection, "provider", "") or "").strip().lower()
+            if provider == "codexcloud":
+                # Autentica com os tokens do Codex CLI (~/.codex/auth.json);
+                # não usa API key de ambiente.
+                from quimera.runtime.drivers.codexcloud import CodexCloudDriver
 
-                OpenAICompatDriver = _OpenAICompatDriver
-
-            api_key_env = connection.api_key_env
-            if api_key_env:
-                api_key = os.environ.get(api_key_env)
-                if not api_key:
-                    self._show_error(
-                        f"[erro] variável de ambiente '{api_key_env}' não definida para {agent}"
-                    )
-                    return None
+                self._api_drivers[agent] = CodexCloudDriver(
+                    model=connection.model,
+                    base_url=connection.base_url,
+                    timeout=getattr(connection, "request_timeout", 300.0),
+                    tool_use_reliability=getattr(profile, "tool_use_reliability", "medium"),
+                    extra_body=connection.extra_body,
+                    max_connections=getattr(connection, "max_connections", 4),
+                    max_model_requests=getattr(connection, "max_model_requests", None),
+                )
+                self._api_driver_signatures[agent] = signature
             else:
-                api_key = "ollama"
-            self._api_drivers[agent] = OpenAICompatDriver(
-                model=connection.model,
-                base_url=connection.base_url,
-                api_key=api_key,
-                timeout=getattr(connection, "request_timeout", 300.0),
-                tool_use_reliability=getattr(profile, "tool_use_reliability", "medium"),
-                extra_body=connection.extra_body,
-                max_connections=getattr(connection, "max_connections", 4),
-                max_model_requests=getattr(connection, "max_model_requests", None),
-            )
-            self._api_driver_signatures[agent] = signature
+                global OpenAICompatDriver
+                if OpenAICompatDriver is None:
+                    from quimera.runtime.drivers.openai_compat import OpenAICompatDriver as _OpenAICompatDriver
+
+                    OpenAICompatDriver = _OpenAICompatDriver
+
+                api_key_env = connection.api_key_env
+                if api_key_env:
+                    api_key = os.environ.get(api_key_env)
+                    if not api_key:
+                        self._show_error(
+                            f"[erro] variável de ambiente '{api_key_env}' não definida para {agent}"
+                        )
+                        return None
+                else:
+                    api_key = "ollama"
+                self._api_drivers[agent] = OpenAICompatDriver(
+                    model=connection.model,
+                    base_url=connection.base_url,
+                    api_key=api_key,
+                    timeout=getattr(connection, "request_timeout", 300.0),
+                    tool_use_reliability=getattr(profile, "tool_use_reliability", "medium"),
+                    extra_body=connection.extra_body,
+                    max_connections=getattr(connection, "max_connections", 4),
+                    max_model_requests=getattr(connection, "max_model_requests", None),
+                )
+                self._api_driver_signatures[agent] = signature
 
         driver_instance = self._api_drivers[agent]
         if self._cancel_event.is_set():
