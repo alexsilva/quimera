@@ -220,29 +220,34 @@ class ApprovalBroker:
     """Governança central de approval, auditoria e serialização de ferramentas."""
 
     _READ_TOOLS = frozenset({
-        "list_files", "read_file", "grep_search", "list_tasks",
-        "list_jobs", "get_job", "todo_list", "list_agents",
+        "list_files", "read_file", "grep_search", "inspect_symbols",
+        "list_tasks", "list_jobs", "get_job", "todo_list",
+        "memory_save", "memory_retrieve", "memory_list_namespaces",
+        "git_status", "git_log", "git_diff", "git_branch",
+        "list_agents", "ask_user", "update_shared_state",
+        "host_processes", "host_process_inspect", "host_memory",
     })
     _NETWORK_TOOLS = frozenset({
         "web_search", "web_fetch",
-        "browser_start", "browser_status", "browser_close", "browser_navigate",
-        "browser_snapshot", "browser_click", "browser_type", "browser_press",
-        "browser_mouse", "browser_wait", "browser_evaluate", "browser_console",
-        "browser_network",
+        "browser_status", "browser_snapshot", "browser_wait",
+        "browser_console", "browser_network",
     })
     _WRITE_TOOLS = frozenset({
-        "write_file", "apply_patch", "todo_write", "tasks", "write_stdin",
-        "poll_command_session", "close_command_session", "git_add", "git_commit",
-        "git_checkout", "git_push",
+        "write_file", "replace_text", "apply_patch", "todo_write", "tasks",
+        "write_stdin", "close_command_session",
+        "git_fetch", "git_add", "git_commit", "git_checkout", "git_push",
+        "browser_start", "browser_close", "browser_navigate", "browser_click",
+        "browser_type", "browser_press", "browser_mouse", "browser_evaluate",
         "browser_screenshot",
     })
     _SHELL_TOOLS = frozenset({
         "run_shell", "exec_command", "poll_command_session",
     })
-    _DESTRUCTIVE_TOOLS = frozenset({"remove_file"})
+    _DESTRUCTIVE_TOOLS = frozenset({"remove_file", "memory_delete"})
+    _DELEGATION_TOOLS = frozenset({"delegate"})
     _PATH_TOOLS = frozenset({
         "read_file", "list_files", "grep_search",
-        "write_file", "remove_file",
+        "write_file", "replace_text", "remove_file",
     })
     _DEFAULT_SCOPE_TTL_SECONDS = 300
 
@@ -265,7 +270,7 @@ class ApprovalBroker:
 
     def classify(self, call: ToolCall) -> RiskLevel:
         """Classifica o nível de risco da ferramenta (delegate, destructive, shell, write, network ou read)."""
-        if call.name == "delegate":
+        if call.name in self._DELEGATION_TOOLS:
             return RiskLevel.DELEGATION
         if call.name == "http_request":
             method = str(call.arguments.get("method", "GET")).strip().upper() or "GET"
@@ -274,8 +279,6 @@ class ApprovalBroker:
             if method in {"POST", "PUT", "PATCH"}:
                 return RiskLevel.WRITE
             return RiskLevel.NETWORK
-        if call.name == "memory_delete":
-            return RiskLevel.DESTRUCTIVE
         if call.name in self._DESTRUCTIVE_TOOLS:
             return RiskLevel.DESTRUCTIVE
         if call.name in self._SHELL_TOOLS:
@@ -284,7 +287,13 @@ class ApprovalBroker:
             return RiskLevel.WRITE
         if call.name in self._NETWORK_TOOLS:
             return RiskLevel.NETWORK
-        return RiskLevel.READ
+        if call.name in self._READ_TOOLS:
+            return RiskLevel.READ
+        # Fail closed. Tools externas e futuras tools nativas esquecidas na
+        # classificação não podem herdar o perfil READ, que é AUTO no preset
+        # strict. WRITE mantém o comportamento esperado dos MCPs externos:
+        # prompt em strict e autonomia explícita nos presets developer/autonomous.
+        return RiskLevel.WRITE
 
     def create_request(
         self,
@@ -574,7 +583,7 @@ class ApprovalBroker:
                 if session_id is not None
                 else "command-session:unknown"
             ]
-        if call.name in {"write_file", "remove_file"}:
+        if call.name in {"write_file", "replace_text", "remove_file"}:
             path = self._extract_path(call)
             return [
                 f"path:{path}"

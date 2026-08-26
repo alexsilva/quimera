@@ -16,7 +16,7 @@ from quimera.runtime.tools import todo as todo_tools
 
 
 _EXPECTED_SCHEMA_FINGERPRINT = (
-    "619ac2990ac1783052d54e95996cae016045243da330bbdcfec7f8a13be14e18"
+    "b97830275159168971c7baa30d76065c15eab7fdccbddc7c8955516580e9e09c"
 )
 
 
@@ -33,7 +33,7 @@ def _fingerprint(schemas: list[dict]) -> str:
 def test_catalog_materializes_the_public_schema_without_contract_changes():
     """A representação tipada não pode alterar o contrato publicado."""
     assert materialize_tool_schemas() == TOOL_SCHEMAS
-    assert len(TOOL_SPECS) == len(TOOL_SCHEMAS) == 53
+    assert len(TOOL_SPECS) == len(TOOL_SCHEMAS) == 56
     assert _fingerprint(TOOL_SCHEMAS) == _EXPECTED_SCHEMA_FINGERPRINT
 
 
@@ -42,7 +42,10 @@ def test_materialization_does_not_share_nested_mutable_structures():
     first = materialize_tool_schemas()
     second = materialize_tool_schemas()
 
-    first[0]["function"]["parameters"]["properties"]["path"]["description"] = "changed"
+    list_files_schema = next(
+        schema for schema in first if schema["function"]["name"] == "list_files"
+    )
+    list_files_schema["function"]["parameters"]["properties"]["path"]["description"] = "changed"
 
     assert first != second
     assert second == TOOL_SCHEMAS
@@ -56,7 +59,7 @@ def test_schema_and_registry_are_one_to_one():
     schema_names = {item["function"]["name"] for item in TOOL_SCHEMAS}
 
     assert registry_names == schema_names
-    assert len(registry_names) == 53
+    assert len(registry_names) == 56
 
 
 def test_explicit_tool_name_lists_match_registered_handlers():

@@ -985,6 +985,10 @@ class TestToolsCallHTTP:
         """Verifica que Test read local profile excludes network tools."""
         assert parse_http_allowed_tools("read-local") == HTTP_READ_LOCAL_TOOLS
         assert "inspect_symbols" in HTTP_READ_LOCAL_TOOLS
+        assert "host_processes" in HTTP_READ_LOCAL_TOOLS
+        assert "host_process_inspect" in HTTP_READ_LOCAL_TOOLS
+        assert "host_memory" in HTTP_READ_LOCAL_TOOLS
+        assert "git_fetch" not in HTTP_READ_LOCAL_TOOLS
         assert "web_search" not in HTTP_READ_LOCAL_TOOLS
         assert "web_fetch" not in HTTP_READ_LOCAL_TOOLS
 
@@ -1002,6 +1006,7 @@ class TestToolsCallHTTP:
         assert "delegate" in tools
         assert "memory_save" in tools
         assert "replace_text" in tools
+        assert "git_fetch" in tools
         for blocked in {"run_shell", "exec_command", "write_file", "remove_file", "apply_patch"}:
             assert blocked not in tools
 

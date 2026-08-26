@@ -6,14 +6,17 @@ import time
 from unittest.mock import MagicMock
 
 from quimera.runtime.approval_broker import (
+    ApprovalBroker,
     ApprovalScope,
     RiskLevel,
     TrustedToolExecutionContext,
 )
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.runtime.drivers.tool_catalog import TOOL_SPECS
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.mcp import MCPServer
 from quimera.runtime.models import ToolCall, ToolResult
+from quimera.runtime.workspace_policy import WorkspacePolicy
 from quimera.tasks.protocol import TaskCreationResult
 
 
@@ -205,6 +208,71 @@ def test_memory_delete_is_destructive_and_requires_approval(tmp_path):
     call = ToolCall(name="memory_delete", arguments={"namespace": "workspace"})
     assert executor.approval_broker.classify(call) == RiskLevel.DESTRUCTIVE
     assert executor.would_require_approval(call) is True
+
+
+def test_all_native_tools_have_explicit_approval_risk_classification():
+    """Nova tool nativa não pode cair silenciosamente no fallback de risco."""
+    explicitly_classified = (
+        ApprovalBroker._READ_TOOLS
+        | ApprovalBroker._NETWORK_TOOLS
+        | ApprovalBroker._WRITE_TOOLS
+        | ApprovalBroker._SHELL_TOOLS
+        | ApprovalBroker._DESTRUCTIVE_TOOLS
+        | ApprovalBroker._DELEGATION_TOOLS
+        | {"http_request"}
+    )
+    native_names = {spec.name for spec in TOOL_SPECS}
+
+    assert native_names == explicitly_classified
+
+
+def test_strict_policy_does_not_auto_approve_mutations_misclassified_as_read_or_network(tmp_path):
+    """Policy de mutação e classificação do broker não podem divergir para AUTO em strict."""
+    executor = ToolExecutor(
+        ToolRuntimeConfig(
+            workspace_root=tmp_path,
+            workspace_policy=WorkspacePolicy.strict(),
+        ),
+        MagicMock(),
+    )
+
+    for call in (
+        ToolCall(name="replace_text", arguments={"path": "x", "old": "a", "new": "b"}),
+        ToolCall(name="git_fetch", arguments={}),
+        ToolCall(name="browser_start", arguments={}),
+        ToolCall(name="browser_click", arguments={"session_id": "x", "selector": "button"}),
+    ):
+        assert executor.policy.requires_approval(call) is True
+        assert executor.would_require_approval(call) is True, call.name
+
+
+def test_unknown_tool_risk_fails_closed_as_write(tmp_path):
+    """Tool externa/futura sem metadata explícita nunca deve herdar READ por fallback."""
+    executor = ToolExecutor(
+        ToolRuntimeConfig(
+            workspace_root=tmp_path,
+            workspace_policy=WorkspacePolicy.strict(),
+        ),
+        MagicMock(),
+    )
+    call = ToolCall(name="external_future_tool", arguments={})
+
+    assert executor.approval_broker.classify(call) == RiskLevel.WRITE
+
+
+def test_replace_text_approval_tracks_and_serializes_by_path(tmp_path):
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    call = ToolCall(
+        name="replace_text",
+        arguments={"path": "src/app.py", "old": "a", "new": "b"},
+    )
+
+    request = executor.approval_broker.create_request(call)
+
+    assert request.path == str(tmp_path / "src" / "app.py")
+    assert executor.approval_broker._serialization_keys(call) == [
+        f"path:{tmp_path / 'src' / 'app.py'}"
+    ]
 
 
 def test_git_add_approval_summary_is_not_redundant(tmp_path):

@@ -11,6 +11,7 @@ from .registry import ToolRegistry
 from .tools import delegate as delegate_module
 from .tools import files as files_tools
 from .tools import git
+from .tools import host as host_tools
 from .tools import interaction as interaction_tools
 from .tools import mcp_clients as mcp_clients_tools
 from .tools import memory as memory_tools
@@ -136,6 +137,7 @@ class ToolExecutor:
         self._interaction_tools = interaction_tools.register(self.registry, self.policy, self.config)
         self._state_tools = state_tools.register(self.registry, self.policy, self.config)
         git.register(self.registry, self.policy, self.config)
+        host_tools.register(self.registry, self.policy, self.config)
         mcp_clients_tools.register(self.registry, self.policy, self.config)
 
     def fork_for_concurrent_run(self) -> "ToolExecutor":

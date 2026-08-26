@@ -121,12 +121,15 @@ HTTP_READ_LOCAL_TOOLS = frozenset({
     "memory_retrieve",
     "memory_list_namespaces",
     "todo_list",
+    # Host diagnostics are read-only and restricted to same-user processes.
+    "host_processes",
+    "host_process_inspect",
+    "host_memory",
     # Git read-only tools
     "git_status",
     "git_log",
     "git_diff",
     "git_branch",
-    "git_fetch",
 })
 
 HTTP_READ_TOOLS = frozenset({
@@ -148,6 +151,7 @@ HTTP_AGENT_TOOLS = frozenset({
     "git_add",
     "git_commit",
     "git_checkout",
+    "git_fetch",
     "git_push",
 })
 
