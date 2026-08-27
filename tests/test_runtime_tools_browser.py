@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import os
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import resource_tracker
 from pathlib import Path
 
 import pytest
@@ -179,6 +182,38 @@ def test_browser_service_timeout_terminates_stuck_worker_and_recovers(tmp_path: 
         ]
     finally:
         service.shutdown()
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("playwright") is None
+    or not any(shutil.which(name) for name in ("google-chrome", "chromium", "chromium-browser")),
+    reason="Playwright ou Chrome/Chromium indisponível",
+)
+def test_browser_service_does_not_depend_on_multiprocessing_resource_tracker(tmp_path: Path):
+    """A stale inherited tracker FD must not prevent browser worker startup."""
+    tracker = resource_tracker._resource_tracker
+    previous_fd = tracker._fd
+    previous_pid = tracker._pid
+    read_fd, stale_fd = os.pipe()
+    os.close(read_fd)
+    os.close(stale_fd)
+    tracker._fd = stale_fd
+    tracker._pid = None
+
+    service = BrowserService(tmp_path)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            started = pool.submit(
+                service.execute,
+                "start",
+                {"url": "about:blank", "headless": True},
+                timeout_seconds=20,
+            ).result(timeout=25)
+        assert started["session_id"]
+    finally:
+        service.shutdown()
+        tracker._fd = previous_fd
+        tracker._pid = previous_pid
 
 
 @pytest.mark.skipif(

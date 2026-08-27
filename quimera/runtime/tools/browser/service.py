@@ -2,16 +2,19 @@
 from __future__ import annotations
 
 import json
-import multiprocessing
 import os
+import select
 import shutil
 import signal
+import socket
+import struct
+import subprocess
+import sys
 import threading
 import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any
 
@@ -36,21 +39,39 @@ class BrowserWorkerError(RuntimeError):
     """Raised when the isolated Playwright worker fails a request."""
 
 
-def _browser_process_main(workspace_root: str, connection: Connection) -> None:
-    """Entry point of the isolated Playwright process.
+class _SocketConnection:
+    """Small framed JSON channel used between the runtime and browser worker."""
 
-    On POSIX the worker becomes a process-group leader before launching
-    Playwright. Parent-side timeout recovery can then terminate the worker,
-    driver and Chromium descendants as one unit instead of leaving orphans.
-    """
-    if os.name == "posix":
-        try:
-            os.setsid()
-        except OSError:
-            pass
+    _HEADER_SIZE = 4
 
-    service = BrowserService(Path(workspace_root), _worker_process=True)
-    service._serve_process(connection)
+    def __init__(self, channel: socket.socket) -> None:
+        self._channel = channel
+
+    def send(self, payload: Any) -> None:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self._channel.sendall(struct.pack("!I", len(data)) + data)
+
+    def recv(self) -> Any:
+        header = self._read_exact(self._HEADER_SIZE)
+        size = struct.unpack("!I", header)[0]
+        data = self._read_exact(size)
+        return json.loads(data.decode("utf-8"))
+
+    def poll(self, timeout: float) -> bool:
+        readable, _, _ = select.select([self._channel], [], [], max(0.0, timeout))
+        return bool(readable)
+
+    def close(self) -> None:
+        self._channel.close()
+
+    def _read_exact(self, size: int) -> bytes:
+        chunks = bytearray()
+        while len(chunks) < size:
+            chunk = self._channel.recv(size - len(chunks))
+            if not chunk:
+                raise EOFError("Browser worker fechou o canal")
+            chunks.extend(chunk)
+        return bytes(chunks)
 
 
 class BrowserService:
@@ -66,9 +87,8 @@ class BrowserService:
     def __init__(self, workspace_root: Path, *, _worker_process: bool = False) -> None:
         self.workspace_root = workspace_root.resolve()
         self._worker_process = _worker_process
-        self._mp_context = multiprocessing.get_context("spawn")
-        self._process: multiprocessing.Process | None = None
-        self._connection: Connection | None = None
+        self._process: subprocess.Popen[bytes] | None = None
+        self._connection: _SocketConnection | None = None
         self._start_lock = threading.Lock()
         self._request_lock = threading.Lock()
 
@@ -150,35 +170,45 @@ class BrowserService:
         try:
             connection = self._connection
             process = self._process
-            if connection is not None and process is not None and process.is_alive():
+            if connection is not None and process is not None and process.poll() is None:
                 try:
                     connection.send(None)
-                    process.join(timeout=5)
+                    process.wait(timeout=5)
                 except (BrokenPipeError, EOFError, OSError):
                     pass
-            self._reset_process(terminate=bool(process and process.is_alive()))
+                except subprocess.TimeoutExpired:
+                    pass
+            self._reset_process(terminate=bool(process and process.poll() is None))
         finally:
             self._request_lock.release()
 
     def _ensure_process(self) -> None:
         with self._start_lock:
             process = self._process
-            if process is not None and process.is_alive() and self._connection is not None:
+            if process is not None and process.poll() is None and self._connection is not None:
                 return
             self._close_parent_connection()
-            parent_connection, child_connection = self._mp_context.Pipe(duplex=True)
-            process = self._mp_context.Process(
-                target=_browser_process_main,
-                args=(str(self.workspace_root), child_connection),
-                name="quimera-browser-worker",
-                daemon=True,
+            parent_socket, child_socket = socket.socketpair()
+            child_fd = child_socket.fileno()
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("worker.py")),
+                    str(child_fd),
+                    str(self.workspace_root),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                pass_fds=(child_fd,),
+                start_new_session=True,
+                close_fds=True,
             )
-            process.start()
-            child_connection.close()
+            child_socket.close()
             self._process = process
-            self._connection = parent_connection
+            self._connection = _SocketConnection(parent_socket)
 
-    def _serve_process(self, connection: Connection) -> None:
+    def _serve_process(self, connection: _SocketConnection) -> None:
         sessions: dict[str, _BrowserSession] = {}
         playwright = None
         try:
@@ -228,15 +258,11 @@ class BrowserService:
             self._close_parent_connection()
             if process is None:
                 return
-            if terminate and process.is_alive():
+            if terminate and process.poll() is None:
                 self._terminate_process_group(process)
             try:
-                process.join(timeout=1)
-            except (AssertionError, OSError):
-                pass
-            try:
-                process.close()
-            except (OSError, ValueError):
+                process.wait(timeout=1)
+            except (OSError, subprocess.TimeoutExpired):
                 pass
 
     def _close_parent_connection(self) -> None:
@@ -249,10 +275,8 @@ class BrowserService:
                 pass
 
     @staticmethod
-    def _terminate_process_group(process: multiprocessing.Process) -> None:
+    def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
         pid = process.pid
-        if pid is None:
-            return
         if os.name == "posix":
             try:
                 pgid = os.getpgid(pid)
@@ -263,7 +287,10 @@ class BrowserService:
                     os.killpg(pgid, signal.SIGTERM)
                 except OSError:
                     pass
-                process.join(timeout=1)
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
                 # O líder Python pode sair antes dos descendentes Chromium.
                 # Consulte o grupo, não apenas process.is_alive(), antes do
                 # SIGKILL final para não deixar filhos órfãos do timeout.
@@ -281,8 +308,9 @@ class BrowserService:
             process.terminate()
         except OSError:
             pass
-        process.join(timeout=1)
-        if process.is_alive():
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
             try:
                 process.kill()
             except OSError:
