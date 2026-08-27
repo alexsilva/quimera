@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.models import ToolCall, ToolResult
 from quimera.runtime.policy import ToolPolicyError
+from quimera.runtime.tools.browser.service import BrowserService, BrowserWorkerTimeout
 from quimera.runtime.tools.browser.tools import BrowserTool, BrowserToolValidator
 
 
@@ -126,6 +128,57 @@ def test_browser_screenshot_omits_oversized_inline_image(tmp_path: Path, monkeyp
     assert result.data["image_inline"] is False
     assert "excede o limite" in result.content
     tool.shutdown()
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("playwright") is None
+    or not any(shutil.which(name) for name in ("google-chrome", "chromium", "chromium-browser")),
+    reason="Playwright ou Chrome/Chromium indisponível",
+)
+def test_browser_service_timeout_terminates_stuck_worker_and_recovers(tmp_path: Path):
+    service = BrowserService(tmp_path)
+    try:
+        first = service.execute(
+            "start",
+            {"url": "about:blank", "headless": True},
+            timeout_seconds=20,
+        )
+        first_session_id = first["session_id"]
+        first_process = service._process
+        assert first_process is not None
+        first_pid = first_process.pid
+
+        started_at = time.monotonic()
+        with pytest.raises(BrowserWorkerTimeout, match="sessões do browser foram encerradas"):
+            service.execute(
+                "evaluate",
+                {
+                    "session_id": first_session_id,
+                    "expression": "() => new Promise(() => {})",
+                },
+                timeout_seconds=1,
+            )
+        elapsed = time.monotonic() - started_at
+
+        assert elapsed < 5
+        assert service._process is None
+
+        second = service.execute(
+            "start",
+            {"url": "about:blank", "headless": True},
+            timeout_seconds=20,
+        )
+        second_process = service._process
+        assert second_process is not None
+        assert second_process.pid != first_pid
+        assert second["session_id"] != first_session_id
+
+        status = service.execute("status", timeout_seconds=10)
+        assert [item["session_id"] for item in status["sessions"]] == [
+            second["session_id"]
+        ]
+    finally:
+        service.shutdown()
 
 
 @pytest.mark.skipif(

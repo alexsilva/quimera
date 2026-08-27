@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 import json
-import queue
+import multiprocessing
+import os
 import shutil
+import signal
 import threading
 import time
 import uuid
 from collections import deque
-from concurrent.futures import Future
 from dataclasses import dataclass, field
+from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any
 
@@ -26,26 +28,49 @@ class _BrowserSession:
     network_events: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=1000))
 
 
-@dataclass(slots=True)
-class _BrowserRequest:
-    operation: str
-    arguments: dict[str, Any]
-    future: Future
+class BrowserWorkerTimeout(TimeoutError):
+    """Raised when the isolated Playwright worker exceeds its deadline."""
+
+
+class BrowserWorkerError(RuntimeError):
+    """Raised when the isolated Playwright worker fails a request."""
+
+
+def _browser_process_main(workspace_root: str, connection: Connection) -> None:
+    """Entry point of the isolated Playwright process.
+
+    On POSIX the worker becomes a process-group leader before launching
+    Playwright. Parent-side timeout recovery can then terminate the worker,
+    driver and Chromium descendants as one unit instead of leaving orphans.
+    """
+    if os.name == "posix":
+        try:
+            os.setsid()
+        except OSError:
+            pass
+
+    service = BrowserService(Path(workspace_root), _worker_process=True)
+    service._serve_process(connection)
 
 
 class BrowserService:
-    """Runs all Playwright objects on one dedicated thread.
+    """Runs all Playwright objects in one isolated, restartable process.
 
-    Playwright's synchronous API is greenlet/thread-affine. Routing every
-    browser operation through this worker avoids intermittent failures when
-    tool calls originate from different runtime threads.
+    Playwright's synchronous API is greenlet/thread-affine and some JavaScript
+    evaluations can block indefinitely. A dedicated process preserves affinity
+    while giving the parent a hard recovery boundary: on timeout the worker and
+    its browser process group are terminated, so later calls cannot queue behind
+    an abandoned operation.
     """
 
-    def __init__(self, workspace_root: Path) -> None:
+    def __init__(self, workspace_root: Path, *, _worker_process: bool = False) -> None:
         self.workspace_root = workspace_root.resolve()
-        self._requests: queue.Queue[_BrowserRequest | None] = queue.Queue()
-        self._thread: threading.Thread | None = None
+        self._worker_process = _worker_process
+        self._mp_context = multiprocessing.get_context("spawn")
+        self._process: multiprocessing.Process | None = None
+        self._connection: Connection | None = None
         self._start_lock = threading.Lock()
+        self._request_lock = threading.Lock()
 
     def execute(
         self,
@@ -54,39 +79,114 @@ class BrowserService:
         *,
         timeout_seconds: float = 45.0,
     ) -> dict[str, Any]:
-        self._ensure_thread()
-        future: Future = Future()
-        self._requests.put(_BrowserRequest(operation, dict(arguments or {}), future))
-        return future.result(timeout=max(1.0, timeout_seconds))
+        if self._worker_process:
+            raise RuntimeError("BrowserService worker não aceita execute() recursivo")
+
+        timeout = max(1.0, float(timeout_seconds))
+        deadline = time.monotonic() + timeout
+        if not self._request_lock.acquire(timeout=timeout):
+            raise BrowserWorkerTimeout(
+                f"Browser worker ocupado por mais de {timeout:.1f}s"
+            )
+        try:
+            self._ensure_process()
+            connection = self._connection
+            if connection is None:
+                raise BrowserWorkerError("Browser worker sem canal de comunicação")
+
+            try:
+                connection.send({
+                    "operation": operation,
+                    "arguments": dict(arguments or {}),
+                })
+            except (BrokenPipeError, EOFError, OSError) as exc:
+                self._reset_process(terminate=True)
+                raise BrowserWorkerError(
+                    "Browser worker encerrou antes de receber a operação"
+                ) from exc
+
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                ready = connection.poll(remaining)
+            except (EOFError, OSError) as exc:
+                self._reset_process(terminate=True)
+                raise BrowserWorkerError(
+                    "Browser worker encerrou durante a operação"
+                ) from exc
+            if not ready:
+                self._reset_process(terminate=True)
+                raise BrowserWorkerTimeout(
+                    f"Operação de navegador '{operation}' excedeu {timeout:.1f}s; "
+                    "as sessões do browser foram encerradas"
+                )
+
+            try:
+                response = connection.recv()
+            except (EOFError, OSError) as exc:
+                self._reset_process(terminate=True)
+                raise BrowserWorkerError(
+                    "Browser worker encerrou sem responder"
+                ) from exc
+
+            if response.get("ok"):
+                return dict(response.get("data") or {})
+
+            error_type = str(response.get("error_type") or "RuntimeError")
+            message = str(response.get("error") or "Falha desconhecida no browser worker")
+            if error_type == "ModuleNotFoundError":
+                raise ModuleNotFoundError(message)
+            raise BrowserWorkerError(message)
+        finally:
+            self._request_lock.release()
 
     def shutdown(self) -> None:
-        with self._start_lock:
-            thread = self._thread
-            if thread is None:
-                return
-            if thread.is_alive():
-                self._requests.put(None)
-                thread.join(timeout=5)
-            if not thread.is_alive() and self._thread is thread:
-                self._thread = None
+        if self._worker_process:
+            return
+        if not self._request_lock.acquire(timeout=5):
+            # A request in-flight pode estar justamente travada. Recuperação de
+            # shutdown não espera indefinidamente por esse lock.
+            self._reset_process(terminate=True)
+            return
+        try:
+            connection = self._connection
+            process = self._process
+            if connection is not None and process is not None and process.is_alive():
+                try:
+                    connection.send(None)
+                    process.join(timeout=5)
+                except (BrokenPipeError, EOFError, OSError):
+                    pass
+            self._reset_process(terminate=bool(process and process.is_alive()))
+        finally:
+            self._request_lock.release()
 
-    def _ensure_thread(self) -> None:
+    def _ensure_process(self) -> None:
         with self._start_lock:
-            if self._thread is not None and self._thread.is_alive():
+            process = self._process
+            if process is not None and process.is_alive() and self._connection is not None:
                 return
-            self._thread = threading.Thread(
-                target=self._run,
+            self._close_parent_connection()
+            parent_connection, child_connection = self._mp_context.Pipe(duplex=True)
+            process = self._mp_context.Process(
+                target=_browser_process_main,
+                args=(str(self.workspace_root), child_connection),
                 name="quimera-browser-worker",
                 daemon=True,
             )
-            self._thread.start()
+            process.start()
+            child_connection.close()
+            self._process = process
+            self._connection = parent_connection
 
-    def _run(self) -> None:
+    def _serve_process(self, connection: Connection) -> None:
         sessions: dict[str, _BrowserSession] = {}
         playwright = None
         try:
             while True:
-                request = self._requests.get()
+                try:
+                    request = connection.recv()
+                except EOFError:
+                    break
                 if request is None:
                     break
                 try:
@@ -94,19 +194,20 @@ class BrowserService:
                         from playwright.sync_api import sync_playwright
 
                         playwright = sync_playwright().start()
-                    result = self._dispatch(playwright, sessions, request.operation, request.arguments)
+                    result = self._dispatch(
+                        playwright,
+                        sessions,
+                        str(request.get("operation") or ""),
+                        dict(request.get("arguments") or {}),
+                    )
                 except Exception as exc:  # noqa: BLE001 - propagated to the tool result
-                    request.future.set_exception(exc)
+                    connection.send({
+                        "ok": False,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    })
                 else:
-                    request.future.set_result(result)
-        except Exception as exc:  # noqa: BLE001
-            while True:
-                try:
-                    request = self._requests.get_nowait()
-                except queue.Empty:
-                    break
-                if request is not None:
-                    request.future.set_exception(exc)
+                    connection.send({"ok": True, "data": result})
         finally:
             for session in list(sessions.values()):
                 self._close_session(session)
@@ -115,6 +216,77 @@ class BrowserService:
                     playwright.stop()
                 except Exception:  # noqa: BLE001
                     pass
+            try:
+                connection.close()
+            except OSError:
+                pass
+
+    def _reset_process(self, *, terminate: bool) -> None:
+        with self._start_lock:
+            process = self._process
+            self._process = None
+            self._close_parent_connection()
+            if process is None:
+                return
+            if terminate and process.is_alive():
+                self._terminate_process_group(process)
+            try:
+                process.join(timeout=1)
+            except (AssertionError, OSError):
+                pass
+            try:
+                process.close()
+            except (OSError, ValueError):
+                pass
+
+    def _close_parent_connection(self) -> None:
+        connection = self._connection
+        self._connection = None
+        if connection is not None:
+            try:
+                connection.close()
+            except OSError:
+                pass
+
+    @staticmethod
+    def _terminate_process_group(process: multiprocessing.Process) -> None:
+        pid = process.pid
+        if pid is None:
+            return
+        if os.name == "posix":
+            try:
+                pgid = os.getpgid(pid)
+            except OSError:
+                pgid = None
+            if pgid == pid and pgid != os.getpgrp():
+                try:
+                    os.killpg(pgid, signal.SIGTERM)
+                except OSError:
+                    pass
+                process.join(timeout=1)
+                # O líder Python pode sair antes dos descendentes Chromium.
+                # Consulte o grupo, não apenas process.is_alive(), antes do
+                # SIGKILL final para não deixar filhos órfãos do timeout.
+                try:
+                    os.killpg(pgid, 0)
+                except OSError:
+                    pass
+                else:
+                    try:
+                        os.killpg(pgid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                return
+        try:
+            process.terminate()
+        except OSError:
+            pass
+        process.join(timeout=1)
+        if process.is_alive():
+            try:
+                process.kill()
+            except OSError:
+                pass
 
     def _dispatch(
         self,
