@@ -1,7 +1,7 @@
 """MCP Client — conecta a servidores MCP externos e expõe suas tools como handlers locais.
 
 Suporta os transportes:
-  - remote:  ``https://mcp.atlassian.com/v1/sse`` (atalho para ``npx -y mcp-remote``)
+  - remote:  ``https://mcp.atlassian.com/v1/mcp`` (atalho para uma versão testada de ``mcp-remote``)
   - stdio:   ``python -m algum_servidor_mcp``
   - socket:  ``/tmp/meu-mcp.sock``
   - http:    ``http://localhost:3100/mcp``
@@ -31,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import IO, Any
 
+from quimera.runtime.mcp.remote_credentials import migrate_legacy_remote_credentials
 from quimera.runtime.models import ToolCall, ToolResult
 
 _logger = logging.getLogger(__name__)
@@ -315,6 +316,33 @@ class StdioMCPTransport(MCPTransport):
     @property
     def transport_type(self) -> str:
         return "stdio"
+
+
+class RemoteMCPTransport(StdioMCPTransport):
+    """STDIO proxy para MCP remoto com compatibilidade de credenciais OAuth."""
+
+    def __init__(
+        self,
+        endpoint: str,
+        command: list[str],
+        env: dict[str, str] | None = None,
+        name: str | None = None,
+    ) -> None:
+        super().__init__(command, env=env, name=name)
+        self._remote_endpoint = endpoint
+
+    def connect(self) -> tuple[IO[str], IO[str]]:
+        migration = migrate_legacy_remote_credentials(
+            self._remote_endpoint,
+            env=self._env,
+        )
+        if migration.migrated:
+            _logger.info(
+                "MCP remote: credenciais OAuth migradas de %s para %s",
+                migration.source_store,
+                migration.destination_store,
+            )
+        return super().connect()
 
 
 class SocketMCPTransport(MCPTransport):
@@ -824,16 +852,17 @@ class MCPClientBridge:
 # ── Factory ──────────────────────────────────────────────────────────────
 
 
-DEFAULT_MCP_REMOTE_RUNNER = "npx -y mcp-remote"
+DEFAULT_MCP_REMOTE_VERSION = "0.3.2"
+DEFAULT_MCP_REMOTE_RUNNER = f"npx -y mcp-remote@{DEFAULT_MCP_REMOTE_VERSION}"
 
 
 def build_mcp_remote_command(endpoint: str) -> list[str]:
     """Expande o atalho ``remote:`` para o comando do ``mcp-remote``.
 
     ``endpoint`` é a URL do servidor remoto, opcionalmente seguida de argumentos
-    extras do ``mcp-remote`` (ex.: ``--header ...``). O runner padrão é
-    ``npx -y mcp-remote`` e pode ser sobrescrito via ``QUIMERA_MCP_REMOTE_CMD``
-    (útil para fixar versão do pacote ou usar outro executor).
+    extras do ``mcp-remote`` (ex.: ``--header ...``). O runner padrão fixa a
+    versão conhecida/testada do pacote e pode ser sobrescrito via
+    ``QUIMERA_MCP_REMOTE_CMD`` (útil para testar outra versão ou executor).
     """
     tail = shlex.split(endpoint or "")
     if not tail:
@@ -850,8 +879,8 @@ def parse_mcp_client_spec(
 
     Formatos aceitos:
 
-    * ``nome=remote:https://host/sse`` — atalho para servidores OAuth remotos;
-      expande para ``npx -y mcp-remote https://host/sse``
+    * ``nome=remote:https://host/mcp`` — atalho para servidores OAuth remotos;
+      expande para a versão testada do ``mcp-remote``
     * ``nome=stdio:comando arg1 arg2`` — subprocesso
     * ``nome=socket:/path/to/sock`` — socket Unix
     * ``nome=http://host:port/path`` — HTTP Streamable MCP
@@ -899,7 +928,12 @@ def parse_mcp_client_spec(
                 f"Transporte remote exige uma URL em --mcp-client: {spec!r}. "
                 f"Ex: nome=remote:https://mcp.exemplo.com/sse"
             )
-        return name, StdioMCPTransport(command, env=env_override or None, name=name)
+        return name, RemoteMCPTransport(
+            endpoint,
+            command,
+            env=env_override or None,
+            name=name,
+        )
     if transport_type == "socket":
         return name, SocketMCPTransport(endpoint)
 
@@ -1030,7 +1064,9 @@ def start_mcp_clients(
     bridge = build_bridge_from_cli(specs, env_overrides=env_overrides)
     if bridge and bridge.started:
         from quimera.runtime.drivers.tool_schemas import set_bridge_schemas
-        from quimera.runtime.tools.mcp_clients import set_bridge as set_mcp_client_bridge
+        from quimera.runtime.tools.mcp_clients import (
+            set_bridge as set_mcp_client_bridge,
+        )
 
         set_mcp_client_bridge(bridge)
         schemas = bridge.get_schemas()

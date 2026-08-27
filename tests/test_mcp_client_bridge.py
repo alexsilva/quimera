@@ -5,12 +5,18 @@ from unittest.mock import MagicMock
 import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
-from quimera.runtime.drivers.tool_schemas import get_bridge_schemas, resolve_tool_schemas, set_bridge_schemas
+from quimera.runtime.drivers.tool_schemas import (
+    get_bridge_schemas,
+    resolve_tool_schemas,
+    set_bridge_schemas,
+)
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.mcp.client import (
+    DEFAULT_MCP_REMOTE_VERSION,
     HttpMCPTransport,
     MCPClientBridge,
     MCPClientSession,
+    RemoteMCPTransport,
     StdioMCPTransport,
     build_mcp_remote_command,
     merge_specs_by_name,
@@ -193,11 +199,11 @@ def test_parse_remote_shortcut_expands_to_mcp_remote_command():
     )
 
     assert name == "atlassian"
-    assert isinstance(transport, StdioMCPTransport)
+    assert isinstance(transport, RemoteMCPTransport)
     assert transport._command == [
         "npx",
         "-y",
-        "mcp-remote",
+        f"mcp-remote@{DEFAULT_MCP_REMOTE_VERSION}",
         "https://mcp.atlassian.com/v1/sse",
     ]
     assert transport._name == "atlassian"
@@ -211,7 +217,7 @@ def test_parse_remote_shortcut_preserves_extra_mcp_remote_args():
     assert transport._command == [
         "npx",
         "-y",
-        "mcp-remote",
+        f"mcp-remote@{DEFAULT_MCP_REMOTE_VERSION}",
         "https://api.githubcopilot.com/mcp/",
         "--transport",
         "sse-only",
@@ -236,6 +242,19 @@ def test_build_mcp_remote_command_honors_runner_override(monkeypatch):
         "bunx",
         "mcp-remote@0.1.0",
         "https://mcp.example.test/sse",
+    ]
+
+
+def test_build_mcp_remote_command_pins_tested_default_version(monkeypatch):
+    monkeypatch.delenv("QUIMERA_MCP_REMOTE_CMD", raising=False)
+
+    command = build_mcp_remote_command("https://mcp.example.test/mcp")
+
+    assert command == [
+        "npx",
+        "-y",
+        f"mcp-remote@{DEFAULT_MCP_REMOTE_VERSION}",
+        "https://mcp.example.test/mcp",
     ]
 
 
