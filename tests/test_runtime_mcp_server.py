@@ -210,6 +210,81 @@ class TestToolsCall:
         assert resp["error"]["code"] == -32602
         assert resp["error"]["message"] == "Unknown tool: tasks"
 
+    def test_shutdown_signals_running_tool_before_waiting(self):
+        executor = _make_executor(tool_names=["read_file"])
+        started = threading.Event()
+        cancelled = threading.Event()
+
+        def execute(call, progress_callback=None):
+            started.set()
+            cancel_event = call.metadata["_mcp_cancel_event"]
+            if cancel_event.wait(timeout=3):
+                cancelled.set()
+            return ToolResult(ok=False, tool_name=call.name, error="cancelled")
+
+        executor.execute.side_effect = execute
+        server = MCPServer(executor)
+        out = io.StringIO()
+        server._handle_tools_call(
+            31,
+            {"name": "read_file", "arguments": {"path": "x"}},
+            out,
+        )
+        assert started.wait(timeout=2)
+
+        started_at = time.monotonic()
+        server.shutdown()
+        elapsed = time.monotonic() - started_at
+
+        assert cancelled.wait(timeout=1)
+        assert elapsed < 1
+        assert server.has_pending_calls is False
+
+    def test_shutdown_is_bounded_when_running_tool_ignores_cancel(self):
+        executor = _make_executor(tool_names=["read_file"])
+        started = threading.Event()
+        release = threading.Event()
+        observed_cancel = []
+
+        def execute(call, progress_callback=None):
+            started.set()
+            observed_cancel.append(call.metadata["_mcp_cancel_event"])
+            release.wait(timeout=5)
+            return ToolResult(ok=True, tool_name=call.name, content="late")
+
+        executor.execute.side_effect = execute
+        server = MCPServer(executor)
+        server._SHUTDOWN_WAIT_SECONDS = 0.1
+        out = io.StringIO()
+        server._handle_tools_call(
+            32,
+            {"name": "read_file", "arguments": {"path": "x"}},
+            out,
+        )
+        assert started.wait(timeout=2)
+
+        started_at = time.monotonic()
+        server.shutdown()
+        elapsed = time.monotonic() - started_at
+        release.set()
+
+        assert elapsed < 0.5
+        assert observed_cancel[0].is_set()
+        assert server.has_pending_calls is False
+
+    def test_tools_call_rejected_after_shutdown(self):
+        server = MCPServer(_make_executor(tool_names=["read_file"]))
+        server.shutdown()
+
+        response = server._handle_tools_call(
+            33,
+            {"name": "read_file", "arguments": {"path": "x"}},
+            io.StringIO(),
+        )
+
+        assert response["error"]["code"] == -32603
+        assert response["error"]["message"] == "MCP server is shutting down"
+
     def test_internal_mcp_tools_call_does_not_emit_agent_run_events(self):
         result = ToolResult(ok=True, tool_name="read_file", content="linhas do arquivo")
         executor = _make_executor(call_result=result)

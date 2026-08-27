@@ -149,6 +149,8 @@ class MCPServer:
     SERVER_VERSION = __version__
     #: Margem extra, após o deadline da última pendência, antes de forçar timeout no shutdown.
     _DRAIN_GRACE_SECONDS: float = 5.0
+    #: Shutdown global só aguarda esta janela por cancelamento cooperativo.
+    _SHUTDOWN_WAIT_SECONDS: float = 2.0
 
     def __init__(
         self,
@@ -183,6 +185,8 @@ class MCPServer:
         self._progress_seq_lock = threading.Lock()
         self._batch_outputs: set[int] = set()
         self._batch_outputs_lock = threading.Lock()
+        self._shutdown_event = threading.Event()
+        self._shutdown_lock = threading.Lock()
         self._thread_pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=4, thread_name_prefix="mcp-tool"
         )
@@ -286,11 +290,46 @@ class MCPServer:
         return self._allowed_tools is None or tool_name in self._allowed_tools
 
     def shutdown(self) -> None:
-        """Encerra o pool de threads, aguardando tarefas em execução."""
-        self._thread_pool.shutdown(wait=True)
+        """Cancela pendências e encerra o pool sem bloquear em tool defeituosa.
 
-        self._pending_calls.clear()
-        self._cancel_events.clear()
+        Futures já em execução não podem ser interrompidos à força por
+        ``ThreadPoolExecutor``. Por isso o servidor primeiro sinaliza todos os
+        ``cancel_event`` confiáveis, dá uma janela curta para cooperação e então
+        libera o pool com ``wait=False``. Pendências são removidas antes da
+        espera para impedir flush/progress tardio em conexões encerradas.
+        """
+        with self._shutdown_lock:
+            if self._shutdown_event.is_set():
+                return
+            self._shutdown_event.set()
+            self._stop_background_flush()
+
+            with self._pending_lock:
+                pending = list(self._pending_calls)
+                self._pending_calls.clear()
+
+            futures: list[concurrent.futures.Future] = []
+            for call in pending:
+                cancel_event = call.get("cancel_event")
+                if cancel_event is not None:
+                    cancel_event.set()
+                future = call.get("future")
+                if future is not None:
+                    future.cancel()
+                    futures.append(future)
+
+            with self._cancel_lock:
+                for event in self._cancel_events.values():
+                    event.set()
+                self._cancel_events.clear()
+
+            if futures:
+                concurrent.futures.wait(
+                    futures,
+                    timeout=self._SHUTDOWN_WAIT_SECONDS,
+                )
+
+            self._thread_pool.shutdown(wait=False, cancel_futures=True)
     # ------------------------------------------------------------------
     # I/O
     # ------------------------------------------------------------------
@@ -649,6 +688,8 @@ class MCPServer:
     def _handle_tools_call(self, msg_id: Any, params: dict, out: IO, blocking: bool = False) -> dict | None:
         tool_name = params.get("name", "")
         arguments = params.get("arguments") or {}
+        if self._shutdown_event.is_set():
+            return self._err(msg_id, -32603, "MCP server is shutting down")
         meta = params.get("_meta") or {}
         progress_token = meta.get("progressToken") if isinstance(meta, dict) else None
         state = getattr(out, "_mcp_state", {}) or {}
@@ -716,6 +757,8 @@ class MCPServer:
         )
 
         def _progress_callback(msg: str) -> None:
+            if self._shutdown_event.is_set():
+                return
             _logger.debug("MCP progress [%s]: %s", tool_name, msg)
             if progress_token:
                 with self._progress_seq_lock:
