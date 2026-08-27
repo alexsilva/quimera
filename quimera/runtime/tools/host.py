@@ -9,6 +9,9 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import time
+from collections.abc import Callable
+from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +19,17 @@ from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
 from ..policy import ToolPolicyError
 from .base import ToolBase, ValidatableTool
+from .host_sampling import (
+    cpu_percent,
+    format_sample_summary,
+    growth_signals,
+    summarize_samples,
+)
 
 _HOST_TOOL_NAMES = [
     "host_processes",
     "host_process_inspect",
+    "host_process_sample",
     "host_memory",
 ]
 
@@ -38,6 +48,14 @@ _AUTH_HEADER_RE = re.compile(
     r"(?i)(authorization:\s*(?:bearer|basic)\s+)[^\s'\"]+",
 )
 _MAX_COMMAND_CHARS = 4096
+_MAX_PROCESS_SAMPLES = 121
+
+
+def _clock_ticks_per_second() -> float:
+    try:
+        return float(os.sysconf("SC_CLK_TCK"))
+    except (OSError, ValueError, TypeError):
+        return 100.0
 
 
 def _int_value(value: str | None, default: int = 0) -> int:
@@ -135,10 +153,30 @@ class HostTools(ToolBase, tool_prefix="host"):
         *,
         proc_root: Path | str = Path("/proc"),
         owner_uid: int | None = None,
+        monotonic_fn: Callable[[], float] = time.monotonic,
+        sleep_fn: Callable[[float], None] = time.sleep,
+        clock_ticks_per_second: float | None = None,
     ) -> None:
         super().__init__(config)
         self._proc_root = Path(proc_root)
         self._owner_uid = os.getuid() if owner_uid is None else int(owner_uid)
+        self._monotonic = monotonic_fn
+        self._sleep = sleep_fn
+        self._clock_ticks_per_second = (
+            float(clock_ticks_per_second)
+            if clock_ticks_per_second is not None
+            else _clock_ticks_per_second()
+        )
+        self._progress_callback: Callable[[str], None] | None = None
+        self._cancel_checker: Callable[[], bool] | None = None
+
+    def _set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
+        """Injeta callback de progresso para operações de amostragem."""
+        self._progress_callback = callback
+
+    def _set_cancel_checker(self, checker: Callable[[], bool] | None) -> None:
+        """Injeta cancelamento cooperativo usado fora do transporte MCP."""
+        self._cancel_checker = checker
 
     def host_processes(self, call: ToolCall) -> ToolResult:
         """Lista processos visíveis pertencentes ao mesmo usuário do Quimera."""
@@ -241,6 +279,119 @@ class HostTools(ToolBase, tool_prefix="host"):
         )
         return ToolResult(ok=True, tool_name=call.name, content=content, data=process)
 
+    def host_process_sample(self, call: ToolCall) -> ToolResult:
+        """Amostra um processo ao longo do tempo e calcula deltas/tendências.
+
+        A operação permanece read-only. O resultado não interpreta crescimento
+        como leak: expõe somente medidas objetivas (delta, min/max e slope),
+        deixando a conclusão causal para quem estiver conduzindo o diagnóstico.
+        """
+        if not self._proc_root.is_dir():
+            return self._unsupported(call.name)
+
+        pid = int(call.arguments["pid"])
+        duration_seconds = float(call.arguments.get("duration_seconds", 5.0))
+        interval_ms = int(call.arguments.get("interval_ms", 500))
+        include_fds = bool(call.arguments.get("include_fds", True))
+        interval_seconds = interval_ms / 1000.0
+        process_root = self._proc_root / str(pid)
+
+        first_identity = self._read_process_identity(process_root)
+        if first_identity is None:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=f"Processo {pid} não existe, encerrou ou não pertence ao usuário atual.",
+            )
+
+        started_at = self._monotonic()
+        samples: list[dict[str, Any]] = []
+        ended = False
+        cancelled = False
+        pid_reused = False
+        target_sample_count = ceil(duration_seconds / interval_seconds) + 1
+
+        while len(samples) < target_sample_count:
+            if self._is_cancelled(call):
+                cancelled = True
+                break
+
+            identity = self._read_process_identity(process_root)
+            if identity is None:
+                ended = True
+                break
+            if identity["start_ticks"] != first_identity["start_ticks"]:
+                pid_reused = True
+                break
+
+            now = self._monotonic()
+            elapsed = max(0.0, now - started_at)
+            sample = self._read_process_sample(
+                process_root,
+                pid=pid,
+                elapsed_seconds=elapsed,
+                include_fds=include_fds,
+            )
+            if sample is None:
+                ended = True
+                break
+            if samples:
+                sample["cpu_percent"] = cpu_percent(samples[-1], sample)
+            else:
+                sample["cpu_percent"] = None
+            samples.append(sample)
+            self._report_sample_progress(
+                pid,
+                sample,
+                current=len(samples),
+                total=target_sample_count,
+            )
+
+            if len(samples) >= target_sample_count:
+                break
+            target_elapsed = min(duration_seconds, len(samples) * interval_seconds)
+            delay = target_elapsed - max(0.0, self._monotonic() - started_at)
+            if delay > 0 and self._wait_cooperatively(call, delay):
+                cancelled = True
+                break
+
+        if not samples:
+            state = "cancelado" if cancelled else "encerrado"
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=f"Processo {pid} foi {state} antes da primeira amostra útil.",
+            )
+
+        actual_duration = samples[-1]["elapsed_seconds"] - samples[0]["elapsed_seconds"]
+        summary = summarize_samples(samples)
+        signals = growth_signals(summary)
+        payload = {
+            "pid": pid,
+            "uid": self._owner_uid,
+            "same_user_only": True,
+            "name": first_identity["name"],
+            "command": first_identity["command"],
+            "requested_duration_seconds": duration_seconds,
+            "actual_duration_seconds": round(max(0.0, actual_duration), 6),
+            "interval_ms": interval_ms,
+            "include_fds": include_fds,
+            "sample_count": len(samples),
+            "target_sample_count": target_sample_count,
+            "ended": ended,
+            "cancelled": cancelled,
+            "pid_reused": pid_reused,
+            "samples": samples,
+            "summary": summary,
+            "growth_observed": signals,
+        }
+        return ToolResult(
+            ok=True,
+            tool_name=call.name,
+            content=format_sample_summary(payload),
+            data=payload,
+        )
+
     def host_memory(self, call: ToolCall) -> ToolResult:
         """Retorna RAM, swap, load average e PSI de memória do host."""
         if not self._proc_root.is_dir():
@@ -294,6 +445,143 @@ class HostTools(ToolBase, tool_prefix="host"):
             f"memory_pressure={pressure or {}}"
         )
         return ToolResult(ok=True, tool_name=call.name, content=content, data=payload)
+
+    def _read_process_identity(self, process_root: Path) -> dict[str, Any] | None:
+        process = self._read_process(process_root)
+        stat = self._read_process_stat(process_root)
+        if process is None or stat is None:
+            return None
+        return {
+            "pid": process["pid"],
+            "uid": process["uid"],
+            "name": process["name"],
+            "command": process["command"],
+            "start_ticks": stat["start_ticks"],
+        }
+
+    def _read_process_sample(
+        self,
+        process_root: Path,
+        *,
+        pid: int,
+        elapsed_seconds: float,
+        include_fds: bool,
+    ) -> dict[str, Any] | None:
+        process = self._read_process(process_root)
+        stat = self._read_process_stat(process_root)
+        if process is None or stat is None:
+            return None
+
+        fds = self._inspect_fds(process_root) if include_fds else None
+        cpu_time_seconds = (
+            stat["utime_ticks"] + stat["stime_ticks"]
+        ) / self._clock_ticks_per_second
+        sample: dict[str, Any] = {
+            "elapsed_seconds": round(elapsed_seconds, 6),
+            "rss_kb": process["rss_kb"],
+            "hwm_kb": process["hwm_kb"],
+            "vm_size_kb": self._status_number(process_root, "VmSize"),
+            "vm_data_kb": self._status_number(process_root, "VmData"),
+            "swap_kb": self._status_number(process_root, "VmSwap"),
+            "threads": process["threads"],
+            "children": len(self._read_children(process_root, pid)),
+            "cpu_time_seconds": round(cpu_time_seconds, 6),
+        }
+        if fds is not None:
+            sample.update(
+                {
+                    "fds": fds["total"],
+                    "sockets": fds["sockets"],
+                    "pipes": fds["pipes"],
+                    "inotify_fds": fds["inotify_fds"],
+                    "inotify_watches": fds["inotify_watches"],
+                }
+            )
+        else:
+            sample.update(
+                {
+                    "fds": None,
+                    "sockets": None,
+                    "pipes": None,
+                    "inotify_fds": None,
+                    "inotify_watches": None,
+                }
+            )
+        return sample
+
+    @staticmethod
+    def _read_process_stat(process_root: Path) -> dict[str, int] | None:
+        """Lê campos estáveis de /proc/<pid>/stat sem quebrar nomes com espaços."""
+        try:
+            raw = (process_root / "stat").read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            return None
+        closing_paren = raw.rfind(")")
+        if closing_paren < 0:
+            return None
+        fields = raw[closing_paren + 1 :].strip().split()
+        # fields[0] corresponde ao campo 3 (state); starttime é o campo 22.
+        if len(fields) < 20:
+            return None
+        try:
+            return {
+                "utime_ticks": int(fields[11]),
+                "stime_ticks": int(fields[12]),
+                "start_ticks": int(fields[19]),
+            }
+        except (TypeError, ValueError):
+            return None
+
+    def _is_cancelled(self, call: ToolCall) -> bool:
+        metadata = call.metadata if isinstance(call.metadata, dict) else {}
+        event = metadata.get("_mcp_cancel_event")
+        is_set = getattr(event, "is_set", None)
+        if callable(is_set):
+            try:
+                if bool(is_set()):
+                    return True
+            except Exception:  # noqa: BLE001 - cancel source is external plumbing
+                is_set = None
+        if self._cancel_checker is not None:
+            try:
+                return bool(self._cancel_checker())
+            except Exception:  # noqa: BLE001 - cancellation must not break diagnostics
+                return False
+        return False
+
+    def _wait_cooperatively(self, call: ToolCall, delay_seconds: float) -> bool:
+        deadline = self._monotonic() + max(0.0, delay_seconds)
+        while True:
+            if self._is_cancelled(call):
+                return True
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                return False
+            self._sleep(min(0.1, remaining))
+
+    def _report_sample_progress(
+        self,
+        pid: int,
+        sample: dict[str, Any],
+        *,
+        current: int,
+        total: int,
+    ) -> None:
+        callback = self._progress_callback
+        if callback is None:
+            return
+        fds = sample.get("fds")
+        watches = sample.get("inotify_watches")
+        suffix = ""
+        if fds is not None:
+            suffix = f" fds={fds} inotify={watches}"
+        try:
+            callback(
+                f"host sample pid={pid} {current}/{total} "
+                f"rss={sample['rss_kb']}kB threads={sample['threads']}{suffix}"
+            )
+        except Exception:  # noqa: BLE001 - progress is best-effort
+            return
 
     def _read_process(self, process_root: Path) -> dict[str, Any] | None:
         try:
@@ -443,14 +731,58 @@ class HostToolsValidator(ValidatableTool):
         if pid <= 0:
             raise ToolPolicyError("host_process_inspect.pid deve ser inteiro positivo")
 
+    def _validate_host_process_sample(self, call: ToolCall) -> None:
+        if "pid" not in call.arguments:
+            raise ToolPolicyError("host_process_sample requer 'pid'")
+        try:
+            pid = int(call.arguments["pid"])
+        except (TypeError, ValueError) as exc:
+            raise ToolPolicyError("host_process_sample.pid deve ser inteiro positivo") from exc
+        if pid <= 0:
+            raise ToolPolicyError("host_process_sample.pid deve ser inteiro positivo")
+
+        try:
+            duration_seconds = float(call.arguments.get("duration_seconds", 5.0))
+        except (TypeError, ValueError) as exc:
+            raise ToolPolicyError(
+                "host_process_sample.duration_seconds deve ser um número"
+            ) from exc
+        if not 0.5 <= duration_seconds <= 60.0:
+            raise ToolPolicyError(
+                "host_process_sample.duration_seconds deve estar entre 0.5 e 60"
+            )
+
+        try:
+            interval_ms = int(call.arguments.get("interval_ms", 500))
+        except (TypeError, ValueError) as exc:
+            raise ToolPolicyError("host_process_sample.interval_ms deve ser inteiro") from exc
+        if not 100 <= interval_ms <= 5000:
+            raise ToolPolicyError(
+                "host_process_sample.interval_ms deve estar entre 100 e 5000"
+            )
+        if interval_ms > duration_seconds * 1000:
+            raise ToolPolicyError(
+                "host_process_sample.interval_ms não pode exceder a duração total"
+            )
+        sample_count = ceil(duration_seconds / (interval_ms / 1000.0)) + 1
+        if sample_count > _MAX_PROCESS_SAMPLES:
+            raise ToolPolicyError(
+                f"host_process_sample aceita no máximo {_MAX_PROCESS_SAMPLES} amostras; "
+                "aumente interval_ms ou reduza duration_seconds"
+            )
+        include_fds = call.arguments.get("include_fds", True)
+        if not isinstance(include_fds, bool):
+            raise ToolPolicyError("host_process_sample.include_fds deve ser booleano")
+
     def _validate_host_memory(self, call: ToolCall) -> None:
         return
 
 
-def register(registry, policy, config) -> None:
+def register(registry, policy, config) -> HostTools:
     """Registra as tools read-only de diagnóstico do host."""
     tools = HostTools(config)
     validator = HostToolsValidator(config)
     for name in _HOST_TOOL_NAMES:
         registry.register(name, getattr(tools, name))
     policy.register_tool_validator(_HOST_TOOL_NAMES, validator)
+    return tools

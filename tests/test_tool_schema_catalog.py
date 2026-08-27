@@ -14,9 +14,8 @@ from quimera.runtime.models import ToolCall
 from quimera.runtime.tools import memory as memory_tools
 from quimera.runtime.tools import todo as todo_tools
 
-
 _EXPECTED_SCHEMA_FINGERPRINT = (
-    "b97830275159168971c7baa30d76065c15eab7fdccbddc7c8955516580e9e09c"
+    "b11e8c7a8fa87941dc2fb4fcd645d0cb4773cd2c16d7ba18240024478484293c"
 )
 
 
@@ -33,7 +32,7 @@ def _fingerprint(schemas: list[dict]) -> str:
 def test_catalog_materializes_the_public_schema_without_contract_changes():
     """A representação tipada não pode alterar o contrato publicado."""
     assert materialize_tool_schemas() == TOOL_SCHEMAS
-    assert len(TOOL_SPECS) == len(TOOL_SCHEMAS) == 56
+    assert len(TOOL_SPECS) == len(TOOL_SCHEMAS) == 57
     assert _fingerprint(TOOL_SCHEMAS) == _EXPECTED_SCHEMA_FINGERPRINT
 
 
@@ -59,7 +58,7 @@ def test_schema_and_registry_are_one_to_one():
     schema_names = {item["function"]["name"] for item in TOOL_SCHEMAS}
 
     assert registry_names == schema_names
-    assert len(registry_names) == 56
+    assert len(registry_names) == 57
 
 
 def test_explicit_tool_name_lists_match_registered_handlers():

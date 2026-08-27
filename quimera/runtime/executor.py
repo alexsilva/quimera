@@ -4,10 +4,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, ClassVar
 
+from .approval import ApprovalHandler, ApprovalManager
 from .config import ToolRuntimeConfig
 from .models import ToolCall, ToolResult
 from .policy import ToolPolicy, ToolPolicyError
 from .registry import ToolRegistry
+from .tools import browser as browser_tools
 from .tools import delegate as delegate_module
 from .tools import files as files_tools
 from .tools import git
@@ -21,8 +23,6 @@ from .tools import state as state_tools
 from .tools import tasks as tasks_tools
 from .tools import todo as todo_tools
 from .tools import web as web_tools
-from .tools import browser as browser_tools
-from .approval import ApprovalHandler, ApprovalManager
 
 
 @dataclass
@@ -104,6 +104,7 @@ class ToolExecutor:
         self._state_tools = None
         self._task_tools = None
         self._browser_tools = None
+        self._host_tools = None
         self._register_builtin_tools()
 
     @staticmethod
@@ -122,6 +123,7 @@ class ToolExecutor:
         self._wiring.tool_progress_callback = fn
         self._tool_progress_callback = fn
         self._delegate_tools.set_progress_callback(fn)
+        self._host_tools._set_progress_callback(fn)
 
     def _register_builtin_tools(self) -> None:
         """Registra todas as ferramentas builtin usando os módulos register()."""
@@ -137,7 +139,7 @@ class ToolExecutor:
         self._interaction_tools = interaction_tools.register(self.registry, self.policy, self.config)
         self._state_tools = state_tools.register(self.registry, self.policy, self.config)
         git.register(self.registry, self.policy, self.config)
-        host_tools.register(self.registry, self.policy, self.config)
+        self._host_tools = host_tools.register(self.registry, self.policy, self.config)
         mcp_clients_tools.register(self.registry, self.policy, self.config)
 
     def fork_for_concurrent_run(self) -> "ToolExecutor":
@@ -289,9 +291,10 @@ class ToolExecutor:
         self._delegate_tools.set_orchestrator_provider(fn)
 
     def set_cancel_checker(self, fn) -> None:
-        """Injeta checker de cancelamento para tools longas como delegate."""
+        """Injeta checker de cancelamento para tools longas."""
         self._wiring.cancel_checker = fn
         self._delegate_tools.set_cancel_checker(fn)
+        self._host_tools._set_cancel_checker(fn)
 
     def set_agent_cleanup_callback(self, fn) -> None:
         """Injeta callback para limpeza do estado de render após delegate.
@@ -342,6 +345,7 @@ class ToolExecutor:
             effective_progress_callback = progress_callback or self._tool_progress_callback
             if effective_progress_callback:
                 self._delegate_tools.set_progress_callback(effective_progress_callback)
+                self._host_tools._set_progress_callback(effective_progress_callback)
             if self.policy.requires_validation(normalized_call):
                 self.policy.validate(normalized_call)
 

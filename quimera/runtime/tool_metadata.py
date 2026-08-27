@@ -77,6 +77,7 @@ TOOL_METADATA: dict[str, ToolMetadata] = {
     # Host diagnostics.
     "host_processes": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
     "host_process_inspect": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
+    "host_process_sample": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
     "host_memory": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
 
     # Files/workspace.
