@@ -186,6 +186,30 @@ class TestToolsCall:
         assert call_arg.name == "read_file"
         assert call_arg.arguments == {"path": "foo.py"}
 
+    def test_capability_hidden_tool_cannot_be_called_directly(self, tmp_path):
+        """tools/call deve aplicar os mesmos capability gates de tools/list."""
+        executor = ToolExecutor(
+            ToolRuntimeConfig(
+                workspace_root=tmp_path,
+                db_path=tmp_path / "tasks.db",
+            ),
+            approval_handler=None,
+        )
+        server = MCPServer(executor)
+
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {
+                "name": "tasks",
+                "arguments": {"description": "não deve executar"},
+            },
+        })
+
+        assert resp["error"]["code"] == -32602
+        assert resp["error"]["message"] == "Unknown tool: tasks"
+
     def test_internal_mcp_tools_call_does_not_emit_agent_run_events(self):
         result = ToolResult(ok=True, tool_name="read_file", content="linhas do arquivo")
         executor = _make_executor(call_result=result)

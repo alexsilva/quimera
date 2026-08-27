@@ -687,10 +687,17 @@ class MCPServer:
         if not isinstance(arguments, dict):
             return self._err(msg_id, -32602, "tools/call: 'arguments' must be an object")
         try:
-            available_tools = set(self._executor.registry.names())
+            available_tools = {
+                schema.get("function", {}).get("name")
+                for schema in resolve_tool_schemas(self._executor)
+            }
+            available_tools.discard(None)
         except Exception:
-            available_tools = set()
-        if available_tools and tool_name not in available_tools:
+            try:
+                available_tools = set(self._executor.registry.names())
+            except Exception:
+                available_tools = set()
+        if tool_name not in available_tools:
             return self._err(msg_id, -32602, f"Unknown tool: {tool_name}")
         if not self.is_tool_allowed(tool_name):
             return self._err(msg_id, -32602, f"Tool not allowed: {tool_name}")

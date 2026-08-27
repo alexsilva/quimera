@@ -4,6 +4,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .runtime.tool_metadata import mutating_tool_names
+
+_INTERACTIVE_SHELL_TOOLS = frozenset({
+    "run_shell",
+    "exec_command",
+    "write_stdin",
+    "poll_command_session",
+    "close_command_session",
+})
+_READ_ONLY_BLOCKED_TOOLS = sorted(
+    mutating_tool_names() - _INTERACTIVE_SHELL_TOOLS
+)
+_NO_EXECUTION_BLOCKED_TOOLS = sorted(mutating_tool_names())
+
 
 @dataclass
 class ExecutionMode:
@@ -22,10 +36,7 @@ MODES: dict[str, ExecutionMode] = {
         name="planning",
         read_only_fs=True,
         allow_network=True,
-        blocked_tools=[
-            "write_file",
-            "apply_patch",
-        ],
+        blocked_tools=list(_READ_ONLY_BLOCKED_TOOLS),
         prompt_addon=(
             "[MODO: PLANEJAMENTO] Planejamento com workspace somente leitura. "
             "Não edite arquivos."
@@ -35,21 +46,14 @@ MODES: dict[str, ExecutionMode] = {
         name="analysis",
         read_only_fs=True,
         allow_network=True,
-        blocked_tools=["write_file", "apply_patch"],
+        blocked_tools=list(_READ_ONLY_BLOCKED_TOOLS),
         prompt_addon=("[MODO: ANÁLISE] Apenas leitura e análise. Não edite arquivos."),
     ),
     "/design": ExecutionMode(
         name="design",
         read_only_fs=True,
         allow_network=True,
-        blocked_tools=[
-            "write_file",
-            "apply_patch",
-            "run_shell",
-            "exec_command",
-            "write_stdin",
-            "close_command_session",
-        ],
+        blocked_tools=list(_NO_EXECUTION_BLOCKED_TOOLS),
         prompt_addon=(
             "[MODO: DESIGN] Apenas design e arquitetura. Não execute código."
         ),
@@ -58,14 +62,7 @@ MODES: dict[str, ExecutionMode] = {
         name="review",
         read_only_fs=True,
         allow_network=True,
-        blocked_tools=[
-            "write_file",
-            "apply_patch",
-            "run_shell",
-            "exec_command",
-            "write_stdin",
-            "close_command_session",
-        ],
+        blocked_tools=list(_NO_EXECUTION_BLOCKED_TOOLS),
         prompt_addon=("[MODO: REVISÃO] Apenas revisão de código. Não edite arquivos."),
     ),
     "/execute": ExecutionMode(

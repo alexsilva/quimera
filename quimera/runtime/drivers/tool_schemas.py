@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from copy import deepcopy
 
+from ..tool_metadata import get_tool_metadata
 from .tool_catalog import TOOL_SPECS, ToolSpec, materialize_tool_schemas
 
 _BRIDGE_SCHEMAS: list[dict] = []
@@ -30,7 +31,23 @@ def get_bridge_schemas() -> list[dict]:
 # preservando exatamente o JSON Schema usado antes desta reorganização.
 TOOL_SCHEMAS = materialize_tool_schemas()
 
-_TASK_TOOL_NAMES = {"tasks", "list_tasks", "list_jobs", "get_job"}
+_CAPABILITY_METHODS = {
+    "delegate": "is_delegate_available",
+    "tasks": "is_tasks_available",
+    "ask_user": "is_ask_user_available",
+    "update_shared_state": "is_update_state_available",
+}
+
+
+def _capability_available(tool_executor, capability: str) -> bool:
+    if capability == "task_db":
+        config = getattr(tool_executor, "config", None)
+        return config is not None and getattr(config, "db_path", None) is not None
+    method_name = _CAPABILITY_METHODS.get(capability)
+    if method_name is None:
+        return False
+    checker = getattr(tool_executor, method_name, None)
+    return bool(callable(checker) and checker())
 
 
 def resolve_tool_schemas(tool_executor=None) -> list[dict]:
@@ -54,13 +71,17 @@ def resolve_tool_schemas(tool_executor=None) -> list[dict]:
                 if schema["function"]["name"] in enabled_names
             ]
 
-    config = getattr(tool_executor, "config", None)
-    if config is not None and getattr(config, "db_path", None) is None:
-        schemas = [
-            schema
-            for schema in schemas
-            if schema["function"]["name"] not in _TASK_TOOL_NAMES
-        ]
+    schemas = [
+        schema
+        for schema in schemas
+        if (
+            (metadata := get_tool_metadata(schema["function"]["name"])) is None
+            or all(
+                _capability_available(tool_executor, capability)
+                for capability in metadata.capabilities
+            )
+        )
+    ]
 
     policy = getattr(tool_executor, "policy", None)
     allowed_tools = getattr(policy, "allowed_tools", None)
@@ -78,42 +99,6 @@ def resolve_tool_schemas(tool_executor=None) -> list[dict]:
             schema
             for schema in schemas
             if schema["function"]["name"] not in blocked_names
-        ]
-
-    is_delegate_available = getattr(tool_executor, "is_delegate_available", None)
-    if callable(is_delegate_available) and not is_delegate_available():
-        schemas = [
-            schema
-            for schema in schemas
-            if schema["function"]["name"] not in ("delegate", "list_agents")
-        ]
-
-    is_tasks_available = getattr(tool_executor, "is_tasks_available", None)
-    if callable(is_tasks_available) and not is_tasks_available():
-        schemas = [
-            schema
-            for schema in schemas
-            if schema["function"]["name"] != "tasks"
-        ]
-
-    is_ask_user_available = getattr(tool_executor, "is_ask_user_available", None)
-    if callable(is_ask_user_available) and not is_ask_user_available():
-        schemas = [
-            schema
-            for schema in schemas
-            if schema["function"]["name"] != "ask_user"
-        ]
-
-    is_update_state_available = getattr(
-        tool_executor,
-        "is_update_state_available",
-        None,
-    )
-    if callable(is_update_state_available) and not is_update_state_available():
-        schemas = [
-            schema
-            for schema in schemas
-            if schema["function"]["name"] != "update_shared_state"
         ]
 
     return schemas

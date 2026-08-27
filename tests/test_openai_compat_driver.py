@@ -133,6 +133,8 @@ def test_schema_names_match_registered_tools():
         "browser_snapshot", "browser_click", "browser_type", "browser_press",
         "browser_mouse", "browser_wait", "browser_evaluate", "browser_screenshot",
         "browser_console", "browser_network",
+        # Host diagnostics
+        "host_processes", "host_process_inspect", "host_memory",
         # Git tools
         "git_status", "git_log", "git_diff", "git_branch", "git_fetch",
         "git_add", "git_commit", "git_checkout", "git_push",
@@ -973,6 +975,9 @@ def test_run_tools_system_prompt_guides_tool_usage():
         "browser_screenshot",
         "browser_console",
         "browser_network",
+        "host_processes",
+        "host_process_inspect",
+        "host_memory",
         # Git tools
         "git_status",
         "git_log",

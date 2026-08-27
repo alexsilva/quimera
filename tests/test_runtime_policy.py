@@ -118,9 +118,9 @@ def test_policy_shell_empty(shell_validator):
 
 
 def test_policy_run_shell_command_alias_removed(policy):
-    """Alias legado run_shell_command não deve mais existir na policy de mutação."""
+    """Alias removido não é metadata nativa e cai no approval fail-closed."""
     assert "run_shell_command" not in policy._MUTATION_TOOLS
-    assert policy.requires_approval(ToolCall(name="run_shell_command", arguments={})) is False
+    assert policy.requires_approval(ToolCall(name="run_shell_command", arguments={})) is True
 
 
 def test_policy_exec_command_empty(shell_validator):

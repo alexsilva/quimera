@@ -54,6 +54,7 @@ from quimera.runtime.mcp.oauth import (
     OAuthRedirectError,
 )
 from quimera.runtime.mcp.server import MCPServer
+from quimera.runtime.tool_metadata import tools_for_http_profile
 
 _logger = logging.getLogger(__name__)
 
@@ -110,50 +111,9 @@ class ActiveMCPHTTPClient:
     scope: str
     protocol_version: str
 
-HTTP_READ_LOCAL_TOOLS = frozenset({
-    "list_files",
-    "read_file",
-    "grep_search",
-    "inspect_symbols",
-    "list_tasks",
-    "list_jobs",
-    "get_job",
-    "memory_retrieve",
-    "memory_list_namespaces",
-    "todo_list",
-    # Host diagnostics are read-only and restricted to same-user processes.
-    "host_processes",
-    "host_process_inspect",
-    "host_memory",
-    # Git read-only tools
-    "git_status",
-    "git_log",
-    "git_diff",
-    "git_branch",
-})
-
-HTTP_READ_TOOLS = frozenset({
-    *HTTP_READ_LOCAL_TOOLS,
-    "web_search",
-    "web_fetch",
-})
-
-HTTP_AGENT_TOOLS = frozenset({
-    *HTTP_READ_TOOLS,
-    "replace_text",
-    "memory_save",
-    "memory_delete",
-    "http_request",
-    "delegate",
-    "list_agents",
-    "tasks",
-    # Git mutation tools (require approval)
-    "git_add",
-    "git_commit",
-    "git_checkout",
-    "git_fetch",
-    "git_push",
-})
+HTTP_READ_LOCAL_TOOLS = tools_for_http_profile("read-local")
+HTTP_READ_TOOLS = tools_for_http_profile("read")
+HTTP_AGENT_TOOLS = tools_for_http_profile("agent")
 
 HTTP_TOOL_PROFILES: dict[str, frozenset[str] | None] = {
     "read-local": HTTP_READ_LOCAL_TOOLS,

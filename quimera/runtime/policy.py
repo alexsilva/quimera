@@ -6,6 +6,7 @@ from pathlib import Path
 from ..shared_state import MAX_AGENT_UPDATE_KEYS
 from .config import ToolRuntimeConfig
 from .models import ToolCall
+from .tool_metadata import ApprovalMode, TOOL_METADATA, get_tool_metadata
 
 
 def is_path_inside(path: Path, root: Path) -> bool:
@@ -41,36 +42,12 @@ class ToolPolicy:
 
     _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "|", "`", "$(")
     _POLICY_BYPASS_TOOLS: set[str] = set()
-    #: Tools que alteram o workspace, o sistema, o browser ou a rede de forma
-    #: irreversível/sensível e, portanto, passam por approval de mutação.
+    #: Compatibilidade para consumidores históricos. A fonte canônica de
+    #: approval é TOOL_METADATA.
     _MUTATION_TOOLS: frozenset[str] = frozenset(
-        {
-            "write_file",
-            "replace_text",
-            "apply_patch",
-            "remove_file",
-            "run_shell",
-            "exec_command",
-            "write_stdin",
-            "poll_command_session",
-            "close_command_session",
-            "delegate",
-            "git_add",
-            "git_commit",
-            "git_checkout",
-            "git_push",
-            "git_fetch",
-            "browser_start",
-            "browser_close",
-            "browser_navigate",
-            "browser_click",
-            "browser_type",
-            "browser_press",
-            "browser_mouse",
-            "browser_evaluate",
-            "browser_screenshot",
-            "memory_delete",
-        }
+        name
+        for name, metadata in TOOL_METADATA.items()
+        if metadata.approval == ApprovalMode.MUTATION
     )
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
@@ -130,25 +107,26 @@ class ToolPolicy:
 
     def requires_path_permission(self, call: ToolCall) -> bool:
         """Retorna True quando a tool precisa validar permissão de path."""
-        return call.name in {
-            "read_file",
-            "list_files",
-            "grep_search",
-            "remove_file",
-        }
+        metadata = get_tool_metadata(call.name)
+        return bool(metadata and metadata.requires_path_permission)
 
     def requires_approval(self, call: ToolCall) -> bool:
         """Retorna True quando a tool requer aprovação humana antes de ser executada."""
-        if call.name == "tasks":
+        metadata = get_tool_metadata(call.name)
+        if metadata is not None and metadata.approval == ApprovalMode.TASK_CREATION:
             return self.config.require_approval_for_task_creation
-        if call.name == "http_request":
+        if metadata is not None and metadata.approval == ApprovalMode.HTTP_METHOD:
             method = str(call.arguments.get("method", "GET")).strip().upper() or "GET"
             if method in {"GET", "HEAD"}:
                 return False
             return self.config.require_approval_for_mutations
-        if call.name in self._MUTATION_TOOLS:
+        if metadata is not None and metadata.approval == ApprovalMode.MUTATION:
             return self.config.require_approval_for_mutations
         if call.name in self._external_mcp_tools:
+            return self.config.require_approval_for_mutations
+        if metadata is None:
+            # Fail closed: uma tool nova/externa que ainda não declarou metadata
+            # não pode herdar implicitamente o caminho sem approval.
             return self.config.require_approval_for_mutations
         return False
 
