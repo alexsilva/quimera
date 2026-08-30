@@ -76,11 +76,17 @@ class TransientAPIError(Exception):
         *,
         rate_limited: bool = False,
         retry_after: float | None = None,
+        user_message: str | None = None,
     ):
         super().__init__(message)
         self.rate_limited = bool(rate_limited)
         self.retry_after = retry_after
         self.retryable = True
+        self.user_message = user_message or (
+            "O provedor limitou temporariamente as requisições. Tente novamente em instantes."
+            if self.rate_limited
+            else "Falha temporária ao comunicar com o provedor. Tente novamente."
+        )
 
 
 class FatalAPIError(Exception):
@@ -90,10 +96,19 @@ class FatalAPIError(Exception):
     a chave ou a requisição são inválidos e o retry não mudaria o resultado.
     """
 
-    def __init__(self, message: str, *, cause: Exception | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        cause: Exception | None = None,
+        user_message: str | None = None,
+    ):
         super().__init__(message)
         self.cause = cause
         self.retryable = False
+        self.user_message = user_message or (
+            "O provedor rejeitou esta execução. Verifique autenticação, modelo e configuração."
+        )
 
 
 class APIExecutionError(Exception):
@@ -116,6 +131,9 @@ class APIExecutionError(Exception):
         self.operation = operation
         self.cause = cause
         self.retryable = False
+        self.user_message = (
+            "O driver OpenAI encontrou uma falha interna e encerrou a execução."
+        )
 
 
 def _api_retry_after(exc: Exception) -> float | None:
@@ -187,7 +205,7 @@ def _fatal_api_error_message(exc: Exception) -> str | None:
     if _OAIAuthError is not Exception and isinstance(exc, _OAIAuthError):
         return "Erro fatal: falha de autenticação na API. Verifique a chave de API configurada."
     if _OAIBadRequestError is not Exception and isinstance(exc, _OAIBadRequestError):
-        return f"Erro fatal: requisição inválida — {exc}"
+        return "Erro fatal: o provedor rejeitou a requisição como inválida."
     return None
 
 _logger = logging.getLogger(__name__)
@@ -640,6 +658,10 @@ class OpenAICompatDriver:
         )
         self.extra_body = dict(extra_body) if extra_body else None
 
+    def _build_messages_from_prompt(self, prompt: PromptText) -> list[dict]:
+        """Converte o prompt preservando um ponto de extensão por provider."""
+        return _build_openai_messages_from_prompt(prompt)
+
     def run(
             self,
             prompt: PromptText,
@@ -705,7 +727,7 @@ class OpenAICompatDriver:
                 tool_budget_index = len(messages) - 1
             else:
                 max_tool_hops = get_max_tool_hops(self.tool_use_reliability)
-            messages.extend(_build_openai_messages_from_prompt(prompt))
+            messages.extend(self._build_messages_from_prompt(prompt))
 
             last_invalid_signature: tuple[str, str, str] | None = None
             consecutive_invalid_signature_count = 0
@@ -741,6 +763,8 @@ class OpenAICompatDriver:
                         )
                     except Exception as exc:
                         _logger.error("OpenAICompatDriver: API error on hop %d: %s", hop, exc)
+                        if isinstance(exc, (FatalAPIError, TransientAPIError)):
+                            raise
                         categorization = _categorize_api_exception(exc)
                         if categorization is None:
                             raise APIExecutionError(
@@ -751,9 +775,13 @@ class OpenAICompatDriver:
                             ) from exc
                         category, retry_after = categorization
                         if category == "fatal":
+                            safe_message = _fatal_api_error_message(exc) or (
+                                "Erro fatal: o provedor rejeitou a execução."
+                            )
                             raise FatalAPIError(
-                                _fatal_api_error_message(exc) or f"Erro fatal da API ({self.model}): {exc}",
+                                safe_message,
                                 cause=exc,
+                                user_message=safe_message,
                             ) from exc
                         if category in ("rate_limit", "transient"):
                             raise TransientAPIError(

@@ -7,11 +7,17 @@ from typing import Any
 
 from ..agents.capabilities import is_user_cancelled
 from ..constants import MSG_EMPTY_INPUT, USER_ROLE
+from ..domain.session_state import SessionRuntimeState
+from ..ui.messages import format_failover_message
 from .command_router import RoutingDecision
 from .config import logger
 from .render_event import RenderEvent
-from ..domain.session_state import SessionRuntimeState
-from ..ui.messages import format_failover_message
+
+
+class NoAgentResponseError(RuntimeError):
+    """Indica que a rodada terminou sem resposta válida de qualquer agente."""
+
+    user_message = "Nenhum agente disponível conseguiu concluir a resposta."
 
 
 @dataclass(frozen=True)
@@ -331,8 +337,9 @@ class ChatRoundOrchestrator:
                 if self._is_cancelled():
                     self._handle_cancelled()
                     return
-                self._show_warning("Nenhum agente disponível respondeu.")
-                return
+                raise NoAgentResponseError(
+                    "todos os agentes retornaram sem resposta válida"
+                )
 
         self._dispatch_services.print_response(first_agent, response)
         if response is not None:

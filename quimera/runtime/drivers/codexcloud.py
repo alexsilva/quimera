@@ -25,6 +25,7 @@ from .openai_compat import (
     _parse_tool_arguments,
     _sanitize_assistant_text,
 )
+from .prompt_adapter import _build_openai_messages_from_prompt
 
 _logger = logging.getLogger(__name__)
 
@@ -54,7 +55,6 @@ a sense of momentum and clarity for the user to understand your next actions.
 - **Keep your tone light, friendly and curious**: add small touches of \
 personality in preambles to feel collaborative and engaging.
 - Write every preamble in the same language as the conversation."""
-
 
 def _content_parts_to_text(content) -> str:
     """Extrai texto de content chat-style (str ou lista de partes)."""
@@ -160,6 +160,13 @@ class CodexCloudDriver(OpenAICompatDriver):
     # Conversão chat -> Responses
     # ------------------------------------------------------------------
 
+    def _build_messages_from_prompt(self, prompt) -> list[dict]:
+        """Preserva os papéis reais do histórico no backend Codex."""
+        return _build_openai_messages_from_prompt(
+            prompt,
+            split_recent_conversation=True,
+        )
+
     def _build_responses_payload(self, messages: list[dict], tools: list[dict]) -> dict:
         """Monta o corpo da requisição Responses a partir do histórico chat."""
         instructions: list[str] = []
@@ -214,7 +221,7 @@ class CodexCloudDriver(OpenAICompatDriver):
             "input": input_items,
             "tools": _chat_tools_to_responses_tools(tools),
             "tool_choice": "auto",
-            "parallel_tool_calls": False,
+            "parallel_tool_calls": True,
             "store": False,
             "stream": True,
             "include": ["reasoning.encrypted_content"],
@@ -252,7 +259,14 @@ class CodexCloudDriver(OpenAICompatDriver):
             try:
                 access_token, account_id = self._auth.credentials(force_refresh=attempt > 0)
             except CodexAuthError as exc:
-                raise FatalAPIError(f"codexcloud: {exc}", cause=exc) from exc
+                raise FatalAPIError(
+                    f"codexcloud: {exc}",
+                    cause=exc,
+                    user_message=(
+                        "Não foi possível autenticar o Codex Cloud. "
+                        "Refaça o login do Codex CLI."
+                    ),
+                ) from exc
             headers = self._request_headers(access_token, account_id)
             try:
                 with self._http.stream(
@@ -269,7 +283,10 @@ class CodexCloudDriver(OpenAICompatDriver):
                         on_text_chunk=on_text_chunk,
                     )
             except httpx.TimeoutException as exc:
-                raise TransientAPIError(f"codexcloud: timeout do backend Codex: {exc}") from exc
+                raise TransientAPIError(
+                    f"codexcloud: timeout do backend Codex: {exc}",
+                    user_message="O Codex Cloud demorou além do limite e foi encerrado.",
+                ) from exc
             except httpx.HTTPError as exc:
                 raise TransientAPIError(f"codexcloud: falha de rede: {exc}") from exc
         raise FatalAPIError(
@@ -308,7 +325,8 @@ class CodexCloudDriver(OpenAICompatDriver):
                 "Rode `codex login` para reautenticar."
             )
         raise FatalAPIError(
-            f"codexcloud: requisição rejeitada pelo backend Codex (HTTP {status}): {detail}"
+            f"codexcloud: requisição rejeitada pelo backend Codex (HTTP {status}): {detail}",
+            user_message=f"O Codex Cloud rejeitou a requisição (HTTP {status}).",
         )
 
     def _remember_reasoning(self, call_id: str, item: dict) -> None:
@@ -426,7 +444,10 @@ class CodexCloudDriver(OpenAICompatDriver):
                     raise TransientAPIError(
                         f"codexcloud: {message}", rate_limited=True
                     )
-                raise FatalAPIError(f"codexcloud: backend Codex falhou: {message}")
+                raise FatalAPIError(
+                    f"codexcloud: backend Codex falhou: {message}",
+                    user_message="O Codex Cloud não conseguiu concluir a resposta.",
+                )
 
             if etype == "response.completed":
                 usage = (event.get("response") or {}).get("usage") or {}

@@ -134,7 +134,7 @@ def test_schema_names_match_registered_tools():
         "browser_mouse", "browser_wait", "browser_evaluate", "browser_screenshot",
         "browser_console", "browser_network",
         # Host diagnostics
-        "host_processes", "host_process_inspect", "host_memory",
+        "host_processes", "host_process_inspect", "host_process_sample", "host_memory",
         # Git tools
         "git_status", "git_log", "git_diff", "git_branch", "git_fetch",
         "git_add", "git_commit", "git_checkout", "git_push",
@@ -584,7 +584,7 @@ def test_prune_tool_loop_messages_preserves_invariant_every_tool_has_assistant()
         if previous.get("role") == "tool":
             previous = pruned[index - 2]
         assert previous.get("role") == "assistant", f"Tool {msg['tool_call_id']} not preceded by assistant"
-        assert previous.get("tool_calls"), f"Assistant has no tool_calls"
+        assert previous.get("tool_calls"), "Assistant has no tool_calls"
         tool_ids = {call.get("id") for call in previous["tool_calls"]}
         assert msg.get("tool_call_id") in tool_ids, f"Tool {msg['tool_call_id']} not in assistant's tool_calls"
 
@@ -975,9 +975,10 @@ def test_run_tools_system_prompt_guides_tool_usage():
         "browser_screenshot",
         "browser_console",
         "browser_network",
-        "host_processes",
-        "host_process_inspect",
-        "host_memory",
+            "host_processes",
+            "host_process_inspect",
+            "host_process_sample",
+            "host_memory",
         # Git tools
         "git_status",
         "git_log",
@@ -1233,7 +1234,6 @@ def test_run_tool_loop_prunes_messages_between_hops():
     driver, mock_client = _make_driver()
 
     def side_effect(*args, **kwargs):
-        messages = kwargs["messages"]
         if len(mock_client.chat.completions.create.call_args_list) < 4:
             tc_id = f"call_{len(mock_client.chat.completions.create.call_args_list)}"
             return _make_non_streaming_response(
@@ -1865,8 +1865,6 @@ def test_driver_repl_run_one_shot_and_interactive_commands():
 
 def test_run_max_hops_returns_last_text():
     """Quando o modelo não para de chamar tools, o loop encerra no MAX_TOOL_HOPS."""
-    from quimera.runtime.drivers.openai_compat import MAX_TOOL_HOPS
-
     driver, mock_client = _make_driver()
     tc = _make_tool_call("c", "run_shell", '{"command":"x"}')
 
@@ -2326,7 +2324,6 @@ def test_semaphore_initial_value_equals_max_connections():
 
 def test_run_acquires_and_releases_semaphore():
     """run() deve adquirir e liberar o semáforo ao redor da chamada API."""
-    from quimera.runtime.drivers.openai_compat import OpenAICompatDriver, DEFAULT_MAX_CONNECTIONS
     driver, mock_client = _make_driver()
 
     # Reduz o semáforo para 1 para testar contenção
@@ -2346,8 +2343,6 @@ def test_concurrent_runs_block_at_max_connections():
     """Chamadas concorrentes além de max_connections devem esperar."""
     import threading
     import time
-    from quimera.runtime.drivers.openai_compat import OpenAICompatDriver
-
     driver, mock_client = _make_driver(model="model-x", base_url="http://localhost:1/v1")
 
     # Permite apenas 1 conexão simultânea

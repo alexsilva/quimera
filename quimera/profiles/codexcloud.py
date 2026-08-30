@@ -27,7 +27,6 @@ _FALLBACK_REASONING_EFFORT = "medium"
 # períodos sem emitir texto.
 _REQUEST_TIMEOUT_SECONDS = 600.0
 
-
 @lru_cache(maxsize=1)
 def _codex_config_defaults() -> tuple[str, str]:
     """Lê modelo e reasoning effort do config.toml do Codex CLI."""

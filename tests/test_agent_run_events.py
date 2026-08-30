@@ -168,7 +168,29 @@ def test_agent_gateway_emits_failed_event_when_backend_raises():
 
     assert [event.kind for event in sink.events] == ["started", "failed"]
     assert sink.events[-1].agent == "opencode"
-    assert sink.events[-1].metadata["error"] == "boom"
+    assert sink.events[-1].metadata["error"] == "O agente não conseguiu concluir a execução."
+
+
+def test_agent_gateway_prefers_safe_provider_error_for_failed_event():
+    class ProviderFailure(RuntimeError):
+        user_message = "O provedor rejeitou a execução."
+
+    sink = RecordingSink()
+    gateway = make_gateway(
+        FakeAgentClient(exc=ProviderFailure("Bearer secret-provider-payload")),
+        sink=sink,
+    )
+
+    try:
+        gateway.call("codexcloud")
+    except ProviderFailure:
+        pass
+    else:
+        raise AssertionError("expected provider exception")
+
+    error = sink.events[-1].metadata["error"]
+    assert error == "O provedor rejeitou a execução."
+    assert "secret-provider-payload" not in error
 
 
 def test_agent_gateway_emits_failed_event_for_empty_response():
@@ -375,7 +397,9 @@ def test_agent_gateway_emits_failed_when_prompt_build_raises():
         raise AssertionError("expected prompt exception")
 
     assert [event.kind for event in sink.events] == ["started", "failed"]
-    assert sink.events[-1].metadata["error"] == "prompt boom"
+    error = sink.events[-1].metadata["error"]
+    assert error == "Falha ao preparar a execução do agente."
+    assert "prompt boom" not in error
 
 
 def test_agent_gateway_emits_cancelled_before_backend_call():

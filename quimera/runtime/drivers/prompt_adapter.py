@@ -1,6 +1,8 @@
 """Converte prompts estruturados do Quimera para mensagens do driver."""
 from __future__ import annotations
 
+import re
+
 from ...clipboard_support import ClipboardManager
 from ...prompt_kinds import PromptKind, coerce_prompt_kind
 from ...prompt_templates import PromptText
@@ -17,6 +19,10 @@ TOOL_SYSTEM_PROMPT = (
 # Cobre chat (current_turn) e os modos task (delegação/review) — sem isso a
 # imagem chegaria apenas como texto no perfil task.
 _MULTIMODAL_USER_BLOCKS = frozenset({"current_turn", "task_delegation", "task_review"})
+
+_CONVERSATION_ENTRY_RE = re.compile(r"(?m)^\[([^\]\n]+)\]:[ \t]?(.*)$")
+_HUMAN_NAME_RE = re.compile(r"(?im)^Usu[aá]rio humano:\s*(.+?)\s*$")
+_GENERIC_HUMAN_ROLES = frozenset({"human", "user", "usuário", "usuario"})
 
 # Mapa direto: PromptKind -> nome do bloco -> role no payload OpenAI-compatible.
 # Blocos ausentes no mapa são omitidos intencionalmente.
@@ -72,9 +78,45 @@ def _message_from_block(block, role: str) -> dict:
     return _message("user", block.content)
 
 
+def _human_role_names(blocks) -> set[str]:
+    names = set(_GENERIC_HUMAN_ROLES)
+    for block in blocks:
+        if block.name != "header":
+            continue
+        match = _HUMAN_NAME_RE.search(str(block.content or ""))
+        if match:
+            names.add(match.group(1).strip().casefold())
+    return names
+
+
+def _split_recent_conversation(content: str, human_roles: set[str]) -> list[dict]:
+    """Reconstrói papéis do bloco canônico ``[PAPEL]: conteúdo``."""
+    text = str(content or "").strip()
+    if not text or text == "[sem itens residuais na conversa recente]":
+        return []
+    matches = list(_CONVERSATION_ENTRY_RE.finditer(text))
+    if not matches:
+        return [{"role": "user", "content": text}]
+
+    messages: list[dict] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        first_line = match.group(2)
+        continuation = text[match.end():end]
+        body = (first_line + continuation).strip()
+        if not body:
+            continue
+        label = match.group(1).strip().casefold()
+        role = "user" if label in human_roles else "assistant"
+        messages.append({"role": role, "content": body})
+    return messages
+
+
 def _build_openai_messages_from_prompt(
     prompt: PromptText,
     prompt_kind: PromptKind | str | None = None,
+    *,
+    split_recent_conversation: bool = False,
 ) -> list[dict]:
     """Converte um PromptText em mensagens de API chat."""
     if not prompt.strip():
@@ -91,11 +133,16 @@ def _build_openai_messages_from_prompt(
     if roles is None:
         raise ValueError(f"PromptKind sem mapeamento de roles no adapter: {kind.value}")
     messages: list[dict] = []
+    human_roles = _human_role_names(blocks) if split_recent_conversation else set()
 
     for block in blocks:
         role = roles.get(block.name)
-        if role:
-            messages.append(_message_from_block(block, role))
+        if not role:
+            continue
+        if split_recent_conversation and block.name == "recent_conversation":
+            messages.extend(_split_recent_conversation(block.content, human_roles))
+            continue
+        messages.append(_message_from_block(block, role))
 
     return messages
 

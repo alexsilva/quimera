@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 from .chat_round import ChatRoundContext
 
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_CHAT_QUEUE_WAIT_TIMEOUT_SECONDS = 600.0
+
+
+class ChatQueueWaitTimeoutError(TimeoutError):
+    """A fila não disponibilizou capacidade dentro do limite operacional."""
+
+    user_message = "A execução não conseguiu sair da fila dentro do limite de espera."
 
 
 class ChatLifecycle:
@@ -31,6 +40,7 @@ class ChatLifecycle:
         parse_routing,
         parse_response,
         refresh_parallel_toolbar,
+        queue_wait_timeout_seconds: float = DEFAULT_CHAT_QUEUE_WAIT_TIMEOUT_SECONDS,
     ) -> None:
         self._chat_round_orchestrator = chat_round_orchestrator
         self._system_layer = system_layer
@@ -47,6 +57,10 @@ class ChatLifecycle:
         self._parse_response = parse_response
         self._ui_event_queue = None
         self._refresh_parallel_toolbar = refresh_parallel_toolbar
+        self._queue_wait_timeout_seconds = max(
+            0.0,
+            float(queue_wait_timeout_seconds),
+        )
         self._submission_futures: dict[int, tuple[object, str, bool]] = {}
         self._active_submission_ids: set[str] = set()
         self._cancelled_submission_ids: set[str] = set()
@@ -189,10 +203,25 @@ class ChatLifecycle:
     def process_queued_message(self, user, *, submission_id: str = ""):
         """Promove um prompt pendente quando um worker do executor fica livre."""
         slot_semaphore = getattr(self._runtime_state, "chat_slot_semaphore", None)
-        if slot_semaphore is not None:
-            slot_semaphore.acquire()
+        slot_acquired = slot_semaphore is None
         promoted = False
         try:
+            if slot_semaphore is not None:
+                deadline = time.monotonic() + self._queue_wait_timeout_seconds
+                while not slot_acquired:
+                    if self._is_submission_cancelled(submission_id):
+                        self.update_submission_status(submission_id, "cancelled")
+                        break
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise ChatQueueWaitTimeoutError(
+                            "chat slot semaphore did not become available"
+                        )
+                    slot_acquired = bool(
+                        slot_semaphore.acquire(timeout=min(0.25, remaining))
+                    )
+            if not slot_acquired:
+                return
             self._runtime_state.promote_chat_pending_to_inflight(
                 self._refresh_parallel_toolbar
             )
@@ -216,7 +245,8 @@ class ChatLifecycle:
                 self._runtime_state.decrement_chat_pending(
                     self._refresh_parallel_toolbar
                 )
-                self._runtime_state.release_chat_slot()
+                if slot_acquired:
+                    self._runtime_state.release_chat_slot()
 
     def submit_async_message(self, user, *, slot_reserved=True, submission_id: str = ""):
         """Submete um prompt já reservado para a pool de execução do chat."""
@@ -328,5 +358,7 @@ class ChatLifecycle:
 
     @staticmethod
     def _submission_error_message(error: BaseException) -> str:
-        message = str(error or "").strip() or type(error).__name__
+        message = str(getattr(error, "user_message", "") or "").strip()
+        if not message:
+            message = str(error or "").strip() or type(error).__name__
         return message if len(message) <= 240 else f"{message[:237]}..."

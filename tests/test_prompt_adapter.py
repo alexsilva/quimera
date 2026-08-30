@@ -40,6 +40,50 @@ def test_build_openai_messages_from_prompt_uses_current_turn_as_active_user_mess
     assert "Execute pwd" not in messages[0]["content"]
 
 
+def test_build_openai_messages_can_restore_recent_conversation_roles_for_codexcloud():
+    prompt = (
+        '<header title="Identificação">\n'
+        'Você é codexcloud-gpt-5-6.\nUsuário humano: ALEX\n'
+        '</header>\n'
+        '<recent_conversation title="Conversa recente">\n'
+        '[ALEX]: investigue o erro\n'
+        '[CODEX-GPT-5-6]: vou verificar\nlinha complementar\n'
+        '[ALEX]: prossiga\n'
+        '</recent_conversation>\n'
+        '<current_turn title="Pedido atual de ALEX">\n'
+        'corrija agora\n'
+        '</current_turn>'
+    )
+
+    messages = _build_openai_messages_from_prompt(
+        _rendered(prompt),
+        split_recent_conversation=True,
+    )
+
+    assert [message["role"] for message in messages] == [
+        "system", "user", "assistant", "user", "user",
+    ]
+    assert messages[1]["content"] == "investigue o erro"
+    assert messages[2]["content"] == "vou verificar\nlinha complementar"
+    assert messages[-1]["content"] == "corrija agora"
+
+
+def test_split_recent_conversation_omits_empty_history_sentinel():
+    prompt = (
+        '<recent_conversation title="Conversa recente">\n'
+        '[sem itens residuais na conversa recente]\n'
+        '</recent_conversation>\n'
+        '<current_turn title="Pedido atual">ação</current_turn>'
+    )
+
+    messages = _build_openai_messages_from_prompt(
+        _rendered(prompt),
+        split_recent_conversation=True,
+    )
+
+    assert messages == [{"role": "user", "content": "ação"}]
+
+
 def test_build_openai_messages_returns_empty_for_blank_prompt():
     """Prompt vazio não gera mensagem user vazia."""
     assert _build_openai_messages_from_prompt(_rendered("")) == []

@@ -1490,7 +1490,10 @@ class AgentClient:
                             (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None)
                             or connection.model or "driver"
                         )
-                        self._show_error(f"[erro] falha ao comunicar com {_name}: {error}")
+                        user_message = getattr(error, "user_message", None) or (
+                            "Falha temporária ao comunicar com o provedor."
+                        )
+                        self._show_error(f"[erro] {_name}: {user_message}")
                         return None
                     if isinstance(error, (_FatalAPIError, _APIExecutionError)):
                         # A camada de dispatch é a única responsável por exibir
@@ -1505,7 +1508,15 @@ class AgentClient:
                         (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None)
                         or connection.model or "driver"
                     )
-                    self._show_error(f"[erro] falha ao comunicar com {_name}: {error}")
+                    _logger.exception(
+                        "driver API falhou agent=%s model=%s",
+                        agent,
+                        connection.model,
+                        exc_info=error,
+                    )
+                    self._show_error(
+                        f"[erro] {_name}: falha inesperada na comunicação com o provedor."
+                    )
                     return None
 
                 return result_holder["result"]

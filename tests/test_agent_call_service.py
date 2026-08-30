@@ -200,6 +200,7 @@ class TestCall:
         record.assert_called_once_with("agent1")
         notify_error.assert_called_once()
         assert "fatal" in notify_error.call_args[0][0]
+        assert "chave de API inválida" not in notify_error.call_args[0][0]
 
     def test_fatal_error_predicate_applies_to_raise_before_retry(self):
         """Verifica que a predicação classifica a exceção antes de decidir retry."""

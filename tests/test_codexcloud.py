@@ -13,6 +13,7 @@ import pytest
 
 from quimera import profiles
 from quimera.profiles.base import OpenAIConnection
+from quimera.prompt_templates import PromptText
 from quimera.profiles.codexcloud import (
     CODEX_CLOUD_BASE_URL,
     CodexCloudProfile,
@@ -228,8 +229,11 @@ def test_build_responses_payload_maps_roles_and_tools():
     body = driver._build_responses_payload(messages, tools)
 
     assert body["model"] == "gpt-5.5"
-    assert body["instructions"] == "regra 1\n\nregra 2\n\n" + PREAMBLE_INSTRUCTIONS
+    assert body["instructions"] == (
+        "regra 1\n\nregra 2\n\n" + PREAMBLE_INSTRUCTIONS
+    )
     assert body["store"] is False and body["stream"] is True
+    assert body["parallel_tool_calls"] is True
     types = [item["type"] for item in body["input"]]
     assert types == ["message", "message", "reasoning", "function_call", "function_call_output"]
     function_call = body["input"][3]
@@ -249,6 +253,25 @@ def test_build_responses_payload_appends_preamble_without_system():
     driver = _make_driver(lambda request: httpx.Response(500))
     body = driver._build_responses_payload([{"role": "user", "content": "oi"}], [])
     assert body["instructions"] == PREAMBLE_INSTRUCTIONS
+    driver.close()
+
+
+def test_codexcloud_driver_restores_structured_history_roles():
+    driver = _make_driver(lambda request: httpx.Response(500))
+    prompt = PromptText(
+        '<header title="Identificação">\nUsuário humano: ALEX\n</header>\n'
+        '<recent_conversation title="Conversa recente">\n'
+        '[ALEX]: pedido anterior\n[CODEXCLOUD-GPT-5-6]: resposta anterior\n'
+        '</recent_conversation>\n'
+        '<current_turn title="Pedido atual de ALEX">continue</current_turn>'
+    )
+
+    messages = driver._build_messages_from_prompt(prompt)
+
+    assert [message["role"] for message in messages] == [
+        "system", "user", "assistant", "user",
+    ]
+    assert messages[-1]["content"] == "continue"
     driver.close()
 
 
@@ -502,6 +525,7 @@ def test_codexcloud_profile_registered_with_api_driver():
     assert connection.base_url == CODEX_CLOUD_BASE_URL
     assert not connection.api_key_env
     assert connection.extra_body["reasoning"]["summary"] == "auto"
+    assert connection.max_model_requests is None
 
 
 def test_codexcloud_profile_configure_with_model_returns_api_connection():

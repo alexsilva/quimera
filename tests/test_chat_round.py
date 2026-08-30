@@ -1,10 +1,10 @@
 """Testes de cobertura para quimera/app/chat_round.py."""
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock
 
 from quimera.app.agent_pool import AgentPool
-from quimera.app.chat_round import ChatRoundOrchestrator
+from quimera.app.chat_round import ChatRoundOrchestrator, NoAgentResponseError
 from quimera.app.staging import merge_staging_to_workspace
 from quimera.domain.session_state import SessionRuntimeState
 
@@ -203,12 +203,11 @@ class TestProcessMainFlow(unittest.TestCase):
         app.dispatch_services.delegate = Mock(return_value=None)
         app.parse_response = Mock(return_value=(None, None, None, None))
 
-        app.chat_round_orchestrator.process("status")
+        with self.assertRaises(NoAgentResponseError):
+            app.chat_round_orchestrator.process("status")
 
         self.assertEqual(app.dispatch_services.delegate.call_count, 3)
-        app.renderer.show_warning.assert_called_once_with(
-            "Nenhum agente disponível respondeu."
-        )
+        app.renderer.show_warning.assert_not_called()
 
     def test_main_flow_fallback_cancelled_resets_turn_without_warning(self):
         """Cancelamento após fallback no fluxo principal deve resetar turno e retornar."""

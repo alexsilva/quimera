@@ -12,6 +12,11 @@ from .config import logger
 from .render_event import RenderEvent
 
 
+def _safe_agent_error(error: BaseException, fallback: str) -> str:
+    """Seleciona texto próprio para UI sem propagar payload bruto do provider."""
+    return str(getattr(error, "user_message", "") or fallback)
+
+
 class _ThinkingStreamRelay:
     """Detecta blocos <think>/<thinking> em um stream e os exibe ao vivo no feed do agente.
 
@@ -277,7 +282,11 @@ class AgentGateway:
                 )
         except Exception as exc:
             fail_metadata = dict(event_metadata)
-            fail_metadata["error"] = str(exc)
+            fail_metadata["error"] = _safe_agent_error(
+                exc,
+                "Falha ao preparar a execução do agente.",
+            )
+            logger.exception("falha ao preparar prompt agent=%s", agent)
             self._agent_run_sink.emit(_run_event("failed", metadata=fail_metadata))
             raise
 
@@ -299,7 +308,11 @@ class AgentGateway:
             )
         except Exception as exc:
             fail_metadata = dict(event_metadata)
-            fail_metadata["error"] = str(exc)
+            fail_metadata["error"] = _safe_agent_error(
+                exc,
+                "O agente não conseguiu concluir a execução.",
+            )
+            logger.exception("falha no backend agent=%s", agent)
             self._agent_run_sink.emit(_run_event("failed", metadata=fail_metadata))
             raise
 

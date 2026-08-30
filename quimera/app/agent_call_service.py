@@ -132,7 +132,12 @@ class AgentCallService:
                 if callable(is_fatal_error) and is_fatal_error(exc):
                     last_error = exc
                     self._record_failure(agent)
-                    self._notify_error(f"{agent}: erro fatal, sem retry: {exc}")
+                    user_message = getattr(exc, "user_message", None) or (
+                        "O provedor rejeitou a execução."
+                    )
+                    self._notify_error(
+                        f"{agent}: erro fatal, sem nova tentativa. {user_message}"
+                    )
                     logger.debug(
                         "agent=%s fatal error, aborting without retry: %s",
                         agent, exc,

@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from quimera.app.chat_lifecycle import ChatLifecycle
+from quimera.app.chat_lifecycle import ChatLifecycle, ChatQueueWaitTimeoutError
 from quimera.app.submission_tracker import SubmissionTracker
 
 
@@ -142,8 +142,8 @@ class _SubmissionRenderer:
         return None
 
 
-def _make_lifecycle(orchestrator, renderer, executor):
-    runtime_state = Mock(chat_executor=executor)
+def _make_lifecycle(orchestrator, renderer, executor, *, queue_wait_timeout_seconds=600):
+    runtime_state = Mock(chat_executor=executor, chat_slot_semaphore=None)
     runtime_state.decrement_chat_inflight.return_value = 0
     runtime_state.get_chat_pending_count.return_value = 0
     runtime_state.get_chat_outstanding_count.return_value = 0
@@ -162,6 +162,7 @@ def _make_lifecycle(orchestrator, renderer, executor):
         parse_routing=None,
         parse_response=None,
         refresh_parallel_toolbar=Mock(),
+        queue_wait_timeout_seconds=queue_wait_timeout_seconds,
     )
 
 
@@ -188,6 +189,32 @@ def test_chat_lifecycle_observes_async_future_failure():
     assert lifecycle._submission_futures == {}
 
 
+def test_chat_lifecycle_uses_safe_user_message_for_failure_status():
+    class ProviderFailure(RuntimeError):
+        user_message = "O provedor rejeitou a execução."
+
+    orchestrator = Mock()
+    orchestrator.process.side_effect = ProviderFailure("Bearer secret-provider-payload")
+    renderer = _SubmissionRenderer()
+    executor = ThreadPoolExecutor(max_workers=1)
+    lifecycle = _make_lifecycle(orchestrator, renderer, executor)
+
+    try:
+        future = lifecycle.submit_async_message(
+            "teste",
+            submission_id="submission:safe-error",
+        )
+        with pytest.raises(ProviderFailure):
+            future.result(timeout=2)
+    finally:
+        executor.shutdown(wait=True)
+
+    _submission_id, status, metadata = renderer.transitions[-1]
+    assert status == "failed"
+    assert metadata["message"] == "O provedor rejeitou a execução."
+    assert "secret-provider-payload" not in metadata["message"]
+
+
 def test_chat_lifecycle_marks_successful_future_completed():
     orchestrator = Mock()
     renderer = _SubmissionRenderer()
@@ -205,6 +232,39 @@ def test_chat_lifecycle_marks_successful_future_completed():
 
     statuses = [status for _submission_id, status, _metadata in renderer.transitions]
     assert statuses == ["starting", "running", "completed"]
+
+
+def test_queued_submission_times_out_without_leaking_slot():
+    class NeverAvailableSemaphore:
+        def acquire(self, timeout=None):
+            return False
+
+    renderer = _SubmissionRenderer()
+    executor = ThreadPoolExecutor(max_workers=1)
+    lifecycle = _make_lifecycle(
+        Mock(),
+        renderer,
+        executor,
+        queue_wait_timeout_seconds=0,
+    )
+    lifecycle._runtime_state.chat_slot_semaphore = NeverAvailableSemaphore()
+
+    try:
+        future = lifecycle.submit_async_message(
+            "teste",
+            slot_reserved=False,
+            submission_id="submission:queue-timeout",
+        )
+        with pytest.raises(ChatQueueWaitTimeoutError):
+            future.result(timeout=2)
+    finally:
+        executor.shutdown(wait=True)
+
+    _submission_id, status, metadata = renderer.transitions[-1]
+    assert status == "failed"
+    assert metadata["message"] == ChatQueueWaitTimeoutError.user_message
+    lifecycle._runtime_state.decrement_chat_pending.assert_called_once()
+    lifecycle._runtime_state.release_chat_slot.assert_not_called()
 
 
 def test_chat_lifecycle_cancels_accepted_submission_before_executor_submit():
