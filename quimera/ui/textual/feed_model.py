@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
 
+from quimera.app.submission_tracker import TERMINAL_SUBMISSION_STATUSES
 from quimera.constants import USER_ROLE
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
 from quimera.ui.text import (
@@ -154,6 +155,21 @@ class TextualFeedModel:
                 if item.transient:
                     transients.append((index, item))
         return transients
+
+    def active_submission_items(self) -> list[tuple[int, TextualFeedItem]]:
+        """Turnos humanos com submissão ainda não terminal, para animar a esfera."""
+        active: list[tuple[int, TextualFeedItem]] = []
+        for index, item in enumerate(self._items):
+            if item.event.kind != "user_message":
+                continue
+            payload = item.event.payload if isinstance(item.event.payload, dict) else {}
+            submission = payload.get("submission")
+            if not isinstance(submission, dict):
+                continue
+            status = str(submission.get("status") or "").strip().lower()
+            if status and status not in TERMINAL_SUBMISSION_STATUSES:
+                active.append((index, item))
+        return active
 
     @property
     def last_change(self) -> TextualFeedChange:

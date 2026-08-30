@@ -398,16 +398,19 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._spinner_index += 1
 
         def _pulse_thinking_marker(self) -> None:
-            """Anima o marcador de pensamento enquanto houver execução em andamento."""
+            """Anima o marcador de pensamento e a esfera do turno humano em execução."""
             expired_tools = self._feed_model.expire_tool_previews()
             if expired_tools:
                 self._sync_feed()
                 self._refresh_now()
-            if not self._feed_model.has_transients:
+            active_submissions = self._feed_model.active_submission_items()
+            if not self._feed_model.has_transients and not active_submissions:
                 reset_thinking_pulse()
                 return
             advance_thinking_pulse()
             self._sync_transient_feed_slots()
+            if active_submissions:
+                self._sync_submission_feed_slots(active_submissions)
 
         def _run_quimera_app(self) -> None:
             try:
@@ -581,6 +584,17 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     immediate=True,
                     x_axis=False,
                 )
+
+        def _sync_submission_feed_slots(self, slots) -> None:
+            """Re-renderiza turnos humanos com submissão ativa para a esfera pulsar."""
+            feed = self.query_one("#feed", _UnifiedFeed)
+            for index, item in slots:
+                token = id(item.event)
+                renderable = _render_event(item.event)
+                if renderable is None or not feed.update_entry(index, token, renderable):
+                    self._sync_feed()
+                    return
+                self._feed_renderable_cache[token] = renderable
 
         def _redraw_feed(self, *, scroll_end: bool = False) -> None:
             """Reconstrói os slots visuais, usado na restauração de histórico."""

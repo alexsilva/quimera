@@ -1742,7 +1742,150 @@ def test_textual_user_turn_renders_submission_status_below_prompt():
     console.print(renderable)
 
     text = output.getvalue()
-    assert text.index("revise") < text.index("Na fila · posição 2")
+    assert text.index("revise") < text.index("1s")
+    assert "Na fila" not in text
+    assert "posição" not in text
+
+
+def test_textual_submission_status_line_shows_only_live_elapsed_time():
+    import time as _time
+    from io import StringIO
+
+    output = StringIO()
+    console = Console(file=output, force_terminal=False, width=80)
+    renderable = renderables._build_submission_status_renderable(
+        {
+            "status": "running",
+            "elapsed_seconds": 2,
+            "received_monotonic": _time.monotonic() - 3.2,
+        }
+    )
+
+    console.print(renderable)
+
+    text = output.getvalue()
+    assert "5s" in text
+    assert "Executando" not in text
+
+
+def test_textual_submission_status_line_uses_static_time_after_terminal():
+    import time as _time
+    from io import StringIO
+
+    output = StringIO()
+    console = Console(file=output, force_terminal=False, width=80)
+    renderable = renderables._build_submission_status_renderable(
+        {
+            "status": "completed",
+            "elapsed_seconds": 49,
+            "received_monotonic": _time.monotonic() - 120,
+        }
+    )
+
+    console.print(renderable)
+
+    text = output.getvalue()
+    assert "49s" in text
+    assert "Concluída" not in text
+
+
+def test_textual_submission_marker_style_follows_status():
+    renderables.reset_thinking_pulse()
+    try:
+        assert renderables._submission_marker_style(None) is None
+        assert renderables._submission_marker_style({}) is None
+        assert renderables._submission_marker_style({"status": "running"}) == "bold cyan"
+        assert renderables._submission_marker_style({"status": "queued"}) == "bold yellow"
+        assert renderables._submission_marker_style({"status": "completed"}) == "bold green"
+        assert renderables._submission_marker_style({"status": "failed"}) == "bold red"
+    finally:
+        renderables.reset_thinking_pulse()
+
+
+def test_textual_submission_marker_blinks_only_while_active():
+    renderables.reset_thinking_pulse()
+    try:
+        renderables.advance_thinking_pulse()
+        renderables.advance_thinking_pulse()
+        assert renderables._submission_marker_style({"status": "running"}) == "dim cyan"
+        # Estados terminais não piscam: a esfera fica sólida na cor final.
+        assert renderables._submission_marker_style({"status": "completed"}) == "bold green"
+        assert renderables._submission_marker_style({"status": "failed"}) == "bold red"
+    finally:
+        renderables.reset_thinking_pulse()
+
+
+def test_textual_user_turn_sphere_uses_submission_color():
+    from rich.table import Table
+    from rich.text import Text
+
+    renderables.reset_thinking_pulse()
+    renderable = renderables._render_event(
+        TextualUiEvent(
+            "user_message",
+            {
+                "content": "revise",
+                "label": "Alex",
+                "style": "green",
+                "submission": {"status": "running", "elapsed_seconds": 1},
+            },
+        )
+    )
+
+    def _find_sphere(node):
+        if isinstance(node, Table):
+            for column in node.columns:
+                for cell in column._cells:
+                    if isinstance(cell, Text) and cell.plain == "●":
+                        return cell
+                    found = _find_sphere(cell)
+                    if found is not None:
+                        return found
+        if isinstance(node, Group):
+            for child in node.renderables:
+                found = _find_sphere(child)
+                if found is not None:
+                    return found
+        return None
+
+    sphere = _find_sphere(renderable)
+    assert sphere is not None
+    assert str(sphere.style) == "bold cyan"  # esfera cyan enquanto executa
+
+
+def test_textual_feed_lists_active_submission_turns():
+    model = TextualFeedModel()
+    model.apply(
+        TextualUiEvent(
+            "user_message",
+            {
+                "content": "roda",
+                "submission_id": "submission:1",
+                "submission": {
+                    "submission_id": "submission:1",
+                    "status": "running",
+                    "revision": 1,
+                },
+            },
+        )
+    )
+
+    active = model.active_submission_items()
+    assert len(active) == 1
+    assert active[0][0] == 0
+
+    model.apply(
+        TextualUiEvent(
+            "submission_status",
+            {
+                "submission_id": "submission:1",
+                "status": "completed",
+                "revision": 2,
+            },
+        )
+    )
+
+    assert model.active_submission_items() == []
 
 
 def test_textual_bridge_prunes_direct_input_owned_by_finished_thread():
@@ -3140,8 +3283,10 @@ def test_textual_user_message_renders_as_chat_turn():
     console = Console(width=60, record=True)
     console.print(rendered)
     output = console.export_text()
-    assert "Alex" in output
-    assert "oi" in output
+    # O prompt do usuário fica na mesma linha do nome: `● Alex: oi`.
+    first_line = output.splitlines()[0]
+    assert "Alex: oi" in first_line
+    assert "●" in first_line
 
 
 def test_textual_feed_entries_have_uniform_spacing():

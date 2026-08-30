@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 from rich.console import Group
@@ -21,6 +22,7 @@ from quimera.ui.textual.constants import (
     APPROVAL_OPTIONS as _APPROVAL_OPTIONS,
     APPROVAL_TITLE as _APPROVAL_TITLE,
 )
+from quimera.app.submission_tracker import TERMINAL_SUBMISSION_STATUSES
 from quimera.ui.branding import banner_gradient_text
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.clipboard_support import ClipboardManager
@@ -71,6 +73,35 @@ def reset_thinking_pulse() -> None:
 def _thinking_pulse_marker() -> str:
     """Retorna o glifo atual do marcador de pensamento pulsante."""
     return _THINKING_PULSE_FRAMES[_thinking_pulse_index]
+
+
+_SUBMISSION_MARKER_STYLES = {
+    "accepted": "yellow",
+    "queued": "yellow",
+    "starting": "yellow",
+    "waiting": "yellow",
+    "running": "cyan",
+    "completed": "green",
+    "failed": "red",
+    "cancelled": "yellow",
+}
+
+
+def _submission_marker_style(submission) -> str | None:
+    """Cor da esfera do turno humano conforme o status da submissão.
+
+    Enquanto a submissão não é terminal, a esfera alterna bold/dim no ritmo
+    do pulso de execução, sinalizando atividade sem variar a largura do turno.
+    """
+    if not isinstance(submission, dict):
+        return None
+    status = str(submission.get("status") or "").strip().lower()
+    color = _SUBMISSION_MARKER_STYLES.get(status)
+    if color is None:
+        return None
+    if status not in TERMINAL_SUBMISSION_STATUSES and (_thinking_pulse_index // 2) % 2:
+        return f"dim {color}"
+    return f"bold {color}"
 
 
 def _gutter_row(marker: str, marker_style: str, content):
@@ -471,32 +502,24 @@ def _clear_question_overlay_widget(overlay) -> None:
 
 
 def _build_submission_status_renderable(payload):
-    """Monta uma linha compacta de estado vinculada ao turno humano."""
+    """Monta a linha de tempo de execução vinculada ao turno humano.
+
+    O status em si fica só na cor (mesma paleta da esfera do header); o texto
+    é apenas o tempo decorrido, que avança ao vivo enquanto a submissão não é
+    terminal graças ao re-render do pulso.
+    """
     if not isinstance(payload, dict):
         return None
     status = str(payload.get("status") or "").strip().lower()
-    elapsed = max(0, int(float(payload.get("elapsed_seconds") or 0)))
-    queue_position = payload.get("queue_position")
-    detail = str(payload.get("message") or "").strip()
-    labels = {
-        "accepted": ("Aceita", "dim"),
-        "queued": ("Na fila", "yellow"),
-        "starting": ("Preparando execução", "yellow"),
-        "running": ("Executando", "cyan"),
-        "waiting": (detail or "Aguardando início", "yellow"),
-        "completed": ("Concluída", "green"),
-        "failed": ("Falhou", "red"),
-        "cancelled": ("Cancelada", "yellow"),
-    }
-    label, style = labels.get(status, (status, "dim"))
-    if not label:
+    style = _SUBMISSION_MARKER_STYLES.get(status)
+    if style is None:
         return None
-    if status == "queued" and queue_position:
-        label = f"{label} · posição {queue_position}"
-    if status == "failed" and detail:
-        label = f"{label} · {detail}"
-    if status in {"completed", "failed", "cancelled"}:
-        label = f"{label} · {_format_submission_elapsed(elapsed)}"
+    elapsed = max(0.0, float(payload.get("elapsed_seconds") or 0))
+    if status not in TERMINAL_SUBMISSION_STATUSES:
+        received = payload.get("received_monotonic")
+        if received is not None:
+            elapsed += max(0.0, time.monotonic() - float(received))
+    label = _format_submission_elapsed(int(elapsed))
     return _gutter_row("·", style, Text(label, style=style, overflow="fold"))
 
 
@@ -511,6 +534,28 @@ def _format_submission_elapsed(seconds: int) -> str:
 
 
 
+def _render_user_turn(theme_name: str, label: str, style: str, content: str, *, marker_style: str | None = None):
+    """Turno humano com o prompt na mesma linha do nome (`● Alex: faça...`).
+
+    O layout inline vale apenas para o tema chat (o padrão); nos demais temas
+    o bloco header+corpo é preservado. Só o turno do usuário passa por aqui —
+    turnos de agentes continuam com o nome em linha própria.
+    """
+    if themes.get(theme_name).name != "chat":
+        return _render_turn_block(
+            theme_name,
+            label,
+            style,
+            content=content,
+            render_mode="plain",
+            header_marker_style=marker_style,
+        )
+    body = Text(no_wrap=False, overflow="fold")
+    body.append(f"{label}: ", style=f"bold {style}")
+    body.append(content or "")
+    return _gutter_row("●", marker_style or f"bold {style}", body)
+
+
 def _render_event(event: TextualUiEvent):
     """Converte eventos do bridge para renderables Rich."""
     if event.kind == "user_message":
@@ -522,14 +567,14 @@ def _render_event(event: TextualUiEvent):
         label = str(payload.get("label", "Alex")) if isinstance(payload, dict) else "Alex"
         style = str(payload.get("style", "green") or "green") if isinstance(payload, dict) else "green"
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME) if isinstance(payload, dict) else themes.DEFAULT_THEME
-        turn = _render_turn_block(
+        submission = payload.get("submission") if isinstance(payload, dict) else None
+        turn = _render_user_turn(
             theme_name,
             label,
             style,
-            content=content,
-            render_mode="plain",
+            content,
+            marker_style=_submission_marker_style(submission),
         )
-        submission = payload.get("submission") if isinstance(payload, dict) else None
         status = _build_submission_status_renderable(submission)
         return Group(turn, status) if status is not None else turn
     if event.kind == "agent_message":
@@ -783,11 +828,11 @@ def _render_themed_agent_block(theme_name: str, label: str, style: str, body, *,
     return Panel(body, title=label, border_style=style)
 
 
-def _build_turn_header(theme_name: str, label: str, style: str):
+def _build_turn_header(theme_name: str, label: str, style: str, *, marker_style: str | None = None):
     """Monta cabeçalho de turno seguindo o renderer main-tui."""
     name = themes.get(theme_name).name
     if name == "chat":
-        return _gutter_row("●", f"bold {style}", Text(label, style=f"bold {style}"))
+        return _gutter_row("●", marker_style or f"bold {style}", Text(label, style=f"bold {style}"))
     if name == "rule":
         return Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}")
     if name == "minimal":
@@ -844,6 +889,7 @@ def _render_turn_block(
     render_mode: str = "auto",
     muted_body: bool = False,
     is_orchestrator: bool = False,
+    header_marker_style: str | None = None,
 ):
     """Monta bloco estruturado de turno: header -> corpo -> tools."""
     if is_orchestrator and content:
@@ -855,7 +901,9 @@ def _render_turn_block(
         )
     parts = []
     if include_header:
-        parts.append(_build_turn_header(theme_name, label, style))
+        parts.append(
+            _build_turn_header(theme_name, label, style, marker_style=header_marker_style)
+        )
     if content:
         parts.append(
             _build_turn_body(

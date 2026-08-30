@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 
 from quimera.app.submission_tracker import SubmittedInput, SubmissionRecord, SubmissionTracker
 from quimera.agents.capabilities import is_agent_running
@@ -118,8 +119,14 @@ class TextualUiBridge:
         }
         if submission is not None:
             payload["submission_id"] = submission.submission_id
-            payload["submission"] = submission.as_payload()
+            payload["submission"] = self._stamp_submission_payload(submission.as_payload())
         self.emit(TextualUiEvent("user_message", payload))
+
+    @staticmethod
+    def _stamp_submission_payload(payload: dict[str, object]) -> dict[str, object]:
+        """Ancora o payload no relógio local para o tempo correr ao vivo na UI."""
+        payload["received_monotonic"] = time.monotonic()
+        return payload
 
     @staticmethod
     def _should_track_submission(text: str, visible_text: str) -> bool:
@@ -133,7 +140,7 @@ class TextualUiBridge:
 
     def _emit_submission_status(self, payload: dict[str, object]) -> None:
         """Publica atualização para substituir o estado no turno já existente."""
-        self.emit(TextualUiEvent("submission_status", payload))
+        self.emit(TextualUiEvent("submission_status", self._stamp_submission_payload(payload)))
 
     def update_submission_status(self, submission_id: str, status: str, **metadata):
         """Atualiza uma submissão a partir do scheduler/lifecycle."""
