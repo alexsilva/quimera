@@ -504,9 +504,10 @@ def _clear_question_overlay_widget(overlay) -> None:
 def _build_submission_status_renderable(payload):
     """Monta a linha de tempo de execução vinculada ao turno humano.
 
-    O status em si fica só na cor (mesma paleta da esfera do header); o texto
-    é apenas o tempo decorrido, que avança ao vivo enquanto a submissão não é
-    terminal graças ao re-render do pulso.
+    O texto base é o tempo decorrido, que avança ao vivo enquanto a submissão
+    não é terminal graças ao re-render do pulso. Executando/concluída ficam só
+    na cor da esfera; fila e falha ganham uma nota textual porque carregam
+    informação sem equivalente visual (posição na fila e motivo do erro).
     """
     if not isinstance(payload, dict):
         return None
@@ -520,13 +521,29 @@ def _build_submission_status_renderable(payload):
         if received is not None:
             elapsed += max(0.0, time.monotonic() - float(received))
     label = _format_submission_elapsed(int(elapsed))
+    note = _submission_status_note(payload, status)
+    if note:
+        label = f"{label} · {note}"
     return _gutter_row("·", style, Text(label, style=style, overflow="fold"))
+
+
+def _submission_status_note(payload, status: str) -> str:
+    """Nota textual da linha de tempo, apenas quando a cor da esfera não basta."""
+    if status == "queued":
+        position = payload.get("queue_position")
+        if position is not None:
+            return f"na fila · posição {int(position)}"
+        return "na fila"
+    if status == "waiting":
+        return str(payload.get("message") or "").strip() or "aguardando início"
+    if status == "failed":
+        message = str(payload.get("message") or "").strip()
+        return f"falhou · {message}" if message else "falhou"
+    return ""
 
 
 def _format_submission_elapsed(seconds: int) -> str:
     """Formata duração sem variar a largura do turno durante a execução."""
-    if seconds < 1:
-        return "<1s"
     if seconds < 60:
         return f"{seconds}s"
     minutes, remainder = divmod(seconds, 60)

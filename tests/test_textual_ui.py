@@ -1743,8 +1743,7 @@ def test_textual_user_turn_renders_submission_status_below_prompt():
 
     text = output.getvalue()
     assert text.index("revise") < text.index("1s")
-    assert "Na fila" not in text
-    assert "posição" not in text
+    assert "na fila · posição 2" in text
 
 
 def test_textual_submission_status_line_shows_only_live_elapsed_time():
@@ -1787,6 +1786,35 @@ def test_textual_submission_status_line_uses_static_time_after_terminal():
     text = output.getvalue()
     assert "49s" in text
     assert "Concluída" not in text
+
+
+def test_textual_submission_status_note_only_for_queue_and_failure():
+    assert renderables._submission_status_note({"queue_position": 3}, "queued") == "na fila · posição 3"
+    assert renderables._submission_status_note({}, "queued") == "na fila"
+    assert renderables._submission_status_note({"message": "Aguardando início há mais de 5s"}, "waiting") == "Aguardando início há mais de 5s"
+    assert renderables._submission_status_note({"message": "boom"}, "failed") == "falhou · boom"
+    assert renderables._submission_status_note({}, "failed") == "falhou"
+    assert renderables._submission_status_note({"message": "x"}, "running") == ""
+    assert renderables._submission_status_note({"message": "x"}, "completed") == ""
+
+
+def test_textual_submission_status_line_appends_failure_reason():
+    from io import StringIO
+
+    output = StringIO()
+    console = Console(file=output, force_terminal=False, width=80)
+    renderable = renderables._build_submission_status_renderable(
+        {
+            "status": "failed",
+            "elapsed_seconds": 12,
+            "message": "timeout ao iniciar agente",
+        }
+    )
+
+    console.print(renderable)
+
+    text = output.getvalue()
+    assert "12s · falhou · timeout ao iniciar agente" in text
 
 
 def test_textual_submission_marker_style_follows_status():
