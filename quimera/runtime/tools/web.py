@@ -21,23 +21,53 @@ from .base import ToolBase, ValidatableTool
 _logger = logging.getLogger(__name__)
 
 
+def _resolve_public_address(parsed: urllib.parse.ParseResult) -> str:
+    """Resolve o host e retorna um IP público validado (anti-SSRF/DNS rebinding).
+
+    Levanta ValueError se a resolução falhar ou se qualquer endereço resolvido
+    não for global (privado, loopback, link-local, CGNAT, reservado, IPv6 ULA).
+    """
+    host = parsed.hostname or ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError(f"Falha ao resolver host: {host}") from exc
+    addresses: list[str] = []
+    for info in infos:
+        address = str(info[4][0])
+        if address not in addresses:
+            addresses.append(address)
+    if not addresses:
+        raise ValueError(f"Falha ao resolver host: {host}")
+    for address in addresses:
+        if not ipaddress.ip_address(address).is_global:
+            raise ValueError(
+                f"Acesso a IP não público não permitido (SSRF): {address}"
+            )
+    return addresses[0]
+
+
+def _curl_resolve_spec(parsed: urllib.parse.ParseResult, resolved_ip: str) -> str:
+    """Monta o argumento de `curl --resolve` fixando o IP já validado."""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    curl_ip = f"[{resolved_ip}]" if ":" in resolved_ip else resolved_ip
+    return f"{parsed.hostname}:{port}:{curl_ip}"
+
+
 def fetch_url_text(url: str, *, timeout: int = 30) -> str:
     """Baixa uma URL publica e retorna o texto sem HTML.
 
-    Aplica as mesmas guardas do web_fetch (apenas http/https, IPs privados
-    bloqueados contra SSRF). Levanta ValueError para URL invalida ou bloqueada
-    e TimeoutError/OSError em falhas de rede.
+    Aplica as mesmas guardas do http_request: apenas http/https, resolução via
+    getaddrinfo com rejeição de qualquer IP não global e IP fixado no curl via
+    --resolve (anti-SSRF/DNS rebinding). Levanta ValueError para URL invalida,
+    bloqueada ou host irresolvível e TimeoutError em timeout de rede.
     """
     cleaned = str(url or "").strip()
     parsed = urllib.parse.urlparse(cleaned)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError(f"URL invalida: {cleaned}")
-    try:
-        ip = socket.gethostbyname(parsed.hostname)
-        if ipaddress.ip_address(ip).is_private:
-            raise ValueError(f"Acesso a IP privado nao permitido (SSRF): {ip}")
-    except OSError as exc:
-        raise OSError(f"Falha ao resolver host: {parsed.hostname}") from exc
+    resolved_ip = _resolve_public_address(parsed)
     args = [
         "curl",
         "-s",
@@ -47,6 +77,8 @@ def fetch_url_text(url: str, *, timeout: int = 30) -> str:
         str(timeout),
         "-A",
         "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
+        "--resolve",
+        _curl_resolve_spec(parsed, resolved_ip),
         cleaned,
     ]
     try:
@@ -108,10 +140,7 @@ class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)
             "-A", "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
             "-X", method_name,
         ]
-        host = parsed.hostname or ""
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        curl_ip = f"[{resolved_ip}]" if ":" in resolved_ip else resolved_ip
-        args.extend(["--resolve", f"{host}:{port}:{curl_ip}"])
+        args.extend(["--resolve", _curl_resolve_spec(parsed, resolved_ip)])
         for key, value in headers.items():
             args.extend(["-H", f"{key}: {value}"])
         if json_body is not None:
@@ -163,29 +192,8 @@ class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)
         url = self._resolve_url(raw_url)
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValueError("http_request requer URL http/https válida com host")
-        try:
-            infos = socket.getaddrinfo(
-                parsed.hostname,
-                parsed.port or (443 if parsed.scheme == "https" else 80),
-                type=socket.SOCK_STREAM,
-            )
-        except OSError as exc:
-            raise ValueError(f"Falha ao resolver host: {parsed.hostname}") from exc
-        addresses: list[str] = []
-        for info in infos:
-            address = str(info[4][0])
-            if address not in addresses:
-                addresses.append(address)
-        if not addresses:
-            raise ValueError(f"Falha ao resolver host: {parsed.hostname}")
-        for address in addresses:
-            ip = ipaddress.ip_address(address)
-            if not ip.is_global:
-                raise ValueError(
-                    f"Acesso a IP não público não permitido (SSRF): {address}"
-                )
-        return url, parsed, addresses[0]
+            raise ValueError("requer URL http/https válida com host")
+        return url, parsed, _resolve_public_address(parsed)
 
     def web_search(self, call: ToolCall) -> ToolResult:
         """Executa uma busca na web usando curl.
@@ -281,21 +289,14 @@ class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)
                 error="Nenhuma URL fornecida.",
             )
 
-        url = self._resolve_url(raw_url.strip())
-        parsed = urllib.parse.urlparse(url)
-        if parsed.hostname:
-            try:
-                ip = socket.gethostbyname(parsed.hostname)
-                if ipaddress.ip_address(ip).is_private:
-                    return ToolResult(
-                        ok=False,
-                        tool_name=call.name,
-                        error=f"Acesso a IP privado não permitido (SSRF): {ip}",
-                    )
-            except OSError:
-                pass
         try:
-            html = self._curl(url, timeout=timeout)
+            url, parsed, resolved_ip = self._resolve_public_http_target(raw_url)
+        except ValueError as exc:
+            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
+        try:
+            html = self._curl(
+                url, timeout=timeout, resolve=_curl_resolve_spec(parsed, resolved_ip)
+            )
             if raw_mode:
                 text = html
             else:
@@ -319,7 +320,7 @@ class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)
                 data={"results": [{"url": url, "error": str(exc)}], "total": 1},
             )
 
-    def _curl(self, url: str, timeout: int = 30) -> str:
+    def _curl(self, url: str, timeout: int = 30, resolve: str | None = None) -> str:
         """Executa curl e retorna o corpo da resposta."""
         args = [
             "curl",
@@ -330,8 +331,10 @@ class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)
             str(timeout),
             "-A",
             "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
-            url,
         ]
+        if resolve:
+            args.extend(["--resolve", resolve])
+        args.append(url)
         try:
             result = subprocess.run(
                 args,

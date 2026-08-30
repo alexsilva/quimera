@@ -8,7 +8,7 @@ import pytest
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicyError
-from quimera.runtime.tools.web import WebTool, WebToolValidator
+from quimera.runtime.tools.web import WebTool, WebToolValidator, fetch_url_text
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +33,19 @@ def mock_curl():
 def mock_post_curl():
     """Mocka WebTool._write_and_curl para chamadas POST."""
     with patch.object(WebTool, "_write_and_curl") as mock:
+        yield mock
+
+
+PUBLIC_ADDRINFO = [(2, 1, 6, "", ("93.184.216.34", 443))]
+
+
+@pytest.fixture
+def mock_public_dns():
+    """Mocka a resolução DNS para devolver um IP público fixo."""
+    with patch(
+        "quimera.runtime.tools.web.socket.getaddrinfo",
+        return_value=PUBLIC_ADDRINFO,
+    ) as mock:
         yield mock
 
 
@@ -183,7 +196,7 @@ HTML_SAMPLE = """\
 """
 
 
-def test_web_fetch_strips_html(web_tool, mock_curl):
+def test_web_fetch_strips_html(web_tool, mock_curl, mock_public_dns):
     """web_fetch retorna texto limpo (sem tags HTML)."""
     mock_curl.return_value = HTML_SAMPLE
 
@@ -201,7 +214,7 @@ def test_web_fetch_strips_html(web_tool, mock_curl):
     assert "exemplo" in content
 
 
-def test_web_fetch_raw_mode(web_tool, mock_curl):
+def test_web_fetch_raw_mode(web_tool, mock_curl, mock_public_dns):
     """Com raw=True, retorna HTML puro."""
     mock_curl.return_value = HTML_SAMPLE
 
@@ -227,7 +240,7 @@ def test_web_fetch_empty_url(web_tool, mock_curl):
     mock_curl.assert_not_called()
 
 
-def test_web_fetch_resolves_url(web_tool, mock_curl):
+def test_web_fetch_resolves_url(web_tool, mock_curl, mock_public_dns):
     """URL sem esquema recebe https:// prefixo."""
     mock_curl.return_value = "conteudo"
 
@@ -241,7 +254,7 @@ def test_web_fetch_resolves_url(web_tool, mock_curl):
     assert called_url.startswith("https://")
 
 
-def test_web_fetch_curl_error(web_tool, mock_curl):
+def test_web_fetch_curl_error(web_tool, mock_curl, mock_public_dns):
     """Falha no curl retorna ToolResult com ok=False."""
     mock_curl.side_effect = TimeoutError("curl timeout")
 
@@ -254,7 +267,7 @@ def test_web_fetch_curl_error(web_tool, mock_curl):
     assert "timeout" in result.error.lower()
 
 
-def test_web_fetch_timeout_parameter(web_tool, mock_curl):
+def test_web_fetch_timeout_parameter(web_tool, mock_curl, mock_public_dns):
     """Parâmetro timeout é repassado ao curl."""
     mock_curl.return_value = "conteudo"
 
@@ -266,6 +279,94 @@ def test_web_fetch_timeout_parameter(web_tool, mock_curl):
     assert result.ok is True
     called_timeout = mock_curl.call_args[1].get("timeout", 30)
     assert called_timeout == 15
+
+
+def test_web_fetch_rejects_non_global_resolved_address(web_tool, mock_curl):
+    """IP resolvido não global (privado/CGNAT/loopback) bloqueia o fetch."""
+    with patch(
+        "quimera.runtime.tools.web.socket.getaddrinfo",
+        return_value=[(2, 1, 6, "", ("100.64.0.1", 443))],
+    ):
+        result = web_tool.web_fetch(ToolCall(
+            name="web_fetch",
+            arguments={"url": "https://exemplo.com"},
+        ))
+
+    assert result.ok is False
+    assert "não público" in result.error
+    mock_curl.assert_not_called()
+
+
+def test_web_fetch_fails_closed_on_dns_error(web_tool, mock_curl):
+    """Falha de resolução DNS bloqueia o fetch em vez de prosseguir (fail-closed)."""
+    with patch(
+        "quimera.runtime.tools.web.socket.getaddrinfo",
+        side_effect=OSError("dns down"),
+    ):
+        result = web_tool.web_fetch(ToolCall(
+            name="web_fetch",
+            arguments={"url": "https://exemplo.com"},
+        ))
+
+    assert result.ok is False
+    assert "resolver" in result.error.lower()
+    mock_curl.assert_not_called()
+
+
+def test_web_fetch_pins_validated_address(web_tool, mock_curl, mock_public_dns):
+    """web_fetch fixa o IP validado no curl via --resolve (anti DNS rebinding)."""
+    mock_curl.return_value = "conteudo"
+
+    result = web_tool.web_fetch(ToolCall(
+        name="web_fetch",
+        arguments={"url": "https://exemplo.com"},
+    ))
+
+    assert result.ok is True
+    assert mock_curl.call_args[1]["resolve"] == "exemplo.com:443:93.184.216.34"
+
+
+# ---------------------------------------------------------------------------
+# fetch_url_text – guardas SSRF
+# ---------------------------------------------------------------------------
+
+def test_fetch_url_text_rejects_non_global_resolved_address():
+    """fetch_url_text bloqueia IP resolvido não global sem executar curl."""
+    with patch(
+        "quimera.runtime.tools.web.socket.getaddrinfo",
+        return_value=[(2, 1, 6, "", ("10.0.0.5", 443))],
+    ), patch("quimera.runtime.tools.web.subprocess.run") as run:
+        with pytest.raises(ValueError, match="não público"):
+            fetch_url_text("https://exemplo.com")
+    run.assert_not_called()
+
+
+def test_fetch_url_text_fails_closed_on_dns_error():
+    """Falha de resolução DNS levanta ValueError sem executar curl."""
+    with patch(
+        "quimera.runtime.tools.web.socket.getaddrinfo",
+        side_effect=OSError("dns down"),
+    ), patch("quimera.runtime.tools.web.subprocess.run") as run:
+        with pytest.raises(ValueError, match="resolver"):
+            fetch_url_text("https://exemplo.com")
+    run.assert_not_called()
+
+
+def test_fetch_url_text_pins_validated_address():
+    """fetch_url_text fixa o IP validado no curl via --resolve."""
+    completed = MagicMock(stdout="<p>ok</p>", stderr="", returncode=0)
+    with patch(
+        "quimera.runtime.tools.web.socket.getaddrinfo",
+        return_value=[(2, 1, 6, "", ("93.184.216.34", 443))],
+    ), patch(
+        "quimera.runtime.tools.web.subprocess.run", return_value=completed
+    ) as run:
+        text = fetch_url_text("https://exemplo.com")
+
+    assert text == "ok"
+    args = run.call_args.args[0]
+    resolve_index = args.index("--resolve")
+    assert args[resolve_index + 1] == "exemplo.com:443:93.184.216.34"
 
 
 def test_http_request_rejects_url_without_host(web_tool):
