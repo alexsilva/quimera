@@ -215,8 +215,45 @@ _THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
 
 # Trunca tool results para evitar explosão de memória no array messages.
 _MAX_TOOL_RESULT_CHARS = 32_000
-_MAX_TOOL_LOOP_MESSAGES = 24
-_MAX_TOOL_LOOP_CHARS = 192_000
+_MAX_TOOL_LOOP_MESSAGES = 240
+_MAX_TOOL_LOOP_CHARS = 240_000
+
+# Janela recente do loop de tools mantida com conteúdo integral (em chars).
+# Pares mais antigos são compactados antes de qualquer remoção, preservando a
+# memória do que já foi feito sem o custo do conteúdo completo.
+_RECENT_TOOL_WINDOW_CHARS = 120_000
+_MIN_RECENT_PAIRS_FULL = 2
+_COMPACTED_ASSISTANT_CHARS = 1_500
+_COMPACTED_TOOL_RESULT_CHARS = 700
+_COMPACTION_NOTE = (
+    "\n…[saída antiga compactada pelo runtime; o conteúdo integral já foi "
+    "processado em um hop anterior]"
+)
+
+# Ledger de chamadas removidas do contexto: evita que o modelo re-explore
+# ações cujos pares foram descartados por limite de espaço.
+_LEDGER_HEADER = (
+    "[Memória do runtime] Chamadas antigas removidas do contexto por limite de "
+    "espaço; não repita estas ações sem um motivo novo:"
+)
+_MAX_LEDGER_ENTRIES = 300
+_MAX_LEDGER_CHARS = 20_000
+
+# Forcing function de convergência: a cada N hops o modelo é instruído a
+# sintetizar o que já sabe antes de continuar, e perto do fim do orçamento a
+# instrução muda para concluir com o que tem.
+_CHECKPOINT_EVERY_HOPS = 16
+_CHECKPOINT_PROMPT = (
+    "CHECKPOINT DE CONVERGÊNCIA: você já executou muitas chamadas nesta "
+    "execução. Antes da próxima ação, escreva um resumo curto (3-6 linhas) do "
+    "que já descobriu e do plano restante, e então prossiga com a próxima ação "
+    "concreta. Não releia arquivos nem repita buscas já feitas; confie no "
+    "histórico e no seu resumo."
+)
+_FINAL_STRETCH_PROMPT = (
+    "ATENÇÃO: o orçamento de chamadas está quase esgotado. Pare de explorar, "
+    "conclua a mudança principal e produza a resposta final com o que já tem."
+)
 
 # Limite padrão de conexões concorrentes ao backend OpenAI-compatible.
 # Evita estouro de rate-limit quando múltiplos agentes chamam a API em paralelo.
@@ -402,6 +439,16 @@ def _tool_arguments_message(tc: dict) -> str:
     return json.dumps(tc["arguments"], ensure_ascii=False)
 
 
+def _canonical_call_arguments(tc: dict) -> str:
+    """Assinatura canônica dos argumentos para detectar chamadas repetidas."""
+    if tc.get("argument_error") is not None:
+        return str(tc.get("raw_arguments") or "")
+    try:
+        return json.dumps(tc["arguments"], ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError):
+        return str(tc.get("raw_arguments") or "")
+
+
 def _message_size(message: dict) -> int:
     """Estima tamanho serializado de uma mensagem sem depender de tokenizer."""
     return len(json.dumps(message, ensure_ascii=False, default=str))
@@ -411,16 +458,71 @@ def _messages_size(messages: list[dict]) -> int:
     return sum(_message_size(message) for message in messages)
 
 
-def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
-    """Limita o histórico do loop de tools preservando system/user e a cauda recente.
+def _compact_pair(assistant: dict, tools: list[dict]) -> tuple[dict, list[dict]]:
+    """Reduz um par antigo do loop a um resumo curto, preservando a estrutura.
 
-    Invariant enforcement:
-    - Every 'tool' message must have a preceding 'assistant' with matching tool_call_id.
-    - Every tool_call in an 'assistant' must have a corresponding 'tool' result.
-    - System/user messages at the head are always preserved.
-    - Total messages never exceed _MAX_TOOL_LOOP_MESSAGES.
-    - The preserved tool-loop tail stays within _MAX_TOOL_LOOP_CHARS when the
-      immutable system/user head itself fits in that budget.
+    O assistant mantém tool_calls integrais (nome + argumentos são a memória do
+    que foi feito); apenas os conteúdos longos são truncados com marcador.
+    A operação é idempotente: recompactar produz o mesmo resultado.
+    """
+    compact_assistant = assistant
+    content = assistant.get("content")
+    if isinstance(content, str) and len(content) > _COMPACTED_ASSISTANT_CHARS:
+        compact_assistant = dict(assistant)
+        compact_assistant["content"] = content[:_COMPACTED_ASSISTANT_CHARS] + _COMPACTION_NOTE
+    compact_tools: list[dict] = []
+    for tool in tools:
+        tool_content = tool.get("content")
+        if isinstance(tool_content, str) and len(tool_content) > _COMPACTED_TOOL_RESULT_CHARS:
+            tool = dict(tool)
+            tool["content"] = tool_content[:_COMPACTED_TOOL_RESULT_CHARS] + _COMPACTION_NOTE
+        compact_tools.append(tool)
+    return compact_assistant, compact_tools
+
+
+def _ledger_entries_from_message(message: dict) -> list[str]:
+    """Extrai as entradas de um ledger previamente injetado no histórico."""
+    if message.get("role") != "user":
+        return []
+    content = message.get("content")
+    if not isinstance(content, str) or not content.startswith(_LEDGER_HEADER):
+        return []
+    return [line[2:] for line in content.splitlines()[1:] if line.startswith("- ")]
+
+
+def _describe_dropped_calls(assistant: dict) -> list[str]:
+    """Resume as chamadas de um par removido para registro no ledger."""
+    entries: list[str] = []
+    for call in assistant.get("tool_calls") or []:
+        function = call.get("function") or {}
+        name = function.get("name") or "?"
+        arguments = re.sub(r"\s+", " ", str(function.get("arguments") or "")).strip()
+        if len(arguments) > 160:
+            arguments = arguments[:160] + "…"
+        entries.append(f"{name}({arguments})")
+    return entries
+
+
+def _build_ledger_message(entries: list[str]) -> dict:
+    kept = entries[-_MAX_LEDGER_ENTRIES:]
+    while len(kept) > 1 and sum(len(entry) + 3 for entry in kept) > _MAX_LEDGER_CHARS:
+        kept = kept[1:]
+    body = "\n".join([_LEDGER_HEADER, *(f"- {entry}" for entry in kept)])
+    return {"role": "user", "content": body}
+
+
+def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
+    """Compacta e limita o histórico do loop de tools sem apagar a memória.
+
+    Política em camadas, aplicada apenas quando o histórico excede os limites:
+    1. Pares (assistant + resultados) fora da janela recente são compactados —
+       o modelo mantém o registro do que já fez sem o custo do conteúdo integral.
+    2. Se ainda exceder, os pares mais antigos são removidos e as chamadas
+       removidas ficam registradas em uma mensagem-ledger, evitando re-exploração.
+    3. Um único par excedente tem os resultados mais antigos descartados,
+       mantendo ao menos o mais recente.
+    O prefixo (prompt, conversa e ledger anterior) nunca é removido, e os
+    invariantes assistant/tool_call_id são preservados em todas as fases.
     """
     messages = _clean_message_sequence(messages)
     if (
@@ -429,152 +531,153 @@ def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
     ):
         return messages
 
-    head_end = 0
-    for msg in messages:
-        if msg.get("role") in {"system", "user"}:
-            head_end += 1
+    # O loop de tools sempre anexa pares ao final; tudo antes do primeiro par
+    # da cauda é prefixo imutável (prompt, conversa e ledger anterior).
+    boundary = len(messages)
+    while boundary > 0:
+        candidate = messages[boundary - 1]
+        role = candidate.get("role")
+        if role == "tool" or (role == "assistant" and candidate.get("tool_calls")):
+            boundary -= 1
             continue
         break
-    if head_end == 0:
-        head_end = min(2, len(messages))
-    head = messages[:head_end]
-    available = max(_MAX_TOOL_LOOP_MESSAGES - len(head), 0)
-    available_chars = max(_MAX_TOOL_LOOP_CHARS - _messages_size(head), 0)
-    tail = messages[len(head):]
+    prefix = list(messages[:boundary])
+    tail = messages[boundary:]
 
-    # Build valid (assistant, tool_results) pairs from tail, enforcing invariants.
+    ledger_entries: list[str] = []
+    if prefix:
+        ledger_entries = _ledger_entries_from_message(prefix[-1])
+        if ledger_entries:
+            prefix.pop()
+
+    # Após a limpeza a cauda é bem formada: cada assistant seguido dos seus results.
     pairs: list[tuple[dict, list[dict]]] = []
-    index = 0
-    while index < len(tail):
-        msg = tail[index]
-        if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            assistant = msg
-            tool_calls = assistant.get("tool_calls", [])
-            call_ids = {call.get("id") for call in tool_calls if call.get("id")}
-            index += 1
-            tool_results: list[dict] = []
-            while index < len(tail) and tail[index].get("role") == "tool":
-                tool_msg = tail[index]
-                tcid = tool_msg.get("tool_call_id")
-                if tcid in call_ids:
-                    tool_results.append(tool_msg)
-                index += 1
-            # Keep only tool_calls that have corresponding results.
-            matched_calls = [call for call in tool_calls if call.get("id") in {r.get("tool_call_id") for r in tool_results}]
-            if matched_calls:
-                clean_assistant = dict(assistant)
-                clean_assistant["tool_calls"] = matched_calls
-                pairs.append((clean_assistant, tool_results))
-            # If no matched calls, drop this assistant entirely (no orphan tool_calls).
-            continue
-        # Orphan tool or non-tool-loop message: skip to enforce invariants.
-        index += 1
+    for msg in tail:
+        if msg.get("role") == "assistant":
+            pairs.append((msg, []))
+        elif pairs:
+            pairs[-1][1].append(msg)
 
-    # Select most recent pairs that fit within 'available' slots.
-    # Each pair contributes 1 (assistant) + N (tool results) messages.
-    kept_pairs: list[tuple[dict, list[dict]]] = []
-    used = 0
-    used_chars = 0
-    for assistant, tools in reversed(pairs):
-        pair_len = 1 + len(tools)
-        pair_messages = [assistant, *tools]
-        pair_chars = _messages_size(pair_messages)
-        if kept_pairs and (
-            used + pair_len > available
-            or used_chars + pair_chars > available_chars
+    def _rebuild() -> list[dict]:
+        rebuilt = list(prefix)
+        if ledger_entries:
+            rebuilt.append(_build_ledger_message(ledger_entries))
+        for assistant, tools in pairs:
+            rebuilt.append(assistant)
+            rebuilt.extend(tools)
+        return rebuilt
+
+    def _over_budget(candidate_messages: list[dict]) -> bool:
+        return (
+            len(candidate_messages) > _MAX_TOOL_LOOP_MESSAGES
+            or _messages_size(candidate_messages) > _MAX_TOOL_LOOP_CHARS
+        )
+
+    # Fase 1: compacta pares fora da janela recente (medida em caracteres),
+    # garantindo os _MIN_RECENT_PAIRS_FULL pares mais novos sempre integrais.
+    keep_full_from = 0
+    cumulative = 0
+    for index in range(len(pairs) - 1, -1, -1):
+        assistant, tools = pairs[index]
+        pair_chars = _messages_size([assistant, *tools])
+        if (
+            cumulative + pair_chars > _RECENT_TOOL_WINDOW_CHARS
+            and index < len(pairs) - _MIN_RECENT_PAIRS_FULL
         ):
+            keep_full_from = index + 1
             break
-        if not kept_pairs and (
-            pair_len > available
-            or pair_chars > available_chars
-        ):
-            # Boundary case: truncate the newest pair to the most recent tool
-            # results that fit both message and aggregate character budgets.
-            if available >= 2:
-                kept_tools: list[dict] = []
-                for tool in reversed(tools):
-                    candidate_tools = [tool, *kept_tools]
-                    kept_ids = {t.get("tool_call_id") for t in candidate_tools}
-                    matched_calls = [
-                        call
-                        for call in assistant.get("tool_calls", [])
-                        if call.get("id") in kept_ids
-                    ]
-                    if not matched_calls:
-                        continue
-                    clean_assistant = dict(assistant)
-                    clean_assistant["tool_calls"] = matched_calls
-                    candidate_messages = [clean_assistant, *candidate_tools]
-                    if (
-                        len(candidate_messages) > available
-                        or _messages_size(candidate_messages) > available_chars
-                    ):
-                        break
-                    kept_tools = candidate_tools
-                if kept_tools:
-                    kept_ids = {t.get("tool_call_id") for t in kept_tools}
-                    clean_assistant = dict(assistant)
-                    clean_assistant["tool_calls"] = [
-                        call
-                        for call in assistant.get("tool_calls", [])
-                        if call.get("id") in kept_ids
-                    ]
-                    kept_pairs.append((clean_assistant, kept_tools))
-            break
-        kept_pairs.append((assistant, tools))
-        used += pair_len
-        used_chars += pair_chars
+        cumulative += pair_chars
+    for index in range(keep_full_from):
+        pairs[index] = _compact_pair(*pairs[index])
 
-    # Reconstruct tail from kept pairs (oldest first).
-    pruned_tail: list[dict] = []
-    for assistant, tools in reversed(kept_pairs):
-        pruned_tail.append(assistant)
-        pruned_tail.extend(tools)
+    # Fase 2: remove pares mais antigos (registrando no ledger) até caber.
+    # Um par ainda integral é compactado antes de ser candidato à remoção.
+    result = _rebuild()
+    while _over_budget(result) and len(pairs) > 1:
+        if keep_full_from == 0:
+            pairs[0] = _compact_pair(*pairs[0])
+            keep_full_from = 1
+        else:
+            dropped_assistant, _dropped_tools = pairs.pop(0)
+            ledger_entries.extend(_describe_dropped_calls(dropped_assistant))
+            keep_full_from -= 1
+        result = _rebuild()
 
-    return head + pruned_tail
+    # Fase 3: um único par excedente perde os resultados mais antigos, mas
+    # mantém ao menos o mais recente mesmo que o orçamento continue estourado.
+    if _over_budget(result) and pairs:
+        assistant, tools = _compact_pair(*pairs[0])
+        kept_tools: list[dict] = []
+        for tool in reversed(tools):
+            candidate_tools = [tool, *kept_tools]
+            kept_ids = {t.get("tool_call_id") for t in candidate_tools}
+            clean_assistant = dict(assistant)
+            clean_assistant["tool_calls"] = [
+                call for call in assistant.get("tool_calls", []) if call.get("id") in kept_ids
+            ]
+            candidate_messages = list(prefix)
+            if ledger_entries:
+                candidate_messages.append(_build_ledger_message(ledger_entries))
+            candidate_messages.extend([clean_assistant, *candidate_tools])
+            if kept_tools and _over_budget(candidate_messages):
+                break
+            kept_tools = candidate_tools
+        kept_ids = {t.get("tool_call_id") for t in kept_tools}
+        clean_assistant = dict(assistant)
+        clean_assistant["tool_calls"] = [
+            call for call in assistant.get("tool_calls", []) if call.get("id") in kept_ids
+        ]
+        pairs[0] = (clean_assistant, kept_tools)
+        result = _rebuild()
+
+    return result
 
 
 def _clean_message_sequence(messages: list[dict]) -> list[dict]:
-    """Enforce invariants on a message sequence that is already within the size limit."""
-    # First pass: identify valid assistant->tool pairs.
-    pairs: list[tuple[dict, list[dict]]] = []
+    """Remove mensagens órfãs do loop de tools preservando o restante em ordem.
+
+    - tool sem assistant anterior com tool_call_id correspondente é descartada;
+    - assistant com tool_calls sem nenhum resultado vira mensagem de texto
+      simples (se tiver conteúdo) ou é descartada;
+    - tool_calls sem resultado correspondente são filtrados do assistant;
+    - todas as demais mensagens (system/user/assistant de conversa) são
+      preservadas na posição original — essencial para históricos com papéis
+      reais (ex.: codexcloud), que intercalam conversa e pares de tools.
+    """
+    cleaned: list[dict] = []
     index = 0
     while index < len(messages):
         msg = messages[index]
-        if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            assistant = msg
-            tool_calls = assistant.get("tool_calls", [])
+        role = msg.get("role")
+        if role == "tool":
+            # Órfã: um assistant válido teria consumido esta mensagem abaixo.
+            index += 1
+            continue
+        if role == "assistant" and msg.get("tool_calls"):
+            tool_calls = msg.get("tool_calls", [])
             call_ids = {call.get("id") for call in tool_calls if call.get("id")}
             index += 1
             tool_results: list[dict] = []
             while index < len(messages) and messages[index].get("role") == "tool":
                 tool_msg = messages[index]
-                tcid = tool_msg.get("tool_call_id")
-                if tcid in call_ids:
+                if tool_msg.get("tool_call_id") in call_ids:
                     tool_results.append(tool_msg)
                 index += 1
-            matched_calls = [call for call in tool_calls if call.get("id") in {r.get("tool_call_id") for r in tool_results}]
+            result_ids = {result.get("tool_call_id") for result in tool_results}
+            matched_calls = [call for call in tool_calls if call.get("id") in result_ids]
             if matched_calls:
-                clean_assistant = dict(assistant)
+                clean_assistant = dict(msg)
                 clean_assistant["tool_calls"] = matched_calls
-                pairs.append((clean_assistant, tool_results))
+                cleaned.append(clean_assistant)
+                cleaned.extend(tool_results)
+            elif str(msg.get("content") or "").strip():
+                clean_assistant = dict(msg)
+                clean_assistant.pop("tool_calls", None)
+                cleaned.append(clean_assistant)
             continue
-        # Preserve system/user and other messages (non-tool-loop).
+        cleaned.append(msg)
         index += 1
-
-    # Reconstruct: keep head (system/user) + valid pairs.
-    head_end = 0
-    for msg in messages:
-        if msg.get("role") in {"system", "user"}:
-            head_end += 1
-            continue
-        break
-    head = messages[:head_end] if head_end > 0 else messages[:min(2, len(messages))]
-    pruned: list[dict] = list(head)
-    for assistant, tools in pairs:
-        pruned.append(assistant)
-        pruned.extend(tools)
-    return pruned
+    return cleaned
 
 
 
@@ -662,6 +765,29 @@ class OpenAICompatDriver:
         """Converte o prompt preservando um ponto de extensão por provider."""
         return _build_openai_messages_from_prompt(prompt)
 
+    def _build_turn_guidance(self, hop: int, max_tool_hops: int) -> str:
+        """Nota efêmera de orçamento e convergência anexada ao fim do request.
+
+        Nunca entra no histórico persistente: assim o prefixo enviado ao
+        provedor permanece estável entre hops (prompt caching) e a instrução
+        de convergência sempre aparece na posição de maior atenção do modelo.
+        """
+        parts = [
+            _build_tool_budget_prompt(
+                max_tool_hops=max_tool_hops,
+                remaining_tool_hops=max(max_tool_hops - hop, 0),
+                max_model_requests=self.max_model_requests,
+                remaining_model_requests=max(self.max_model_requests - hop, 0),
+            )
+        ]
+        remaining = min(max_tool_hops - hop, self.max_model_requests - hop)
+        final_stretch = max(min(max_tool_hops, self.max_model_requests) // 10, 4)
+        if 0 <= remaining <= final_stretch:
+            parts.append(_FINAL_STRETCH_PROMPT)
+        elif hop > 0 and hop % _CHECKPOINT_EVERY_HOPS == 0:
+            parts.append(_CHECKPOINT_PROMPT)
+        return "\n\n".join(parts)
+
     def run(
             self,
             prompt: PromptText,
@@ -705,29 +831,19 @@ class OpenAICompatDriver:
                 return None
 
             messages: list[dict] = []
-            tool_budget_index: int | None = None
+            max_tool_hops = get_max_tool_hops(self.tool_use_reliability)
             if tools:
                 tool_names = [t["function"]["name"] for t in tools]
                 workspace_root = getattr(getattr(tool_executor, "config", None), "workspace_root", None)
                 shell_allowlist = getattr(getattr(tool_executor, "config", None), "shell_allowlist", None)
-                max_tool_hops = get_max_tool_hops(self.tool_use_reliability)
                 messages.append({
                     "role": "system",
                     "content": _build_tool_system_prompt(tool_names, workspace_root, shell_allowlist),
                 })
-                messages.append({
-                    "role": "system",
-                    "content": _build_tool_budget_prompt(
-                        max_tool_hops=max_tool_hops,
-                        remaining_tool_hops=max_tool_hops,
-                        max_model_requests=self.max_model_requests,
-                        remaining_model_requests=self.max_model_requests,
-                    ),
-                })
-                tool_budget_index = len(messages) - 1
-            else:
-                max_tool_hops = get_max_tool_hops(self.tool_use_reliability)
             messages.extend(self._build_messages_from_prompt(prompt))
+            # Assinaturas de chamadas já executadas -> hop em que ocorreram.
+            # Usado para avisar o modelo quando ele repete uma ação idêntica.
+            executed_call_hops: dict[tuple[str, str], int] = {}
 
             last_invalid_signature: tuple[str, str, str] | None = None
             consecutive_invalid_signature_count = 0
@@ -745,18 +861,21 @@ class OpenAICompatDriver:
                         if on_tool_abort is not None:
                             on_tool_abort("max_model_requests")
                         return "Limite de chamadas ao modelo atingido."
-                    if tool_budget_index is not None:
-                        remaining_tool_hops = max(max_tool_hops - hop, 0)
-                        remaining_model_requests = max(self.max_model_requests - hop, 0)
-                        messages[tool_budget_index]["content"] = _build_tool_budget_prompt(
-                            max_tool_hops=max_tool_hops,
-                            remaining_tool_hops=remaining_tool_hops,
-                            max_model_requests=self.max_model_requests,
-                            remaining_model_requests=remaining_model_requests,
-                        )
+                    # A nota de orçamento/convergência é efêmera: vai apenas no
+                    # request, nunca no histórico persistente. Manter o prefixo
+                    # estável entre hops preserva o prompt caching do provedor.
+                    request_messages = messages
+                    if tools:
+                        request_messages = [
+                            *messages,
+                            {
+                                "role": "user",
+                                "content": self._build_turn_guidance(hop, max_tool_hops),
+                            },
+                        ]
                     try:
                         response_text, tool_calls = self._chat(
-                            messages,
+                            request_messages,
                             tools,
                             cancel_event=cancel_event,
                             on_text_chunk=on_text_chunk,
@@ -876,13 +995,20 @@ class OpenAICompatDriver:
                         )
                         if on_tool_result is not None:
                             on_tool_result(result)
+                        payload = result.to_prompt_payload(_MAX_TOOL_RESULT_CHARS)
+                        signature = (tc["name"], _canonical_call_arguments(tc))
+                        previous_hop = executed_call_hops.get(signature)
+                        if previous_hop is not None:
+                            payload["runtime_note"] = (
+                                f"Chamada idêntica já executada no hop {previous_hop} "
+                                "desta mesma execução. Evite repetir ações sem um motivo "
+                                "novo; aproveite o que já observou."
+                            )
+                        executed_call_hops[signature] = hop
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc["id"],
-                            "content": json.dumps(
-                                result.to_prompt_payload(_MAX_TOOL_RESULT_CHARS),
-                                ensure_ascii=False,
-                            ),
+                            "content": json.dumps(payload, ensure_ascii=False),
                         })
                         if self._is_invalid_tool_result(result):
                             saw_invalid_result = True
@@ -985,6 +1111,14 @@ class OpenAICompatDriver:
         if not response.choices:
             raise ValueError(
                 f"API retornou choices vazio ou None (model={self.model!r}): {response!r}"
+            )
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            _logger.info(
+                "OpenAICompatDriver: turno concluído model=%s input_tokens=%s output_tokens=%s",
+                self.model,
+                getattr(usage, "prompt_tokens", None),
+                getattr(usage, "completion_tokens", None),
             )
         choice = response.choices[0]
         reasoning = getattr(choice.message, "reasoning", None) or getattr(choice.message, "reasoning_content", None)

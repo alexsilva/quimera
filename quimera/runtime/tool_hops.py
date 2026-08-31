@@ -1,10 +1,10 @@
 """Configuração compartilhada para limite de hops de ferramentas."""
 
-DEFAULT_MAX_TOOL_HOPS = 512
+DEFAULT_MAX_TOOL_HOPS = 256
 MAX_TOOL_HOPS_BY_RELIABILITY = {
     "low": 128,
-    "medium": 512,
-    "high": 1024,
+    "medium": 256,
+    "high": 512,
 }
 
 DEFAULT_MAX_MODEL_REQUESTS = DEFAULT_MAX_TOOL_HOPS + 1

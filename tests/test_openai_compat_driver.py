@@ -361,12 +361,19 @@ def test_prune_tool_loop_messages_keeps_head_and_recent_tail():
 
     pruned = _prune_tool_loop_messages(messages)
 
-    assert len(pruned) == _MAX_TOOL_LOOP_MESSAGES
+    assert len(pruned) <= _MAX_TOOL_LOOP_MESSAGES
     assert pruned[:2] == messages[:2]
+    # Pares removidos ficam registrados no ledger logo após o prefixo.
+    ledger = pruned[2]
+    assert ledger["role"] == "user"
+    assert ledger["content"].startswith(openai_compat_module._LEDGER_HEADER)
+    assert "foo(" in ledger["content"]
     # The tail should contain the most recent valid pairs
-    assert all(msg.get("role") in {"assistant", "tool"} for msg in pruned[2:])
+    assert all(msg.get("role") in {"assistant", "tool"} for msg in pruned[3:])
+    # A cauda termina no par mais recente do histórico original.
+    assert pruned[-1]["tool_call_id"] == messages[-1]["tool_call_id"]
     # Verify invariant: every tool has a matching assistant tool_call
-    for index, msg in enumerate(pruned):
+    for index, msg in enumerate(pruned[3:], start=3):
         if msg.get("role") != "tool":
             continue
         assert index > 0
@@ -492,7 +499,7 @@ def test_prune_tool_loop_messages_filters_mismatched_tool_calls():
 
 
 def test_prune_tool_loop_messages_removes_orphan_tool_after_regular_assistant():
-    """Tool after assistant without tool_calls is treated as orphan and removed."""
+    """Tool órfã é removida; assistant de conversa (sem tool_calls) é preservado."""
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "user"},
@@ -500,9 +507,10 @@ def test_prune_tool_loop_messages_removes_orphan_tool_after_regular_assistant():
         {"role": "tool", "tool_call_id": "call_1", "content": "result"},
     ]
     pruned = _prune_tool_loop_messages(messages)
-    assert len(pruned) == 2
+    assert len(pruned) == 3
     assert pruned[0]["role"] == "system"
     assert pruned[1]["role"] == "user"
+    assert pruned[2] == {"role": "assistant", "content": "just text"}
 
 
 def test_prune_tool_loop_messages_keeps_only_complete_pairs():
@@ -658,7 +666,16 @@ def test_prune_tool_loop_messages_caps_aggregate_characters_without_orphans():
         for message in pruned
     )
     assert serialized_size <= _MAX_TOOL_LOOP_CHARS
-    assert len(pruned) < len(messages)
+    # Nenhum par é removido: os antigos são compactados com marcador,
+    # preservando a memória do que já foi executado.
+    assert len(pruned) == len(messages)
+    tool_messages = [m for m in pruned if m.get("role") == "tool"]
+    assert any(
+        m["content"].endswith(openai_compat_module._COMPACTION_NOTE)
+        for m in tool_messages
+    )
+    # Os pares mais recentes permanecem com conteúdo integral.
+    assert tool_messages[-1]["content"] == "x" * 30_000
     for index, message in enumerate(pruned):
         if message.get("role") != "tool":
             continue
@@ -667,6 +684,205 @@ def test_prune_tool_loop_messages_caps_aggregate_characters_without_orphans():
         assert message["tool_call_id"] in {
             call["id"] for call in assistant["tool_calls"]
         }
+
+
+def test_clean_message_sequence_preserves_interleaved_conversation():
+    """Regressão: histórico com papéis reais (codexcloud) não perde a conversa.
+
+    Antes, tudo após o primeiro assistant de conversa era descartado na
+    reconstrução head+pares — inclusive o turno atual do usuário.
+    """
+    from quimera.runtime.drivers.openai_compat import _clean_message_sequence
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "primeira pergunta"},
+        {"role": "assistant", "content": "primeira resposta"},
+        {"role": "user", "content": "turno atual"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "resultado"},
+    ]
+    assert _clean_message_sequence(messages) == messages
+    assert _prune_tool_loop_messages(messages) == messages
+
+
+def test_prune_compacts_old_pairs_and_keeps_recent_window_full():
+    """Pares antigos são compactados com marcador; janela recente fica integral."""
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+    ]
+    for i in range(12):
+        messages.append({
+            "role": "assistant",
+            "content": "análise " * 1000,
+            "tool_calls": [{
+                "id": f"call_{i}",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": json.dumps({"path": f"f{i}.py"})},
+            }],
+        })
+        messages.append({"role": "tool", "tool_call_id": f"call_{i}", "content": "y" * 30_000})
+
+    pruned = _prune_tool_loop_messages(messages)
+
+    # Nenhum par é removido; os antigos são compactados.
+    assert len(pruned) == len(messages)
+    tool_messages = [m for m in pruned if m.get("role") == "tool"]
+    oldest_tool = tool_messages[0]
+    assert oldest_tool["content"].startswith("y" * 100)
+    assert oldest_tool["content"].endswith(openai_compat_module._COMPACTION_NOTE)
+    assert len(oldest_tool["content"]) < 1_000
+    assert tool_messages[-1]["content"] == "y" * 30_000
+    # tool_calls (a memória do que foi feito) permanecem íntegros no par compactado.
+    old_assistant = pruned[2]
+    assert old_assistant["tool_calls"][0]["function"]["arguments"] == json.dumps({"path": "f0.py"})
+    # Idempotência: compactar de novo não muda nada.
+    assert _prune_tool_loop_messages(pruned) == pruned
+
+
+def test_prune_records_dropped_calls_in_ledger_and_accumulates():
+    """Pares removidos entram no ledger e o ledger sobrevive a novas podas."""
+    def _pair(i):
+        return [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": f"call_{i}",
+                    "type": "function",
+                    "function": {"name": "grep_search", "arguments": json.dumps({"q": f"padrão-{i}"}, ensure_ascii=False)},
+                }],
+            },
+            {"role": "tool", "tool_call_id": f"call_{i}", "content": "ok"},
+        ]
+
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+    ]
+    for i in range(130):
+        messages.extend(_pair(i))
+
+    pruned = _prune_tool_loop_messages(messages)
+
+    assert len(pruned) <= _MAX_TOOL_LOOP_MESSAGES
+    ledger = pruned[2]
+    assert ledger["role"] == "user"
+    assert ledger["content"].startswith(openai_compat_module._LEDGER_HEADER)
+    assert "padrão-0" in ledger["content"]
+    assert pruned[-1]["tool_call_id"] == "call_129"
+
+    extended = list(pruned)
+    for i in range(130, 140):
+        extended.extend(_pair(i))
+    repruned = _prune_tool_loop_messages(extended)
+
+    ledger2 = repruned[2]
+    assert ledger2["content"].startswith(openai_compat_module._LEDGER_HEADER)
+    # Entradas antigas do ledger são preservadas e as novas remoções acumulam.
+    assert "padrão-0" in ledger2["content"]
+    assert "padrão-12" in ledger2["content"]
+    assert repruned[-1]["tool_call_id"] == "call_139"
+
+
+def test_run_request_prefix_stable_and_guidance_ephemeral():
+    """A nota de orçamento nunca entra no histórico: o prefixo fica estável
+    entre hops (prompt caching) e só o request corrente carrega a nota."""
+    driver, mock_client = _make_driver()
+    responses = iter([
+        _make_non_streaming_response(
+            content="", tool_calls=[_make_tool_call("call_a", "run_shell", '{"command":"ls"}')]
+        ),
+        _make_non_streaming_response(content="Done.", tool_calls=None),
+    ])
+    observed = []
+
+    def side_effect(*args, **kwargs):
+        observed.append([dict(m) for m in kwargs["messages"]])
+        return next(responses)
+
+    mock_client.chat.completions.create.side_effect = side_effect
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+    mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="file.py")
+
+    driver.run(_prompt("liste arquivos"), tool_executor=mock_executor)
+
+    first, second = observed
+    assert "max_tool_hops" in first[-1]["content"]
+    assert "max_tool_hops" in second[-1]["content"]
+    # O request seguinte reusa o prefixo anterior sem a nota efêmera.
+    assert second[: len(first) - 1] == first[:-1]
+    # Nenhuma cópia antiga da nota persiste no histórico.
+    stale_budgets = [m for m in second[:-1] if "max_tool_hops" in str(m.get("content"))]
+    assert stale_budgets == []
+
+
+def test_run_checkpoint_prompt_injected_periodically():
+    """A cada _CHECKPOINT_EVERY_HOPS o request pede síntese antes de continuar."""
+    driver, mock_client = _make_driver()
+    call_count = {"n": 0}
+
+    def side_effect(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] <= 20:
+            return _make_non_streaming_response(
+                content="",
+                tool_calls=[_make_tool_call(
+                    f"call_{call_count['n']}",
+                    "run_shell",
+                    json.dumps({"command": f"ls {call_count['n']}"}),
+                )],
+            )
+        return _make_non_streaming_response(content="Done.", tool_calls=None)
+
+    mock_client.chat.completions.create.side_effect = side_effect
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+    mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="ok")
+
+    result = driver.run(_prompt("investigue"), tool_executor=mock_executor)
+
+    assert result == "Done."
+    guidance_texts = [
+        call.kwargs["messages"][-1]["content"]
+        for call in mock_client.chat.completions.create.call_args_list
+    ]
+    checkpoint_hops = [
+        index for index, text in enumerate(guidance_texts)
+        if "CHECKPOINT DE CONVERGÊNCIA" in text
+    ]
+    assert checkpoint_hops == [openai_compat_module._CHECKPOINT_EVERY_HOPS]
+
+
+def test_run_marks_repeated_identical_tool_call():
+    """Chamada idêntica a uma anterior ganha runtime_note apontando o hop original."""
+    driver, mock_client = _make_driver()
+    responses = iter([
+        _make_non_streaming_response(
+            content="", tool_calls=[_make_tool_call("call_1", "read_file", '{"path":"x.py"}')]
+        ),
+        _make_non_streaming_response(
+            content="", tool_calls=[_make_tool_call("call_2", "read_file", '{"path":"x.py"}')]
+        ),
+        _make_non_streaming_response(content="Done.", tool_calls=None),
+    ])
+    mock_client.chat.completions.create.side_effect = lambda *a, **k: next(responses)
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+    mock_executor.execute.return_value = ToolResult(ok=True, tool_name="read_file", content="conteúdo")
+
+    driver.run(_prompt("leia x.py duas vezes"), tool_executor=mock_executor)
+
+    final_messages = mock_client.chat.completions.create.call_args[1]["messages"]
+    tool_messages = [m for m in final_messages if m.get("role") == "tool"]
+    first_payload = json.loads(tool_messages[0]["content"])
+    second_payload = json.loads(tool_messages[1]["content"])
+    assert "runtime_note" not in first_payload
+    assert "hop 0" in second_payload["runtime_note"]
 
 
 # ---------------------------------------------------------------------------
@@ -925,14 +1141,17 @@ def test_run_tools_system_prompt_guides_tool_usage():
 
     messages = mock_client.chat.completions.create.call_args[1]["messages"]
     system_message = messages[0]
-    budget_message = messages[1]
+    budget_message = messages[-1]
     assert system_message["role"] == "system"
-    assert budget_message["role"] == "system"
     assert "não repita o mesmo payload inválido" in system_message["content"]
     assert "Use as ferramentas disponíveis" in system_message["content"]
     assert "Workspace raiz: /tmp/workspace." not in system_message["content"]
+    # O orçamento vai como nota efêmera no fim do request (não no head),
+    # mantendo o prefixo estável para prompt caching.
+    assert budget_message["role"] == "user"
     assert f"max_tool_hops={MAX_TOOL_HOPS_BY_RELIABILITY['medium']}" in budget_message["content"]
     assert f"remaining_tool_hops={MAX_TOOL_HOPS_BY_RELIABILITY['medium']}" in budget_message["content"]
+    assert messages[1]["role"] != "system" or "max_tool_hops" not in str(messages[1].get("content"))
     tool_names = {tool["function"]["name"] for tool in mock_client.chat.completions.create.call_args[1]["tools"]}
     assert tool_names == {
         "list_files",
@@ -1169,7 +1388,7 @@ def test_run_tool_loop_updates_remaining_budget_each_hop():
 
     def side_effect(*args, **kwargs):
         messages = kwargs["messages"]
-        observed_budget_prompts.append(messages[1]["content"])
+        observed_budget_prompts.append(messages[-1]["content"])
         return next(responses)
 
     mock_client.chat.completions.create.side_effect = side_effect
@@ -1255,10 +1474,12 @@ def test_run_tool_loop_prunes_messages_between_hops():
         call.kwargs["messages"]
         for call in mock_client.chat.completions.create.call_args_list
     ]
-    assert len(observed_lengths[-1]) <= _MAX_TOOL_LOOP_MESSAGES
+    # +1: a nota efêmera de orçamento anexada ao fim de cada request.
+    assert len(observed_lengths[-1]) <= _MAX_TOOL_LOOP_MESSAGES + 1
     assert observed_lengths[-1][0]["role"] == "system"
-    assert observed_lengths[-1][1]["role"] == "system"
-    assert observed_lengths[-1][2]["role"] == "user"
+    assert observed_lengths[-1][1]["role"] == "user"
+    assert observed_lengths[-1][-1]["role"] == "user"
+    assert "max_tool_hops" in observed_lengths[-1][-1]["content"]
 
 
 def test_run_api_error_returns_none():
@@ -2657,6 +2878,6 @@ def test_tool_budget_prompt_exposes_model_request_budget():
 
     assert driver.run(_prompt(), tool_executor=executor) == "ok"
 
-    budget = mock_client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+    budget = mock_client.chat.completions.create.call_args.kwargs["messages"][-1]["content"]
     assert "max_model_requests=7" in budget
     assert "remaining_model_requests=7" in budget
