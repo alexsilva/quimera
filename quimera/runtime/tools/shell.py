@@ -136,6 +136,7 @@ class ShellTool(ToolBase):
         command = str(call.arguments["command"])
         workdir = self._resolve_workdir(call.arguments.get("workdir"))
         command = self._rewrite_command_for_local_venv(command, workdir)
+        env = self._build_workspace_environment(workdir)
         timeout_seconds = self._resolve_timeout_seconds(call.arguments.get("timeout"))
         started = time.perf_counter()
         try:
@@ -143,6 +144,7 @@ class ShellTool(ToolBase):
                 command,
                 shell=True,
                 cwd=str(workdir),
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
@@ -258,7 +260,15 @@ class ShellTool(ToolBase):
         tty_enabled = bool(call.arguments.get("tty", False))
 
         command = self._rewrite_command_for_local_venv(command, workdir)
-        process, tty_master_fd = self._spawn_process(command, workdir, shell=shell, login=login, tty=tty_enabled)
+        env = self._build_workspace_environment(workdir)
+        process, tty_master_fd = self._spawn_process(
+            command,
+            workdir,
+            shell=shell,
+            login=login,
+            tty=tty_enabled,
+            env=env,
+        )
         session = self._create_session(
             process,
             command=command,
@@ -466,6 +476,47 @@ class ShellTool(ToolBase):
             return command
         return f"{match.group(1)}{shlex.quote(str(candidate))}{command[match.end():]}"
 
+    def _find_workspace_virtualenv(self, workdir: Path) -> Path | None:
+        """Encontra o `.venv` mais próximo sem ultrapassar a raiz da workspace."""
+        current = workdir.resolve()
+        workspace_root = self.config.workspace_root.resolve()
+        while is_path_inside(current, workspace_root):
+            candidate = current / ".venv"
+            if (candidate / "bin").is_dir():
+                return candidate
+            if current == workspace_root:
+                break
+            current = current.parent
+        return None
+
+    def _build_workspace_environment(self, workdir: Path) -> dict[str, str]:
+        """Isola comandos das tools do virtualenv usado para executar o Quimera.
+
+        O launcher global pode executar o Quimera dentro do próprio `.venv`.
+        Esse ambiente não deve vazar para comandos do workspace: quando o
+        projeto possui `.venv`, ele passa a ser o virtualenv dos processos
+        filhos; quando não possui, o virtualenv herdado é removido do PATH e
+        de VIRTUAL_ENV para que o shell use o ambiente normal do usuário.
+        """
+        env = os.environ.copy()
+        inherited_venv = env.pop("VIRTUAL_ENV", None)
+        path_entries = env.get("PATH", "").split(os.pathsep)
+
+        if inherited_venv:
+            inherited_bin = str(Path(inherited_venv) / "bin")
+            path_entries = [entry for entry in path_entries if entry != inherited_bin]
+
+        workspace_venv = self._find_workspace_virtualenv(workdir)
+        if workspace_venv is not None:
+            workspace_bin = workspace_venv / "bin"
+            workspace_bin_str = str(workspace_bin)
+            path_entries = [entry for entry in path_entries if entry != workspace_bin_str]
+            path_entries.insert(0, workspace_bin_str)
+            env["VIRTUAL_ENV"] = str(workspace_venv)
+
+        env["PATH"] = os.pathsep.join(path_entries)
+        return env
+
     def _spawn_process(
             self,
             command: str,
@@ -474,6 +525,7 @@ class ShellTool(ToolBase):
             shell: str,
             login: bool,
             tty: bool,
+            env: dict[str, str],
     ) -> tuple[subprocess.ProcessHandle, int | None]:
         """Cria o subprocesso usado por exec_command."""
         shell_args = [shell, "-lc" if login else "-c", command]
@@ -486,6 +538,7 @@ class ShellTool(ToolBase):
                 stdout=slave_fd,
                 stderr=slave_fd,
                 close_fds=True,
+                env=env,
                 start_new_session=True,
             )
             os.close(slave_fd)
@@ -493,6 +546,7 @@ class ShellTool(ToolBase):
         process = subprocess.popen_text(
             shell_args,
             cwd=str(workdir),
+            env=env,
             start_new_session=True,
         )
         return process, None

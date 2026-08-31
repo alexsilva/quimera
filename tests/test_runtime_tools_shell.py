@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -106,6 +107,83 @@ def test_rewrite_virtualenv_preserves_shell_chaining(tmp_path):
     command = tool._rewrite_command_for_local_venv("python script.py && echo ok", tmp_path)
 
     assert command == f"{python_bin} script.py && echo ok"
+
+
+def test_workspace_environment_uses_project_virtualenv_for_indirect_python(tmp_path, monkeypatch):
+    """O ambiente da tool deve isolar subprocessos do virtualenv do Quimera."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    venv_bin = workspace / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    python_bin = venv_bin / "python"
+    python_bin.symlink_to(sys.executable)
+
+    quimera_venv = tmp_path / "quimera" / ".venv"
+    quimera_bin = quimera_venv / "bin"
+    quimera_bin.mkdir(parents=True)
+    monkeypatch.setenv("VIRTUAL_ENV", str(quimera_venv))
+    monkeypatch.setenv("PATH", f"{quimera_bin}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    tool = ShellTool(ToolRuntimeConfig(workspace_root=workspace))
+    result = _poll_until_completed(
+        tool,
+        tool.exec_command(
+            ToolCall(
+                name="exec_command",
+                arguments={
+                    "cmd": (
+                        "python -c 'import os, subprocess, sys; "
+                        "print(os.environ.get(\"VIRTUAL_ENV\")); "
+                        "print(subprocess.check_output([\"python\", \"-c\", "
+                        "\"import sys; print(sys.executable)\"], text=True).strip())'"
+                    ),
+                    "login": False,
+                    "yield_time_ms": 500,
+                },
+            )
+        ),
+    )
+
+    assert result.ok is True
+    lines = result.data["stdout"].splitlines()
+    assert lines[0] == str(workspace / ".venv")
+    assert lines[1] == str(python_bin)
+
+
+def test_workspace_environment_removes_quimera_virtualenv_without_project_venv(tmp_path, monkeypatch):
+    """Workspace sem `.venv` não deve herdar o virtualenv interno do Quimera."""
+    quimera_venv = tmp_path / "quimera" / ".venv"
+    quimera_bin = quimera_venv / "bin"
+    quimera_bin.mkdir(parents=True)
+    monkeypatch.setenv("VIRTUAL_ENV", str(quimera_venv))
+    monkeypatch.setenv("PATH", os.pathsep.join([str(quimera_bin), "/usr/bin", "/bin"]))
+
+    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    env = tool._build_workspace_environment(tmp_path)
+
+    assert "VIRTUAL_ENV" not in env
+    assert str(quimera_bin) not in env["PATH"].split(os.pathsep)
+
+
+def test_workspace_environment_finds_root_virtualenv_from_nested_workdir(tmp_path, monkeypatch):
+    """Workdir interno continua usando o `.venv` da raiz da workspace."""
+    workspace = tmp_path / "workspace"
+    nested = workspace / "src" / "package"
+    nested.mkdir(parents=True)
+    workspace_bin = workspace / ".venv" / "bin"
+    workspace_bin.mkdir(parents=True)
+
+    quimera_venv = tmp_path / "quimera" / ".venv"
+    quimera_bin = quimera_venv / "bin"
+    quimera_bin.mkdir(parents=True)
+    monkeypatch.setenv("VIRTUAL_ENV", str(quimera_venv))
+    monkeypatch.setenv("PATH", os.pathsep.join([str(quimera_bin), "/usr/bin", "/bin"]))
+
+    tool = ShellTool(ToolRuntimeConfig(workspace_root=workspace))
+    env = tool._build_workspace_environment(nested)
+
+    assert env["VIRTUAL_ENV"] == str(workspace / ".venv")
+    assert env["PATH"].split(os.pathsep)[0] == str(workspace_bin)
 
 
 def test_run_shell_supports_workdir(tmp_path):
