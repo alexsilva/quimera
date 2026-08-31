@@ -1606,6 +1606,7 @@ def test_textual_status_exit_marks_exception_as_failed():
 def test_textual_bridge_handles_events_synchronously_on_textual_thread():
     bridge = TextualUiBridge()
     textual_app = Mock()
+    textual_app.flush_bridge_events = None
 
     bridge.attach_textual_app(textual_app)
     event = TextualUiEvent("user_message", {"content": "revise"})
@@ -1613,6 +1614,120 @@ def test_textual_bridge_handles_events_synchronously_on_textual_thread():
 
     textual_app.handle_bridge_event.assert_called_once_with(event)
     textual_app.call_from_thread.assert_not_called()
+
+
+def test_textual_bridge_queues_cross_thread_events_without_waiting_for_textual():
+    import threading
+
+    bridge = TextualUiBridge()
+    textual_app = Mock()
+    bridge.attach_textual_app(textual_app)
+    event = TextualUiEvent("stream_chunk", {"text": "token"}, agent="codex")
+
+    worker = threading.Thread(target=bridge.emit, args=(event,))
+    worker.start()
+    worker.join(timeout=0.5)
+
+    assert not worker.is_alive()
+    textual_app.call_from_thread.assert_not_called()
+    textual_app.handle_bridge_event.assert_not_called()
+    assert bridge.drain_pending_events() == [event]
+
+
+def test_textual_bridge_can_limit_drain_batch_without_losing_fifo_order():
+    bridge = TextualUiBridge()
+    events = [TextualUiEvent("plain", str(index)) for index in range(5)]
+    for event in events:
+        bridge.emit(event)
+
+    assert bridge.drain_pending_events(max_items=2) == events[:2]
+    assert bridge.drain_pending_events(max_items=2) == events[2:4]
+    assert bridge.drain_pending_events(max_items=2) == events[4:]
+
+
+def test_textual_bridge_does_not_reenter_an_active_ui_batch():
+    bridge = TextualUiBridge()
+
+    class TextualApp:
+        _handling_bridge_batch = True
+
+        def flush_bridge_events(self):
+            raise AssertionError("não deve reentrar no lote ativo")
+
+    app = TextualApp()
+    bridge.attach_textual_app(app)
+    event = TextualUiEvent("plain", "adiado")
+
+    bridge.emit(event)
+
+    assert bridge.drain_pending_events() == [event]
+
+
+def test_textual_bridge_detach_ignores_an_older_app_instance():
+    bridge = TextualUiBridge()
+    old_app = Mock()
+    current_app = Mock()
+
+    bridge.attach_textual_app(old_app)
+    bridge.attach_textual_app(current_app)
+    bridge.detach_textual_app(old_app)
+
+    assert bridge.textual_app is current_app
+
+    bridge.detach_textual_app(current_app)
+    assert bridge.textual_app is None
+    assert bridge._textual_thread_id is None
+
+
+def test_textual_app_reconciles_a_bridge_burst_once_per_frame():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    captured_apps = []
+    bridge = TextualUiBridge()
+    quimera_app = SimpleNamespace(
+        renderer=None,
+        input_gate=SimpleNamespace(_build_toolbar_renderable=Mock(return_value="toolbar")),
+    )
+
+    def capture_app(app, *args, **kwargs):
+        captured_apps.append(app)
+
+    with patch("textual.app.App.run", capture_app):
+        run_textual_quimera_app(quimera_app, bridge)
+
+    app = captured_apps[0]
+    feed = SimpleNamespace(
+        is_vertical_scroll_end=False,
+        sync_entries=Mock(),
+    )
+    toolbar = SimpleNamespace(
+        size=SimpleNamespace(width=80),
+        update=Mock(),
+    )
+    status_bar = SimpleNamespace(display=True, update=Mock())
+    agent_status = SimpleNamespace(display=True, update=Mock())
+    widgets = {
+        "#feed": feed,
+        "#toolbar": toolbar,
+        "#status_bar": status_bar,
+        "#agent_status": agent_status,
+    }
+    app.query_one = Mock(side_effect=lambda selector, *_: widgets[selector])
+    app.refresh = Mock()
+    app.call_after_refresh = Mock()
+    events = [TextualUiEvent("plain", f"linha {index}") for index in range(100)]
+    for event in events:
+        bridge.emit(event)
+
+    app._drain_bridge_events()
+
+    feed.sync_entries.assert_called_once()
+    assert len(feed.sync_entries.call_args.args[0]) == len(events)
+    toolbar.update.assert_called_once_with("toolbar")
+    status_bar.update.assert_called_once_with("")
+    agent_status.update.assert_called_once_with("")
+    app.refresh.assert_called_once_with(layout=False)
 
 
 def test_textual_bridge_submit_input_echoes_user_before_queueing_message():
@@ -4112,7 +4227,7 @@ def test_textual_app_periodically_drains_bridge_event_queue():
 
     assert "self.set_interval(0.05, self._drain_bridge_events)" in source
     assert "def _drain_bridge_events" in source
-    assert "bridge.drain_pending_events()" in source
+    assert "bridge.drain_pending_events(max_items=max_events)" in source
 
 
 def test_textual_renderer_flush_drains_bridge_events_for_tool_previews():
@@ -4124,12 +4239,15 @@ def test_textual_renderer_flush_drains_bridge_events_for_tool_previews():
             calls.append(event.kind)
 
         def flush_bridge_events(self):
+            for event in bridge.drain_pending_events():
+                self.handle_bridge_event(event)
             calls.append("flush")
 
         def call_from_thread(self, callback, *args):
             callback(*args)
 
     bridge.attach_textual_app(FakeTextualApp())
+    bridge._textual_thread_id = -1
     renderer = TextualRenderer(bridge)
 
     renderer.show_system_neutral("tool: list_files")
@@ -4146,8 +4264,8 @@ def test_textual_app_exposes_flush_bridge_events_for_immediate_tool_preview_rend
     source = inspect.getsource(run_textual_quimera_app)
 
     assert "def flush_bridge_events" in source
-    assert "self._drain_bridge_events()" in source
-    assert "self._refresh_now(layout=True)" in source
+    assert "bridge.pending_event_count()" in source
+    assert "self._drain_bridge_events(max_events=" in source
 
 
 def test_textual_app_status_bar_tracks_tool_preview_events():

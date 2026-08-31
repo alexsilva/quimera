@@ -50,6 +50,13 @@ class TextualUiBridge:
             self.textual_app = textual_app
             self._textual_thread_id = threading.get_ident()
 
+    def detach_textual_app(self, textual_app) -> None:
+        """Descarta uma instância Textual encerrada sem afetar outra mais nova."""
+        with self._lock:
+            if self.textual_app is textual_app:
+                self.textual_app = None
+                self._textual_thread_id = None
+
     def attach_quimera_app(self, quimera_app) -> None:
         """Registra a instância Quimera controlada pela UI."""
         with self._lock:
@@ -297,19 +304,29 @@ class TextualUiBridge:
 
     def emit(self, event: TextualUiEvent) -> None:
         """Envia evento visual para a UI, com fallback para fila interna."""
+        # App.call_from_thread espera o callback terminar. Usá-lo para cada
+        # token acopla a velocidade do agente ao custo de render/layout da TUI.
+        # A fila é drenada pelo app em frames curtos e permite agrupar rajadas.
+        self.ui_queue.put(event)
         with self._lock:
             textual_app = self.textual_app
             textual_thread_id = self._textual_thread_id
         if textual_app is None:
-            self.ui_queue.put(event)
             return
         if threading.get_ident() == textual_thread_id:
-            textual_app.handle_bridge_event(event)
-            return
-        try:
-            textual_app.call_from_thread(textual_app.handle_bridge_event, event)
-        except RuntimeError:
-            self.ui_queue.put(event)
+            if getattr(textual_app, "_handling_bridge_batch", False) is True:
+                # O evento já está na fila; o lote externo ou o próximo frame
+                # o consumirá sem reentrar no reconciliador.
+                return
+            # Mantém eventos locais imediatos e preserva a ordem em relação a
+            # eventos de workers que já estejam aguardando na fila. No app real,
+            # o flush também passa pelo reconciliador em lote.
+            flush_bridge_events = getattr(textual_app, "flush_bridge_events", None)
+            if callable(flush_bridge_events):
+                flush_bridge_events()
+                return
+            for pending_event in self.drain_pending_events():
+                textual_app.handle_bridge_event(pending_event)
 
     def flush_ui_events(self) -> bool:
         """Força o app Textual a drenar eventos visuais pendentes agora."""
@@ -321,19 +338,29 @@ class TextualUiBridge:
         if not callable(flush_bridge_events):
             return False
         try:
-            textual_app.call_from_thread(flush_bridge_events)
+            with self._lock:
+                textual_thread_id = self._textual_thread_id
+            if threading.get_ident() == textual_thread_id:
+                flush_bridge_events()
+            else:
+                textual_app.call_from_thread(flush_bridge_events)
             return True
         except RuntimeError:
             return False
 
-    def drain_pending_events(self) -> list[TextualUiEvent]:
-        """Drena eventos acumulados antes da montagem do app."""
+    def drain_pending_events(self, *, max_items: int | None = None) -> list[TextualUiEvent]:
+        """Drena eventos acumulados, opcionalmente limitando o lote."""
         events: list[TextualUiEvent] = []
-        while True:
+        while max_items is None or len(events) < max_items:
             try:
                 events.append(self.ui_queue.get_nowait())
             except queue.Empty:
-                return events
+                break
+        return events
+
+    def pending_event_count(self) -> int:
+        """Retorna um watermark aproximado da fila visual pendente."""
+        return self.ui_queue.qsize()
 
     @staticmethod
     def _has_active_chat_work(quimera_app) -> bool:

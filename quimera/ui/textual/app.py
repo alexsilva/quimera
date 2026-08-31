@@ -148,6 +148,15 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._bridge_drain_timer = None
             self._active_agent_timer = None
             self._thinking_pulse_timer = None
+            self._handling_bridge_batch = False
+            self._bridge_batch_feed_dirty = False
+            self._bridge_batch_feed_force = False
+            self._bridge_batch_scroll_end = False
+            self._bridge_batch_toolbar_dirty = False
+            self._bridge_batch_status_dirty = False
+            self._bridge_batch_breadcrumb_dirty = False
+            self._bridge_batch_refresh_requested = False
+            self._bridge_batch_layout_requested = False
             self.active_agent: str | None = None
             self._last_active_agent_info: tuple[str, str] | None = None
             self._active_tool_previews: dict[str, str] = {}
@@ -182,8 +191,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             gate = getattr(quimera_app, "input_gate", None)
             if hasattr(gate, "set_textual_mounted"):
                 gate.set_textual_mounted(True)
-            for event in bridge.drain_pending_events():
-                self.handle_bridge_event(event)
+            self._drain_bridge_events(max_events=None)
             self._bridge_drain_timer = self.set_interval(0.05, self._drain_bridge_events)
             self._active_agent_timer = self.set_interval(0.2, self._poll_active_agent)
             self._thinking_pulse_timer = self.set_interval(0.25, self._pulse_thinking_marker)
@@ -237,10 +245,17 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 except Exception:
                     pass
                 self._active_agent_timer = None
+            if self._thinking_pulse_timer is not None:
+                try:
+                    self._thinking_pulse_timer.stop()
+                except Exception:
+                    pass
+                self._thinking_pulse_timer = None
             try:
                 self.query_one("#input", _CompletionInput).save_history(self._history_file_path)
             except Exception:
                 pass
+            bridge.detach_textual_app(self)
 
         def _hydrate_restored_history(self) -> bool:
             """Carrega o histórico já restaurado pelo core no feed visual."""
@@ -316,11 +331,17 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                         self.active_agent = None
 
         def _update_agent_status_widget(self) -> None:
+            if self._handling_bridge_batch:
+                self._bridge_batch_status_dirty = True
+                return
             agent_status = self.query_one("#agent_status", Static)
             agent_status.display = False
             agent_status.update("")
 
         def _update_breadcrumb(self) -> None:
+            if self._handling_bridge_batch:
+                self._bridge_batch_breadcrumb_dirty = True
+                return
             chain = self._breadcrumb_chain
             if chain:
                 breadcrumb_text = " > ".join(chain[:5])
@@ -333,14 +354,20 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._last_active_agent_info = None
             self._last_status_bar_state = None
             self._breadcrumb_chain = []
+            self.active_agent = None
             self._update_breadcrumb()
+            if self._handling_bridge_batch:
+                self._bridge_batch_status_dirty = True
+                return
             widget = self.query_one("#status_bar", Static)
             widget.display = False
             widget.update("")
-            self.active_agent = None
             self._update_agent_status_widget()
 
         def _update_status_bar(self) -> None:
+            if self._handling_bridge_batch:
+                self._bridge_batch_status_dirty = True
+                return
             self._update_agent_status_widget()
             info = bridge.active_agent_info()
             tools = tuple(self._active_tool_previews.items())
@@ -356,17 +383,75 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         def _poll_active_agent(self) -> None:
             self._update_status_bar()
 
-        def _drain_bridge_events(self) -> None:
-            drained = False
-            for event in bridge.drain_pending_events():
-                drained = True
-                self.handle_bridge_event(event)
-            if drained:
-                self._refresh_now(layout=True)
+        def _drain_bridge_events(self, *, max_events: int | None = 256) -> None:
+            if self._handling_bridge_batch:
+                return
+            events = bridge.drain_pending_events(max_items=max_events)
+            if not events:
+                return
+
+            # Uma rajada de stream/tool events deve compor um único frame. Os
+            # handlers ainda aplicam tudo em ordem, mas feed, toolbar e repaint
+            # são reconciliados só após o lote completo.
+            self._handling_bridge_batch = True
+            try:
+                for event in events:
+                    try:
+                        self.handle_bridge_event(event)
+                    except Exception:
+                        # Um evento inválido não deve descartar o restante da
+                        # rajada que já saiu da fila.
+                        _logger.exception(
+                            "Falha ao processar evento Textual %s",
+                            getattr(event, "kind", "unknown"),
+                        )
+            finally:
+                self._handling_bridge_batch = False
+
+            feed_dirty = self._bridge_batch_feed_dirty
+            feed_force = self._bridge_batch_feed_force
+            scroll_end = self._bridge_batch_scroll_end
+            toolbar_dirty = self._bridge_batch_toolbar_dirty
+            status_dirty = self._bridge_batch_status_dirty
+            breadcrumb_dirty = self._bridge_batch_breadcrumb_dirty
+            refresh_requested = self._bridge_batch_refresh_requested
+            layout_requested = self._bridge_batch_layout_requested
+            self._bridge_batch_feed_dirty = False
+            self._bridge_batch_feed_force = False
+            self._bridge_batch_scroll_end = False
+            self._bridge_batch_toolbar_dirty = False
+            self._bridge_batch_status_dirty = False
+            self._bridge_batch_breadcrumb_dirty = False
+            self._bridge_batch_refresh_requested = False
+            self._bridge_batch_layout_requested = False
+
+            if feed_dirty:
+                try:
+                    self._sync_feed(force=feed_force, scroll_end=scroll_end)
+                except Exception:
+                    _logger.exception("Falha ao reconciliar feed Textual")
+            if toolbar_dirty:
+                try:
+                    self._refresh_toolbar()
+                except Exception:
+                    _logger.exception("Falha ao reconciliar toolbar Textual")
+            if breadcrumb_dirty:
+                try:
+                    self._update_breadcrumb()
+                except Exception:
+                    _logger.exception("Falha ao reconciliar breadcrumb Textual")
+            if status_dirty:
+                try:
+                    self._update_status_bar()
+                except Exception:
+                    _logger.exception("Falha ao reconciliar status Textual")
+            if feed_dirty or toolbar_dirty or status_dirty or breadcrumb_dirty or refresh_requested:
+                self._refresh_now(layout=layout_requested)
 
         def flush_bridge_events(self) -> None:
-            self._drain_bridge_events()
-            self._refresh_now(layout=True)
+            # Drena até o watermark observado agora. Eventos produzidos durante
+            # o flush ficam para o próximo frame em vez de prolongá-lo sem fim.
+            self._drain_bridge_events(max_events=bridge.pending_event_count())
 
         def _start_spinner(self) -> None:
             """Inicia feedback visual de loading para sumarização."""
@@ -473,6 +558,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._refresh_toolbar()
 
         def _refresh_now(self, *, layout: bool = False) -> None:
+            if self._handling_bridge_batch:
+                self._bridge_batch_refresh_requested = True
+                self._bridge_batch_layout_requested |= layout
+                return
             try:
                 self.refresh(layout=layout)
             except Exception:
@@ -480,6 +569,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 return
 
         def _refresh_toolbar(self) -> None:
+            if self._handling_bridge_batch:
+                self._bridge_batch_toolbar_dirty = True
+                return
             gate = getattr(quimera_app, "input_gate", None)
             builder = getattr(gate, "_build_toolbar_renderable", None)
             if callable(builder):
@@ -525,6 +617,11 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
 
         def _sync_feed(self, *, force: bool = False, scroll_end: bool = False) -> None:
             """Reconcilia histórico e execuções vivas na mesma área rolável."""
+            if self._handling_bridge_batch:
+                self._bridge_batch_feed_dirty = True
+                self._bridge_batch_feed_force |= force
+                self._bridge_batch_scroll_end |= scroll_end
+                return
             feed = self.query_one("#feed", _UnifiedFeed)
             entries: list[tuple[int, bool, object, bool]] = []
             active_tokens: set[int] = set()
