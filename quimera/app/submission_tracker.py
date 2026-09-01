@@ -27,6 +27,11 @@ class SubmittedInput(str):
         return instance
 
 
+def new_submission_id() -> str:
+    """Gera o identificador canônico de uma nova submissão de chat."""
+    return f"submission:{uuid.uuid4().hex}"
+
+
 def submission_id_of(value: object) -> str:
     """Extrai o identificador sem alterar o contrato textual do input."""
     return str(getattr(value, "submission_id", "") or "")
@@ -84,7 +89,7 @@ class SubmissionTracker:
         """Cria uma submissão aceita e, opcionalmente, arma seu watchdog."""
         now = self._clock()
         record = SubmissionRecord(
-            submission_id=f"submission:{uuid.uuid4().hex}",
+            submission_id=new_submission_id(),
             status="accepted",
             created_at=now,
             updated_at=now,

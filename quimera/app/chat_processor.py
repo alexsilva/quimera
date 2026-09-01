@@ -18,7 +18,7 @@ from .session_bootstrap import (
     resolve_render_debug_log_path,
     resolve_session_log_path,
 )
-from .submission_tracker import submission_id_of
+from .submission_tracker import new_submission_id, submission_id_of
 from .turn import TurnManager
 from .worker import ChatWorker, ChatWorkItem
 from ..runtime.tools.mcp_clients import get_bridge as get_mcp_client_bridge
@@ -233,7 +233,9 @@ def run_chat_loop(
                     continue
                 if threaded_chat:
                     outstanding = app.runtime_state.get_chat_outstanding_count()
-                    if outstanding > 0 and not ctrl_c_cancelled:
+                    has_active_work = getattr(app.agent_client, "has_active_work", None)
+                    draining = bool(callable(has_active_work) and has_active_work())
+                    if (outstanding > 0 or draining) and not ctrl_c_cancelled:
                         ctrl_c_cancelled = True
                         chat_lifecycle.handle_local_interrupt()
                         swallow_threaded_input_interrupt = True
@@ -268,6 +270,14 @@ def run_chat_loop(
                 continue
             elif isinstance(_cmd_result, str):
                 user = _cmd_result
+
+            # A Textual já entrega SubmittedInput correlacionado. O CLI clássico
+            # entrega str puro; gere o mesmo identificador antes de enfileirar para
+            # que um prompt seguinte não consiga apagar semanticamente o
+            # cancelamento de uma rodada anterior via reset_cancel_state().
+            if not submission_id:
+                submission_id = new_submission_id()
+                chat_lifecycle.register_submission(submission_id)
 
             session_state_manager.advance_turn()
 

@@ -33,6 +33,7 @@ class ChatRoundContext:
     dispatch_services: Any | None = None
     show_system_message: Any | None = None
     ui_queue: Any | None = None
+    is_cancelled: Any | None = None
 
 
 class ChatRoundOrchestrator:
@@ -221,6 +222,13 @@ class ChatRoundOrchestrator:
             )
 
     def _is_cancelled(self) -> bool:
+        checker = getattr(self._cancel_notice_tls, "is_cancelled", None)
+        if callable(checker):
+            try:
+                if bool(checker()):
+                    return True
+            except Exception:
+                logger.debug("submission cancel checker falhou", exc_info=True)
         return is_user_cancelled(self._agent_client)
 
     def _handle_cancelled(self) -> None:
@@ -254,95 +262,99 @@ class ChatRoundOrchestrator:
         if ctx is not None:
             self._apply_runtime_context(ctx)
         self._cancel_notice_tls.shown = False
-        self._set_parallel_toolbar_state(
-            active=0,
-            queued=0,
-            capacity=max(0, self._threads),
-            active_agents=(),
-        )
-        route = RoutingDecision.coerce(self._parse_routing(user))
-        first_agent = route.agent
-        message = route.message
-        if first_agent is None:
-            return
-        if not message or not message.strip():
-            self._show_warning(MSG_EMPTY_INPUT.format(first_agent))
-            return
+        self._cancel_notice_tls.is_cancelled = ctx.is_cancelled if ctx is not None else None
+        try:
+            self._set_parallel_toolbar_state(
+                active=0,
+                queued=0,
+                capacity=max(0, self._threads),
+                active_agents=(),
+            )
+            route = RoutingDecision.coerce(self._parse_routing(user))
+            first_agent = route.agent
+            message = route.message
+            if first_agent is None:
+                return
+            if not message or not message.strip():
+                self._show_warning(MSG_EMPTY_INPUT.format(first_agent))
+                return
 
-        if not route.explicit and self._agent_pool is not None:
-            reserved_agent = self._agent_pool.take_primary()
-            if reserved_agent is not None:
-                first_agent = reserved_agent
+            if not route.explicit and self._agent_pool is not None:
+                reserved_agent = self._agent_pool.take_primary()
+                if reserved_agent is not None:
+                    first_agent = reserved_agent
 
-        self._set_round_index(self._get_round_index() + 1)
-        self._set_summary_agent_preference(first_agent)
-        history_snapshot = self._persist_user_message(message)
-        prompt_binding = {"request_override": message}
-        if history_snapshot:
-            prompt_binding["history_snapshot"] = history_snapshot
+            self._set_round_index(self._get_round_index() + 1)
+            self._set_summary_agent_preference(first_agent)
+            history_snapshot = self._persist_user_message(message)
+            prompt_binding = {"request_override": message}
+            if history_snapshot:
+                prompt_binding["history_snapshot"] = history_snapshot
 
-        response = self._delegate(
-            first_agent,
-            is_first_speaker=True,
-            protocol_mode="standard",
-            **prompt_binding,
-        )
-        response, _, _, _ = self._parse_response(response)
+            response = self._delegate(
+                first_agent,
+                is_first_speaker=True,
+                protocol_mode="standard",
+                **prompt_binding,
+            )
+            response, _, _, _ = self._parse_response(response)
 
-        if self._is_cancelled():
-            self._handle_cancelled()
-            return
-
-        if response is None:
             if self._is_cancelled():
                 self._handle_cancelled()
                 return
-
-            fallback_candidates = [agent for agent in self._agent_pool.agents if agent != first_agent]
-            failed_agent = first_agent
-            for fallback_agent in fallback_candidates:
-                if self._is_cancelled():
-                    self._handle_cancelled()
-                    return
-                logger.debug(
-                    "no response from %s; failover to %s",
-                    failed_agent, fallback_agent,
-                )
-                if self._is_cancelled():
-                    self._handle_cancelled()
-                    return
-                self._notify_failover(failed_agent, fallback_agent)
-                fallback_response = self._delegate(
-                    fallback_agent,
-                    is_first_speaker=True,
-                    primary=False,
-                    protocol_mode="standard",
-                    **prompt_binding,
-                )
-                fallback_response, _, _, _ = self._parse_response(
-                    fallback_response
-                )
-                if self._is_cancelled():
-                    self._handle_cancelled()
-                    return
-                if fallback_response is None:
-                    failed_agent = fallback_agent
-                    continue
-                first_agent = fallback_agent
-                self._set_summary_agent_preference(first_agent)
-                response = fallback_response
-                break
 
             if response is None:
                 if self._is_cancelled():
                     self._handle_cancelled()
                     return
-                raise NoAgentResponseError(
-                    "todos os agentes retornaram sem resposta válida"
-                )
 
-        self._dispatch_services.print_response(first_agent, response)
-        if response is not None:
-            self._session_services.persist_message(first_agent, response)
+                fallback_candidates = [agent for agent in self._agent_pool.agents if agent != first_agent]
+                failed_agent = first_agent
+                for fallback_agent in fallback_candidates:
+                    if self._is_cancelled():
+                        self._handle_cancelled()
+                        return
+                    logger.debug(
+                        "no response from %s; failover to %s",
+                        failed_agent, fallback_agent,
+                    )
+                    if self._is_cancelled():
+                        self._handle_cancelled()
+                        return
+                    self._notify_failover(failed_agent, fallback_agent)
+                    fallback_response = self._delegate(
+                        fallback_agent,
+                        is_first_speaker=True,
+                        primary=False,
+                        protocol_mode="standard",
+                        **prompt_binding,
+                    )
+                    fallback_response, _, _, _ = self._parse_response(
+                        fallback_response
+                    )
+                    if self._is_cancelled():
+                        self._handle_cancelled()
+                        return
+                    if fallback_response is None:
+                        failed_agent = fallback_agent
+                        continue
+                    first_agent = fallback_agent
+                    self._set_summary_agent_preference(first_agent)
+                    response = fallback_response
+                    break
 
-        self._session_services.maybe_auto_summarize(preferred_agent=first_agent)
+                if response is None:
+                    if self._is_cancelled():
+                        self._handle_cancelled()
+                        return
+                    raise NoAgentResponseError(
+                        "todos os agentes retornaram sem resposta válida"
+                    )
+
+            self._dispatch_services.print_response(first_agent, response)
+            if response is not None:
+                self._session_services.persist_message(first_agent, response)
+
+            self._session_services.maybe_auto_summarize(preferred_agent=first_agent)
+        finally:
+            self._cancel_notice_tls.is_cancelled = None

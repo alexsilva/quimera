@@ -421,17 +421,34 @@ def _materialize_chat_lifecycle(app):
             else:
                 super().handle_local_interrupt()
 
-        def submit_async_message(self, user, *, slot_reserved=True):
+        def submit_async_message(self, user, *, slot_reserved=True, submission_id=""):
             fn = app.__dict__.get('_submit_async_chat_message')
             if callable(fn):
                 try:
-                    fn(user, slot_reserved=slot_reserved)
+                    fn(
+                        user,
+                        slot_reserved=slot_reserved,
+                        submission_id=submission_id,
+                    )
                 except TypeError as exc:
-                    if "slot_reserved" not in str(exc):
+                    message = str(exc)
+                    if "submission_id" in message:
+                        try:
+                            fn(user, slot_reserved=slot_reserved)
+                        except TypeError as inner_exc:
+                            if "slot_reserved" not in str(inner_exc):
+                                raise
+                            fn(user)
+                    elif "slot_reserved" in message:
+                        fn(user)
+                    else:
                         raise
-                    fn(user)
             else:
-                super().submit_async_message(user, slot_reserved=slot_reserved)
+                super().submit_async_message(
+                    user,
+                    slot_reserved=slot_reserved,
+                    submission_id=submission_id,
+                )
 
         def drain_ui_events(self, ui_queue):
             fn = app.__dict__.get('_drain_ui_events')

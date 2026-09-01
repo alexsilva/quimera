@@ -142,7 +142,14 @@ class _SubmissionRenderer:
         return None
 
 
-def _make_lifecycle(orchestrator, renderer, executor, *, queue_wait_timeout_seconds=600):
+def _make_lifecycle(
+    orchestrator,
+    renderer,
+    executor,
+    *,
+    queue_wait_timeout_seconds=600,
+    agent_client=None,
+):
     runtime_state = Mock(chat_executor=executor, chat_slot_semaphore=None)
     runtime_state.decrement_chat_inflight.return_value = 0
     runtime_state.get_chat_pending_count.return_value = 0
@@ -153,7 +160,7 @@ def _make_lifecycle(orchestrator, renderer, executor, *, queue_wait_timeout_seco
         renderer=renderer,
         runtime_state=runtime_state,
         turn_manager=None,
-        agent_client=None,
+        agent_client=agent_client,
         ui_event_handler=Mock(),
         session_services=None,
         task_services=None,
@@ -284,3 +291,71 @@ def test_chat_lifecycle_cancels_accepted_submission_before_executor_submit():
     lifecycle._runtime_state.decrement_chat_inflight.assert_called_once()
     lifecycle._runtime_state.release_chat_slot.assert_called_once()
     assert renderer.transitions[-1][1] == "cancelled"
+
+
+def test_running_submission_stays_cancelled_after_owner_cancel_state_is_reset():
+    """Prompt novo não pode transformar uma submission antiga cancelada em completed."""
+
+    class CancelableClient:
+        def __init__(self):
+            self.cancelled = False
+
+        def reset_cancel_state(self):
+            self.cancelled = False
+
+        def cancel_active_work(self):
+            self.cancelled = True
+
+        def _show_cancelled_once(self):
+            return None
+
+        def is_cancelled(self):
+            return self.cancelled
+
+    renderer = _SubmissionRenderer()
+    executor = ThreadPoolExecutor(max_workers=1)
+    orchestrator = Mock()
+    started = threading.Event()
+    release = threading.Event()
+
+    def process(_user, *, ctx=None):
+        started.set()
+        assert release.wait(timeout=2)
+
+    orchestrator.process.side_effect = process
+    client = CancelableClient()
+    lifecycle = _make_lifecycle(
+        orchestrator,
+        renderer,
+        executor,
+        agent_client=client,
+    )
+
+    try:
+        future = lifecycle.submit_async_message(
+            "primeiro prompt",
+            submission_id="submission:first",
+        )
+        assert started.wait(timeout=1)
+
+        lifecycle.handle_local_interrupt()
+        assert client.cancelled is True
+
+        # Simula o reset que ocorre quando um novo prompt começa enquanto a
+        # chamada OpenAI antiga ainda está drenando em background.
+        client.reset_cancel_state()
+        assert client.cancelled is False
+
+        release.set()
+        future.result(timeout=2)
+    finally:
+        release.set()
+        executor.shutdown(wait=True)
+
+    first_statuses = [
+        status
+        for submission_id, status, _metadata in renderer.transitions
+        if submission_id == "submission:first"
+    ]
+    assert "cancelled" in first_statuses
+    assert "completed" not in first_statuses

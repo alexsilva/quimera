@@ -66,6 +66,7 @@ class ChatLifecycle:
         self._cancelled_submission_ids: set[str] = set()
         self._running_submission_ids: set[str] = set()
         self._submission_lock = threading.RLock()
+        self._processing_tls = threading.local()
 
     def bind_ui_event_queue(self, ui_event_queue) -> None:
         """Vincula a fila de eventos de UI materializada pelo loop de chat."""
@@ -109,6 +110,14 @@ class ChatLifecycle:
                 submission_id and submission_id in self._cancelled_submission_ids
             )
 
+    def _is_processing_cancelled(self, submission_id: str) -> bool:
+        """Consulta o cancelamento estável da submission e depois o client global."""
+        if self._is_submission_cancelled(submission_id):
+            return True
+        agent_client = self._agent_client
+        is_cancelled = getattr(agent_client, "is_cancelled", None)
+        return bool(callable(is_cancelled) and is_cancelled())
+
     def process_message(self, user, *, submission_id: str = ""):
         """Executa process chat message com controle de turno."""
         if self._is_submission_cancelled(submission_id):
@@ -121,6 +130,7 @@ class ChatLifecycle:
             with self._submission_lock:
                 self._running_submission_ids.add(submission_id)
             self.update_submission_status(submission_id, "running")
+        self._processing_tls.submission_id = submission_id
         try:
             self._do_process_message(user)
         except KeyboardInterrupt:
@@ -134,13 +144,13 @@ class ChatLifecycle:
             )
             raise
         else:
-            is_cancelled = getattr(agent_client, "is_cancelled", None)
-            cancelled = bool(callable(is_cancelled) and is_cancelled())
+            cancelled = self._is_processing_cancelled(submission_id)
             self.update_submission_status(
                 submission_id,
                 "cancelled" if cancelled else "completed",
             )
         finally:
+            self._processing_tls.submission_id = ""
             if submission_id:
                 with self._submission_lock:
                     self._running_submission_ids.discard(submission_id)
@@ -153,6 +163,7 @@ class ChatLifecycle:
 
     def _do_process_message(self, user):
         """Executa uma rodada de chat com o contexto completo."""
+        submission_id = str(getattr(self._processing_tls, "submission_id", "") or "")
         ctx = ChatRoundContext(
             session_services=self._session_services,
             task_services=self._task_services,
@@ -163,6 +174,7 @@ class ChatLifecycle:
             dispatch_services=self._dispatch_services,
             show_system_message=self._system_layer.show_system_message,
             ui_queue=self._ui_event_queue,
+            is_cancelled=lambda sid=submission_id: self._is_processing_cancelled(sid),
         )
         self._chat_round_orchestrator.process(user, ctx=ctx)
 

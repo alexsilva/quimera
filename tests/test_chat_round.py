@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from quimera.app.agent_pool import AgentPool
-from quimera.app.chat_round import ChatRoundOrchestrator, NoAgentResponseError
+from quimera.app.chat_round import ChatRoundContext, ChatRoundOrchestrator, NoAgentResponseError
 from quimera.app.staging import merge_staging_to_workspace
 from quimera.domain.session_state import SessionRuntimeState
 
@@ -287,6 +287,39 @@ class TestProcessMainFlow(unittest.TestCase):
         shown_messages = [call.args[0] for call in app.renderer.show_system.call_args_list if call.args]
         self.assertFalse(any(msg.startswith("[fallback]") for msg in shown_messages))
         app.turn_manager.reset.assert_called_once()
+
+    def test_cancelled_submission_blocks_failover_after_global_cancel_state_is_reset(self):
+        """Cancelamento da submission prevalece sobre o estado mutável do client principal."""
+        app = _make_app(active_agents=["ollama", "claude"], threads=3)
+        app.parse_routing = Mock(return_value=("ollama", "commit", False))
+        app.dispatch_services.delegate = Mock(return_value=None)
+        app.parse_response = Mock(return_value=(None, None, None, None))
+        app.agent_client._user_cancelled = False
+
+        app.chat_round_orchestrator.process(
+            "commit",
+            ctx=ChatRoundContext(is_cancelled=lambda: True),
+        )
+
+        app.dispatch_services.delegate.assert_called_once()
+        app.renderer.notify_agent_failover.assert_not_called()
+        app.turn_manager.reset.assert_called_once()
+        app.dispatch_services.print_response.assert_not_called()
+
+    def test_process_clears_submission_cancel_checker_after_round(self):
+        """Checker por submission não deve vazar para outro uso da mesma thread do pool."""
+        app = _make_app(active_agents=["ollama"], threads=1)
+        app.dispatch_services.delegate = Mock(return_value="ok")
+        app.parse_response = Mock(return_value=("ok", None, None, None))
+
+        app.chat_round_orchestrator.process(
+            "status",
+            ctx=ChatRoundContext(is_cancelled=lambda: False),
+        )
+
+        self.assertIsNone(
+            getattr(app.chat_round_orchestrator._cancel_notice_tls, "is_cancelled", None)
+        )
 
     def test_process_rotates_round_robin_at_prompt_start(self):
         """Prompts sequenciais sem prefixo explícito reservam agentes em round-robin."""

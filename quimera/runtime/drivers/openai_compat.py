@@ -803,6 +803,8 @@ class OpenAICompatDriver:
             progress_callback=None,
             quiet=False,
             cancel_event=None,
+            begin_tool_execution=None,
+            end_tool_execution=None,
     ) -> Optional[str]:
         """
         Executa o agente com o prompt dado tratando o loop de tool calling internamente.
@@ -980,13 +982,22 @@ class OpenAICompatDriver:
                                 on_tool_call(tc["name"], tc["arguments"])
                             if cancel_event is not None and cancel_event.is_set():
                                 return None
-                            result = self._execute_tool(
-                                tc,
-                                tool_executor,
-                                agent_name=agent_name,
-                                parent_agent=parent_agent,
-                                progress_callback=progress_callback,
-                            )
+                            tool_boundary_entered = True
+                            if begin_tool_execution is not None:
+                                tool_boundary_entered = bool(begin_tool_execution())
+                            if not tool_boundary_entered:
+                                return None
+                            try:
+                                result = self._execute_tool(
+                                    tc,
+                                    tool_executor,
+                                    agent_name=agent_name,
+                                    parent_agent=parent_agent,
+                                    progress_callback=progress_callback,
+                                )
+                            finally:
+                                if end_tool_execution is not None:
+                                    end_tool_execution()
                         if cancel_event is not None and cancel_event.is_set():
                             return None
                         _logger.info(

@@ -559,6 +559,91 @@ class TestTurnCycle(unittest.TestCase):
         app.session_services.shutdown.assert_called_once_with(interrupted=False)
         app.agent_client.close.assert_called_once()
 
+    def test_run_keeps_chat_alive_when_only_openai_drain_is_active(self):
+        """Ctrl+C no CLI não pode sair enquanto has_active_work rastreia HTTP tardio."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
+        app.renderer = DummyRenderer()
+        app.threads = 1
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.session_services = Mock()
+        app.agent_client = Mock()
+        app.agent_client.has_active_work.return_value = True
+        app.turn_manager = TurnManager()
+        app._format_user_prompt = lambda: "User: "
+        app.system_layer = Mock(show_muted_message=MagicMock())
+        app._refresh_parallel_toolbar = Mock()
+        app.bug_services = Mock()
+
+        read_index = [0]
+
+        def mock_read_user_input(_prompt, timeout=None):
+            read_index[0] += 1
+            if read_index[0] == 1:
+                raise KeyboardInterrupt()
+            return CMD_EXIT
+
+        app.read_user_input = mock_read_user_input
+        _materialize_ui_event_handler(app)
+
+        QuimeraApp.run(app)
+
+        self.assertEqual(read_index[0], 2)
+        app.agent_client.cancel_active_work.assert_called_once_with()
+        app.session_services.shutdown.assert_called_once_with(interrupted=False)
+        app.agent_client.close.assert_called_once()
+
+    def test_run_assigns_submission_id_to_plain_cli_prompt(self):
+        """Prompt textual do CLI precisa de correlação estável como na Textual."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
+        app.renderer = DummyRenderer()
+        app.threads = 1
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.session_services = Mock()
+        app.agent_client = Mock()
+        app.agent_client.has_active_work.return_value = False
+        app.turn_manager = TurnManager()
+        app._format_user_prompt = lambda: "User: "
+        app.system_layer = Mock(show_muted_message=MagicMock())
+        app._refresh_parallel_toolbar = Mock()
+        app.bug_services = Mock()
+        app._do_process_chat_message = Mock()
+        app.read_user_input = Mock(side_effect=["mensagem", CMD_EXIT])
+
+        _materialize_ui_event_handler(app)
+        original_register = app.chat_lifecycle.register_submission
+        app.chat_lifecycle.register_submission = MagicMock(wraps=original_register)
+
+        QuimeraApp.run(app)
+
+        app.chat_lifecycle.register_submission.assert_called_once()
+        submission_id = app.chat_lifecycle.register_submission.call_args.args[0]
+        self.assertTrue(submission_id.startswith("submission:"))
+        self.assertGreater(len(submission_id), len("submission:"))
+
     def test_handle_local_processing_interrupt_cancels_active_work(self):
         """Ctrl+C local deve sinalizar cancelamento real do AgentClient."""
         app = QuimeraApp.__new__(QuimeraApp)

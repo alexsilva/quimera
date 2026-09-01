@@ -82,6 +82,7 @@ class AgentClient:
         self._api_driver_signatures: dict = {}
         self._active_api_runs: dict[object, threading.Event] = {}
         self._active_api_runs_lock = threading.Lock()
+        self._can_abandon_cancelled_api_run = False
         self.tool_event_callback = None
         # Modo de execução ativo; quando definido, subprocessos são envolvidos com bwrap.
         self.execution_mode = None
@@ -400,6 +401,7 @@ class AgentClient:
         forked._cancel_notice_state = self._cancel_notice_state
         forked._active_api_runs = self._active_api_runs
         forked._active_api_runs_lock = self._active_api_runs_lock
+        forked._can_abandon_cancelled_api_run = True
         return forked
 
     def has_active_work(self) -> bool:
@@ -1350,8 +1352,27 @@ class AgentClient:
                 result_holder = {"result": None, "error": None}
                 api_run_token = object()
                 api_cancel_event = threading.Event()
+                tool_execution_lock = threading.Lock()
+                active_tool_executions = 0
                 if self._cancel_event.is_set():
                     api_cancel_event.set()
+
+                def _begin_tool_execution() -> bool:
+                    nonlocal active_tool_executions
+                    with tool_execution_lock:
+                        if api_cancel_event.is_set():
+                            return False
+                        active_tool_executions += 1
+                        return True
+
+                def _end_tool_execution() -> None:
+                    nonlocal active_tool_executions
+                    with tool_execution_lock:
+                        active_tool_executions = max(0, active_tool_executions - 1)
+
+                def _has_active_tool_execution() -> bool:
+                    with tool_execution_lock:
+                        return active_tool_executions > 0
 
                 def _run_driver():
                     previous_scope = None
@@ -1399,6 +1420,8 @@ class AgentClient:
                             if self.tool_event_callback else None,
                             on_text_chunk=guarded_on_text_chunk,
                             progress_callback=progress_callback,
+                            begin_tool_execution=_begin_tool_execution,
+                            end_tool_execution=_end_tool_execution,
                         )
                     except Exception as exc:
                         result_holder["error"] = exc
@@ -1439,15 +1462,24 @@ class AgentClient:
                     if self._cancel_event.is_set() and not api_cancel_event.is_set():
                         api_cancel_event.set()
                     if api_cancel_event.is_set():
-                        if not timed_out and not cancellation_announced:
-                            self._show_cancelled_once()
-                            cancellation_announced = True
-                        # A chamada HTTP do SDK pode permanecer bloqueada até o
-                        # timeout do transporte. Não abandonamos a thread: enquanto
-                        # ela estiver viva o scheduler deve continuar contabilizando
-                        # a execução, impedindo que um segundo Ctrl+C seja tratado
-                        # como saída do app. O driver recebe o mesmo cancel_event e
-                        # descarta qualquer resposta tardia antes de executar tools.
+                        if not timed_out:
+                            self._user_cancelled = True
+                            if not cancellation_announced:
+                                self._show_cancelled_once()
+                                cancellation_announced = True
+                            if (
+                                self._can_abandon_cancelled_api_run
+                                and not _has_active_tool_execution()
+                            ):
+                                # Forks de chat têm ToolExecutor próprio. Enquanto
+                                # nenhuma tool cruzou a fronteira de execução, a
+                                # thread pode drenar o transporte em background sem
+                                # afetar o próximo turno.
+                                self.invalidate_api_driver(agent)
+                                return None
+                        # Wall-clock timeout mantém o contrato conservador: nesse
+                        # caso, no client primário ou com tool já iniciada, aguardamos
+                        # a thread realmente encerrar antes de liberar a rodada.
                         t.join(timeout=0.1)
                         continue
                     time.sleep(0.25)
@@ -1475,6 +1507,7 @@ class AgentClient:
                     # estado público do client também nesse caminho rápido.
                     self._user_cancelled = True
                     self._show_cancelled_once()
+                    self.invalidate_api_driver(agent)
                     return None
 
                 if result_holder["error"]:
