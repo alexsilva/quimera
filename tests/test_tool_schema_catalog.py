@@ -15,7 +15,7 @@ from quimera.runtime.tools import memory as memory_tools
 from quimera.runtime.tools import todo as todo_tools
 
 _EXPECTED_SCHEMA_FINGERPRINT = (
-    "b11e8c7a8fa87941dc2fb4fcd645d0cb4773cd2c16d7ba18240024478484293c"
+    "007c23cbfb8c12bbf6026676d59d605619582ed3686854b8c2bd9ca20f9caa9d"
 )
 
 
@@ -48,6 +48,21 @@ def test_materialization_does_not_share_nested_mutable_structures():
 
     assert first != second
     assert second == TOOL_SCHEMAS
+
+
+def test_shell_tool_descriptions_distinguish_sync_and_persistent_execution():
+    """Descrições públicas devem orientar pelo contrato temporal, sem casos específicos."""
+    descriptions = {
+        schema["function"]["name"]: schema["function"]["description"]
+        for schema in TOOL_SCHEMAS
+    }
+
+    assert "curta duração" in descriptions["run_shell"]
+    assert "limite síncrono" in descriptions["run_shell"]
+    assert "prefira exec_command" in descriptions["run_shell"]
+    assert "sessão persistente" in descriptions["exec_command"]
+    assert "duração for incerta" in descriptions["exec_command"]
+    assert "acompanhamento por polling" in descriptions["exec_command"]
 
 
 def test_schema_and_registry_are_one_to_one():

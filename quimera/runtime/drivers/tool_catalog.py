@@ -258,15 +258,15 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='run_shell',
-        description='Executa um comando shell no diretório do workspace. Use para inspeção ou validação objetiva, não para substituir ferramentas específicas.',
+        description='Executa um comando shell de curta duração no workspace. Use quando a conclusão for esperada dentro do limite síncrono da ferramenta; para duração incerta ou que possa exceder esse limite, prefira exec_command.',
         parameters={'type': 'object',
  'properties': {'command': {'type': 'string', 'description': 'Comando shell a executar.'},
                 'workdir': {'type': 'string',
                             'description': 'Diretório relativo ao workspace onde o comando deve '
                                            'rodar.'},
                 'timeout': {'type': 'number',
-                            'description': 'Timeout em segundos para esta chamada (limitado ao '
-                                           'máximo configurado no runtime).'}},
+                            'description': 'Timeout solicitado em segundos. Se omitido, usa o default da runtime; '
+                                           'valores explícitos são limitados ao máximo configurado.'}},
  'required': ['command']},
         output_schema={'type': 'object',
  'properties': {'ok': {'type': 'boolean', 'description': 'True if exit_code=0'},
@@ -281,7 +281,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='exec_command',
-        description='Executa um comando shell com suporte a sessão persistente, stdout/stderr incremental e polling posterior via poll_command_session.',
+        description='Executa um comando shell em sessão persistente, com stdout/stderr incremental e acompanhamento por polling. Prefira quando a duração for incerta, puder exceder o limite síncrono ou quando for necessário acompanhar o processo ao longo do tempo.',
         parameters={'type': 'object',
  'properties': {'cmd': {'type': 'string', 'description': 'Comando shell a executar.'},
                 'workdir': {'type': 'string',

@@ -35,6 +35,58 @@ def test_shell_tool_run_basic(config):
         assert result.data["stdout"] == "hello\n"
 
 
+def test_run_shell_uses_default_timeout_when_omitted(tmp_path):
+    """Sem timeout explícito, run_shell usa o default configurado."""
+    config = ToolRuntimeConfig(
+        workspace_root=tmp_path,
+        command_timeout_seconds=20,
+        command_max_timeout_seconds=300,
+    )
+    tool = ShellTool(config)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+        tool.run_shell(ToolCall(name="run_shell", arguments={"command": "echo ok"}))
+
+    assert mock_run.call_args.kwargs["timeout"] == 20
+
+
+def test_run_shell_allows_timeout_above_default_up_to_configured_max(tmp_path):
+    """Timeout explícito pode exceder o default sem exceder o teto da runtime."""
+    config = ToolRuntimeConfig(
+        workspace_root=tmp_path,
+        command_timeout_seconds=20,
+        command_max_timeout_seconds=300,
+    )
+    tool = ShellTool(config)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+        tool.run_shell(
+            ToolCall(name="run_shell", arguments={"command": "echo ok", "timeout": 60})
+        )
+
+    assert mock_run.call_args.kwargs["timeout"] == 60
+
+
+def test_run_shell_caps_requested_timeout_at_configured_max(tmp_path):
+    """Timeout solicitado acima do teto é limitado pelo máximo da runtime."""
+    config = ToolRuntimeConfig(
+        workspace_root=tmp_path,
+        command_timeout_seconds=20,
+        command_max_timeout_seconds=120,
+    )
+    tool = ShellTool(config)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+        tool.run_shell(
+            ToolCall(name="run_shell", arguments={"command": "echo ok", "timeout": 300})
+        )
+
+    assert mock_run.call_args.kwargs["timeout"] == 120
+
+
 def test_run_shell_timeout_preserves_partial_bytes_and_nullable_exit_code(config):
     tool = ShellTool(config)
     timeout = shell_module.subprocess.TimeoutExpired(

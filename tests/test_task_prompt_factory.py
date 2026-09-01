@@ -99,6 +99,9 @@ def test_build_task_body_includes_protocol_and_instruction():
     assert "apply_patch" in body
     assert "run_shell" in body
     assert "exec_command" in body
+    assert "limite síncrono da ferramenta" in body
+    assert "duração for incerta" in body
+    assert "sessão interativa" not in body
     assert "Ignore conversa recente fora da task" in body
     assert "Use o estado compartilhado apenas como referência auxiliar" in body
 

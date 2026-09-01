@@ -407,17 +407,22 @@ class ShellTool(ToolBase):
         )
 
     def _resolve_timeout_seconds(self, raw_timeout: object) -> float:
-        """Resolve timeout por chamada, limitado ao máximo configurado."""
+        """Resolve timeout por chamada com default e teto independentes."""
         default = float(self.config.command_timeout_seconds)
+        maximum = float(
+            getattr(self.config, "command_max_timeout_seconds", self.config.command_timeout_seconds)
+        )
+        if default <= 0 or maximum <= 0:
+            raise ToolPolicyError("timeouts da runtime devem ser números positivos (segundos)")
         if raw_timeout is None:
-            return default
+            return min(default, maximum)
         try:
             value = float(raw_timeout)
         except (TypeError, ValueError) as exc:
             raise ToolPolicyError("timeout deve ser número positivo (segundos)") from exc
         if value <= 0:
             raise ToolPolicyError("timeout deve ser número positivo (segundos)")
-        return min(value, default)
+        return min(value, maximum)
 
     @staticmethod
     def _coerce_timeout_stream(value: object) -> str:

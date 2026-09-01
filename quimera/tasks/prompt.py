@@ -60,7 +60,7 @@ class TaskPromptFactory:
             "1. Descubra o alvo antes de mudar: identifique arquivos, trechos ou comandos relevantes.\n"
             "2. Para código existente, leia antes de editar e prefira alteração mínima.\n"
             "3. Use apply_patch para mudanças parciais; use write_file apenas para arquivo novo ou reescrita total justificada.\n"
-            "4. Para shell, use exatamente run_shell em execuções simples e exec_command apenas quando precisar de sessão interativa.\n"
+            "4. Para shell, use run_shell quando a conclusão for esperada dentro do limite síncrono da ferramenta; use exec_command quando a duração for incerta ou quando precisar acompanhar a execução por polling.\n"
             "5. Ao responder, inclua evidência concreta: arquivos alterados, resultado de validação e próximo passo."
         )
         parts.append(

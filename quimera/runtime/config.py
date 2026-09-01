@@ -26,6 +26,7 @@ class ToolRuntimeConfig:
     memory_file: Path | None = None
     artifacts_root: Path | None = None
     command_timeout_seconds: int = 20
+    command_max_timeout_seconds: int = 300
     mcp_tool_timeout_seconds: int = DEFAULT_MCP_TOOL_TIMEOUT_SECONDS
     delegate_parallel_timeout_seconds: int = DEFAULT_DELEGATE_TIMEOUT_SECONDS
     interactive_command_default_yield_ms: int = 1000
