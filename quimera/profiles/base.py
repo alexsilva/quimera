@@ -2,6 +2,7 @@
 import json
 import re
 import shlex
+import sys
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable, FrozenSet, List, Optional, Tuple, Union
@@ -391,6 +392,27 @@ class ExecutionProfile:
             # passado como argumento separado.
             return [f"--token={token}"]
         return []
+
+    def _build_mcp_proxy_command(self, socket_path: str) -> List[str]:
+        """Monta o proxy MCP usando o mesmo Python que executa o Quimera.
+
+        O agente CLI roda no ambiente do workspace, que pode ter outro
+        virtualenv. Usar apenas ``python -m quimera.runtime.mcp`` faria o
+        proxy resolver esse Python do projeto e exigir que o pacote Quimera
+        estivesse instalado nele. ``sys.executable`` mantém o proxy preso ao
+        runtime do próprio Quimera sem contaminar o PATH do agente.
+        """
+        command = [
+            sys.executable,
+            "-m",
+            "quimera.runtime.mcp",
+            "--connect-socket",
+            socket_path,
+            "--agent-name",
+            self.name,
+        ]
+        command.extend(self._build_token_args())
+        return command
 
     def env_for_cli(self) -> dict:
         """Retorna variáveis de ambiente extras a injetar no subprocess CLI.

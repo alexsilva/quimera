@@ -2,6 +2,7 @@ import json
 import queue
 import signal
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -171,7 +172,7 @@ def test_codex_profile_injects_mcp_server_before_stdin_sentinel():
             "--skip-git-repo-check",
             "--json",
             "-c",
-            'mcp_servers.quimera.command="python"',
+            f"mcp_servers.quimera.command={json.dumps(sys.executable)}",
             "-c",
             f"mcp_servers.quimera.args={expected_args}",
             "-c",
@@ -240,6 +241,7 @@ def test_claude_profile_injects_mcp_server():
         config = _json.loads(cmd[idx + 1])
         assert "mcpServers" in config
         assert "quimera" in config["mcpServers"]
+        assert config["mcpServers"]["quimera"]["command"] == sys.executable
         proxy_args = config["mcpServers"]["quimera"]["args"]
         assert "--connect-socket" in proxy_args
         assert "/tmp/quimera.sock" in proxy_args
@@ -341,7 +343,7 @@ def test_claude_profile_prefers_socket_when_socket_and_http_are_set():
         config = _json.loads(config_raw)
         server = config["mcpServers"]["quimera"]
         assert server["type"] == "stdio"
-        assert server["command"] == "python"
+        assert server["command"] == sys.executable
         assert "--connect-socket" in server["args"]
         assert "/tmp/quimera.sock" in server["args"]
         assert "--token=internal-token" in server["args"]
@@ -365,7 +367,7 @@ def test_codex_profile_prefers_socket_when_socket_and_http_are_set():
         profile.set_mcp_http_config("https://external.example/mcp", "external-token")
         cmd = profile.effective_cmd()
         joined = "\n".join(cmd)
-        assert 'mcp_servers.quimera.command="python"' in cmd
+        assert f"mcp_servers.quimera.command={json.dumps(sys.executable)}" in cmd
         assert "--connect-socket" in joined
         assert "/tmp/quimera.sock" in joined
         assert "internal-token" in joined
@@ -393,6 +395,7 @@ def test_opencode_profile_prefers_local_socket_env_when_socket_and_http_are_set(
         config = json.loads(config_raw)
         server = config["mcp"]["quimera"]
         assert server["type"] == "local"
+        assert server["command"][0] == sys.executable
         assert "--connect-socket" in server["command"]
         assert "/tmp/quimera.sock" in server["command"]
         assert "--token=internal-token" in server["command"]
@@ -1922,7 +1925,7 @@ def test_opencode_profile_injects_mcp_via_env_var():
         config = json.loads(config_raw)
         assert config["mcp"]["quimera"]["type"] == "local"
         assert config["mcp"]["quimera"]["command"] == [
-            "python", "-m", "quimera.runtime.mcp",
+            sys.executable, "-m", "quimera.runtime.mcp",
             "--connect-socket", "/tmp/quimera.sock",
             "--agent-name", "opencode",
         ]
@@ -1997,7 +2000,7 @@ def test_agent_client_call_dynamic_opencode_base_passes_env_for_cli_to_run(rende
         assert config_raw is not None
         config = json.loads(config_raw)
         assert config["mcp"]["quimera"]["command"] == [
-            "python", "-m", "quimera.runtime.mcp",
+            sys.executable, "-m", "quimera.runtime.mcp",
             "--connect-socket", "/tmp/quimera.sock",
             "--agent-name", "opencode-dyn-call-test",
         ]

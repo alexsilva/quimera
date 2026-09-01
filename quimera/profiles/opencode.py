@@ -71,12 +71,7 @@ class OpenCodeProfile(ExecutionProfile):
         """Gera JSON de config para ativar MCP do Quimera."""
         if not (socket_path or "").strip():
             return None
-        proxy_cmd: list[str] = [
-            "python", "-m", "quimera.runtime.mcp",
-            "--connect-socket", socket_path,
-            "--agent-name", self.name,
-        ]
-        proxy_cmd += self._build_token_args()
+        proxy_cmd = self._build_mcp_proxy_command(socket_path)
         config = {
             "mcp": {
                 "quimera": {
