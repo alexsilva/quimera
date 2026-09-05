@@ -22,9 +22,14 @@ from quimera.agents.process_runner import ProcessRunner
 from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.profiles import get as get_profile
 from quimera.prompt_templates import PromptText
-from quimera.profiles.base import CliConnection, OpenAIConnection, register_connection_profile
+from quimera.profiles.base import (
+    CliConnection,
+    OpenAIConnection,
+    ProfileRegistry,
+    register_connection_profile,
+)
 from quimera.profiles.claude import _format_claude_spy_event
-from quimera.profiles.codex import _format_codex_spy_event
+from quimera.profiles.codex import CodexProfile, _format_codex_spy_event
 from quimera.profiles.opencode import OpenCodeProfile, _format_opencode_spy_event
 from quimera.profiles.spy_utils import format_command_output_preview
 from quimera.spy_output_presenter import SpyOutputPresenter
@@ -113,15 +118,13 @@ def test_codex_profile_reads_prompt_from_stdin():
     assert profile.aliases == []
 
 
-def test_codex_profile_resumes_last_session_in_workspace():
-    """Verifica que codex profile resumes last session in workspace."""
+def test_codex_profile_starts_new_session_in_workspace():
+    """Chamadas padrão não podem disputar a sessão de outro agente ativo."""
     profile = get_profile("codex")
     assert profile is not None
     assert profile.effective_cmd() == [
         "codex",
         "exec",
-        "resume",
-        "--last",
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "--json",
@@ -129,8 +132,8 @@ def test_codex_profile_resumes_last_session_in_workspace():
     ]
 
 
-def test_codex_profile_applies_resume_to_cli_override():
-    """Verifica que codex profile applies resume to cli override."""
+def test_codex_profile_keeps_new_session_for_cli_override():
+    """Override sem retomada também deve iniciar uma sessão própria."""
     profile = get_profile("codex")
     assert profile is not None
     original_override = profile._connection_override
@@ -142,7 +145,7 @@ def test_codex_profile_applies_resume_to_cli_override():
             prompt_as_arg=False,
             output_format="codex-json",
         )
-        assert profile.effective_cmd() == ["codex", "exec", "resume", "--last", "--json", "-"]
+        assert profile.effective_cmd() == ["codex", "exec", "--json", "-"]
     finally:
         profile._connection_override = original_override
         profile.set_mcp_socket_path(original_mcp_socket)
@@ -166,8 +169,6 @@ def test_codex_profile_injects_mcp_server_before_stdin_sentinel():
         assert profile.effective_cmd() == [
             "codex",
             "exec",
-            "resume",
-            "--last",
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--json",
@@ -205,8 +206,6 @@ def test_codex_profile_does_not_duplicate_existing_mcp_override():
         assert profile.effective_cmd() == [
             "codex",
             "exec",
-            "resume",
-            "--last",
             "--json",
             "-c",
             'mcp_servers.quimera.command="python"',
@@ -216,6 +215,69 @@ def test_codex_profile_does_not_duplicate_existing_mcp_override():
     finally:
         profile._connection_override = original_override
         profile.set_mcp_socket_path(original_mcp_socket)
+
+
+@pytest.mark.parametrize("session", ["--last", "explicit-session-id"])
+def test_codex_profile_preserves_explicit_resume(session):
+    """Retomadas escolhidas pelo usuário permanecem intactas, inclusive MCP."""
+    cmd = ["codex", "exec", "resume", session, "--json", "-"]
+    profile = CodexProfile(
+        name="codex-resume", prefix="/codex-resume", style=("blue", "Codex"), cmd=cmd
+    )
+    profile.set_mcp_socket_path("/tmp/quimera.sock")
+
+    effective = profile.effective_cmd()
+
+    assert effective[:len(cmd) - 1] == cmd[:-1]
+    assert effective[-1] == "-"
+    assert effective.count("-") == 1
+    assert any("mcp_servers.quimera.command=" in arg for arg in effective)
+    assert profile.cmd == cmd
+
+
+def test_codex_profile_does_not_duplicate_stdin_sentinel():
+    cmd = ["codex", "exec", "--json", "-"]
+    profile = CodexProfile(
+        name="codex-stdin", prefix="/codex-stdin", style=("blue", "Codex"), cmd=cmd
+    )
+
+    assert profile.effective_cmd() == cmd
+    assert profile.effective_cmd() == cmd
+    assert profile.cmd == cmd
+
+
+def test_codex_connection_profiles_keep_sessions_independent():
+    """Perfis dinâmicos usados por delegate não retomam a sessão do pai."""
+    registry = ProfileRegistry()
+    registry.register(
+        CodexProfile(name="codex", prefix="/codex", style=("blue", "Codex"))
+    )
+    for name in ("codex-parent", "codex-child"):
+        connection = CliConnection(
+            cmd=["codex", "exec", "--model", name, "--json"],
+            prompt_as_arg=False,
+            output_format="codex-json",
+        )
+        profile = register_connection_profile(
+            name,
+            connection=connection,
+            metadata={"profile": "codex"},
+            registry=registry,
+        )
+        profile.set_mcp_socket_path("/tmp/quimera.sock")
+
+        command, prompt_as_arg, output_format = (
+            AgentClient._resolve_profile_cli_attrs(profile, connection)
+        )
+
+        assert command[:6] == ["codex", "exec", "--model", name, "--json", "-c"]
+        assert "resume" not in command
+        assert "--last" not in command
+        assert command[-1] == "-"
+        assert prompt_as_arg is False
+        assert output_format == "codex-json"
+        assert name in command[command.index("-c", 6) + 1]
+        assert connection.cmd == ["codex", "exec", "--model", name, "--json"]
 
 
 def test_claude_profile_injects_mcp_server():

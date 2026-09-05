@@ -155,7 +155,7 @@ def _format_codex_spy_event(line: str) -> list[SpyEvent]:
 
 
 class CodexProfile(ExecutionProfile):
-    """Profile do Codex com retomada automática da última sessão por workspace."""
+    """Profile do Codex com uma sessão própria por chamada do Quimera."""
 
     def configure_with_model(self, model_id: str) -> CliConnection:
         """Retorna conexão CLI do Codex com --model aplicado."""
@@ -225,7 +225,11 @@ class CodexProfile(ExecutionProfile):
         return [*base_cmd, *mcp_args]
 
     def effective_cmd(self) -> list[str]:
-        """Prefere `codex exec resume --last` sem mover a lógica para fora do profile."""
+        """Inicia uma sessão nova, salvo retomada configurada explicitamente.
+
+        O Quimera já envia o contexto no prompt. Retomar a última sessão do
+        workspace mistura agentes e disputa seu writer com chamadas ativas.
+        """
         connection = self.effective_connection()
         if isinstance(connection, CliConnection):
             cmd = list(connection.cmd)
@@ -237,10 +241,9 @@ class CodexProfile(ExecutionProfile):
         if cmd[:2] != ["codex", "exec"] or (len(cmd) >= 3 and cmd[2] == "resume"):
             return self._with_mcp_server_args(cmd)
 
-        resumed = ["codex", "exec", "resume", "--last", *cmd[2:]]
-        if not prompt_as_arg:
-            resumed.append("-")
-        return self._with_mcp_server_args(resumed)
+        if not prompt_as_arg and cmd[-1] != "-":
+            cmd.append("-")
+        return self._with_mcp_server_args(cmd)
 
 
 
