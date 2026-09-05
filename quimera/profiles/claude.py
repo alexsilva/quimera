@@ -58,8 +58,33 @@ def _format_claude_spy_event(line: str) -> list[SpyEvent]:
 
 class ClaudeProfile(ExecutionProfile):
     def format_stdin_input(self, prompt) -> str:
-        """Serializa o prompt como evento stream-json para o Claude CLI."""
-        event = {"type": "user", "message": {"role": "user", "content": str(prompt)}}
+        """Formata o prompt conforme o protocolo da conexão efetiva.
+
+        Conexões antigas usam entrada textual, mesmo com saída stream-json.
+        Enviar um envelope JSON nesse caso faz o Claude recebê-lo como parte
+        do contexto, em vez de interpretar seu conteúdo como o prompt.
+        """
+        connection = self.effective_connection()
+        cmd = (
+            connection.cmd
+            if isinstance(connection, CliConnection)
+            else self.cmd
+        )
+        input_format = "text"
+        for index, arg in enumerate(cmd):
+            if arg == "--":
+                break
+            if arg.startswith("--input-format="):
+                input_format = arg.split("=", 1)[1]
+            elif arg == "--input-format" and index + 1 < len(cmd):
+                input_format = cmd[index + 1]
+
+        if input_format != "stream-json":
+            return str(prompt)
+        event = {
+            "type": "user",
+            "message": {"role": "user", "content": str(prompt)},
+        }
         return json.dumps(event, ensure_ascii=False) + "\n"
 
     def configure_with_model(self, model_id: str) -> CliConnection:

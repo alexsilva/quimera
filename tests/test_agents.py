@@ -28,7 +28,7 @@ from quimera.profiles.base import (
     ProfileRegistry,
     register_connection_profile,
 )
-from quimera.profiles.claude import _format_claude_spy_event
+from quimera.profiles.claude import ClaudeProfile, _format_claude_spy_event
 from quimera.profiles.codex import CodexProfile, _format_codex_spy_event
 from quimera.profiles.opencode import OpenCodeProfile, _format_opencode_spy_event
 from quimera.profiles.spy_utils import format_command_output_preview
@@ -1963,6 +1963,101 @@ def test_claude_profile_supports_stream_json_input_protocol():
 
     event = json.loads(profile.format_stdin_input("olá").strip())
     assert event == {"type": "user", "message": {"role": "user", "content": "olá"}}
+
+
+@pytest.mark.parametrize(
+    "input_args, uses_stream_json",
+    [
+        ([], False),
+        (["--input-format=text"], False),
+        (["--input-format", "text"], False),
+        (["--input-format=stream-json"], True),
+        (["--input-format", "stream-json"], True),
+        (["--input-format=stream-json", "--input-format=text"], False),
+        (["--", "--input-format=stream-json"], False),
+    ],
+)
+def test_claude_profile_formats_input_for_connection_protocol(
+    input_args, uses_stream_json,
+):
+    """O formato de saída não pode determinar a serialização da entrada."""
+    profile = ClaudeProfile(
+        name="claude-protocol",
+        prefix="/claude-protocol",
+        style=("magenta", "Claude"),
+        cmd=["claude", "--input-format=stream-json"],
+    )
+    connection = CliConnection(
+        cmd=["claude", "-p", "--output-format=stream-json", *input_args],
+        output_format="stream-json",
+    )
+    profile._connection_override = connection
+    original_cmd = list(connection.cmd)
+    prompt = 'Contexto: ação anterior.\nPedido atual: confira "olá".\n'
+
+    formatted = profile.format_stdin_input(prompt)
+
+    if uses_stream_json:
+        assert len(formatted.splitlines()) == 1
+        assert json.loads(formatted) == {
+            "type": "user",
+            "message": {"role": "user", "content": prompt},
+        }
+    else:
+        assert formatted == prompt
+    assert connection.cmd == original_cmd
+
+
+def test_claude_connection_profiles_keep_context_and_protocol_independent():
+    """Delegados com conexões antigas e novas recebem só seu próprio prompt."""
+    registry = ProfileRegistry()
+    registry.register(
+        ClaudeProfile(
+            name="claude",
+            prefix="/claude",
+            style=("magenta", "Claude"),
+            cmd=["claude", "--print", "--input-format=stream-json"],
+        )
+    )
+    entries = []
+    for model, input_args in (
+        ("sonnet", []),
+        ("opus", ["--input-format", "stream-json"]),
+    ):
+        name = f"claude-{model}"
+        connection = CliConnection(
+            cmd=["claude", "--model", model, "-p", *input_args],
+            output_format="stream-json",
+        )
+        profile = register_connection_profile(
+            name,
+            connection=connection,
+            metadata={"profile": "claude"},
+            registry=registry,
+        )
+        profile.set_mcp_socket_path("/tmp/quimera.sock")
+        command, prompt_as_arg, output_format = (
+            AgentClient._resolve_profile_cli_attrs(profile, connection)
+        )
+        session_flags = {
+            "--continue", "-c", "--resume", "-r", "--session-id",
+        }
+        assert session_flags.isdisjoint(command)
+        assert prompt_as_arg is False
+        assert output_format == "stream-json"
+        config = json.loads(command[command.index("--mcp-config") + 1])
+        assert config["mcpServers"]["quimera"]["args"][-2:] == [
+            "--agent-name", name,
+        ]
+        entries.append((profile, f"Pedido exclusivo para {name}"))
+
+    for _ in range(2):
+        for profile, prompt in entries:
+            formatted = profile.format_stdin_input(prompt)
+            if profile.name == "claude-opus":
+                assert json.loads(formatted)["message"]["content"] == prompt
+            else:
+                assert formatted == prompt
 
 
 def test_opencode_profile_exposes_spy_stdout_formatter_and_json_output():
