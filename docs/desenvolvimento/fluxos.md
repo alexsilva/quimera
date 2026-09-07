@@ -43,6 +43,7 @@ input começa com '/'
 
 ```text
 executor acorda
+  -> verifica gate e capacidade livre de workers
   -> claim_task(agent)
   -> monta prompt de task
   -> chama agente
@@ -50,6 +51,12 @@ executor acorda
   -> envia para pending_review ou failed/completed conforme política
   -> publica eventos de domínio
 ```
+
+Execução e review compartilham a capacidade do pool. O polling manual usa o mesmo
+gate e a mesma proteção de reserva/submissão do loop em background. Quando um
+worker termina, ele acorda o executor; `stop()` impede novas reservas e deixa os
+handlers já iniciados terminarem. O lifecycle da aplicação controla o
+cancelamento dos agentes em execução.
 
 ## Review de task
 

@@ -5,6 +5,7 @@ rate limit, sem depender de QuimeraApp. Dependências injetadas
 como callables.
 """
 
+import math
 import time
 
 from .config import logger
@@ -64,7 +65,7 @@ class AgentCallService:
         """
         last_error = None
 
-        effective_max_retries = self._max_retries
+        effective_max_retries = max(1, self._max_retries)
         if isinstance(max_retries, int):
             effective_max_retries = max(1, max_retries)
 
@@ -78,6 +79,8 @@ class AgentCallService:
 
             try:
                 response = call_fn(agent)
+                if is_user_cancelled():
+                    return None
                 if response is None:
                     if is_user_cancelled():
                         logger.debug("[AGENT_CALL] agent=%s cancelled by user, aborting", agent)
@@ -95,12 +98,15 @@ class AgentCallService:
                             "agent=%s no response, retrying %d/%d",
                             agent, attempt, effective_max_retries,
                         )
-                        time.sleep(backoff)
+                        if not self._wait_backoff(backoff, is_user_cancelled):
+                            return None
                         continue
                     self._record_failure(agent)
                     return None
 
                 result = resolve_fn(agent, response)
+                if is_user_cancelled():
+                    return None
                 if result is None:
                     if is_user_cancelled():
                         logger.debug("[AGENT_CALL] agent=%s cancelled by user, aborting", agent)
@@ -118,7 +124,8 @@ class AgentCallService:
                             "agent=%s response parsing failed, retrying %d/%d",
                             agent, attempt, effective_max_retries,
                         )
-                        time.sleep(backoff)
+                        if not self._wait_backoff(backoff, is_user_cancelled):
+                            return None
                         continue
                     self._record_failure(agent)
                 else:
@@ -157,7 +164,8 @@ class AgentCallService:
                         "agent=%s error communicating, retrying %d/%d: %s",
                         agent, attempt, effective_max_retries, exc,
                     )
-                    time.sleep(self._retry_backoff * attempt)
+                    if not self._wait_backoff(self._compute_backoff(attempt), is_user_cancelled):
+                        return None
                     continue
                 self._record_failure(agent)
                 raise
@@ -171,10 +179,22 @@ class AgentCallService:
             )
         return None
 
+    @staticmethod
+    def _wait_backoff(seconds: float, is_user_cancelled) -> bool:
+        """Keep cancellation responsive even during long provider backoffs."""
+        remaining = max(0.0, seconds)
+        while remaining > 0:
+            if is_user_cancelled():
+                return False
+            interval = min(0.1, remaining)
+            time.sleep(interval)
+            remaining -= interval
+        return not is_user_cancelled()
+
     def _compute_backoff(self, attempt: int) -> float:
         if self._is_rate_limited():
             retry_after = self._get_retry_after()
-            if isinstance(retry_after, (int, float)) and retry_after > 0:
+            if isinstance(retry_after, (int, float)) and math.isfinite(retry_after) and retry_after > 0:
                 return max(self._rate_limit_backoff, float(retry_after))
             return self._rate_limit_backoff
         return self._retry_backoff * attempt

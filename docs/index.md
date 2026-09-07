@@ -28,6 +28,7 @@ Use este guia se você precisa:
 | Configurar o Quimera | [Configuração](guia/configuracao.md) |
 | Referência técnica | [CLI](referencia/cli.md), [Comandos slash](referencia/comandos.md), [Dependências](referencia/dependencias.md), [Estrutura de dados](referencia/estrutura-de-dados.md) e [Troubleshooting](referencia/troubleshooting.md) |
 | Fluxo de interação entre agentes | [Agent interaction flow](architecture/agent-interaction-flow.md) |
+| Mapa do harness e revisão de robustez | [Auditoria do harness](desenvolvimento/auditoria-harness.md) |
 
 ## Como publicar ou validar a documentação
 

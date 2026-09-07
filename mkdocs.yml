@@ -28,6 +28,7 @@ nav:
       - Aprovação e segurança de ferramentas: desenvolvimento/aprovacao.md
       - Fluxos de execução: desenvolvimento/fluxos.md
       - Testes e qualidade: desenvolvimento/testes.md
+      - Auditoria do harness: desenvolvimento/auditoria-harness.md
 markdown_extensions:
   - admonition
   - tables

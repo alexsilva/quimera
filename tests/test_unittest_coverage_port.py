@@ -558,7 +558,7 @@ class TaskExecutorCoverageTests(unittest.TestCase):
                 return False
 
             executor._running = True
-            _task2 = TaskRecord(id=2, job_id=0, description="", status="in_progress")
+            _task2 = TaskRecord(id=2, job_id=0, description="", status="reviewing", reviewed_by="agent")
             repository.tasks_by_id[2] = _task2
             repository.claim_task = MagicMock(side_effect=claim_task_side_effect)
             repository.claim_review_task = MagicMock(return_value=2)

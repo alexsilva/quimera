@@ -209,7 +209,7 @@ def test_task_executor_skips_review_claim_when_agent_is_not_operational(tmp_path
     """Verifica que Test task executor skips review claim when agent is not operational."""
     repository = MagicMock()
     repository.claim_task.return_value = None
-    executor = TaskExecutor("gemini", db_path=tmp_path / "tasks.db", poll_interval=0, repository=repository)
+    executor = TaskExecutor("gemini", db_path=tmp_path / "tasks.db", poll_interval=0.01, repository=repository)
     executor.set_review_handler(lambda _task: True)
     executor.set_review_eligibility(lambda: False)
     executor._running = True

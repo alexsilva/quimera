@@ -277,7 +277,7 @@ class TaskRepository:
         sql = (
             "SELECT id, job_id, description, body, status, task_type, origin, assigned_to, "
             "result, notes, priority, created_at, updated_at, created_by, requested_by, "
-            "started_at, completed_at "
+            "started_at, completed_at, reviewed_by "
             "FROM tasks"
         )
         clauses: list[str] = []
@@ -311,6 +311,7 @@ class TaskRepository:
                 requested_by=r[14],
                 started_at=r[15],
                 completed_at=r[16],
+                reviewed_by=r[17],
             )
             for r in rows
         ]

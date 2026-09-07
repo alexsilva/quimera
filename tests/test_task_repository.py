@@ -15,6 +15,7 @@ from quimera.tasks.events import (
     TaskFailed,
 )
 from quimera.tasks.repository import TaskRepository
+from quimera.tasks.executor import TaskExecutor
 from quimera.constants import TaskStatus
 from quimera.tasks import api as runtime_tasks
 from quimera.runtime.models import JobRecord, TaskRecord
@@ -194,6 +195,7 @@ def test_requeue_task_after_review_clears_reviewer(repository):
         )
         is True
     )
+    assert repository.list_tasks({"id": task_id})[0].reviewed_by is None
 
     row = _task_row(task_id, repository.db_path)
     assert row[0] == TaskStatus.PENDING
@@ -202,6 +204,25 @@ def test_requeue_task_after_review_clears_reviewer(repository):
     assert row[3] == "pedir ajuste"
     assert row[4] is None
     assert row[6] == 1
+
+
+def test_executor_dispatches_claimed_review_with_persisted_reviewer(repository):
+    job_id = runtime_tasks.add_job("job review dispatch", db_path=repository.db_path)
+    task_id = repository.create_task(job_id, "revisar", assigned_to="author", status=TaskStatus.IN_PROGRESS)
+    assert repository.submit_for_review(task_id, result="resultado")
+    executor = TaskExecutor("reviewer", repository=repository)
+    reviewed = []
+
+    def review(task):
+        reviewed.append(task)
+        return repository.complete_task(task.id, result=task.result, reviewed_by="reviewer")
+
+    executor.set_review_handler(review)
+    assert executor._process_next(include_reviews=True) == task_id
+    assert len(reviewed) == 1
+    assert reviewed[0].reviewed_by == "reviewer"
+    assert reviewed[0].status == TaskStatus.REVIEWING
+    assert repository.list_tasks({"id": task_id})[0].status == TaskStatus.COMPLETED
 
 
 def test_transition_task_preserves_omitted_fields(repository):

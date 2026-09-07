@@ -366,7 +366,9 @@ class TestCallAgent:
         ):
             result = ds.delegate("agent1")
         assert result is None
-        mock_sleep.assert_called_with(0.5)
+        waits = [call.args[0] for call in mock_sleep.call_args_list]
+        assert sum(waits) == pytest.approx(0.5)
+        assert max(waits) <= 0.1
 
     def test_none_low_level_with_user_cancelled_after_call_aborts(self, dispatch_app):
         """Verifica que none low level with user cancelled after call aborts."""
@@ -412,7 +414,9 @@ class TestCallAgent:
         ):
             result = ds.delegate("agent1")
         assert result is None
-        mock_sleep.assert_called_with(0.5)
+        waits = [call.args[0] for call in mock_sleep.call_args_list]
+        assert sum(waits) == pytest.approx(0.5)
+        assert max(waits) <= 0.1
 
     def test_none_resolve_with_user_cancelled_after_resolve_aborts(self, dispatch_app):
         """Verifica que none resolve with user cancelled after resolve aborts."""

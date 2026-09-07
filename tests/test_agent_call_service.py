@@ -1,8 +1,63 @@
 """Testes unitários para AgentCallService."""
 from unittest.mock import MagicMock, patch
+import threading
 import pytest
 
 from quimera.app.agent_call_service import AgentCallService
+
+
+@pytest.mark.parametrize("failure", ["no_response", "resolve_failed", "exception"])
+def test_cancellation_interrupts_rate_limit_backoff_without_penalizing_agent(failure):
+    cancelled = threading.Event()
+    record_failure = MagicMock()
+    record_success = MagicMock()
+    service = AgentCallService(max_retries=3, is_rate_limited=lambda: True,
+                               get_retry_after=lambda: 120, record_failure=record_failure,
+                               record_success=record_success)
+    call_fn = MagicMock(return_value=None if failure == "no_response" else "response")
+    if failure == "exception":
+        call_fn.side_effect = RuntimeError("rate limit")
+    resolve_fn = MagicMock(return_value=None)
+    with patch("quimera.app.agent_call_service.time.sleep", side_effect=lambda _seconds: cancelled.set()) as sleep:
+        assert service.call("agent", call_fn, resolve_fn, cancelled.is_set) is None
+    call_fn.assert_called_once_with("agent")
+    sleep.assert_called_once_with(0.1)
+    record_failure.assert_not_called()
+    record_success.assert_not_called()
+
+
+@pytest.mark.parametrize("stage", ["call", "resolve"])
+def test_response_after_cancellation_is_discarded(stage):
+    cancelled = threading.Event()
+    record_failure = MagicMock()
+    record_success = MagicMock()
+    service = AgentCallService(record_failure=record_failure, record_success=record_success)
+
+    def response(*_args):
+        cancelled.set()
+        return "late response"
+
+    call_fn = MagicMock(side_effect=response if stage == "call" else None, return_value="response")
+    resolve_fn = MagicMock(side_effect=response)
+    assert service.call("agent", call_fn, resolve_fn, cancelled.is_set) is None
+    if stage == "call":
+        resolve_fn.assert_not_called()
+    record_failure.assert_not_called()
+    record_success.assert_not_called()
+
+
+@pytest.mark.parametrize("retry_after", [float("inf"), float("nan"), -1, "invalid"])
+def test_invalid_retry_after_falls_back_to_finite_delay(retry_after):
+    service = AgentCallService(is_rate_limited=lambda: True, get_retry_after=lambda: retry_after)
+    assert service._compute_backoff(1) == 30.0
+
+
+def test_exception_retry_respects_provider_retry_after():
+    service = AgentCallService(is_rate_limited=lambda: True, get_retry_after=lambda: 45)
+    call_fn = MagicMock(side_effect=[RuntimeError("rate limit"), "response"])
+    with patch("quimera.app.agent_call_service.time.sleep") as sleep:
+        assert service.call("agent", call_fn, lambda *_args: "ok", lambda: False) == "ok"
+    assert sum(call.args[0] for call in sleep.call_args_list) == pytest.approx(45)
 
 
 class TestAgentCallServiceConstruction:
@@ -346,9 +401,9 @@ class TestCall:
         call_fn = MagicMock(return_value=None)
         with patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
             service.call("agent1", call_fn, MagicMock(), lambda: False)
-        assert mock_sleep.call_count == 2
-        mock_sleep.assert_any_call(0.5)
-        mock_sleep.assert_any_call(1.0)
+        waits = [call.args[0] for call in mock_sleep.call_args_list]
+        assert sum(waits) == pytest.approx(1.5)
+        assert max(waits) <= 0.1
 
     def test_max_retries_one_no_retry(self):
         """Verifica que com max_retries=1 não há retentativa e a falha é registrada imediatamente."""

@@ -2,9 +2,9 @@
 Task executor for Stage 5 - autonomous task consumption and execution.
 """
 import logging
-import queue
+import math
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable, Optional
 
 from ..constants import TaskStatus
@@ -31,6 +31,10 @@ class TaskExecutor:
         """
         if repository is None:
             raise ValueError("repository is required")
+        if type(max_workers) is not int or max_workers < 1:
+            raise ValueError("max_workers must be a positive integer")
+        if not math.isfinite(poll_interval) or poll_interval <= 0:
+            raise ValueError("poll_interval must be finite and positive")
         self.agent_name = agent_name
         self.db_path = db_path
         self._repository = repository
@@ -41,7 +45,10 @@ class TaskExecutor:
         self._wake_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._executor: Optional[ThreadPoolExecutor] = None
-        self._task_queue: queue.Queue = queue.Queue()
+        self._claim_lock = threading.RLock()
+        self._futures_lock = threading.RLock()
+        self._futures: set[Future] = set()
+        self._stopped = False
         self._handler: Optional[Callable] = None
         self._review_handler: Optional[Callable] = None
         self._review_eligibility: Optional[Callable[[], bool]] = None
@@ -65,21 +72,30 @@ class TaskExecutor:
 
     def start(self):
         """Inicia o loop de polling e o pool de workers em background."""
-        if self._running:
-            return
-        self._running = True
-        self._wake_event.clear()
-        self._executor = ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix=f"task-{self.agent_name}")
-        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
-        self._thread.start()
+        with self._claim_lock:
+            if self._running:
+                return
+            with self._futures_lock:
+                if self._futures:
+                    raise RuntimeError("previous task workers are still running")
+            if self._thread is not None and self._thread.is_alive():
+                raise RuntimeError("previous task poller is still running")
+            self._executor = ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix=f"task-{self.agent_name}")
+            self._running = True
+            self._stopped = False
+            self._wake_event.clear()
+            self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+            self._thread.start()
 
     def stop(self):
         """Interrompe o loop de polling e finaliza o pool de workers."""
-        self._running = False
-        self._wake_event.set()
-        if self._executor:
-            self._executor.shutdown(wait=False)
-        if self._thread:
+        with self._claim_lock:
+            self._running = False
+            self._stopped = True
+            self._wake_event.set()
+            if self._executor:
+                self._executor.shutdown(wait=False)
+        if self._thread and self._thread is not threading.current_thread():
             try:
                 self._thread.join(timeout=5)
             except KeyboardInterrupt:
@@ -120,61 +136,88 @@ class TaskExecutor:
     def _dispatch_task(self, task: TaskRecord) -> bool:
         if not self._handler or not self._can_execute_task(task):
             return False
-        if self._executor is not None:
-            self._executor.submit(self._handler, task)
-        else:
-            self._handler(task)
+        self._submit_handler(self._handler, task)
         return True
+
+    def _submit_handler(self, handler: Callable, task: TaskRecord) -> None:
+        if self._executor is None:
+            self._run_handler(handler, task)
+            return
+        with self._futures_lock:
+            future = self._executor.submit(self._run_handler, handler, task)
+            self._futures.add(future)
+            future.add_done_callback(self._worker_done)
+
+    def _run_handler(self, handler: Callable, task: TaskRecord) -> bool:
+        try:
+            return handler(task)
+        except Exception as exc:
+            _logger.exception("task handler failed agent=%s task_id=%s", self.agent_name, task.id)
+            current = self._load_task(task.id)
+            if current and (
+                (current.status == TaskStatus.IN_PROGRESS
+                 and current.assigned_to in {None, "", self.agent_name})
+                or (current.status == TaskStatus.REVIEWING
+                    and current.reviewed_by == self.agent_name)
+            ):
+                self._fail_task(task.id, str(exc))
+            return False
+
+    def _worker_done(self, future: Future) -> None:
+        with self._futures_lock:
+            self._futures.discard(future)
+        try:
+            future.result()
+        except Exception:
+            _logger.exception("task worker recovery failed agent=%s", self.agent_name)
+        self.wake()
+
+    def _process_next(self, *, include_reviews: bool = False) -> Optional[int]:
+        # Keep the capacity check, claim and submission together so manual polling
+        # cannot race the background poller and reserve work beyond worker capacity.
+        with self._claim_lock:
+            if self._stopped or (self._claim_gate is not None and not self._claim_gate()):
+                return None
+            with self._futures_lock:
+                if len(self._futures) >= self.max_workers:
+                    return None
+            task_id = None
+            try:
+                if self._handler:
+                    task_id = self._claim_task()
+                    if task_id:
+                        task = self._load_task(task_id)
+                        if task is None:
+                            self._fail_task(task_id, "task not found")
+                        elif self._dispatch_task(task):
+                            return task_id
+                        return None
+                if (include_reviews and self._review_handler
+                        and (self._review_eligibility is None or self._review_eligibility())):
+                    task_id = self._claim_review_task()
+                    if task_id:
+                        task = self._load_task(task_id)
+                        if task is None:
+                            self._fail_task(task_id, "review task not found")
+                        elif task.status == TaskStatus.REVIEWING and task.reviewed_by == self.agent_name:
+                            self._submit_handler(self._review_handler, task)
+                            return task_id
+                return None
+            except Exception as exc:
+                if task_id:
+                    self._fail_task(task_id, str(exc))
+                raise
 
     def _poll_loop(self):
         """Executa poll loop — tasks despachadas em paralelo via ThreadPoolExecutor quando ativo."""
         while self._running:
-            if self._claim_gate is not None and not self._claim_gate():
-                if self._wait_or_stop(0.5):
-                    break
-                continue
-            task_id = None
             try:
-                task_id = self._claim_task()
-                if task_id:
-                    task = self._load_task(task_id)
-                    if task and self._dispatch_task(task):
-                        pass
-                    elif not task or not self._handler:
-                        self._fail_task(task_id, "handler unavailable or task not found")
-                        _logger.warning("task %s claimed by %s but could not be dispatched", task_id, self.agent_name)
-                    task_id = None
-                    if self._wait_or_stop(1):
-                        break
+                if self._process_next(include_reviews=True) is not None:
                     continue
-                can_review = self._review_eligibility() if self._review_eligibility else True
-                if self._review_handler and can_review:
-                    review_id = self._claim_review_task()
-                    if review_id:
-                        task = self._load_task(review_id)
-                        if task:
-                            self._review_handler(task)
-                        else:
-                            self._fail_task(review_id, "review task not found")
-                            _logger.warning(
-                                "review task %s claimed by %s but could not be loaded",
-                                review_id,
-                                self.agent_name,
-                            )
-                        if self._wait_or_stop(1):
-                            break
-                        continue
-                if self._wait_or_stop(self.poll_interval):
-                    break
-            except Exception as exc:
-                _logger.exception("poll loop error agent=%s task_id=%s: %s", self.agent_name, task_id, exc)
-                if task_id:
-                    try:
-                        self._fail_task(task_id, str(exc))
-                    except Exception:
-                        pass
-                if self._wait_or_stop(self.poll_interval):
-                    break
+            except Exception:
+                _logger.exception("poll loop error agent=%s", self.agent_name)
+            if self._wait_or_stop(self.poll_interval):
+                break
 
     def _wait_or_stop(self, timeout: float) -> bool:
         """Wait for timeout unless stop() wakes the poll loop."""
@@ -189,16 +232,7 @@ class TaskExecutor:
 
     def process_pending(self):
         """Processa uma iteração manual de tasks pendentes (execução em lote)."""
-        task_id = self._claim_task()
-        if not task_id:
-            return None
-        task = self._load_task(task_id)
-        if task and self._dispatch_task(task):
-            # Note: handler already calls complete_task/fail_task with result
-            return task_id
-        if not task or not self._handler:
-            self._fail_task(task_id, "handler unavailable or task not found")
-        return None
+        return self._process_next()
 
 
 def create_executor(
