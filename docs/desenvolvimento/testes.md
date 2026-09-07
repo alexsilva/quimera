@@ -134,14 +134,14 @@ Gatilhos úteis:
 
 ### CLI que delega para um agente OpenAI via MCP
 
-O profile `fake-cli-delegation` valida o caminho entre dois agentes de execução diferentes: um agente CLI MCP-capaz recebe o socket/token MCP do Quimera por variáveis de ambiente, chama a tool `delegate` e delega para o agente OpenAI-compatible `fake-openai`. A partir daí, o agente OpenAI usa o driver `openai_compat`, emite tool calls nativas e passa pelo fluxo normal de aprovação/execução de ferramentas do runtime.
+O profile `fake-cli-delegate` valida o caminho entre dois agentes de execução diferentes: um agente CLI MCP-capaz recebe o socket/token MCP do Quimera por variáveis de ambiente, chama a tool `delegate` e delega para o agente OpenAI-compatible `fake-openai`. A partir daí, o agente OpenAI usa o driver `openai_compat`, emite tool calls nativas e passa pelo fluxo normal de aprovação/execução de ferramentas do runtime.
 
-O profile `fake-openai-mcp-cli` continua disponível para validar o caminho direto CLI -> OpenAI-compatible -> MCP, mas ele não exercita delegação entre agentes; para comprovar CLI -> `delegate` -> OpenAI, prefira `fake-cli-delegation`.
+O profile `fake-openai-mcp-cli` continua disponível para validar o caminho direto CLI -> OpenAI-compatible -> MCP, mas ele não exercita delegação entre agentes; para comprovar CLI -> `delegate` -> OpenAI, prefira `fake-cli-delegate`.
 
 Rode o app com MCP habilitado (padrão) e o agente CLI MCP. Não é necessário iniciar um servidor externo antes: `--test` sobe o backend fake em porta livre e aponta `fake-openai` para ele com override não persistente:
 
 ```bash
-python quimera.py --test --agents fake-cli-delegation fake-openai --visibility full
+python quimera.py --test --agents fake-cli-delegate fake-openai --visibility full
 ```
 
 Prompt de smoke sugerido:

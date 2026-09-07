@@ -152,13 +152,13 @@ O Quimera inclui agentes fake para validar o app sem provedores externos. Eles n
 
 - `fake-cli`: agente CLI local determinístico (`python -m quimera.devtools.fake_agents cli`).
 - `fake-openai`: profile OpenAI-compatible apontando para um servidor local fake com tool calling nativo.
-- `fake-cli-delegation`: agente CLI que usa MCP `delegate` para delegar ao `fake-openai`.
+- `fake-cli-delegate`: agente CLI que usa MCP `delegate` para delegar ao `fake-openai`.
 - `fake-openai-mcp-cli`: agente CLI que chama o backend OpenAI-compatible fake diretamente e executa tool calls via MCP do Quimera.
 
 Exemplo rápido:
 
 ```bash
-python quimera.py --test --agents fake-cli-delegation fake-openai --visibility full
+python quimera.py --test --agents fake-cli-delegate fake-openai --visibility full
 ```
 
 Com `--test`, o app registra os fake profiles, inicia automaticamente o backend OpenAI-compatible fake em uma porta livre e aplica overrides somente no processo. O comando `python -m quimera.devtools.fake_agents openai-server` continua disponível apenas para debug manual.
