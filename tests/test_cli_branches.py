@@ -59,6 +59,10 @@ class _FakeConfig:
     def set_mcp_client_env(self, value):
         self._mcp_client_env = value
 
+    def set_mcp_configuration(self, specs, env_specs):
+        self._mcp_clients = specs
+        self._mcp_client_env = env_specs
+
 
 class _FakeApp:
     last_instance = None

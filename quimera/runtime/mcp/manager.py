@@ -110,8 +110,7 @@ class MCPConnectionManager:
         self.bridge.replace_connection(parsed_name, transport)
         refresh_registration(self.executor, self.bridge)
 
-        self.config.set_mcp_clients(merged_specs)
-        self.config.set_mcp_client_env(env_specs)
+        self.config.set_mcp_configuration(merged_specs, env_specs)
         return describe_mcp_client_spec(spec, connected=True)
 
     def reconnect(self, name: str) -> MCPConnectionInfo:
@@ -137,8 +136,7 @@ class MCPConnectionManager:
         env_specs = [
             item for item in (self.config.mcp_client_env or []) if _spec_name(item) != name
         ]
-        self.config.set_mcp_clients(specs)
-        self.config.set_mcp_client_env(env_specs)
+        self.config.set_mcp_configuration(specs, env_specs)
 
     def env_spec_for(self, name: str) -> str | None:
         """Retorna a configuração de ambiente persistida para a conexão."""

@@ -1074,8 +1074,7 @@ def start_mcp_clients(
             set_bridge_schemas(schemas)
 
     if cli_specs:
-        config.set_mcp_clients(specs)
-        config.set_mcp_client_env(env_specs)
+        config.set_mcp_configuration(specs, env_specs)
 
     return MCPClientRuntime(
         enabled=bool(bridge and bridge.started),

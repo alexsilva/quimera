@@ -1,5 +1,7 @@
 """Componentes de `quimera.config`."""
-import json
+from pathlib import Path
+
+from .config_store import read_json_object, update_json_object, write_json_object
 
 from .themes import DEFAULT_THEME, DEFAULT_DENSITY, DENSITY_OPTIONS, names as theme_names
 
@@ -18,32 +20,36 @@ class ConfigManager:
 
     def __init__(self, path):
         """Inicializa uma instância de ConfigManager."""
-        self._path = path
+        self._path = Path(path)
 
     def _load(self) -> dict:
         """Carrega load."""
-        if self._path.exists():
-            try:
-                return json.loads(self._path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                pass
-        return {}
+        return read_json_object(self._path)
 
     def _save(self, data: dict):
         """Persiste save."""
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        write_json_object(self._path, data)
+
+    def _update(self, **values):
+        def update(data):
+            for key, value in values.items():
+                if value is None:
+                    data.pop(key, None)
+                else:
+                    data[key] = value
+        update_json_object(self._path, update)
 
     @property
     def user_name(self) -> str:
         """Executa user name."""
-        return self._load().get("user_name") or DEFAULT_USER_NAME
+        value = self._load().get("user_name")
+        return value if isinstance(value, str) and value else DEFAULT_USER_NAME
 
     @property
     def history_window(self) -> int:
         """Executa history window."""
         value = self._load().get("history_window")
-        if isinstance(value, int) and value > 0:
+        if type(value) is int and value > 0:
             return value
         return DEFAULT_HISTORY_WINDOW
 
@@ -51,35 +57,25 @@ class ConfigManager:
     def auto_summarize_threshold(self) -> int:
         """Executa auto summarize threshold."""
         value = self._load().get("auto_summarize_threshold")
-        if isinstance(value, int) and value > 0:
+        if type(value) is int and value > 0:
             return value
         return self.history_window * 2
 
     def set_auto_summarize_threshold(self, value: int | None):
         """Define auto summarize threshold."""
-        data = self._load()
-        if isinstance(value, int) and value > 0:
-            data["auto_summarize_threshold"] = value
-        else:
-            data.pop("auto_summarize_threshold", None)
-        self._save(data)
+        self._update(auto_summarize_threshold=value if type(value) is int and value > 0 else None)
 
     @property
     def idle_timeout_seconds(self) -> int:
         """Executa idle timeout seconds."""
         value = self._load().get("idle_timeout_seconds")
-        if isinstance(value, int) and value > 0:
+        if type(value) is int and value > 0:
             return value
         return DEFAULT_IDLE_TIMEOUT_SECONDS
 
     def set_idle_timeout_seconds(self, value: int | None):
         """Define idle timeout seconds."""
-        data = self._load()
-        if isinstance(value, int) and value > 0:
-            data["idle_timeout_seconds"] = value
-        else:
-            data.pop("idle_timeout_seconds", None)
-        self._save(data)
+        self._update(idle_timeout_seconds=value if type(value) is int and value > 0 else None)
 
     @property
     def workspace_policy(self) -> str:
@@ -91,31 +87,16 @@ class ConfigManager:
 
     def set_workspace_policy(self, value: str | None):
         """Persiste o preset de policy do workspace."""
-        data = self._load()
         normalized = str(value or "").strip().lower()
-        if normalized in WORKSPACE_POLICY_PRESETS:
-            data["workspace_policy"] = normalized
-        else:
-            data.pop("workspace_policy", None)
-        self._save(data)
+        self._update(workspace_policy=normalized if normalized in WORKSPACE_POLICY_PRESETS else None)
 
     def set_user_name(self, name: str):
         """Define user name."""
-        data = self._load()
-        if name:
-            data["user_name"] = name
-        else:
-            data.pop("user_name", None)
-        self._save(data)
+        self._update(user_name=name or None)
 
     def set_history_window(self, value: int | None):
         """Define history window."""
-        data = self._load()
-        if isinstance(value, int) and value > 0:
-            data["history_window"] = value
-        else:
-            data.pop("history_window", None)
-        self._save(data)
+        self._update(history_window=value if type(value) is int and value > 0 else None)
 
     @property
     def theme(self) -> str:
@@ -127,29 +108,19 @@ class ConfigManager:
 
     def set_theme(self, name: str):
         """Persiste o tema padrão."""
-        data = self._load()
-        if name and name in theme_names():
-            data["theme"] = name
-        else:
-            data.pop("theme", None)
-        self._save(data)
+        self._update(theme=name if name and name in theme_names() else None)
 
     @property
     def density(self) -> str:
         """Retorna a densidade de layout ativa; fallback para o padrão."""
         value = self._load().get("density")
-        if value and value in DENSITY_OPTIONS:
+        if isinstance(value, str) and value in DENSITY_OPTIONS:
             return value
         return DEFAULT_DENSITY
 
     def set_density(self, value: str):
         """Persiste a densidade de layout."""
-        data = self._load()
-        if value and value in DENSITY_OPTIONS:
-            data["density"] = value
-        else:
-            data.pop("density", None)
-        self._save(data)
+        self._update(density=value if isinstance(value, str) and value in DENSITY_OPTIONS else None)
 
     @property
     def mcp_clients(self) -> list[str] | None:
@@ -161,12 +132,7 @@ class ConfigManager:
 
     def set_mcp_clients(self, specs: list[str] | None):
         """Persiste specs de MCP client."""
-        data = self._load()
-        if specs:
-            data["mcp_clients"] = specs
-        else:
-            data.pop("mcp_clients", None)
-        self._save(data)
+        self._update(mcp_clients=specs or None)
 
     @property
     def mcp_client_env(self) -> list[str] | None:
@@ -178,9 +144,8 @@ class ConfigManager:
 
     def set_mcp_client_env(self, specs: list[str] | None):
         """Persiste env vars de MCP client."""
-        data = self._load()
-        if specs:
-            data["mcp_client_env"] = specs
-        else:
-            data.pop("mcp_client_env", None)
-        self._save(data)
+        self._update(mcp_client_env=specs or None)
+
+    def set_mcp_configuration(self, specs: list[str] | None, env_specs: list[str] | None) -> None:
+        """Persiste servidores e ambiente na mesma escrita atomica."""
+        self._update(mcp_clients=specs or None, mcp_client_env=env_specs or None)

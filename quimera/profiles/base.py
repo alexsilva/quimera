@@ -1,5 +1,6 @@
 """Componentes de `quimera.profiles.base`."""
 import json
+import logging
 import re
 import shlex
 import sys
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Callable, FrozenSet, List, Optional, Tuple, Union
 
 from ..paths import CANDIDATE_DIRS, find_base_writable
+from ..config_store import read_json_object, update_json_object, write_json_object
 from quimera.agent_events import SpyEvent
 
 
@@ -80,17 +82,19 @@ def _get_connections_file() -> Path:
 
 def load_connections() -> dict:
     """Carrega conexões persistidas."""
-    f = _get_connections_file()
-    if f.exists():
-        return json.loads(f.read_text(encoding="utf-8"))
-    return {}
+    data = read_json_object(_get_connections_file())
+    valid = {}
+    for name, connection in data.items():
+        if is_valid_agent_name(name) and isinstance(connection, dict):
+            valid[name] = connection
+        else:
+            logging.getLogger(__name__).warning("Entrada de conexao invalida em connections.json; ignorada.")
+    return valid
 
 
 def save_connections(connections: dict) -> None:
     """Salva conexões persistidas."""
-    f = _get_connections_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(connections, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_json_object(_get_connections_file(), connections)
 
 
 def get_connections() -> dict[str, dict]:
@@ -177,10 +181,8 @@ def set_connection(agent_name: str, connection: Connection, persist: bool = True
     """Aplica um override de conexão em memória e opcionalmente persiste."""
     target_registry = _resolve_registry(registry)
     profile = target_registry.get(agent_name)
-    if profile is not None:
-        object.__setattr__(profile, "_connection_override", connection)
-    if persist:
-        connections = load_connections()
+
+    def update(connections):
         payload = connection_to_dict(connection)
         if profile is not None and getattr(profile, "dynamic", False):
             profile_meta: dict = {
@@ -203,13 +205,26 @@ def set_connection(agent_name: str, connection: Connection, persist: bool = True
             # Preserve profile reference for formatter inheritance on reload
             base_ref = (
                 getattr(profile, "_profile_name", None)
-                or connections.get(agent_name, {}).get("profile", {}).get("profile")
+                or _persisted_profile_reference(connections.get(agent_name))
             )
             if base_ref:
                 profile_meta["profile"] = base_ref
             payload["profile"] = profile_meta
         connections[agent_name] = payload
-        save_connections(connections)
+
+    if persist:
+        update_json_object(_get_connections_file(), update)
+    if profile is not None:
+        object.__setattr__(profile, "_connection_override", connection)
+
+
+def _persisted_profile_reference(connection) -> str | None:
+    if not isinstance(connection, dict):
+        return None
+    metadata = connection.get("profile")
+    if isinstance(metadata, str):
+        return metadata
+    return metadata.get("profile") if isinstance(metadata, dict) else None
 
 
 def remove_connection(agent_name: str, registry=None) -> bool:
@@ -221,11 +236,16 @@ def remove_connection(agent_name: str, registry=None) -> bool:
     Returns:
         True se a conexão existia e foi removida, False se não existia.
     """
-    connections = load_connections()
-    if agent_name not in connections:
+    removed = False
+
+    def update(connections):
+        nonlocal removed
+        removed = agent_name in connections
+        connections.pop(agent_name, None)
+
+    update_json_object(_get_connections_file(), update)
+    if not removed:
         return False
-    del connections[agent_name]
-    save_connections(connections)
     # Remove o override em memória se o perfil estiver registrado
     profile = _resolve_registry(registry).get(agent_name)
     if profile is not None:

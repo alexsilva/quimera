@@ -301,11 +301,9 @@ def test_start_mcp_clients_connects_and_persists_merged_specs(monkeypatch):
         mcp_clients = ["jira=stdio:jira-cmd"]
         mcp_client_env = ["jira=JIRA_TOKEN=old-token"]
 
-        def set_mcp_clients(self, specs):
+        def set_mcp_configuration(self, specs, env_specs):
             captured["persisted_specs"] = specs
-
-        def set_mcp_client_env(self, specs):
-            captured["persisted_env_specs"] = specs
+            captured["persisted_env_specs"] = env_specs
 
     class FakeBridge:
         started = False
@@ -368,11 +366,9 @@ def test_manager_disconnect_remove_tools_vivas_e_preserva_config(monkeypatch):
         def mcp_client_env(self):
             return list(captured["env"])
 
-        def set_mcp_clients(self, specs):
+        def set_mcp_configuration(self, specs, env_specs):
             captured["clients"] = list(specs or [])
-
-        def set_mcp_client_env(self, specs):
-            captured["env"] = list(specs or [])
+            captured["env"] = list(env_specs or [])
 
     class FakeSession:
         def disconnect(self):
@@ -418,11 +414,9 @@ def test_manager_remove_desconecta_e_apaga_specs(monkeypatch):
         def mcp_client_env(self):
             return list(captured["env"])
 
-        def set_mcp_clients(self, specs):
+        def set_mcp_configuration(self, specs, env_specs):
             captured["clients"] = list(specs or [])
-
-        def set_mcp_client_env(self, specs):
-            captured["env"] = list(specs or [])
+            captured["env"] = list(env_specs or [])
 
     bridge = MCPClientBridge()
     bridge._sessions["jira"] = MagicMock()

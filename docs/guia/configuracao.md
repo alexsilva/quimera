@@ -10,6 +10,16 @@ O Quimera procura um diretório gravável entre locais candidatos do usuário e 
 | `connections.json` | Overrides e agentes dinâmicos criados por `--connect`. |
 | `.env` | Chaves simples `KEY=VALUE` para variáveis de modelo/API. |
 
+As configurações MCP ficam no arquivo específico do workspace. Servidores e
+variáveis de ambiente são persistidos juntos. Atualizações de configuração e
+conexões usam substituição atômica e locks entre processos; arquivos `.lock`
+adjacentes coordenam essas gravações e podem permanecer no diretório.
+
+Se um JSON estiver inválido, ilegível ou não contiver um objeto, a leitura usa
+defaults e registra um aviso. Novas alterações recusam sobrescrever o arquivo:
+corrija seu conteúdo antes de salvar novamente. Uma falha de gravação preserva
+o arquivo anterior.
+
 ## Configurações persistíveis pela CLI
 
 ```bash
