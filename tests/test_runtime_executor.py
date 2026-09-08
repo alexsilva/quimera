@@ -15,53 +15,36 @@ from quimera.runtime.policy import ToolPolicy
 from quimera.tasks.executor import TaskExecutor
 
 
-@pytest.fixture
-def config():
-    return ToolRuntimeConfig(workspace_root=Path("/tmp"))
+# ════════════════════════════════════════════════════════════════════════
+# Tests for tool denial/approval
+# ════════════════════════════════════════════════════════════════════════
 
-
-@pytest.fixture
-def approval_handler():
-    return MagicMock()
-
-
-def test_executor_denied(config, approval_handler):
-    # Line 58-59 coverage
-    """Verifica que Test executor denied."""
-    executor = ToolExecutor(config, approval_handler)
-    call = ToolCall(name="write_file", arguments={"path": "test.py", "content": "print(1)", "replace_existing": True})
-    approval_handler.approve.return_value = False
-    result = executor.execute(call)
+@pytest.mark.parametrize("tool_name,arguments", [
+    ("write_file", {"path": "test.py", "content": "print(1)", "replace_existing": True}),
+    ("apply_patch", {"patch": "*** Begin Patch\n*** End Patch"}),
+])
+def test_executor_tool_denied_by_approval(executor_with_approval, tool_name, arguments):
+    """Verifica que ferramentas mutantes são negadas quando aprovação retorna False."""
+    executor_with_approval.approval_handler.approve.return_value = False
+    call = ToolCall(name=tool_name, arguments=arguments)
+    result = executor_with_approval.execute(call)
     assert result.ok is False
     assert "Execução negada" in result.error
 
 
-def test_executor_apply_patch_requires_approval(config, approval_handler):
-    """Verifica que Test executor apply patch requires approval."""
-    executor = ToolExecutor(config, approval_handler)
-    call = ToolCall(name="apply_patch", arguments={"patch": "*** Begin Patch\n*** End Patch"})
-    approval_handler.approve.return_value = False
-    result = executor.execute(call)
-    assert result.ok is False
-    assert "Execução negada" in result.error
-
-
-def test_executor_unexpected_exception(config, approval_handler):
-    # Line 64-65 coverage
-    """Verifica que Test executor unexpected exception."""
-    executor = ToolExecutor(config, approval_handler)
-    call = ToolCall(name="list_files", arguments={"path": "/tmp"})
-    with patch.object(executor.registry, "get") as mock_get:
+def test_executor_unexpected_exception(executor_with_approval):
+    """Verifica que exceção inesperada no handler retorna erro."""
+    call = ToolCall(name="list_files", arguments={"path": "."})
+    with patch.object(executor_with_approval.registry, "get") as mock_get:
         mock_handler = MagicMock(side_effect=Exception("Boom"))
         mock_get.return_value = mock_handler
-        result = executor.execute(call)
+        result = executor_with_approval.execute(call)
         assert result.ok is False
         assert "Falha inesperada: Boom" in result.error
 
 
-def test_executor_registers_interactive_command_tools(config, approval_handler):
-    """Verifica que Test executor registers interactive command tools."""
-    executor = ToolExecutor(config, approval_handler)
+def test_executor_registers_interactive_command_tools(executor):
+    """Verifica que ferramentas de comando interativo são registradas."""
     names = executor.registry.names()
     assert "run_shell_command" not in names
     assert "run_shell" in names
@@ -72,26 +55,28 @@ def test_executor_registers_interactive_command_tools(config, approval_handler):
     assert "memory_retrieve" in names
 
 
-def test_executor_normalizes_run_alias_with_commands_list(tmp_path):
-    """Verifica que Test executor normalizes run alias with commands list."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
-    executor.approval_handler.approve.return_value = True
-    result = executor.execute(ToolCall(name="run", arguments={"commands": ["echo hello"]}))
+@pytest.mark.parametrize("alias,arguments,check", [
+    ("run", {"commands": ["echo hello"]}, "content"),
+    ("execute_command", {"command": "echo hello"}, "status"),
+])
+def test_executor_normalizes_aliases(executor_with_workspace, alias, arguments, check):
+    """Verifica que aliases de run são normalizados."""
+    result = executor_with_workspace.execute(ToolCall(name=alias, arguments=arguments))
     assert result.ok is True
-    assert "hello" in result.content
+    if check == "content":
+        assert "hello" in result.content
+    else:
+        assert result.data["status"] in {"running", "completed"}
 
 
-def test_executor_normalizes_execute_command_alias(tmp_path):
-    """Verifica que Test executor normalizes execute command alias."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
-    executor.approval_handler.approve.return_value = True
-    result = executor.execute(ToolCall(name="execute_command", arguments={"command": "echo hello"}))
-    assert result.ok is True
-    assert result.data["status"] in {"running", "completed"}
+# ════════════════════════════════════════════════════════════════════════
+# Memory tool tests
+# ════════════════════════════════════════════════════════════════════════
 
-
-def test_executor_memory_save_and_retrieve_roundtrip(tmp_path):
-    executor = ToolExecutor(
+@pytest.fixture
+def memory_executor(tmp_path):
+    """Executor configurado com memory_file para testes de memória."""
+    return ToolExecutor(
         ToolRuntimeConfig(
             workspace_root=tmp_path,
             memory_file=tmp_path / "state" / "memory.json",
@@ -99,7 +84,10 @@ def test_executor_memory_save_and_retrieve_roundtrip(tmp_path):
         MagicMock(),
     )
 
-    save = executor.execute(
+
+def test_executor_memory_save_and_retrieve_roundtrip(memory_executor):
+    """Testa salvamento e recuperação de memória."""
+    save = memory_executor.execute(
         ToolCall(
             name="memory_save",
             arguments={
@@ -110,7 +98,7 @@ def test_executor_memory_save_and_retrieve_roundtrip(tmp_path):
             metadata={"trusted_context": {"agent_name": "codex"}},
         )
     )
-    retrieve = executor.execute(
+    retrieve = memory_executor.execute(
         ToolCall(
             name="memory_retrieve",
             arguments={"namespace": "workspace", "key": "summary"},
@@ -130,16 +118,9 @@ def test_executor_memory_save_and_retrieve_roundtrip(tmp_path):
     assert entry["updated_by"] == "codex"
 
 
-def test_executor_memory_retrieve_filters_by_prefix_and_tags(tmp_path):
-    executor = ToolExecutor(
-        ToolRuntimeConfig(
-            workspace_root=tmp_path,
-            memory_file=tmp_path / "state" / "memory.json",
-        ),
-        MagicMock(),
-    )
-
-    executor.execute(
+def test_executor_memory_retrieve_filters_by_prefix_and_tags(memory_executor):
+    """Testa filtros de prefixo e tags na recuperação."""
+    memory_executor.execute(
         ToolCall(
             name="memory_save",
             arguments={
@@ -149,7 +130,7 @@ def test_executor_memory_retrieve_filters_by_prefix_and_tags(tmp_path):
             },
         )
     )
-    executor.execute(
+    memory_executor.execute(
         ToolCall(
             name="memory_save",
             arguments={
@@ -160,7 +141,7 @@ def test_executor_memory_retrieve_filters_by_prefix_and_tags(tmp_path):
         )
     )
 
-    retrieve = executor.execute(
+    retrieve = memory_executor.execute(
         ToolCall(
             name="memory_retrieve",
             arguments={"namespace": "workspace", "prefix": "decision.", "tags": ["api"]},
@@ -172,6 +153,7 @@ def test_executor_memory_retrieve_filters_by_prefix_and_tags(tmp_path):
 
 
 def test_executor_memory_list_namespaces_and_delete_roundtrip(tmp_path):
+    """Testa listagem de namespaces e exclusão."""
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(
@@ -206,7 +188,7 @@ def test_executor_memory_list_namespaces_and_delete_roundtrip(tmp_path):
 
 
 def test_task_executor_skips_review_claim_when_agent_is_not_operational(tmp_path):
-    """Verifica que Test task executor skips review claim when agent is not operational."""
+    """Verifica que TaskExecutor pula review quando agente não operacional."""
     repository = MagicMock()
     repository.claim_task.return_value = None
     executor = TaskExecutor("gemini", db_path=tmp_path / "tasks.db", poll_interval=0.01, repository=repository)
@@ -224,32 +206,43 @@ def test_task_executor_skips_review_claim_when_agent_is_not_operational(tmp_path
     repository.claim_review_task.assert_not_called()
 
 
-# ── remove_file executor ─────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════
+# remove_file executor tests
+# ════════════════════════════════════════════════════════════════════════
 
-def test_executor_remove_file_is_registered(config, approval_handler):
+def test_executor_remove_file_is_registered(executor):
     """remove_file está registrado no executor."""
-    executor = ToolExecutor(config, approval_handler)
     assert "remove_file" in executor.registry.names()
 
 
-def test_executor_remove_file_denied_by_approval(tmp_path):
-    """remove_file com aprovação negada retorna erro."""
-    executor = ToolExecutor(
-        ToolRuntimeConfig(workspace_root=tmp_path),
-        MagicMock(),
-    )
-    executor.approval_handler.approve.return_value = False
-
+@pytest.mark.parametrize("approved", [False, True], ids=["negado", "aprovado"])
+def test_executor_remove_file_approval(executor_with_approval, approved, tmp_path):
+    """remove_file é negado quando aprovação falha e executa quando aprovada."""
+    executor_with_approval.approval_handler.approve.return_value = approved
     (tmp_path / "x.txt").write_text("x")
     call = ToolCall(name="remove_file", arguments={"path": "x.txt", "dry_run": False})
-    result = executor.execute(call)
+    result = executor_with_approval.execute(call)
+    if approved:
+        assert result.ok is True
+        assert "removido" in result.content.lower()
+        assert not (tmp_path / "x.txt").exists()
+    else:
+        assert result.ok is False
+        assert "Execução negada" in result.error
 
-    assert result.ok is False
-    assert "Execução negada" in result.error
+
+def test_executor_remove_file_no_approval_config_skips_handler(executor_no_approval, tmp_path):
+    """Com require_approval_for_mutations=False o handler não é consultado."""
+    executor_no_approval.approval_handler.approve.return_value = False
+    (tmp_path / "x.txt").write_text("x")
+    call = ToolCall(name="remove_file", arguments={"path": "x.txt", "dry_run": False})
+    result = executor_no_approval.execute(call)
+    assert result.ok is True
+    executor_no_approval.approval_handler.approve.assert_not_called()
 
 
 def test_executor_allows_mcp_tool_with_propagated_task_scope(tmp_path):
-    """Escopo de task propagado pelo MCP deve autorizar tool mutante."""
+    """Escopo de task propagado pelo MCP autoriza tool mutante sem aprovação."""
     approval = MagicMock()
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
     executor.approval_manager.set_thread_approve_all(
@@ -269,39 +262,18 @@ def test_executor_allows_mcp_tool_with_propagated_task_scope(tmp_path):
     assert not (tmp_path / "x.txt").exists()
 
 
-def test_executor_remove_file_allowed_and_executes(tmp_path):
-    """remove_file com aprovação concedida executa e remove o arquivo."""
-    executor = ToolExecutor(
-        ToolRuntimeConfig(workspace_root=tmp_path),
-        MagicMock(),
-    )
-    executor.approval_handler.approve.return_value = True
-
-    (tmp_path / "x.txt").write_text("x")
-    call = ToolCall(name="remove_file", arguments={"path": "x.txt", "dry_run": False})
-    result = executor.execute(call)
-
-    assert result.ok is True
-    assert "removido" in result.content.lower()
-    assert not (tmp_path / "x.txt").exists()
-
-
-def test_executor_remove_file_policy_blocks_missing_dry_run(tmp_path):
+def test_executor_remove_file_policy_blocks_missing_dry_run(executor_with_workspace):
     """Política bloqueia remove_file sem dry_run=False explícito."""
-    executor = ToolExecutor(
-        ToolRuntimeConfig(workspace_root=tmp_path),
-        MagicMock(),
-    )
-    (tmp_path / "x.txt").write_text("x")
-
+    (executor_with_workspace.config.workspace_root / "x.txt").write_text("x")
     call = ToolCall(name="remove_file", arguments={"path": "x.txt"})
-    result = executor.execute(call)
-
+    result = executor_with_workspace.execute(call)
     assert result.ok is False
     assert "dry_run=False" in result.error
 
 
-# ── set_spinner_callbacks ───────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════
+# Spinner/cancel callbacks tests
+# ════════════════════════════════════════════════════════════════════════
 
 def test_set_spinner_callbacks_injects_into_approval_manager():
     """set_spinner_callbacks injeta no ApprovalManager diretamente."""
@@ -317,7 +289,7 @@ def test_set_spinner_callbacks_injects_into_approval_manager():
 
 
 def test_set_spinner_callbacks_ignores_non_console_handler():
-    """set_spinner_callbacks não quebra com handler que não tem set_spinner_callbacks."""
+    """set_spinner_callbacks não quebra com handler sem _console_handler."""
     handler = ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y")
     handler.set_approve_all(True)
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
@@ -340,12 +312,7 @@ def test_set_approval_cancel_event_injects_into_approval_manager():
 
 
 def test_bind_approval_cancel_event_is_thread_isolated_with_restore():
-    """Binding de cancel_event é por thread e restaura o valor anterior.
-
-    Dois 'drivers' concorrentes usando o mesmo executor compartilhado
-    devem ver apenas os seus próprios cancel_events. Depois que cada um
-    termina, a thread fica sem binding (restauração segura).
-    """
+    """Binding de cancel_event é por thread e restaura o valor anterior."""
     executor = ToolExecutor(
         ToolRuntimeConfig(workspace_root=Path("/tmp")),
         ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y"),
@@ -376,16 +343,11 @@ def test_bind_approval_cancel_event_is_thread_isolated_with_restore():
 
     assert errors == {}, f"erros: {errors}"
     assert results == {"a": event_a, "b": event_b}
-    # Restauração: thread atual não herda binding de outra thread
     assert executor.get_thread_approval_cancel_event() is None
 
 
 def test_shared_approval_manager_cancel_event_is_thread_scoped_during_prompt():
-    """Cancelar a thread B não cancela o prompt ativo da thread A.
-
-    Com o slot global legado, o cancel_event de B sobrescrevia o de A no
-    handler compartilhado; aqui, o cancel de B só afeta a própria B.
-    """
+    """Cancelar a thread B não cancela o prompt ativo da thread A."""
     started = threading.Event()
     can_proceed = threading.Event()
 
@@ -418,7 +380,6 @@ def test_shared_approval_manager_cancel_event_is_thread_scoped_during_prompt():
     t_b = threading.Thread(target=driver, args=("b", event_b), daemon=True)
     t_b.start()
 
-    # B cancela a si mesma; A continua presa no prompt sem ser afetada.
     event_b.set()
     time.sleep(0.2)
     can_proceed.set()
@@ -427,19 +388,19 @@ def test_shared_approval_manager_cancel_event_is_thread_scoped_during_prompt():
     t_b.join(3)
 
     assert errors == {}, f"erros: {errors}"
-    # A: prompt não cancelado pelo evento de B → respondeu 'y'
     assert results.get("a") is True
-    # B: entrou após A liberar o lock e viu o próprio evento setado
     assert results.get("b") is False
 
 
-# ── Fluxo unificado de aprovação ────────────────────────────
+# ════════════════════════════════════════════════════════════════════════
+# Unified approval flow tests
+# ════════════════════════════════════════════════════════════════════════
 
-def test_executor_permission_error_triggers_approval(config, approval_handler):
-    """Quando há permission_error, o handler de aprovação é chamado com
-    summary contendo 'Permissão necessária'."""
+@pytest.mark.parametrize("approved", [False, True])
+def test_executor_permission_error_approval(config, approval_handler, approved):
+    """Testa fluxo de permission_error com aprovação."""
     executor = ToolExecutor(config, approval_handler)
-    approval_handler.approve.return_value = False
+    approval_handler.approve.return_value = approved
 
     permission_error = PathPermissionError("/etc/passwd", Path("/etc/passwd"))
 
@@ -448,31 +409,18 @@ def test_executor_permission_error_triggers_approval(config, approval_handler):
          patch.object(executor.policy, "check_path_permission", return_value=permission_error):
         result = executor.execute(call)
 
-    assert result.ok is False
-    assert "Execução negada" in result.error
-    approval_handler.approve.assert_called_once()
-    call_kwargs = approval_handler.approve.call_args.kwargs
-    assert "Permissão necessária" in call_kwargs["summary"]
-
-
-def test_executor_permission_error_approved_executes(config, approval_handler):
-    """Quando permission_error é aprovado, a ferramenta executa normalmente."""
-    executor = ToolExecutor(config, approval_handler)
-    approval_handler.approve.return_value = True
-
-    permission_error = PathPermissionError("/etc/passwd", Path("/etc/passwd"))
-
-    call = ToolCall(name="list_files", arguments={"path": "."})
-    with patch.object(executor.policy, "validate"), \
-         patch.object(executor.policy, "check_path_permission", return_value=permission_error):
-        result = executor.execute(call)
-
-    assert result.ok is True
+    if approved:
+        assert result.ok is True
+    else:
+        assert result.ok is False
+        assert "Execução negada" in result.error
+        approval_handler.approve.assert_called_once()
+        call_kwargs = approval_handler.approve.call_args.kwargs
+        assert "Permissão necessária" in call_kwargs["summary"]
 
 
 def test_executor_needs_approval_and_permission_error_unified(tmp_path):
-    """Quando uma ferramenta tem ambos needs_approval e permission_error,
-    o approve é chamado uma única vez com summary de permissão (priority)."""
+    """Quando ferramenta tem needs_approval e permission_error, approve chamado uma vez."""
     config = ToolRuntimeConfig(
         workspace_root=tmp_path,
         require_approval_for_mutations=True,
@@ -494,13 +442,19 @@ def test_executor_needs_approval_and_permission_error_unified(tmp_path):
     assert "Permissão necessária" in call_kwargs["summary"]
 
 
-# ── write_stdin na lista de aprovação ──────────────────────
+# ════════════════════════════════════════════════════════════════════════
+# write_stdin approval tests
+# ════════════════════════════════════════════════════════════════════════
 
-def test_executor_write_stdin_requires_approval_when_mutations_enabled():
-    """write_stdin requer aprovação quando require_approval_for_mutations=True."""
+@pytest.mark.parametrize("require_approval,expected_approve_called", [
+    (True, True),
+    (False, False),
+])
+def test_executor_write_stdin_approval(require_approval, expected_approve_called):
+    """write_stdin requer aprovação conforme configuração."""
     config = ToolRuntimeConfig(
         workspace_root=Path("/tmp"),
-        require_approval_for_mutations=True,
+        require_approval_for_mutations=require_approval,
     )
     approval_handler = MagicMock()
     approval_handler.approve.return_value = False
@@ -509,28 +463,17 @@ def test_executor_write_stdin_requires_approval_when_mutations_enabled():
     call = ToolCall(name="write_stdin", arguments={"session_id": 1, "chars": "y"})
     result = executor.execute(call)
 
-    assert result.ok is False
-    assert "Execução negada" in result.error
-    approval_handler.approve.assert_called_once()
+    if expected_approve_called:
+        assert result.ok is False
+        assert "Execução negada" in result.error
+        approval_handler.approve.assert_called_once()
+    else:
+        approval_handler.approve.assert_not_called()
 
 
-def test_executor_write_stdin_no_approval_when_mutations_disabled():
-    """write_stdin NÃO requer aprovação quando require_approval_for_mutations=False."""
-    config = ToolRuntimeConfig(
-        workspace_root=Path("/tmp"),
-        require_approval_for_mutations=False,
-    )
-    approval_handler = MagicMock()
-    executor = ToolExecutor(config, approval_handler)
-
-    call = ToolCall(name="write_stdin", arguments={"session_id": 1, "chars": ""})
-    result = executor.execute(call)
-
-    # Não deve chamar approve (mas a ferramenta pode falhar por sessão inexistente)
-    approval_handler.approve.assert_not_called()
-
-
-# ── approval_handler property ───────────────────────────────
+# ════════════════════════════════════════════════════════════════════════
+# Property tests
+# ════════════════════════════════════════════════════════════════════════
 
 def test_executor_approval_handler_property():
     """A property approval_handler retorna o handler configurado."""
@@ -544,9 +487,14 @@ def test_set_spinner_callbacks_no_op_when_handler_is_none_like():
     handler = ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y")
     handler.set_approve_all(True)
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
-    # Já testado, mas reforçando: não deve lançar exceção
-    executor.set_spinner_callbacks(MagicMock(), MagicMock())
 
+    executor.set_spinner_callbacks(MagicMock(), MagicMock())
+    # Não deve lançar exceção
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Delegate via ToolExecutor (contrato de dispatch, pool ativo, truncamento)
+# ════════════════════════════════════════════════════════════════════════
 
 def test_executor_delegate_dispatches_with_delegation_mode(tmp_path):
     """delegate delega com contrato alinhado ao fluxo de delegation interno."""

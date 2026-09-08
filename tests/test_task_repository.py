@@ -2,7 +2,6 @@ import sqlite3
 
 import pytest
 
-from quimera.app.event_sink import EventSink
 from quimera.tasks.events import (
     TaskProposed,
     TaskStarted,
@@ -19,32 +18,17 @@ from quimera.tasks.executor import TaskExecutor
 from quimera.constants import TaskStatus
 from quimera.tasks import api as runtime_tasks
 from quimera.runtime.models import JobRecord, TaskRecord
+from tests.helpers import task_row
 
 
 @pytest.fixture
-def repository(tmp_path):
-    db_path = tmp_path / "task_repository.db"
-    return TaskRepository(str(db_path))
+def repository(task_repository):
+    return task_repository
 
 
 @pytest.fixture
-def sink_repository(tmp_path):
-    db_path = tmp_path / "task_repository_sink.db"
-    sink = EventSink()
-    repo = TaskRepository(str(db_path), event_sink=sink)
-    return repo, sink
-
-
-def _task_row(task_id, db_path):
-    conn = runtime_tasks.get_conn(db_path)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT status, assigned_to, result, notes, reviewed_by, failed_agents, attempt_count FROM tasks WHERE id = ?",
-        (task_id,),
-    )
-    row = cur.fetchone()
-    conn.close()
-    return row
+def sink_repository(task_repository_with_sink):
+    return task_repository_with_sink
 
 
 def test_init_requires_db_path():
@@ -114,7 +98,7 @@ def test_fail_task(repository):
 
     assert repository.fail_task(task_id, reason="timeout") is True
 
-    row = _task_row(task_id, repository.db_path)
+    row = task_row(task_id, repository.db_path)
     assert row[0] == TaskStatus.FAILED
     assert row[2] == "timeout"
     assert row[3] == "timeout"
@@ -129,7 +113,7 @@ def test_requeue_task(repository):
 
     assert repository.requeue_task(task_id, "codex", reason="falha transitoria") is True
 
-    row = _task_row(task_id, repository.db_path)
+    row = task_row(task_id, repository.db_path)
     assert row[0] == TaskStatus.PENDING
     assert row[1] is None
     assert row[2] == "falha transitoria"
@@ -197,7 +181,7 @@ def test_requeue_task_after_review_clears_reviewer(repository):
     )
     assert repository.list_tasks({"id": task_id})[0].reviewed_by is None
 
-    row = _task_row(task_id, repository.db_path)
+    row = task_row(task_id, repository.db_path)
     assert row[0] == TaskStatus.PENDING
     assert row[1] is None
     assert row[2] == "novo resultado"

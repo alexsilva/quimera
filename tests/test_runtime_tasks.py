@@ -10,25 +10,12 @@ import pytest
 
 from quimera.constants import TaskStatus, can_transition
 from quimera.tasks import api as tasks
+from tests.helpers import task_row
 
 
 @pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "runtime_tasks.db"
-    tasks.init_db(str(path))
-    return str(path)
-
-
-def _task_row(task_id, db_path):
-    conn = tasks.get_conn(db_path)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT status, assigned_to, result, notes, reviewed_by, failed_agents, attempt_count FROM tasks WHERE id = ?",
-        (task_id,),
-    )
-    row = cur.fetchone()
-    conn.close()
-    return row
+def db_path(tasks_db_path):
+    return tasks_db_path
 
 
 def test_add_job_with_explicit_job_id_reuses_existing_row(db_path):
@@ -154,7 +141,7 @@ def test_requeue_task_does_not_duplicate_failed_token_and_increments_attempt(db_
 
     assert tasks.requeue_task(task_id, "codex", reason="erro transitorio", db_path=db_path) is True
 
-    row = _task_row(task_id, db_path)
+    row = task_row(task_id, db_path)
     assert row[0] == "pending"
     assert row[1] is None
     assert row[2] == "erro transitorio"
@@ -185,7 +172,7 @@ def test_requeue_task_after_review_clears_reviewer_and_preserves_unique_failed_t
         db_path=db_path,
     ) is True
 
-    row = _task_row(task_id, db_path)
+    row = task_row(task_id, db_path)
     assert row[0] == "pending"
     assert row[1] is None
     assert row[2] == "resultado"
@@ -309,7 +296,7 @@ def test_requeue_task_adds_new_token(db_path):
     task_id = tasks.create_task(job_id, "t", assigned_to="codex", status="in_progress", db_path=db_path)
     # failed_agents is empty — token will be added (line 317)
     assert tasks.requeue_task(task_id, "codex", reason="erro", db_path=db_path) is True
-    row = _task_row(task_id, db_path)
+    row = task_row(task_id, db_path)
     assert "|codex|" in (row[5] or "")
 
 
@@ -672,7 +659,7 @@ class TestTransitionTask:
         task_id = tasks.create_task(job_id, "t", status=TaskStatus.PENDING, db_path=db_path)
         result = tasks.transition_task(task_id, TaskStatus.IN_PROGRESS, db_path=db_path)
         assert result is True
-        row = _task_row(task_id, db_path)
+        row = task_row(task_id, db_path)
         assert row[0] == TaskStatus.IN_PROGRESS
 
     def test_invalid_transition_returns_false(self, db_path):
@@ -681,7 +668,7 @@ class TestTransitionTask:
         task_id = tasks.create_task(job_id, "t", status=TaskStatus.COMPLETED, db_path=db_path)
         result = tasks.transition_task(task_id, TaskStatus.PENDING, db_path=db_path)
         assert result is False
-        row = _task_row(task_id, db_path)
+        row = task_row(task_id, db_path)
         assert row[0] == TaskStatus.COMPLETED
 
     def test_missing_task_returns_false(self, db_path):
