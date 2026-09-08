@@ -10,156 +10,88 @@ from quimera.runtime.errors import (
     TOOL_ERROR_TYPES,
 )
 
+_METADATA_SUBCLASSES = [
+    ToolValidationError,
+    ToolEnvironmentError,
+    ToolLogicError,
+    ToolRateLimitError,
+    ToolPolicyViolationError,
+]
 
-class TestToolError:
-    def test_base_exception_metadata_default(self):
-        """Verifica que ToolError padrão tem metadata vazio."""
-        err = ToolError("generic error")
-        assert str(err) == "generic error"
-        assert err.metadata == {}
+_SINGLE_FIELD_CASES = [
+    (ToolValidationError, {"field": "name"}, {"field": "name"}),
+    (ToolValidationError, {"hint": "use X"}, {"hint": "use X"}),
+    (ToolEnvironmentError, {"action": "read"}, {"action": "read"}),
+    (ToolEnvironmentError, {"path": "/tmp/x"}, {"path": "/tmp/x"}),
+    (ToolLogicError, {"rule": "no_recurse"}, {"rule": "no_recurse"}),
+    (ToolLogicError, {"context": {"count": 3}}, {"count": 3}),
+    (ToolRateLimitError, {"retry_after": 5.0}, {"retry_after": 5.0}),
+    (ToolPolicyViolationError, {"hint": "use allowed cmd"}, {"hint": "use allowed cmd"}),
+    (ToolPolicyViolationError, {"rule": "no_chain"}, {"rule": "no_chain"}),
+]
 
-    def test_base_exception_with_metadata(self):
-        """Verifica que ToolError aceita metadata personalizado."""
-        err = ToolError("msg", metadata={"key": "val"})
-        assert err.metadata == {"key": "val"}
-
-    def test_base_is_exception(self):
-        """Verifica que ToolError é subclasse de Exception."""
-        assert issubclass(ToolError, Exception)
-
-
-class TestToolValidationError:
-    def test_default_field_hint_none(self):
-        """Verifica que ToolValidationError padrão tem metadata vazio."""
-        err = ToolValidationError("invalid")
-        assert err.metadata == {}
-
-    def test_with_field(self):
-        """Verifica que ToolValidationError aceita field no metadata."""
-        err = ToolValidationError("invalid", field="name")
-        assert err.metadata == {"field": "name"}
-
-    def test_with_hint(self):
-        """Verifica que ToolValidationError aceita hint no metadata."""
-        err = ToolValidationError("invalid", hint="use X")
-        assert err.metadata == {"hint": "use X"}
-
-    def test_with_both(self):
-        """Verifica que ToolValidationError aceita field e hint simultaneamente."""
-        err = ToolValidationError("invalid", field="email", hint="format")
-        assert err.metadata == {"field": "email", "hint": "format"}
-
-    def test_is_subclass(self):
-        """Verifica que ToolValidationError é subclasse de ToolError."""
-        assert issubclass(ToolValidationError, ToolError)
+_MULTI_FIELD_CASES = [
+    (ToolValidationError, {"field": "email", "hint": "format"}, {"field": "email", "hint": "format"}),
+    (ToolEnvironmentError, {"action": "write", "path": "/tmp/x"}, {"action": "write", "path": "/tmp/x"}),
+    (ToolPolicyViolationError, {"hint": "try X", "rule": "no_chain"}, {"hint": "try X", "rule": "no_chain"}),
+]
 
 
-class TestToolEnvironmentError:
-    def test_default_action_path_none(self):
-        """Verifica que ToolEnvironmentError padrão tem metadata vazio."""
-        err = ToolEnvironmentError("env fail")
-        assert err.metadata == {}
-
-    def test_with_action(self):
-        """Verifica que ToolEnvironmentError aceita action no metadata."""
-        err = ToolEnvironmentError("env fail", action="read")
-        assert err.metadata == {"action": "read"}
-
-    def test_with_path(self):
-        """Verifica que ToolEnvironmentError aceita path no metadata."""
-        err = ToolEnvironmentError("env fail", path="/tmp/x")
-        assert err.metadata == {"path": "/tmp/x"}
-
-    def test_with_both(self):
-        """Verifica que ToolEnvironmentError aceita action e path simultaneamente."""
-        err = ToolEnvironmentError("env fail", action="write", path="/tmp/x")
-        assert err.metadata == {"action": "write", "path": "/tmp/x"}
-
-    def test_is_subclass(self):
-        """Verifica que ToolEnvironmentError é subclasse de ToolError."""
-        assert issubclass(ToolEnvironmentError, ToolError)
+def test_base_error_metadata_default():
+    """Verifica que ToolError padrão tem metadata vazio."""
+    err = ToolError("generic error")
+    assert str(err) == "generic error"
+    assert err.metadata == {}
 
 
-class TestToolLogicError:
-    def test_default_rule_context_none(self):
-        """Verifica que ToolLogicError padrão tem metadata vazio."""
-        err = ToolLogicError("logic fail")
-        assert err.metadata == {}
-
-    def test_with_rule(self):
-        """Verifica que ToolLogicError aceita rule no metadata."""
-        err = ToolLogicError("logic fail", rule="no_recurse")
-        assert err.metadata == {"rule": "no_recurse"}
-
-    def test_with_context(self):
-        """Verifica que ToolLogicError aceita context no metadata."""
-        err = ToolLogicError("logic fail", context={"count": 3})
-        assert err.metadata == {"count": 3}
-
-    def test_is_subclass(self):
-        """Verifica que ToolLogicError é subclasse de ToolError."""
-        assert issubclass(ToolLogicError, ToolError)
+def test_base_error_with_metadata():
+    """Verifica que ToolError aceita metadata personalizado."""
+    err = ToolError("msg", metadata={"key": "val"})
+    assert err.metadata == {"key": "val"}
 
 
-class TestToolRateLimitError:
-    def test_default_retry_after_none(self):
-        """Verifica que ToolRateLimitError padrão tem metadata vazio."""
-        err = ToolRateLimitError("rate limited")
-        assert err.metadata == {}
-
-    def test_with_retry_after(self):
-        """Verifica que ToolRateLimitError aceita retry_after no metadata."""
-        err = ToolRateLimitError("rate limited", retry_after=5.0)
-        assert err.metadata == {"retry_after": 5.0}
-
-    def test_is_subclass(self):
-        """Verifica que ToolRateLimitError é subclasse de ToolError."""
-        assert issubclass(ToolRateLimitError, ToolError)
+def test_tool_error_is_exception():
+    """Verifica que ToolError é subclasse de Exception."""
+    assert issubclass(ToolError, Exception)
 
 
-class TestToolPolicyViolationError:
-    def test_default_hint_rule_none(self):
-        """Verifica que ToolPolicyViolationError padrão tem metadata vazio."""
-        err = ToolPolicyViolationError("blocked")
-        assert err.metadata == {}
-
-    def test_with_hint(self):
-        """Verifica que ToolPolicyViolationError aceita hint no metadata."""
-        err = ToolPolicyViolationError("blocked", hint="use allowed cmd")
-        assert err.metadata == {"hint": "use allowed cmd"}
-
-    def test_with_rule(self):
-        """Verifica que ToolPolicyViolationError aceita rule no metadata."""
-        err = ToolPolicyViolationError("blocked", rule="no_chain")
-        assert err.metadata == {"rule": "no_chain"}
-
-    def test_with_both(self):
-        """Verifica que ToolPolicyViolationError aceita hint e rule simultaneamente."""
-        err = ToolPolicyViolationError("blocked", hint="try X", rule="no_chain")
-        assert err.metadata == {"hint": "try X", "rule": "no_chain"}
-
-    def test_is_subclass(self):
-        """Verifica que ToolPolicyViolationError é subclasse de ToolError."""
-        assert issubclass(ToolPolicyViolationError, ToolError)
+@pytest.mark.parametrize("error_cls", _METADATA_SUBCLASSES)
+def test_error_metadata_default(error_cls):
+    """Verifica que classes derivadas de ToolError têm metadata vazio por padrão."""
+    err = error_cls("msg")
+    assert err.metadata == {}
 
 
-class TestTOOL_ERROR_TYPES:
-    def test_validation_mapping(self):
-        """Verifica que TOOL_ERROR_TYPES mapeia validation para ToolValidationError."""
-        assert TOOL_ERROR_TYPES["validation"] is ToolValidationError
+@pytest.mark.parametrize(("error_cls", "kwargs", "expected"), _SINGLE_FIELD_CASES)
+def test_error_metadata_single_field(error_cls, kwargs, expected):
+    """Verifica que classes derivadas mapeiam um campo extra para metadata."""
+    err = error_cls("msg", **kwargs)
+    assert err.metadata == expected
 
-    def test_environment_mapping(self):
-        """Verifica que TOOL_ERROR_TYPES mapeia environment para ToolEnvironmentError."""
-        assert TOOL_ERROR_TYPES["environment"] is ToolEnvironmentError
 
-    def test_logic_mapping(self):
-        """Verifica que TOOL_ERROR_TYPES mapeia logic para ToolLogicError."""
-        assert TOOL_ERROR_TYPES["logic"] is ToolLogicError
+@pytest.mark.parametrize(("error_cls", "kwargs", "expected"), _MULTI_FIELD_CASES)
+def test_error_metadata_multiple_fields(error_cls, kwargs, expected):
+    """Verifica que classes derivadas aceitam múltiplos campos simultaneamente."""
+    err = error_cls("msg", **kwargs)
+    assert err.metadata == expected
 
-    def test_policy_mapping(self):
-        """Verifica que TOOL_ERROR_TYPES mapeia policy para ToolPolicyViolationError."""
-        assert TOOL_ERROR_TYPES["policy"] is ToolPolicyViolationError
 
-    def test_rate_limit_mapping(self):
-        """Verifica que TOOL_ERROR_TYPES mapeia rate_limit para ToolRateLimitError."""
-        assert TOOL_ERROR_TYPES["rate_limit"] is ToolRateLimitError
+@pytest.mark.parametrize("error_cls", _METADATA_SUBCLASSES)
+def test_error_is_tool_error_subclass(error_cls):
+    """Verifica que todas as classes derivadas são subclasses de ToolError."""
+    assert issubclass(error_cls, ToolError)
+
+
+@pytest.mark.parametrize(
+    ("key", "error_cls"),
+    [
+        ("validation", ToolValidationError),
+        ("environment", ToolEnvironmentError),
+        ("logic", ToolLogicError),
+        ("policy", ToolPolicyViolationError),
+        ("rate_limit", ToolRateLimitError),
+    ],
+)
+def test_tool_error_types_mapping(key, error_cls):
+    """Verifica que TOOL_ERROR_TYPES mapeia cada chave para a classe correta."""
+    assert TOOL_ERROR_TYPES[key] is error_cls

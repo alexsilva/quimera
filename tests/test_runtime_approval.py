@@ -6,15 +6,13 @@ escopo por thread, cancelamento e governança.
 import io
 import threading
 from contextlib import contextmanager
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from quimera.runtime.approval import (
     ApprovalHandler,
     ApprovalManager,
-    _ApprovalCancelled,
-    _emit_approval_message,
     format_approval_question,
 )
 from quimera.ui.base import RendererBase
@@ -54,30 +52,33 @@ def test_approval_handler_abstract():
 # ── ApprovalManager (interactive) ──────────────────────────
 
 
+_INPUT_APPROVAL_CASES = [
+    ("y", True),
+    ("yes", True),
+    ("s", True),
+    ("sim", True),
+    ("n", False),
+    ("N", False),
+    ("", False),
+]
+
+
 @patch('builtins.input')
 @patch('builtins.print')
-def test_console_approval_handler_yes(mock_print, mock_input):
-    """Resposta 'y' aprova."""
-    handler = ApprovalManager(None)
+def test_console_approval_handler_builtin_input_path(mock_print, mock_input):
+    """Sem input_fn, usa input() builtin dinamicamente e imprime o prompt."""
+    handler = ApprovalManager(None, input_fn=None)
     mock_input.return_value = "y"
     assert handler.approve(tool_name="shell", summary="ls") is True
+    mock_input.assert_called_once()
     mock_print.assert_called()
 
 
-@patch('builtins.input')
-def test_console_approval_handler_no(mock_input):
-    """Resposta 'n' nega."""
-    handler = ApprovalManager(None)
-    mock_input.return_value = "n"
-    assert handler.approve(tool_name="shell", summary="rm -rf /") is False
-
-
-@patch('builtins.input')
-def test_console_approval_handler_empty(mock_input):
-    """Resposta vazia nega."""
-    handler = ApprovalManager(None)
-    mock_input.return_value = ""
-    assert handler.approve(tool_name="shell", summary="echo") is False
+@pytest.mark.parametrize(("response", "expected"), _INPUT_APPROVAL_CASES)
+def test_console_approval_handler_response(response, expected):
+    """Resposta afirmativa aprova; negativa ou vazia nega."""
+    handler = ApprovalManager(None, input_fn=lambda _: response)
+    assert handler.approve(tool_name="shell", summary="ls") is expected
 
 
 def test_console_approval_handler_with_custom_input_fn():
@@ -95,30 +96,6 @@ def test_console_approval_handler_with_custom_input_fn():
     assert len(calls) == 1
     assert "Executar?" in calls[0]
     assert "y/N" in calls[0]
-
-
-def test_console_approval_handler_accepts_sim():
-    """Aceita 'sim' (português) como resposta afirmativa."""
-    handler = ApprovalManager(None, input_fn=lambda _: "sim")
-    assert handler.approve(tool_name="shell", summary="ls") is True
-
-
-def test_console_approval_handler_accepts_s():
-    """Aceita 's' como resposta afirmativa."""
-    handler = ApprovalManager(None, input_fn=lambda _: "s")
-    assert handler.approve(tool_name="shell", summary="ls") is True
-
-
-def test_console_approval_handler_accepts_yes():
-    """Aceita 'yes' como resposta afirmativa."""
-    handler = ApprovalManager(None, input_fn=lambda _: "yes")
-    assert handler.approve(tool_name="shell", summary="ls") is True
-
-
-def test_console_approval_handler_rejects_uppercase_n():
-    """'N' (maiúsculo) nega."""
-    handler = ApprovalManager(None, input_fn=lambda _: "N")
-    assert handler.approve(tool_name="shell", summary="ls") is False
 
 
 def test_console_approval_handler_eof_error_returns_false():
@@ -294,53 +271,48 @@ def test_console_approval_handler_input_gate_spinner_callbacks_called():
 # ── ApprovalManager + renderer ──────────────────────────────
 
 
+class FakeApprovalRenderer(RendererBase):
+    """Renderer fake que registra eventos de aprovação em ordem de chamada."""
+
+    def __init__(self):
+        self.events = []
+        self.windows = []
+
+    @property
+    def messages(self):
+        return [payload for kind, payload in self.events if kind == "show"]
+
+    def show_approval(self, msg):
+        self.events.append(("show", msg))
+
+    def flush(self):
+        self.events.append(("flush", None))
+
+    @contextmanager
+    def approval_window(self, **kwargs):
+        self.windows.append(kwargs)
+        self.events.append(("approval_window:enter", None))
+        try:
+            yield
+        finally:
+            self.events.append(("approval_window:exit", None))
+
+
 def test_console_approval_handler_with_renderer():
     """Quando um renderer é injetado, usa show_approval em vez de print."""
-    class FakeRenderer(RendererBase):
-        def __init__(self):
-            self.calls = []
-
-        def show_approval(self, msg):
-            self.calls.append(msg)
-
-        @contextmanager
-        def approval_window(self, **_kwargs):
-            self.calls.append("approval_window:enter")
-            try:
-                yield
-            finally:
-                self.calls.append("approval_window:exit")
-
-    renderer = FakeRenderer()
+    renderer = FakeApprovalRenderer()
     handler = ApprovalManager(None, input_fn=lambda _: "y", renderer=renderer)
     with patch('builtins.print') as mock_print:
         result = handler.approve(tool_name="shell", summary="ls")
     assert result is True
-    assert len(renderer.calls) >= 1
-    assert "Aprovar shell" in renderer.calls[0]
+    mock_print.assert_not_called()
+    assert renderer.messages
+    assert "Aprovar shell" in renderer.messages[0]
 
 
 def test_console_approval_handler_renderer_flushes_before_input():
     """Com renderer, flush é chamado antes de solicitar input."""
-    class FakeRenderer(RendererBase):
-        def __init__(self):
-            self.calls = []
-
-        def show_approval(self, msg):
-            self.calls.append(("show", msg))
-
-        def flush(self):
-            self.calls.append(("flush", None))
-
-        @contextmanager
-        def approval_window(self, **_kwargs):
-            self.calls.append(("approval_window:enter", None))
-            try:
-                yield
-            finally:
-                self.calls.append(("approval_window:exit", None))
-
-    renderer = FakeRenderer()
+    renderer = FakeApprovalRenderer()
     order = []
     handler = ApprovalManager(None,
         input_fn=lambda _: order.append("input") or "y",
@@ -348,35 +320,20 @@ def test_console_approval_handler_renderer_flushes_before_input():
     )
     result = handler.approve(tool_name="shell", summary="ls")
     assert result is True
-    assert renderer.calls[:2] == [("show", "\nAprovar shell\nls"), ("flush", None)]
+    assert renderer.events[:2] == [("show", "\nAprovar shell\nls"), ("flush", None)]
     assert order == ["input"]
 
 
 def test_console_approval_handler_renderer_shows_eof_message():
     """Com renderer, mensagem de EOF também usa show_approval."""
-    class FakeRenderer(RendererBase):
-        def __init__(self):
-            self.calls = []
-
-        def show_approval(self, msg):
-            self.calls.append(msg)
-
-        @contextmanager
-        def approval_window(self, **_kwargs):
-            self.calls.append("approval_window:enter")
-            try:
-                yield
-            finally:
-                self.calls.append("approval_window:exit")
-
-    renderer = FakeRenderer()
+    renderer = FakeApprovalRenderer()
     handler = ApprovalManager(None,
         input_fn=lambda _: (_ for _ in ()).throw(EOFError()),
         renderer=renderer,
     )
     result = handler.approve(tool_name="shell", summary="ls")
     assert result is False
-    assert any("stdin não disponível" in m for m in renderer.calls)
+    assert any("stdin não disponível" in m for m in renderer.messages)
 
 
 def test_console_approval_handler_no_renderer_uses_print():
@@ -393,17 +350,6 @@ def test_console_approval_handler_no_renderer_uses_print():
 
 
 # ── ApprovalManager + None input_fn usa builtins.input ──────
-
-
-@patch('builtins.input')
-@patch('builtins.print')
-def test_console_approval_handler_none_input_fn_uses_builtin(mock_print, mock_input):
-    """Quando input_fn=None no construtor, usa input() builtin dinamicamente."""
-    handler = ApprovalManager(None, input_fn=None)
-    mock_input.return_value = "y"
-    result = handler.approve(tool_name="shell", summary="ls")
-    assert result is True
-    mock_input.assert_called_once()
 
 
 @patch('builtins.print')
@@ -724,23 +670,8 @@ def test_pre_approval_handler_spinner_callbacks_on_base_eof():
 def test_console_approval_handler_renderer_with_spinner_callbacks():
     """Combinação de renderer + spinner callbacks: ordem correta e
     renderer é usado para exibir o prompt."""
-    class FakeRenderer(RendererBase):
-        def __init__(self):
-            self.calls = []
-
-        def show_approval(self, msg):
-            self.calls.append(msg)
-
-        @contextmanager
-        def approval_window(self, **_kwargs):
-            self.calls.append("approval_window:enter")
-            try:
-                yield
-            finally:
-                self.calls.append("approval_window:exit")
-
     order = []
-    renderer = FakeRenderer()
+    renderer = FakeApprovalRenderer()
     handler = ApprovalManager(None,
         input_fn=lambda _: order.append("input") or "y",
         renderer=renderer,
@@ -754,8 +685,8 @@ def test_console_approval_handler_renderer_with_spinner_callbacks():
         result = handler.approve(tool_name="shell", summary="ls")
 
     assert result is True
-    assert len(renderer.calls) >= 1
-    assert "Aprovar shell" in renderer.calls[0]
+    assert renderer.messages
+    assert "Aprovar shell" in renderer.messages[0]
     mock_print.assert_not_called()
     assert order == ["suspend_spinner", "input", "resume_spinner"]
 
@@ -829,20 +760,7 @@ def test_console_approval_handler_textual_xthread_prefers_approval_gate_even_whe
 
 def test_console_approval_handler_renderer_window_receives_question_metadata():
     """Fallback com renderer deve abrir approval_window com pergunta completa."""
-    class FakeRenderer(RendererBase):
-        def __init__(self):
-            self.windows = []
-            self.messages = []
-
-        def show_approval(self, message):
-            self.messages.append(message)
-
-        @contextmanager
-        def approval_window(self, **kwargs):
-            self.windows.append(kwargs)
-            yield
-
-    renderer = FakeRenderer()
+    renderer = FakeApprovalRenderer()
     handler = ApprovalManager(None, input_fn=lambda _: "y", renderer=renderer)
 
     result = handler.approve(tool_name="write_file", summary="risco: write\narquivo: README.md")

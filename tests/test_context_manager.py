@@ -1,5 +1,5 @@
 import subprocess
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -14,11 +14,6 @@ def temp_files(tmp_path):
     base.write_text("Base Content", encoding="utf-8")
     session.write_text("## Resumo da última sessão\n\n_Gerado em 2026-01-01 10:00_\n\nActual Summary", encoding="utf-8")
     return base, session
-
-
-@pytest.fixture
-def renderer():
-    return MagicMock()
 
 
 def test_load_base(temp_files, renderer):

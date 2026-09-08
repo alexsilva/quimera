@@ -6,7 +6,6 @@ import pytest
 from quimera.debate.commands import DebateCommand
 from quimera.debate.models import (
     DebateMode,
-    DebateProtocolError,
     DebateStatus,
 )
 from quimera.debate.repository import DebateRepository

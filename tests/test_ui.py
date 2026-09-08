@@ -139,6 +139,7 @@ class TestTerminalRenderer:
                 patch("quimera.ui.Markdown") as mock_md, \
                 patch("quimera.ui._agent_style", return_value=("blue", "Test")):
             mock_renderer.show_message("test", "Hello")
+        mock_md.assert_called_once_with("Hello")
 
     def test_show_message_extracts_text_from_panel_content(self):
         """Renderable Rich não deve vazar repr interna no conteúdo final."""
@@ -489,6 +490,7 @@ class TestTerminalRenderer:
                 patch("quimera.ui.Panel") as mock_panel:
             result = mock_renderer._render_status_panel()
             assert mock_panel.called
+            assert result is mock_panel.return_value
 
     def test_render_status_panel_title_includes_agent_count(self, mock_renderer):
         """Painel de status explicita quantos agentes estão ativos."""
@@ -504,7 +506,7 @@ class TestTerminalRenderer:
         with patch("quimera.ui._RICH_AVAILABLE", True):
             mock_renderer._console = MagicMock()
             mock_renderer._live = None
-            with mock_renderer.live_status(["agent1", "agent2"]) as ctx:
+            with mock_renderer.live_status(["agent1", "agent2"]):
                 pass
 
     def test_live_status_without_rich(self, renderer_no_rich):
@@ -1155,49 +1157,21 @@ class TestExtractTextFromRenderable:
 class TestHighlightTags:
     """Test suite for _highlight_tags function."""
 
-    def test_simple_tag(self):
-        result = _highlight_tags("<tool>")
+    @pytest.mark.parametrize(
+        ("source", "expected_spans"),
+        [
+            pytest.param("<tool>", 1, id="tag-simples"),
+            pytest.param("</tool>", 1, id="tag-fechamento"),
+            pytest.param('<tool name="x"/>', 1, id="tag-auto-fechada"),
+            pytest.param("hello world", 0, id="texto-puro"),
+            pytest.param("a <tool>b</tool> c", 2, id="conteudo-misto"),
+            pytest.param("", 0, id="string-vazia"),
+            pytest.param("[bold]text[/bold]", 0, id="rich-markup"),
+            pytest.param("a < b > c", 0, id="angle-bracket-solto"),
+        ],
+    )
+    def test_highlight(self, source, expected_spans):
+        result = _highlight_tags(source)
         assert isinstance(result, Text)
-        assert result.plain == "<tool>"
-        assert len(result.spans) == 1
-
-    def test_closing_tag(self):
-        result = _highlight_tags("</tool>")
-        assert isinstance(result, Text)
-        assert result.plain == "</tool>"
-        assert len(result.spans) == 1
-
-    def test_self_closing_tag(self):
-        result = _highlight_tags('<tool name="x"/>')
-        assert isinstance(result, Text)
-        assert result.plain == '<tool name="x"/>'
-        assert len(result.spans) == 1
-
-    def test_plain_text_no_tags(self):
-        result = _highlight_tags("hello world")
-        assert isinstance(result, Text)
-        assert result.plain == "hello world"
-        assert len(result.spans) == 0
-
-    def test_mixed_content(self):
-        result = _highlight_tags("a <tool>b</tool> c")
-        assert isinstance(result, Text)
-        assert result.plain == "a <tool>b</tool> c"
-        assert len(result.spans) == 2
-
-    def test_empty_string(self):
-        result = _highlight_tags("")
-        assert isinstance(result, Text)
-        assert result.plain == ""
-
-    def test_rich_markup_is_not_confused_with_tags(self):
-        result = _highlight_tags("[bold]text[/bold]")
-        assert isinstance(result, Text)
-        assert result.plain == "[bold]text[/bold]"
-        assert len(result.spans) == 0
-
-    def test_lone_angle_bracket_not_tag(self):
-        result = _highlight_tags("a < b > c")
-        assert isinstance(result, Text)
-        assert result.plain == "a < b > c"
-        assert len(result.spans) == 0
+        assert result.plain == source
+        assert len(result.spans) == expected_spans

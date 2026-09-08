@@ -1,4 +1,3 @@
-import pytest
 
 import quimera.profiles.mock  # noqa: F401
 from quimera.profiles import get

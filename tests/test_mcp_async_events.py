@@ -5,16 +5,14 @@ import concurrent.futures
 import http.client
 import io
 import json
-import os
 import socket
 import threading
 import time
 from unittest.mock import patch
 
-import pytest
 
 from quimera.runtime.mcp import MCPServer, MCP_HTTPServer
-from quimera.runtime.models import ToolCall, ToolResult
+from quimera.runtime.models import ToolResult
 
 from tests.test_runtime_mcp_server import _make_executor, _make_server, _wait_for_socket
 
@@ -210,7 +208,7 @@ class TestCancellation:
         out = io.StringIO()
         server.serve(stdin=inp, stdout=out)
 
-        responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+        responses = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
         assert len(responses) == 0, "cancelamento não deve gerar resposta"
 
 
@@ -388,7 +386,7 @@ class TestTimeout:
         server._flush_pending(out)
 
         raw = out.getvalue()
-        responses = [json.loads(l) for l in raw.splitlines() if l.strip()]
+        responses = [json.loads(line) for line in raw.splitlines() if line.strip()]
         assert len(responses) == 1
         assert responses[0]["result"]["isError"] is False
         assert responses[0]["result"]["content"][0]["text"] == "ok"
@@ -502,7 +500,7 @@ class TestTimeout:
                 call["deadline_at"] = time.perf_counter() - 0.01
             server._flush_pending(out)
 
-            responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+            responses = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
             assert len(responses) == 1
             assert responses[0]["id"] == 11
             assert responses[0]["error"]["message"].startswith("Tool 'read_file' timed out")
@@ -513,7 +511,7 @@ class TestTimeout:
 
             # Não reemite a resposta em flushes posteriores.
             server._flush_pending(out)
-            responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+            responses = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
             assert len(responses) == 1
         finally:
             release.set()
@@ -537,7 +535,7 @@ class TestTimeout:
 
         server._flush_pending(out)
 
-        responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+        responses = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
         assert len(responses) == 1
         assert responses[0]["result"]["isError"] is False
         assert responses[0]["result"]["content"][0]["text"] == "ok-late"
@@ -568,7 +566,7 @@ class TestTimeout:
             elapsed = time.perf_counter() - started
 
             assert elapsed < 3
-            responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+            responses = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
             assert len(responses) == 1
             assert responses[0]["error"]["message"].startswith("Tool 'read_file' timed out")
             assert call["cancel_event"].is_set()

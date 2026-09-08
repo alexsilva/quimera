@@ -10,18 +10,12 @@ from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
-from quimera.runtime.policy import ToolPolicy, ToolPolicyError
-from quimera.runtime.registry import ToolRegistry
+from quimera.runtime.policy import ToolPolicyError
 from quimera.tasks.executor import TaskExecutor
-from quimera.runtime.tools import delegate as delegate_module
-from quimera.runtime.tools import files as files_tools
-from quimera.runtime.tools import memory as memory_tools
-from quimera.runtime.tools import patch as patch_tools
-from quimera.runtime.tools import tasks as tasks_tools
-from quimera.runtime.tools import todo as todo_tools
 from quimera.runtime.tools.shell import ShellToolValidator
 from quimera.tasks.planning import choose_best_agent, classify_task_type
 from quimera.tasks.api import add_job, get_conn, init_db, list_tasks, propose_task
+from tests.helpers import make_policy as _make_policy
 
 
 # ---------------------------------------------------------------------------
@@ -30,19 +24,6 @@ from quimera.tasks.api import add_job, get_conn, init_db, list_tasks, propose_ta
 
 def _make_config(tmp_path: Path) -> ToolRuntimeConfig:
     return ToolRuntimeConfig(workspace_root=tmp_path)
-
-
-def _make_policy(config):
-    """Cria ToolPolicy com todos os validators registrados."""
-    p = ToolPolicy(config)
-    _reg = ToolRegistry()
-    files_tools.register(_reg, p, config)
-    patch_tools.register(_reg, p, config)
-    tasks_tools.register(_reg, p, config)
-    todo_tools.register(_reg, p, config)
-    memory_tools.register(_reg, p, config)
-    delegate_module.register(_reg, p, config)
-    return p
 
 
 def _auto_approve() -> ApprovalHandler:

@@ -12,11 +12,6 @@ from quimera.runtime.tools import shell as shell_module
 from quimera.runtime.tools.shell import CommandSession, ShellTool, ShellToolValidator
 
 
-@pytest.fixture
-def config():
-    return ToolRuntimeConfig(workspace_root=Path("/tmp"))
-
-
 def test_shell_tool_run_basic(config):
     """Verifica que Test shell tool run basic."""
     tool = ShellTool(config)

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import threading
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -431,8 +430,7 @@ class TestNonSSEPath:
         delegation_tools.config.db_path = tmp_path / "tasks.db"
 
         # cancel_checker já retorna True desde o início — simula Ctrl+C
-        cancelled_immediately = lambda: True
-        delegation_tools.set_cancel_checker(cancelled_immediately)
+        delegation_tools.set_cancel_checker(lambda: True)
         delegation_tools.set_delegate_fn(MagicMock(return_value="resultado"))
 
         call = _make_call(metadata={"_mcp_state": {"sse_queue": None}})

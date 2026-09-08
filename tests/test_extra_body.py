@@ -329,7 +329,7 @@ def test_build_connection_with_model_no_extra_body():
 def test_build_connection_base_with_model_ignores_extra_body():
     """--profile + --model: caminho configure_with_model ignora extra_body (é CliConnection)."""
     # Isso testa que o ramo profile+model não quebra com extra_body presente
-    from quimera.profiles.base import ExecutionProfile, ProfileRegistry
+    from quimera.profiles.base import ExecutionProfile
     base_profile = ExecutionProfile(
         name="base-agent",
         prefix="/base-agent",
@@ -389,7 +389,6 @@ class TestExtraBodyPersistence:
         from quimera.profiles import base as base_mod
         from quimera.profiles.base import (
             OpenAIConnection,
-            ProfileRegistry,
             set_connection,
             ExecutionProfile,
         )
@@ -427,7 +426,6 @@ class TestExtraBodyPersistence:
         from quimera.profiles import base as base_mod
         from quimera.profiles.base import (
             OpenAIConnection,
-            ProfileRegistry,
             set_connection,
             ExecutionProfile,
         )

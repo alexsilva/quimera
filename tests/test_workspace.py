@@ -218,7 +218,6 @@ class TestWorkspace(unittest.TestCase):
     def test_tmp_ensure_dirs_logs_only_the_failing_directory(self):
         """Verifica que apenas o diretório com falha é registrado no log."""
         render_dir = self.tmp_base / "hash123" / "data" / "logs" / "render"
-        metrics_dir = self.tmp_base / "hash123" / "data" / "logs" / "metrics"
 
         def fake_mkdir(path, parents=False, exist_ok=False):
             if path == render_dir:

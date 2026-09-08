@@ -706,7 +706,9 @@ def test_main_connect_profile_model_uses_model_flag(monkeypatch):
 
 def test_main_connect_existing_profile_inherits_base_settings(monkeypatch):
     """Verifica que main connect existing profile inherits base settings."""
-    base_formatter = lambda text: text
+    def base_formatter(text):
+        return text
+
     existing_profile = SimpleNamespace(
         dynamic=True,
         effective_connection=lambda: CliConnection(cmd=["existing"]),

@@ -1,7 +1,6 @@
 """Tests for ConnectionConfigurator — preservação de configuração existente."""
 import json
 
-import pytest
 
 from quimera.connection_configurator import ConnectionConfigurator
 from quimera.profiles.base import ExecutionProfile, CliConnection, OpenAIConnection

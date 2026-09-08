@@ -1,7 +1,6 @@
 import io
 import runpy
 import sqlite3
-import subprocess
 import sys
 from contextlib import redirect_stdout
 from unittest.mock import patch

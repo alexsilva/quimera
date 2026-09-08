@@ -4,7 +4,6 @@ import threading
 import time
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 
 def test_textual_input_gate_reads_submitted_line():
@@ -73,7 +72,6 @@ def test_textual_input_gate_redisplay_sends_prompt_event():
     gate = bridge.create_input_gate(command_resolver=lambda: ["/help"])
 
     events = []
-    original_emit = bridge.emit
     bridge.emit = lambda e: events.append(e.kind)
 
     gate._set_active_state(True)
@@ -523,11 +521,16 @@ def test_simple_input_gate_setters():
     from quimera.app.simple_input_gate import SimpleInputGate
 
     gate = SimpleInputGate()
-    handler = lambda: None
+
+    def handler():
+        return None
+
+    def resolver():
+        return []
+
     gate.set_theme_cycle_handler(handler)
     assert gate._theme_cycle_handler is handler
 
-    resolver = lambda: []
     gate.set_command_resolver(resolver)
     assert gate._command_resolver is resolver
 

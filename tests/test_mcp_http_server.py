@@ -6,7 +6,6 @@ import json
 import os
 import queue
 import socket
-import threading
 import time
 from http.client import HTTPConnection
 from unittest.mock import MagicMock, patch
@@ -31,25 +30,8 @@ from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolResult
 from quimera.runtime.workspace_policy import WorkspacePolicy
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _make_executor(tool_names=None, call_result=None):
-    executor = MagicMock()
-    names = tool_names or ["read_file", "run_shell"]
-    executor.registry.names.return_value = names
-    executor.config.db_path = None
-    executor.policy.blocked_tools = set()
-    if call_result is None:
-        call_result = ToolResult(ok=True, tool_name="read_file", content="ok")
-    executor.execute.return_value = call_result
-    return executor
-
-
-def _make_mcp_server(executor=None):
-    return MCPServer(executor or _make_executor())
+from tests.helpers import make_mcp_executor as _make_executor
+from tests.helpers import make_mcp_server as _make_mcp_server
 
 
 def _wait_for_server(host: str, port: int, timeout: float = 5.0) -> None:

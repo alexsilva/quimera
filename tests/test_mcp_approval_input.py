@@ -20,14 +20,12 @@ Bug #3 — _show() antes do input corre com Live context:
 """
 from __future__ import annotations
 
-import sys
 import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig

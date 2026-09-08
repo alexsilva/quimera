@@ -1,5 +1,4 @@
 """Tests for ProfileRegistry injection in QuimeraApp."""
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest

@@ -43,6 +43,8 @@ class TestStage5Workflow(unittest.TestCase):
         self.assertEqual(len(tasks_completed), 1)
         self.assertEqual(tasks_completed[0]["result"], "JWT validation implemented")
 
+        self.assertEqual(claim_task("agent-2", db_path=self.tmp), t2)
+
     def test_approve_validates_state(self):
         """Verifica que approve_task só funciona uma vez no mesmo estado."""
         job_id = add_job("Test job", db_path=self.tmp)

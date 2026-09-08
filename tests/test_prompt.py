@@ -700,7 +700,7 @@ def test_build_conversation_block_skips_empty_content():
     prompt = builder.build(agent="codex", history=history)
 
     conversation_block = _extract_block(prompt, "recent_conversation")
-    lines = [l for l in conversation_block.splitlines() if "[ALEX]" in l]
+    lines = [line for line in conversation_block.splitlines() if "[ALEX]" in line]
     assert len(lines) == 1
     assert "pergunta anterior válida" in lines[0]
 

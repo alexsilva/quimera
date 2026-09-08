@@ -3,7 +3,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from quimera.app.dispatch import AppDispatchServices
 from quimera.tasks.runner import TaskRunner
 from quimera.tasks.services import (
     AppTaskServices,

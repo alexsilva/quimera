@@ -7,7 +7,6 @@ import logging
 import os
 import socket
 import sys
-import tempfile
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -21,26 +20,8 @@ from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall, ToolResult
 from quimera.runtime.workspace_policy import WorkspacePolicy
 
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-def _make_executor(tool_names=None, call_result=None):
-    """Cria um ToolExecutor mínimo com registry e execute mockados."""
-    executor = MagicMock()
-    names = tool_names or ["read_file", "run_shell"]
-    executor.registry.names.return_value = names
-    executor.config.db_path = None
-    executor.policy.blocked_tools = set()
-    if call_result is None:
-        call_result = ToolResult(ok=True, tool_name="read_file", content="conteudo")
-    executor.execute.return_value = call_result
-    return executor
-
-
-def _make_server(executor=None):
-    return MCPServer(executor or _make_executor())
+from tests.helpers import make_mcp_executor as _make_executor
+from tests.helpers import make_mcp_server as _make_server
 
 
 def _exchange(server, *msgs):
@@ -792,7 +773,7 @@ class TestSocketProxy:
         out = io.StringIO()
         _proxy_stdio_to_socket(sock_path, stdin=inp, stdout=out)
 
-        responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+        responses = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
         assert len(responses) == 1
         assert responses[0]["id"] == 42
         assert responses[0]["result"] == {}
@@ -805,7 +786,7 @@ class TestInputRobustness:
         inp = io.StringIO("isto nao e json\n" + json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}) + "\n")
         out = io.StringIO()
         server.serve(stdin=inp, stdout=out)
-        responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+        responses = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
         assert len(responses) == 2
         assert responses[0].get("error", {}).get("code") == -32700
         assert responses[1]["result"] == {}
@@ -816,7 +797,7 @@ class TestInputRobustness:
         inp = io.StringIO("\n\n" + json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}) + "\n")
         out = io.StringIO()
         server.serve(stdin=inp, stdout=out)
-        responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+        responses = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
         assert len(responses) == 1
 
     def test_sequencia_de_requests(self):
@@ -1047,7 +1028,7 @@ class TestSocketAuth:
         out = io.StringIO()
         _proxy_stdio_to_socket(sock_path, token="secrettoken", stdin=inp, stdout=out)
 
-        responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+        responses = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
         assert len(responses) == 1
         assert responses[0]["id"] == 42
         assert responses[0]["result"] == {}
@@ -1121,7 +1102,7 @@ class TestSocketAuth:
         with patch("quimera.runtime.mcp.server.resolve_tool_schemas", return_value=schemas):
             _proxy_stdio_to_socket(sock_path, token="abc", stdin=inp, stdout=out)
 
-        [resp] = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+        [resp] = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
         names = [tool["name"] for tool in resp["result"]["tools"]]
         assert names == ["read_file"]
 
@@ -1292,7 +1273,7 @@ class TestProfileTokenIntegration:
 
     def test_configure_mcp_socket_usa_set_mcp_socket_config_quando_disponivel(self):
         """configure_mcp_socket usa set_mcp_socket_config quando o profile tem o método."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
         profile = MagicMock()
         profile.set_mcp_socket_config = MagicMock()
         profile.set_mcp_socket_path = MagicMock()

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import threading
 
-import pytest
 
 from quimera.app.event_sink import EventSink
 from quimera.tasks.events import TaskEvent, TaskProposed, TaskCompleted

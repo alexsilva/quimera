@@ -197,27 +197,6 @@ def test_write_file_does_not_mutate_allowed_read_root(tmp_path):
     assert not (read_root / "created.txt").exists()
 
 
-def test_write_file_does_not_mutate_allowed_read_root(tmp_path):
-    """allowed_read_roots são leitura; mutações continuam limitadas à workspace."""
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    read_root = tmp_path / "read-root"
-    read_root.mkdir()
-    config = ToolRuntimeConfig(
-        workspace_root=workspace,
-        allowed_read_roots=[workspace, read_root],
-    )
-    tools = FileTools(config)
-
-    call = ToolCall(
-        name="write_file",
-        arguments={"path": f"../{read_root.name}/created.txt", "content": "x"},
-    )
-    with pytest.raises(ValueError, match="Path fora da workspace"):
-        tools.write_file(call)
-    assert not (read_root / "created.txt").exists()
-
-
 def test_file_tools_grep_search_staging(tools, config):
     """Verifica que grep_search busca também no staging."""
     # Line 114-116 coverage
@@ -357,48 +336,34 @@ def test_remove_file_does_not_mutate_allowed_read_root(tmp_path):
     assert protected.exists()
 
 
-def test_remove_file_does_not_mutate_allowed_read_root(tmp_path):
-    """remove_file também não opera em allowed_read_roots fora da workspace."""
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    read_root = tmp_path / "read-root"
-    read_root.mkdir()
-    protected = read_root / "protected.txt"
-    protected.write_text("keep", encoding="utf-8")
-    config = ToolRuntimeConfig(
-        workspace_root=workspace,
-        allowed_read_roots=[workspace, read_root],
-    )
-    tools = FileTools(config)
-
-    call = ToolCall(
-        name="remove_file",
-        arguments={"path": f"../{read_root.name}/protected.txt", "dry_run": False},
-    )
-    with pytest.raises(ValueError, match="Path fora da workspace"):
-        tools.remove_file(call)
-    assert protected.exists()
-
-
 # ── read_file range de linhas ─────────────────────────────────
 
-def test_read_file_range_start_only(tools, config):
-    """read_file com start_line lê da linha em diante."""
+_RANGE_FILE_CASES = [
+    ({"start_line": 3}, "c\nd\ne\n"),
+    ({"start_line": 2, "end_line": 99}, "b\nc\nd\ne\n"),
+    ({"start_line": -5, "end_line": 2}, "a\nb\n"),
+]
+
+
+@pytest.mark.parametrize(("range_kwargs", "expected"), _RANGE_FILE_CASES)
+def test_read_file_range_variants(tools, config, range_kwargs, expected):
+    """read_file respeita start_line/end_line (clamps e limites)."""
     workspace = config.workspace_root
     lines = ["a", "b", "c", "d", "e"]
-    (workspace / "test.txt").write_text("".join(f"{l}\n" for l in lines), encoding="utf-8")
+    (workspace / "test.txt").write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
 
-    call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": 3})
+    call = ToolCall(name="read_file", arguments={"path": "test.txt", **range_kwargs})
     result = tools.read_file(call)
+
     assert result.ok is True
-    assert result.content == "c\nd\ne\n"
+    assert result.content == expected
 
 
-def test_read_file_range_start_end(tools, config):
-    """read_file com start_line e end_line (inclusivo) lê intervalo."""
+def test_read_file_range_start_end_metadata(tools, config):
+    """read_file com start_line e end_line (inclusivo) lê intervalo e expõe metadados."""
     workspace = config.workspace_root
     lines = ["a", "b", "c", "d", "e"]
-    (workspace / "test.txt").write_text("".join(f"{l}\n" for l in lines), encoding="utf-8")
+    (workspace / "test.txt").write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
 
     call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": 2, "end_line": 4})
     result = tools.read_file(call)
@@ -426,48 +391,19 @@ def test_read_file_returns_line_metadata_without_range(tools, config):
     assert result.data["truncated"] is False
 
 
-def test_read_file_range_end_greater_than_total(tools, config):
-    """read_file com end_line > total limita ao total."""
-    workspace = config.workspace_root
-    lines = ["a", "b", "c"]
-    (workspace / "test.txt").write_text("".join(f"{l}\n" for l in lines), encoding="utf-8")
-
-    call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": 2, "end_line": 99})
-    result = tools.read_file(call)
-    assert result.ok is True
-    assert result.content == "b\nc\n"
+_INVALID_RANGE_CASES = [
+    {"start_line": 3, "end_line": 2},
+    {"start_line": 1, "end_line": 0},
+]
 
 
-def test_read_file_range_negative_start_clamps(tools, config):
-    """read_file com start_line < 1 é tratado como 0 (início)."""
-    workspace = config.workspace_root
-    lines = ["a", "b", "c"]
-    (workspace / "test.txt").write_text("".join(f"{l}\n" for l in lines), encoding="utf-8")
-
-    call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": -5, "end_line": 2})
-    result = tools.read_file(call)
-    assert result.ok is True
-    assert result.content == "a\nb\n"
-
-
-def test_read_file_range_invalid_start_ge_end(tools, config):
-    """read_file com start_line >= end_line retorna erro."""
-    workspace = config.workspace_root
-    lines = ["a", "b", "c"]
-    (workspace / "test.txt").write_text("".join(f"{l}\n" for l in lines), encoding="utf-8")
-
-    call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": 3, "end_line": 2})
-    result = tools.read_file(call)
-    assert result.ok is False
-    assert "Intervalo inválido" in result.error
-
-
-def test_read_file_range_end_line_zero(tools, config):
-    """read_file com end_line=0 retorna erro (start=1 >= end=0)."""
+@pytest.mark.parametrize("range_kwargs", _INVALID_RANGE_CASES)
+def test_read_file_range_invalid_interval(tools, config, range_kwargs):
+    """read_file com intervalo inválido (start >= end ou end=0) retorna erro."""
     workspace = config.workspace_root
     (workspace / "test.txt").write_text("a\nb\nc\n", encoding="utf-8")
 
-    call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": 1, "end_line": 0})
+    call = ToolCall(name="read_file", arguments={"path": "test.txt", **range_kwargs})
     result = tools.read_file(call)
     assert result.ok is False
     assert "Intervalo inválido" in result.error

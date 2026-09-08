@@ -9,7 +9,6 @@ Cobre as lacunas identificadas em code review:
 
 from pathlib import Path
 
-import pytest
 
 from unittest.mock import MagicMock
 
@@ -228,7 +227,6 @@ def test_approve_all_command_por_getter_nao_quebra_sem_handler(tmp_path: Path):
     """handle_command("/approve-all") não quebra se approval_handler_getter retornar None."""
     from quimera.app.system_layer import AppSystemLayer
     from quimera.app.agent_pool import AgentPool
-    from quimera.app.display_service import DisplayService
 
     renderer = DummyRenderer()
     layer = AppSystemLayer(
@@ -243,7 +241,6 @@ def test_approve_all_command_por_getter_nao_quebra_sem_handler(tmp_path: Path):
 def test_approve_command_por_getter_nao_quebra_sem_handler(tmp_path: Path):
     from quimera.app.system_layer import AppSystemLayer
     from quimera.app.agent_pool import AgentPool
-    from quimera.app.display_service import DisplayService
 
     renderer = DummyRenderer()
     layer = AppSystemLayer(

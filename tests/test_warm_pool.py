@@ -4,8 +4,6 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from quimera.agents import AgentClient
 from quimera.agents.warm_pool import WarmPool, _WarmSlot
 
@@ -284,11 +282,6 @@ class TestWarmPool:
 # ---------------------------------------------------------------------------
 # AgentClient — integração com WarmPool
 # ---------------------------------------------------------------------------
-
-@pytest.fixture
-def renderer():
-    return MagicMock()
-
 
 class TestAgentClientWarmPool:
     def _make_mock_proc(self, stdout_lines=None, stderr_lines=None, returncode=0):

@@ -128,7 +128,9 @@ def test_task_executor_skips_task_not_in_progress(db_path, repository):
 
 def test_create_executor(db_path, repository):
     """Verifica que create_executor cria um executor corretamente."""
-    handler = lambda x: True
+    def handler(_task):
+        return True
+
     executor = create_executor("agent", handler, db_path, repository=repository)
     assert executor.agent_name == "agent"
     assert executor._handler == handler

@@ -3,7 +3,7 @@ import queue
 import sys
 import threading
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 
 @pytest.fixture
@@ -108,7 +108,7 @@ class TestAppInputServices:
             set_prompt_owner=lambda v: setattr(mock_app, "_prompt_owning_thread_id", v),
         )
         mock_app._nonblocking_input_status = "reading"
-        with patch("sys.stdout") as mock_stdout:
+        with patch("sys.stdout"):
             srv.suspend_nonblocking()
         assert srv._suspended is True
         assert mock_app._nonblocking_input_status == "idle"

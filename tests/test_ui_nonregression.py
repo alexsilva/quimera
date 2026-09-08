@@ -6,8 +6,7 @@ Cobre três eixos críticos:
 3. Stream/summary sequence — ordenação e isolamento entre agentes e fluxo stream→resumo.
 """
 import io
-import sys
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from rich.console import Console

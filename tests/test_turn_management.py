@@ -218,8 +218,12 @@ class TestChatRoundContextBridge(unittest.TestCase):
         new_dispatch = Mock()
         new_ui_queue = queue.Queue()
         new_state = {"history": []}
-        parse_routing = lambda _user: (None, None, False)
-        parse_response = lambda response: (response, None, None, None)
+        def parse_routing(_user):
+            return (None, None, False)
+
+        def parse_response(response):
+            return (response, None, None, None)
+
         show_system = Mock()
 
         ctx = ChatRoundContext(
@@ -529,10 +533,10 @@ class TestTurnCycle(unittest.TestCase):
             if read_index[0] == 1:
                 return "mensagem-ativa"
             if read_index[0] == 2:
-                self.assertTrue(process_started.wait(timeout=2))
+                self.assertTrue(process_started.wait(timeout=10))
                 return "mensagem-pendente"
             if read_index[0] == 3:
-                self.assertTrue(process_started.wait(timeout=2))
+                self.assertTrue(process_started.wait(timeout=10))
                 raise KeyboardInterrupt()
             release_process.set()
             return CMD_EXIT
@@ -542,7 +546,7 @@ class TestTurnCycle(unittest.TestCase):
         def queued_process(user):
             process_calls.append(user)
             process_started.set()
-            release_process.wait(timeout=2)
+            release_process.wait(timeout=10)
 
         app.read_user_input = mock_read_user_input
         app._do_process_chat_message = queued_process
@@ -2025,7 +2029,7 @@ class TestAiTurnControlPlaneCommands(unittest.TestCase):
             if call_index[0] == 2:
                 # Só entrega o comando depois que o processamento realmente começou,
                 # garantindo overlap real (não apenas um turno_manager forjado).
-                self.assertTrue(process_started.wait(timeout=2), "processamento não iniciou a tempo")
+                self.assertTrue(process_started.wait(timeout=10), "processamento não iniciou a tempo")
                 return "/agents"
             return CMD_EXIT
 

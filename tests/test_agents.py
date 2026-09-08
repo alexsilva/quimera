@@ -19,7 +19,7 @@ from quimera.agents import (
     _should_ignore_stderr_line,
 )
 from quimera.agents.process_runner import ProcessRunner
-from quimera.constants import MAX_STDERR_LINES, Visibility
+from quimera.constants import Visibility
 from quimera.profiles import get as get_profile
 from quimera.prompt_templates import PromptText
 from quimera.profiles.base import (
@@ -47,11 +47,6 @@ def _build_tool_executor(workspace_root):
         require_approval_for_mutations=False,
     )
     return ToolExecutor(config, AutoApprovalHandler())
-
-
-@pytest.fixture
-def renderer():
-    return MagicMock()
 
 
 def test_strip_spinner():
@@ -937,24 +932,6 @@ def test_agent_client_run_input_failure_escalates_only_after_timeout(renderer):
     mock_proc.kill.assert_called_once_with()
 
 
-def test_agent_client_run_communication_error(renderer):
-    """Verifica que agent client run communication error."""
-    client = AgentClient(renderer)
-    with patch("subprocess.Popen") as mock_popen:
-        mock_proc = MagicMock()
-        mock_proc.stdout = iter(["out\n"])
-        mock_proc.stderr = iter([])
-        mock_proc.returncode = 0
-        mock_popen.return_value = mock_proc
-
-        # We need to wait for threads, but we can mock them or force error
-        with patch("threading.Thread") as mock_thread:
-            # We want to set result_holder["error"]
-            # This is hard because result_holder is local to run()
-            # Let's mock the whole run method's internals or use a different approach
-            pass
-
-
 def test_agent_client_run_silent_logs(renderer):
     """Verifica que agent client run silent logs."""
     client = AgentClient(renderer)
@@ -1512,34 +1489,6 @@ def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
     renderer.clear_agent_transient.assert_any_call("claude")
 
 
-def test_agent_client_run_post_drain(renderer):
-    """Verifica que agent client run post drain."""
-    # Line 166-180 approx - Drain remaining queue after threads die
-    client = AgentClient(renderer)
-    with patch("subprocess.Popen") as mock_popen:
-        mock_proc = MagicMock()
-        mock_proc.stdout = iter([])
-        mock_proc.stderr = iter([])
-        mock_proc.returncode = 0
-        mock_proc.stdin = MagicMock()
-        mock_popen.return_value = mock_proc
-
-        with patch("threading.Thread") as mock_thread_cls:
-            mock_stdout_thread = MagicMock()
-            mock_stderr_thread = MagicMock()
-            # Threads die immediately
-            mock_stdout_thread.is_alive.return_value = False
-            mock_stderr_thread.is_alive.return_value = False
-            mock_thread_cls.side_effect = [mock_stdout_thread, mock_stderr_thread]
-
-            # But we put something in the queue manually if we could...
-            # Actually, the real threads put things in log_queue.
-            # Since we mocked Thread, we have to simulate what they do.
-
-            # Let's use a real thread for a moment or mock the queue behavior in the loop
-            pass
-
-
 def test_agent_client_run_uses_working_dir(renderer, tmp_path):
     """Verifica que agent client run uses working dir."""
     workspace = str(tmp_path)
@@ -1710,6 +1659,7 @@ def test_agent_client_call_api_driver(renderer):
 
             with patch.object(client, "_api_drivers", {}):
                 result = client.call("test-agent", "prompt")
+            assert result == "api response"
             mock_driver_cls.assert_called()
 
 
@@ -1823,6 +1773,7 @@ def test_parse_codex_json(renderer):
 
     raw = '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0}}'
     result = client._parse_codex_json(raw, "codex")
+    assert result is None
     assert callback_called
 
 

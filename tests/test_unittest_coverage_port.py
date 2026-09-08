@@ -16,14 +16,8 @@ from quimera.runtime.approval import ApprovalHandler, ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import TaskRecord, ToolCall, ToolResult
-from quimera.runtime.policy import ToolPolicy, ToolPolicyError
+from quimera.runtime.policy import ToolPolicyError
 from quimera.runtime.registry import ToolRegistry
-from quimera.runtime.tools import delegate as delegate_module
-from quimera.runtime.tools import files as files_tools
-from quimera.runtime.tools import memory as memory_tools
-from quimera.runtime.tools import patch as patch_tools
-from quimera.runtime.tools import tasks as tasks_tools
-from quimera.runtime.tools import todo as todo_tools
 from quimera.tasks.executor import TaskExecutor, create_executor
 from quimera.constants import TaskType
 from quimera.tasks.planning import (
@@ -34,22 +28,11 @@ from quimera.tasks.planning import (
 TASK_TYPE_CODE_EDIT = TaskType.CODE_EDIT
 TASK_TYPE_GENERAL = TaskType.GENERAL
 TASK_TYPE_TEST_EXECUTION = TaskType.TEST_EXECUTION
-from quimera.runtime.tools.files import FileTools, set_staging_root
-from quimera.runtime.tools.shell import ShellTool
-from quimera.runtime.tools.tasks import TaskTools
+from quimera.runtime.tools.files import FileTools, set_staging_root  # noqa: E402
+from quimera.runtime.tools.shell import ShellTool  # noqa: E402
+from quimera.runtime.tools.tasks import TaskTools  # noqa: E402
 
-
-def _make_policy(config):
-    """Cria ToolPolicy com todos os validators registrados."""
-    p = ToolPolicy(config)
-    _reg = ToolRegistry()
-    files_tools.register(_reg, p, config)
-    patch_tools.register(_reg, p, config)
-    tasks_tools.register(_reg, p, config)
-    todo_tools.register(_reg, p, config)
-    memory_tools.register(_reg, p, config)
-    delegate_module.register(_reg, p, config)
-    return p
+from tests.helpers import make_policy as _make_policy  # noqa: E402
 
 
 class _DummyStatus:

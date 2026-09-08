@@ -1,3 +1,4 @@
+import copy
 import io
 import importlib
 import re
@@ -6,7 +7,7 @@ import threading
 import time
 import unittest
 from collections import deque
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, call, patch
@@ -141,6 +142,107 @@ class DummyConfigManager:
         self.idle_timeout_seconds = 300
         self.theme = None
         self.density = "normal"
+
+
+def _make_summary_fakes(existing_summary, merged_summary):
+    """Par (context_manager, summarizer) fake para testes de merge de resumo de sessão."""
+
+    class FakeContextManager:
+        def __init__(self):
+            self.saved_summary = None
+
+        def load_session_summary(self):
+            return existing_summary
+
+        def update_with_summary(self, summary):
+            self.saved_summary = summary
+
+    class FakeSessionSummarizer:
+        def __init__(self):
+            self.calls = []
+
+        def summarize(self, history, existing_summary=None, preferred_agent=None, fallback=True):
+            self.calls.append((history, existing_summary, preferred_agent))
+            return merged_summary
+
+    return FakeContextManager(), FakeSessionSummarizer()
+
+
+def _build_fake_app_bootstrap(temp_root, *, load_session="", session_payload=None, history_window=None):
+    """Constrói QuimeraApp com bootstrapping falso (Workspace/Context/SessionStorage).
+
+    Substitui ConfigManager, Workspace, ContextManager e SessionStorage por fakes
+    durante a construção, evitando acesso ao sistema de arquivos do ambiente.
+    """
+    ROOT = Path(temp_root)
+
+    class FakeTmp:
+        root = ROOT
+        logs_dir = ROOT / "logs"
+
+        def render_log_path_for(self, session_id):
+            return ROOT / f"render-{session_id}.jsonl"
+
+        def render_ansi_path_for(self, session_id):
+            return ROOT / f"render-{session_id}.ansi"
+
+        def metrics_path_for(self, session_id):
+            return ROOT / f"metrics-{session_id}.jsonl"
+
+    class FakeWorkspace:
+        def __init__(self, cwd):
+            self.root = ROOT
+            self.cwd = cwd
+            self.config_file = ROOT / "config.json"
+            self.context_persistent = ROOT / "quimera_context.md"
+            self.context_session = ROOT / "quimera_session_context.md"
+            self.logs_dir = ROOT / "quimera_logs"
+            self.state_dir = ROOT / "quimera_state"
+            self.tasks_db = ROOT / "quimera_tasks.db"
+            self.decisions_log = ROOT / "decisions.jsonl"
+            self.env_file = ROOT / ".env"
+            self.tmp = FakeTmp()
+
+        def history_file_for(self, session_id):
+            return ROOT / f"quimera_history-{session_id}.jsonl"
+
+        def migrate_from_legacy(self, cwd):
+            return []
+
+    class FakeContextManager:
+        SUMMARY_MARKER = "## Resumo da última sessão"
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def load_session(self):
+            return load_session
+
+    class FakeSessionStorage:
+        session_id = "sessao-2026-03-27-123456"
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def load_last_session(self):
+            if session_payload is None:
+                return {"messages": [], "shared_state": {}}
+            return copy.deepcopy(session_payload)
+
+        def get_history_file(self):
+            return Path("/tmp/sessao-2026-03-27-123456.json")
+
+    patchers = [
+        patch("quimera.app.bootstrap.wiring.ConfigManager", DummyConfigManager),
+        patch("quimera.app.bootstrap.wiring.Workspace", FakeWorkspace),
+        patch("quimera.app.bootstrap.wiring.ContextManager", FakeContextManager),
+        patch("quimera.app.bootstrap.wiring.SessionStorage", FakeSessionStorage),
+    ]
+    with ExitStack() as stack:
+        for p in patchers:
+            stack.enter_context(p)
+        kwargs = {} if history_window is None else {"history_window": history_window}
+        return QuimeraApp(Path("/tmp/projeto"), input_gate_factory=lambda **kw: MagicMock(), **kwargs)
 
 
 class DummyStorage:
@@ -1814,70 +1916,11 @@ class ProtocolTests(unittest.TestCase):
 
     def test_app_builds_explicit_session_state_for_prompt(self):
         """Verifica que app builds explicit session state for prompt."""
-        temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-
-        class FakeTmp:
-            root = temp_root
-            logs_dir = temp_root / "logs"
-
-            def render_log_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.jsonl"
-
-            def render_ansi_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.ansi"
-
-            def metrics_path_for(self, session_id):
-                return temp_root / f"metrics-{session_id}.jsonl"
-
-        class FakeWorkspace:
-            def __init__(self, cwd):
-                self.root = temp_root
-                self.cwd = cwd
-                self.config_file = temp_root / "config.json"
-                self.context_persistent = temp_root / "quimera_context.md"
-                self.context_session = temp_root / "quimera_session_context.md"
-                self.logs_dir = temp_root / "quimera_logs"
-                self.state_dir = temp_root / "quimera_state"
-                self.tasks_db = temp_root / "quimera_tasks.db"
-                self.decisions_log = temp_root / "decisions.jsonl"
-                self.env_file = temp_root / ".env"
-                self.tmp = FakeTmp()
-
-            def history_file_for(self, session_id):
-                return temp_root / f"quimera_history-{session_id}.jsonl"
-
-            def migrate_from_legacy(self, cwd):
-                return []
-
-        class FakeContextManager:
-            SUMMARY_MARKER = "## Resumo da última sessão"
-
-            def __init__(self, *_args, **_kwargs):
-                pass
-
-            def load_session(self):
-                return "## Resumo da última sessão\n\nResumo anterior"
-
-        class FakeSessionStorage:
-            session_id = "sessao-2026-03-27-123456"
-
-            def __init__(self, *_args, **_kwargs):
-                pass
-
-            def load_last_session(self):
-                return {
-                    "messages": [{"role": "human", "content": "oi"}],
-                    "shared_state": {"goal": "continuar"},
-                }
-
-            def get_history_file(self):
-                return Path("/tmp/sessao-2026-03-27-123456.json")
-
-        with patch("quimera.app.bootstrap.wiring.ConfigManager", DummyConfigManager), patch("quimera.app.bootstrap.wiring.Workspace",
-                                                                                FakeWorkspace), patch(
-                "quimera.app.bootstrap.wiring.ContextManager", FakeContextManager
-        ), patch("quimera.app.bootstrap.wiring.SessionStorage", FakeSessionStorage):
-            app = QuimeraApp(Path("/tmp/projeto"), input_gate_factory=lambda **kw: MagicMock())
+        app = _build_fake_app_bootstrap(
+            Path(self.enterContext(tempfile.TemporaryDirectory())),
+            load_session="## Resumo da última sessão\n\nResumo anterior",
+            session_payload={"messages": [{"role": "human", "content": "oi"}], "shared_state": {"goal": "continuar"}},
+        )
 
         try:
             session_state = app.prompt_builder.session_state
@@ -1897,67 +1940,9 @@ class ProtocolTests(unittest.TestCase):
 
     def test_app_uses_default_history_window_from_config(self):
         """Verifica que app uses default history window from config."""
-        temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-
-        class FakeTmp:
-            root = temp_root
-            logs_dir = temp_root / "logs"
-
-            def render_log_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.jsonl"
-
-            def render_ansi_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.ansi"
-
-            def metrics_path_for(self, session_id):
-                return temp_root / f"metrics-{session_id}.jsonl"
-
-        class FakeWorkspace:
-            def __init__(self, cwd):
-                self.root = temp_root
-                self.cwd = cwd
-                self.config_file = temp_root / "config.json"
-                self.context_persistent = temp_root / "quimera_context.md"
-                self.context_session = temp_root / "quimera_session_context.md"
-                self.logs_dir = temp_root / "quimera_logs"
-                self.state_dir = temp_root / "quimera_state"
-                self.tasks_db = temp_root / "quimera_tasks.db"
-                self.decisions_log = temp_root / "decisions.jsonl"
-                self.env_file = temp_root / ".env"
-                self.tmp = FakeTmp()
-
-            def history_file_for(self, session_id):
-                return temp_root / f"quimera_history-{session_id}.jsonl"
-
-            def migrate_from_legacy(self, cwd):
-                return []
-
-        class FakeContextManager:
-            SUMMARY_MARKER = "## Resumo da última sessão"
-
-            def __init__(self, *_args, **_kwargs):
-                pass
-
-            def load_session(self):
-                return ""
-
-        class FakeSessionStorage:
-            session_id = "sessao-2026-03-27-123456"
-
-            def __init__(self, *_args, **_kwargs):
-                pass
-
-            def load_last_session(self):
-                return {"messages": [], "shared_state": {}}
-
-            def get_history_file(self):
-                return Path("/tmp/sessao-2026-03-27-123456.json")
-
-        with patch("quimera.app.bootstrap.wiring.ConfigManager", DummyConfigManager), patch("quimera.app.bootstrap.wiring.Workspace",
-                                                                                FakeWorkspace), patch(
-                "quimera.app.bootstrap.wiring.ContextManager", FakeContextManager
-        ), patch("quimera.app.bootstrap.wiring.SessionStorage", FakeSessionStorage):
-            app = QuimeraApp(Path("/tmp/projeto"), input_gate_factory=lambda **kw: MagicMock())
+        app = _build_fake_app_bootstrap(
+            Path(self.enterContext(tempfile.TemporaryDirectory())),
+        )
 
         try:
             self.assertEqual(app.prompt_builder.history_window, DEFAULT_HISTORY_WINDOW)
@@ -1966,67 +1951,10 @@ class ProtocolTests(unittest.TestCase):
 
     def test_app_allows_history_window_override(self):
         """Verifica que app allows history window override."""
-        temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-
-        class FakeTmp:
-            root = temp_root
-            logs_dir = temp_root / "logs"
-
-            def render_log_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.jsonl"
-
-            def render_ansi_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.ansi"
-
-            def metrics_path_for(self, session_id):
-                return temp_root / f"metrics-{session_id}.jsonl"
-
-        class FakeWorkspace:
-            def __init__(self, cwd):
-                self.root = temp_root
-                self.cwd = cwd
-                self.config_file = temp_root / "config.json"
-                self.context_persistent = temp_root / "quimera_context.md"
-                self.context_session = temp_root / "quimera_session_context.md"
-                self.logs_dir = temp_root / "quimera_logs"
-                self.state_dir = temp_root / "quimera_state"
-                self.tasks_db = temp_root / "quimera_tasks.db"
-                self.decisions_log = temp_root / "decisions.jsonl"
-                self.env_file = temp_root / ".env"
-                self.tmp = FakeTmp()
-
-            def history_file_for(self, session_id):
-                return temp_root / f"quimera_history-{session_id}.jsonl"
-
-            def migrate_from_legacy(self, cwd):
-                return []
-
-        class FakeContextManager:
-            SUMMARY_MARKER = "## Resumo da última sessão"
-
-            def __init__(self, *_args, **_kwargs):
-                pass
-
-            def load_session(self):
-                return ""
-
-        class FakeSessionStorage:
-            session_id = "sessao-2026-03-27-123456"
-
-            def __init__(self, *_args, **_kwargs):
-                pass
-
-            def load_last_session(self):
-                return {"messages": [], "shared_state": {}}
-
-            def get_history_file(self):
-                return Path("/tmp/sessao-2026-03-27-123456.json")
-
-        with patch("quimera.app.bootstrap.wiring.ConfigManager", DummyConfigManager), patch("quimera.app.bootstrap.wiring.Workspace",
-                                                                                FakeWorkspace), patch(
-                "quimera.app.bootstrap.wiring.ContextManager", FakeContextManager
-        ), patch("quimera.app.bootstrap.wiring.SessionStorage", FakeSessionStorage):
-            app = QuimeraApp(Path("/tmp/projeto"), history_window=5, input_gate_factory=lambda **kw: MagicMock())
+        app = _build_fake_app_bootstrap(
+            Path(self.enterContext(tempfile.TemporaryDirectory())),
+            history_window=5,
+        )
 
         try:
             self.assertEqual(app.prompt_builder.history_window, 5)
@@ -2035,70 +1963,10 @@ class ProtocolTests(unittest.TestCase):
 
     def test_app_truncates_restored_history_to_hard_limit(self):
         """Verifica que app truncates restored history to hard limit."""
-        temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-
-        class FakeTmp:
-            root = temp_root
-            logs_dir = temp_root / "logs"
-
-            def render_log_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.jsonl"
-
-            def render_ansi_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.ansi"
-
-            def metrics_path_for(self, session_id):
-                return temp_root / f"metrics-{session_id}.jsonl"
-
-        class FakeWorkspace:
-            def __init__(self, cwd):
-                self.root = temp_root
-                self.cwd = cwd
-                self.config_file = temp_root / "config.json"
-                self.context_persistent = temp_root / "quimera_context.md"
-                self.context_session = temp_root / "quimera_session_context.md"
-                self.logs_dir = temp_root / "quimera_logs"
-                self.state_dir = temp_root / "quimera_state"
-                self.tasks_db = temp_root / "quimera_tasks.db"
-                self.decisions_log = temp_root / "decisions.jsonl"
-                self.env_file = temp_root / ".env"
-                self.tmp = FakeTmp()
-
-            def history_file_for(self, session_id):
-                return temp_root / f"quimera_history-{session_id}.jsonl"
-
-            def migrate_from_legacy(self, cwd):
-                return []
-
-        class FakeContextManager:
-            SUMMARY_MARKER = "## Resumo da última sessão"
-
-            def __init__(self, *_args, **_kwargs):
-                pass
-
-            def load_session(self):
-                return ""
-
-        class FakeSessionStorage:
-            session_id = "sessao-2026-03-27-123456"
-
-            def __init__(self, *_args, **_kwargs):
-                pass
-
-            def load_last_session(self):
-                return {
-                    "messages": [{"role": "human", "content": f"m{i}"} for i in range(80)],
-                    "shared_state": {},
-                }
-
-            def get_history_file(self):
-                return Path("/tmp/sessao-2026-03-27-123456.json")
-
-        with patch("quimera.app.bootstrap.wiring.ConfigManager", DummyConfigManager), patch("quimera.app.bootstrap.wiring.Workspace",
-                                                                                FakeWorkspace), patch(
-                "quimera.app.bootstrap.wiring.ContextManager", FakeContextManager
-        ), patch("quimera.app.bootstrap.wiring.SessionStorage", FakeSessionStorage):
-            app = QuimeraApp(Path("/tmp/projeto"), input_gate_factory=lambda **kw: MagicMock())
+        app = _build_fake_app_bootstrap(
+            Path(self.enterContext(tempfile.TemporaryDirectory())),
+            session_payload={"messages": [{"role": "human", "content": f"m{i}"} for i in range(80)], "shared_state": {}},
+        )
 
         try:
             self.assertEqual(len(app.history), 60)
@@ -2565,23 +2433,10 @@ class ProtocolTests(unittest.TestCase):
 
     def test_auto_summarize_merges_with_existing_session_summary(self):
         """Verifica que auto summarize merges with existing session summary."""
-        class FakeContextManager:
-            def __init__(self):
-                self.saved_summary = None
-
-            def load_session_summary(self):
-                return "## Resumo da Conversa\n\n- Contexto anterior"
-
-            def update_with_summary(self, summary):
-                self.saved_summary = summary
-
-        class FakeSessionSummarizer:
-            def __init__(self):
-                self.calls = []
-
-            def summarize(self, history, existing_summary=None, preferred_agent=None, fallback=True):
-                self.calls.append((history, existing_summary, preferred_agent))
-                return "## Resumo da Conversa\n\n- Consolidado"
+        context_manager, summarizer = _make_summary_fakes(
+            "## Resumo da Conversa\n\n- Contexto anterior",
+            "## Resumo da Conversa\n\n- Consolidado",
+        )
 
         # 12 mensagens com janela=2: surplus=10 >= _MIN_SUMMARIZE_SURPLUS, então resume as 10 primeiras.
         app = QuimeraApp.__new__(QuimeraApp)
@@ -2591,8 +2446,8 @@ class ProtocolTests(unittest.TestCase):
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.auto_summarize_threshold = 4
         app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 2})()
-        app.context_manager = FakeContextManager()
-        app.session_summarizer = FakeSessionSummarizer()
+        app.context_manager = context_manager
+        app.session_summarizer = summarizer
         app.renderer = DummyRenderer()
         app.storage = DummyStorage()
         app.shared_state = {"goal": "manter memória"}
@@ -2691,28 +2546,15 @@ class ProtocolTests(unittest.TestCase):
 
     def test_shutdown_merges_existing_session_summary(self):
         """Verifica que shutdown merges existing session summary."""
-        class FakeContextManager:
-            def __init__(self):
-                self.saved_summary = None
-
-            def load_session_summary(self):
-                return "## Resumo da Conversa\n\n- Memória acumulada"
-
-            def update_with_summary(self, summary):
-                self.saved_summary = summary
-
-        class FakeSessionSummarizer:
-            def __init__(self):
-                self.calls = []
-
-            def summarize(self, history, existing_summary=None, preferred_agent=None, fallback=True):
-                self.calls.append((history, existing_summary, preferred_agent))
-                return "## Resumo da Conversa\n\n- Memória consolidada"
+        context_manager, summarizer = _make_summary_fakes(
+            "## Resumo da Conversa\n\n- Memória acumulada",
+            "## Resumo da Conversa\n\n- Memória consolidada",
+        )
 
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = [{"role": "human", "content": "mensagem final"}]
-        app.context_manager = FakeContextManager()
-        app.session_summarizer = FakeSessionSummarizer()
+        app.context_manager = context_manager
+        app.session_summarizer = summarizer
         app.renderer = DummyRenderer()
         app.summary_agent_preference = "codex"
         app.task_services = Mock()
