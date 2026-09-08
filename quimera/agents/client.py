@@ -1161,6 +1161,8 @@ class AgentClient:
             getattr(connection, "max_connections", None),
             getattr(connection, "max_model_requests", None),
             getattr(connection, "request_timeout", 300.0),
+            getattr(connection, "context_window", None),
+            getattr(connection, "context_reserve_tokens", None),
             api_key_fingerprint,
             extra_body_sig,
         )
@@ -1413,6 +1415,8 @@ class AgentClient:
                     extra_body=connection.extra_body,
                     max_connections=getattr(connection, "max_connections", 4),
                     max_model_requests=getattr(connection, "max_model_requests", None),
+                    context_window=getattr(connection, "context_window", None),
+                    context_reserve_tokens=getattr(connection, "context_reserve_tokens", None),
                 )
                 self._api_driver_signatures[agent] = signature
 

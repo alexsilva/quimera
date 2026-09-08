@@ -240,6 +240,13 @@ _MAX_TOOL_RESULT_CHARS = 32_000
 _MAX_TOOL_LOOP_MESSAGES = 240
 _MAX_TOOL_LOOP_CHARS = 240_000
 
+# Estimativa deliberadamente conservadora e independente de tokenizer/modelo.
+# O orçamento configurado em tokens é convertido para chars apenas para decidir
+# quando compactar histórico local. Providers continuam responsáveis pela
+# tokenização real do request.
+_CONTEXT_ESTIMATE_CHARS_PER_TOKEN = 3
+_DEFAULT_OUTPUT_RESERVE_TOKENS = 4_096
+
 # Janela recente do loop de tools mantida com conteúdo integral (em chars).
 # Pares mais antigos são compactados antes de qualquer remoção, preservando a
 # memória do que já foi feito sem o custo do conteúdo completo.
@@ -502,6 +509,34 @@ def _messages_size(messages: list[dict]) -> int:
     return sum(_message_size(message) for message in messages)
 
 
+def _tools_size(tools: list[dict]) -> int:
+    """Tamanho serializado aproximado dos schemas enviados junto ao request."""
+    if not tools:
+        return 0
+    return len(json.dumps(tools, ensure_ascii=False, default=str, separators=(",", ":")))
+
+
+def _context_char_budget(context_window: int | None, context_reserve_tokens: int | None) -> int | None:
+    """Converte a janela configurada em um orçamento conservador de entrada."""
+    if context_window is None:
+        return None
+    try:
+        window = int(context_window)
+    except (TypeError, ValueError):
+        return None
+    if window <= 0:
+        return None
+
+    try:
+        reserve = int(context_reserve_tokens) if context_reserve_tokens is not None else _DEFAULT_OUTPUT_RESERVE_TOKENS
+    except (TypeError, ValueError):
+        reserve = _DEFAULT_OUTPUT_RESERVE_TOKENS
+    reserve = max(1, reserve)
+    if reserve >= window:
+        return 0
+    return (window - reserve) * _CONTEXT_ESTIMATE_CHARS_PER_TOKEN
+
+
 def _compact_pair(assistant: dict, tools: list[dict]) -> tuple[dict, list[dict]]:
     """Reduz um par antigo do loop a um resumo curto, preservando a estrutura.
 
@@ -558,6 +593,8 @@ def _build_ledger_message(entries: list[str]) -> dict:
 def _prune_tool_loop_messages(
     messages: list[dict],
     budget: ToolLoopBudget | None = None,
+    *,
+    max_chars: int | None = None,
 ) -> list[dict]:
     """Compacta e limita o histórico do loop de tools sem apagar a memória.
 
@@ -574,9 +611,12 @@ def _prune_tool_loop_messages(
     if budget is None:
         budget = ToolLoopBudget()
     messages = _clean_message_sequence(messages)
+    effective_max_chars = budget.max_chars
+    if max_chars is not None:
+        effective_max_chars = max(0, min(effective_max_chars, int(max_chars)))
     if (
         len(messages) <= budget.max_messages
-        and _messages_size(messages) <= budget.max_chars
+        and _messages_size(messages) <= effective_max_chars
     ):
         return messages
 
@@ -619,7 +659,7 @@ def _prune_tool_loop_messages(
     def _over_budget(candidate_messages: list[dict]) -> bool:
         return (
             len(candidate_messages) > budget.max_messages
-            or _messages_size(candidate_messages) > budget.max_chars
+            or _messages_size(candidate_messages) > effective_max_chars
         )
 
     # Fase 1: compacta pares fora da janela recente (medida em caracteres),
@@ -680,6 +720,86 @@ def _prune_tool_loop_messages(
         result = _rebuild()
 
     return result
+
+
+def _prune_request_messages(
+    messages: list[dict],
+    tools: list[dict],
+    *,
+    context_window: int | None,
+    context_reserve_tokens: int | None,
+    extra_chars: int = 0,
+    loop_budget: ToolLoopBudget | None = None,
+) -> tuple[list[dict], bool]:
+    """Roll old context only when the connection declares a context window.
+
+    Connections without ``context_window`` are left untouched. With a window,
+    old plain conversation is discarded first, then old tool-call pairs are
+    compacted/removed while preserving system messages, the current user turn
+    and assistant/tool structural invariants.
+    """
+    char_budget = _context_char_budget(context_window, context_reserve_tokens)
+    if char_budget is None:
+        return list(messages), True
+
+    message_budget = max(0, char_budget - _tools_size(tools) - max(0, int(extra_chars)))
+    pruned = _clean_message_sequence(messages)
+    if _messages_size(pruned) <= message_budget:
+        return pruned, True
+
+    current_user = next(
+        (message for message in reversed(pruned) if message.get("role") == "user"),
+        None,
+    )
+    protected_user_id = id(current_user) if current_user is not None else None
+
+    def _drop_oldest_plain_message() -> bool:
+        for index, message in enumerate(pruned):
+            if id(message) == protected_user_id:
+                continue
+            if message.get("role") not in {"user", "assistant"}:
+                continue
+            if message.get("tool_calls"):
+                continue
+            pruned.pop(index)
+            return True
+        return False
+
+    # Prefer forgetting old conversation over recent discoveries from tools.
+    while _messages_size(pruned) > message_budget and _drop_oldest_plain_message():
+        pass
+    if _messages_size(pruned) <= message_budget:
+        return pruned, True
+
+    # Once plain history has rolled out, compact/drop the oldest complete tool
+    # pairs. This helper preserves assistant/tool_call_id invariants.
+    pruned = _prune_tool_loop_messages(
+        pruned,
+        loop_budget,
+        max_chars=message_budget,
+    )
+    if _messages_size(pruned) <= message_budget:
+        return pruned, True
+
+    # Tool compaction may create a bounded ledger. If even that does not fit,
+    # the ledger is older context and may roll out too; the current user turn
+    # remains protected by identity.
+    while _messages_size(pruned) > message_budget:
+        removable_index = next(
+            (
+                index
+                for index, message in enumerate(pruned)
+                if id(message) != protected_user_id
+                and message.get("role") in {"user", "assistant"}
+                and not message.get("tool_calls")
+            ),
+            None,
+        )
+        if removable_index is None:
+            break
+        pruned.pop(removable_index)
+
+    return pruned, _messages_size(pruned) <= message_budget
 
 
 def _clean_message_sequence(messages: list[dict]) -> list[dict]:
@@ -777,6 +897,8 @@ class OpenAICompatDriver:
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
         max_model_requests: int | None = None,
         loop_budget: ToolLoopBudget | None = None,
+        context_window: int | None = None,
+        context_reserve_tokens: int | None = None,
     ) -> None:
         """Inicializa uma instância de OpenAICompatDriver.
         extra_body: dicionário opcional mesclado no corpo da requisição (ex: {"thinking": {"type": "enabled"}}).
@@ -814,14 +936,19 @@ class OpenAICompatDriver:
         )
         self.extra_body = dict(extra_body) if extra_body else None
         self._loop_budget = loop_budget or ToolLoopBudget()
+        try:
+            normalized_context_window = int(context_window) if context_window is not None else None
+        except (TypeError, ValueError):
+            normalized_context_window = None
+        self.context_window = normalized_context_window if normalized_context_window and normalized_context_window > 0 else None
+        try:
+            normalized_output_tokens = int(context_reserve_tokens) if context_reserve_tokens is not None else None
+        except (TypeError, ValueError):
+            normalized_output_tokens = None
+        self.context_reserve_tokens = normalized_output_tokens if normalized_output_tokens and normalized_output_tokens > 0 else None
 
     def _build_messages_from_prompt(self, prompt: PromptText) -> list[dict]:
-        """Converte o prompt preservando um ponto de extensão por provider.
-
-        A conversa recente é restaurada com papéis reais (user/assistant) em
-        vez de um bloco user achatado: sem isso o modelo nunca vê as próprias
-        falas no papel assistant e confunde identidade em salas multiagente.
-        """
+        """Converte o prompt preservando os papéis reais da conversa recente."""
         return _build_openai_messages_from_prompt(
             prompt,
             split_recent_conversation=True,
@@ -926,17 +1053,34 @@ class OpenAICompatDriver:
                             on_tool_abort("max_model_requests")
                         return "Limite de chamadas ao modelo atingido."
                     # A nota de orçamento/convergência é efêmera: vai apenas no
-                    # request, nunca no histórico persistente. Manter o prefixo
-                    # estável entre hops preserva o prompt caching do provedor.
-                    request_messages = messages
+                    # request, nunca no histórico persistente. O pruning acontece
+                    # antes dela, reservando seu espaço, para que o pedido atual
+                    # continue sendo a última mensagem user protegida.
+                    guidance_message = None
                     if tools:
-                        request_messages = [
-                            *messages,
-                            {
-                                "role": "user",
-                                "content": self._build_turn_guidance(hop, max_tool_hops),
-                            },
-                        ]
+                        guidance_message = {
+                            "role": "user",
+                            "content": self._build_turn_guidance(hop, max_tool_hops),
+                        }
+                    request_messages, fits_context = _prune_request_messages(
+                        messages,
+                        tools,
+                        context_window=self.context_window,
+                        context_reserve_tokens=self.context_reserve_tokens,
+                        extra_chars=_message_size(guidance_message) if guidance_message else 0,
+                        loop_budget=self._loop_budget,
+                    )
+                    if fits_context and guidance_message is not None:
+                        request_messages = [*request_messages, guidance_message]
+                    if not fits_context:
+                        _logger.warning(
+                            "OpenAICompatDriver: request protected content exceeds configured context window model=%s context_window=%s",
+                            self.model,
+                            self.context_window,
+                        )
+                        if on_tool_abort is not None:
+                            on_tool_abort("context_window")
+                        return "Falha: o contexto essencial da requisição excede a janela configurada do modelo."
                     try:
                         response_text, tool_calls = self._chat(
                             request_messages,
@@ -1134,121 +1278,71 @@ class OpenAICompatDriver:
         try:
             if cancel_event is not None and cancel_event.is_set():
                 return "", []
-            if tools:
-                return self._chat_with_tools(
-                    messages,
-                    tools,
-                    cancel_event=cancel_event,
-                    on_text_chunk=on_text_chunk,
-                )
             return self._chat_streaming(
                 messages,
+                tools=tools,
                 cancel_event=cancel_event,
                 on_text_chunk=on_text_chunk,
             )
         finally:
             self._semaphore.release()
 
-    def _chat_with_tools(
+    def _chat_streaming(
         self,
         messages: list[dict],
-        tools: list[dict],
+        *,
+        tools: list[dict] | None = None,
         cancel_event=None,
         on_text_chunk=None,
     ) -> tuple[str, list[dict]]:
         """
-        Chamada não-streaming quando há ferramentas.
+        Executa chat completions em streaming, com ou sem ferramentas.
 
-        O modo não-streaming permite receber message.tool_calls estruturados
-        dos endpoints compatíveis com OpenAI que suportam tool calling nativo.
-        A resposta chega de uma vez (sem streaming real), mas o texto bruto
-        (incluindo blocos <think>) ainda é repassado a on_text_chunk para que
-        o raciocínio apareça no feed do agente, como ocorre no modo streaming.
+        Reasoning, texto e delta.tool_calls sao processados no mesmo fluxo.
+        Tool calls podem chegar fragmentados em varios chunks; id, nome e
+        argumentos sao acumulados por index e validados ao final do stream.
         """
-        response = self._client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-            **( {"extra_body": self.extra_body} if self.extra_body else {} ),
-            stream=False,
-        )
-        if cancel_event is not None and cancel_event.is_set():
-            return "", []
-        if not response.choices:
-            raise ValueError(
-                f"API retornou choices vazio ou None (model={self.model!r}): {response!r}"
-            )
-        usage = getattr(response, "usage", None)
-        if usage is not None:
-            _logger.info(
-                "OpenAICompatDriver: turno concluído model=%s input_tokens=%s output_tokens=%s",
-                self.model,
-                getattr(usage, "prompt_tokens", None),
-                getattr(usage, "completion_tokens", None),
-            )
-        choice = response.choices[0]
-        reasoning = getattr(choice.message, "reasoning", None) or getattr(choice.message, "reasoning_content", None)
-        if reasoning and on_text_chunk is not None and not (
-            cancel_event is not None and cancel_event.is_set()
-        ):
-            on_text_chunk(f"<think>{reasoning}</think>")
-        text = (choice.message.content or "").strip()
-        if text and on_text_chunk is not None and not (
-            cancel_event is not None and cancel_event.is_set()
-        ):
-            on_text_chunk(text)
-        tool_calls: list[dict] = []
-        if choice.message.tool_calls:
-            for tc in choice.message.tool_calls:
-                raw_arguments = tc.function.arguments
-                arguments, argument_error = _parse_tool_arguments(
-                    tc.function.name,
-                    raw_arguments,
-                )
-                tool_calls.append({
-                    "id": tc.id,
-                    "name": tc.function.name,
-                    "arguments": arguments,
-                    "raw_arguments": raw_arguments,
-                    "argument_error": argument_error,
-                })
+        request_kwargs: dict = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+        }
+        if tools:
+            request_kwargs.update({
+                "tools": tools,
+                "tool_choice": "auto",
+            })
+        if self.extra_body:
+            request_kwargs["extra_body"] = self.extra_body
 
-
-        return text, tool_calls
-
-    def _chat_streaming(self, messages: list[dict], cancel_event=None, on_text_chunk=None) -> tuple[str, list[dict]]:
-        """
-        Chamada streaming para respostas de texto puro (sem ferramentas).
-        Evita timeout em respostas longas sem bloquear a coleta.
-        """
-        stream = self._client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            **({"extra_body": self.extra_body} if self.extra_body else {}),
-            stream=True,
-        )
+        stream = self._client.chat.completions.create(**request_kwargs)
         text = ""
         reasoning_open = False
+        tool_calls_acc: dict[int, dict[str, str]] = {}
+
         try:
             for chunk in stream:
                 if cancel_event is not None and cancel_event.is_set():
                     break
                 if not chunk.choices:
                     continue
+
                 delta = chunk.choices[0].delta
                 content = getattr(delta, "content", None)
-                reasoning = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
+                reasoning = (
+                    getattr(delta, "reasoning", None)
+                    or getattr(delta, "reasoning_content", None)
+                )
                 diff = normalize_stream_diff(getattr(delta, "diff", None))
+                tool_call_deltas = getattr(delta, "tool_calls", None) or []
 
                 if reasoning:
                     if on_text_chunk is not None:
                         piece = f"<think>{reasoning}" if not reasoning_open else reasoning
                         on_text_chunk(piece)
                     reasoning_open = True
-                    continue
 
-                if reasoning_open and (content or diff):
+                if reasoning_open and (content or diff or tool_call_deltas):
                     reasoning_open = False
                     if on_text_chunk is not None:
                         on_text_chunk("</think>")
@@ -1257,12 +1351,38 @@ class OpenAICompatDriver:
                     text = apply_stream_diff(text, diff)
                     if on_text_chunk is not None:
                         on_text_chunk({"text": content or "", "diff": diff})
-                    continue
-
-                if content:
+                elif content:
                     text += content
                     if on_text_chunk is not None:
                         on_text_chunk(content)
+
+                for tc_delta in tool_call_deltas:
+                    index = getattr(tc_delta, "index", None)
+                    if index is None:
+                        index = 0
+                    acc = tool_calls_acc.setdefault(
+                        int(index),
+                        {"id": "", "name": "", "arguments": ""},
+                    )
+
+                    tc_id = getattr(tc_delta, "id", None)
+                    if tc_id:
+                        acc["id"] = tc_id
+
+                    function = getattr(tc_delta, "function", None)
+                    if function is not None:
+                        name = getattr(function, "name", None)
+                        if name:
+                            if not acc["name"]:
+                                acc["name"] = name
+                            elif (
+                                name != acc["name"]
+                                and not acc["name"].endswith(name)
+                            ):
+                                acc["name"] += name
+                        arguments = getattr(function, "arguments", None)
+                        if arguments:
+                            acc["arguments"] += arguments
         finally:
             if reasoning_open and on_text_chunk is not None:
                 on_text_chunk("</think>")
@@ -1272,7 +1392,24 @@ class OpenAICompatDriver:
                     close()
                 except Exception:
                     _logger.exception("OpenAICompatDriver: falha ao fechar stream")
-        return text.strip(), []
+
+        tool_calls: list[dict] = []
+        for index in sorted(tool_calls_acc):
+            raw = tool_calls_acc[index]
+            raw_arguments = raw["arguments"]
+            arguments, argument_error = _parse_tool_arguments(
+                raw["name"],
+                raw_arguments,
+            )
+            tool_calls.append({
+                "id": raw["id"] or f"call_{index}",
+                "name": raw["name"],
+                "arguments": arguments,
+                "raw_arguments": raw_arguments,
+                "argument_error": argument_error,
+            })
+
+        return text.strip(), tool_calls
 
     def _execute_tool(
         self,

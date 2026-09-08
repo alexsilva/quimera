@@ -93,6 +93,10 @@ class ConnectionScreen(ModalScreen[None]):
                     yield Input(value=api.api_key_env, id="conn_api_key_env")
                     yield Label("Máximo de conexões")
                     yield Input(value=str(api.max_connections), id="conn_max_connections")
+                    yield Label("Janela de contexto (tokens; vazio = sem limite)")
+                    yield Input(value=str(api.context_window) if api.context_window else "", id="conn_context_window")
+                    yield Label("Máximo de tokens de saída (vazio = automático)")
+                    yield Input(value=str(api.context_reserve_tokens) if api.context_reserve_tokens else "", id="conn_context_reserve_tokens")
                     yield Label("extra_body (JSON; vazio remove)")
                     yield Input(value=json.dumps(api.extra_body, ensure_ascii=False) if api.extra_body else "", id="conn_extra_body")
                     yield Label("Ferramentas nativas")
@@ -148,6 +152,16 @@ class ConnectionScreen(ModalScreen[None]):
                 max_connections = int(self.query_one("#conn_max_connections", Input).value.strip())
                 if max_connections <= 0:
                     raise ValueError("Máximo de conexões deve ser positivo.")
+                context_raw = self.query_one("#conn_context_window", Input).value.strip()
+                context_window = int(context_raw) if context_raw else None
+                if context_window is not None and context_window <= 0:
+                    raise ValueError("Janela de contexto deve ser positiva.")
+                output_raw = self.query_one("#conn_context_reserve_tokens", Input).value.strip()
+                context_reserve_tokens = int(output_raw) if output_raw else None
+                if context_reserve_tokens is not None and context_reserve_tokens <= 0:
+                    raise ValueError("Máximo de tokens de saída deve ser positivo.")
+                if context_window is not None and context_reserve_tokens is not None and context_reserve_tokens >= context_window:
+                    raise ValueError("Máximo de tokens de saída deve ser menor que a janela de contexto.")
                 extra_raw = self.query_one("#conn_extra_body", Input).value.strip()
                 extra_body = json.loads(extra_raw) if extra_raw else None
                 if extra_body == {}:
@@ -162,6 +176,8 @@ class ConnectionScreen(ModalScreen[None]):
                     supports_native_tools=self.query_one("#conn_native_tools", Switch).value,
                     max_connections=max_connections,
                     extra_body=extra_body,
+                    context_window=context_window,
+                    context_reserve_tokens=context_reserve_tokens,
                 )
         except (ValueError, json.JSONDecodeError) as exc:
             self.parent_app.notify(str(exc), severity="error")

@@ -201,8 +201,8 @@ def test_show_turn_summary_does_not_mutate_detail_payload_between_layouts():
     assert detail == original
 
 
-def test_show_turn_summary_skips_non_cli_runtime():
-    """Verifica que show_turn_summary ignora runtimes não-CLI."""
+def test_show_turn_summary_includes_openai_runtime():
+    """Verifica que o resumo também é exibido para o runtime OpenAI."""
     renderer = TerminalRenderer(theme="rule")
     renderer._console = Console(width=120, record=True, force_terminal=False)
 
@@ -218,7 +218,7 @@ def test_show_turn_summary_skips_non_cli_runtime():
     renderer.flush()
 
     rendered = renderer._console.export_text()
-    assert "TOOLS:" not in rendered
+    assert "TOOLS: 1 chamadas" in rendered
     assert "trace-non-cli" not in rendered
 
 

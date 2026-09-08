@@ -192,6 +192,8 @@ class DriverRepl:
             connection.max_connections,
             connection.max_model_requests,
             connection.request_timeout,
+            getattr(connection, "context_window", None),
+            getattr(connection, "context_reserve_tokens", None),
             hashlib.sha256(api_key.encode("utf-8")).hexdigest(),
             extra_body_signature,
         )
@@ -229,7 +231,16 @@ class DriverRepl:
                         "Usando string vazia como api_key.",
                         file=sys.stderr,
                     )
-            new_driver = OpenAICompatDriver(api_key=api_key, **common_kwargs)
+            new_driver = OpenAICompatDriver(
+                api_key=api_key,
+                context_window=getattr(connection, "context_window", None),
+                context_reserve_tokens=getattr(
+                    connection,
+                    "context_reserve_tokens",
+                    None,
+                ),
+                **common_kwargs,
+            )
 
         previous_driver = getattr(self, "driver", None)
         self.driver = new_driver

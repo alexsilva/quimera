@@ -29,6 +29,7 @@ from quimera.runtime.drivers.openai_compat import (
      _categorize_api_exception,
      _parse_retry_after,
      _prune_tool_loop_messages,
+     _prune_request_messages,
      _sanitize_assistant_text,
      _strip_thinking,
  )
@@ -51,18 +52,41 @@ from quimera.prompt_templates import PromptText
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_chunk(content=None, diff=None):
-    """Chunk de streaming para respostas de texto (sem ferramentas)."""
-    delta = SimpleNamespace(content=content, diff=diff)
+def _make_chunk(content=None, diff=None, reasoning=None, reasoning_content=None, tool_calls=None):
+    """Chunk de streaming OpenAI-compatible."""
+    delta = SimpleNamespace(
+        content=content,
+        diff=diff,
+        reasoning=reasoning,
+        reasoning_content=reasoning_content,
+        tool_calls=tool_calls,
+    )
     choice = SimpleNamespace(delta=delta)
     return SimpleNamespace(choices=[choice])
 
 
-def _make_non_streaming_response(content=None, tool_calls=None):
-    """Resposta não-streaming (usada quando há ferramentas)."""
-    msg = SimpleNamespace(content=content, tool_calls=tool_calls)
-    choice = SimpleNamespace(message=msg)
-    return SimpleNamespace(choices=[choice])
+
+
+def _make_tool_call_delta(index, tc_id=None, name=None, arguments=None):
+    func = SimpleNamespace(name=name, arguments=arguments)
+    return SimpleNamespace(index=index, id=tc_id, function=func)
+
+def _make_streaming_response(content=None, tool_calls=None):
+    """Monta um stream OpenAI-compatible equivalente a uma resposta completa."""
+    chunks = []
+    if content is not None:
+        chunks.append(_make_chunk(content=content))
+    for index, tool_call in enumerate(tool_calls or []):
+        function = tool_call.function
+        chunks.append(_make_chunk(tool_calls=[_make_tool_call_delta(
+            index,
+            tc_id=tool_call.id,
+            name=function.name,
+            arguments=function.arguments,
+        )]))
+    if not chunks:
+        chunks.append(_make_chunk(content=None))
+    return iter(chunks)
 
 
 def _make_tool_call(tc_id, name, arguments_json):
@@ -76,6 +100,8 @@ def _make_driver(
     base_url="http://localhost:11434/v1",
     max_connections=DEFAULT_MAX_CONNECTIONS,
     max_model_requests=None,
+    context_window=None,
+    context_reserve_tokens=None,
 ):
     """Cria um driver com o cliente OpenAI mockado."""
     with patch("quimera.runtime.drivers.openai_compat.OpenAI") as MockOpenAI:
@@ -86,6 +112,8 @@ def _make_driver(
             base_url=base_url,
             max_connections=max_connections,
             max_model_requests=max_model_requests,
+            context_window=context_window,
+            context_reserve_tokens=context_reserve_tokens,
         )
     driver._client = mock_client
     return driver, mock_client
@@ -871,10 +899,10 @@ def test_run_request_prefix_stable_and_guidance_ephemeral():
     entre hops (prompt caching) e só o request corrente carrega a nota."""
     driver, mock_client = _make_driver()
     responses = iter([
-        _make_non_streaming_response(
+        _make_streaming_response(
             content="", tool_calls=[_make_tool_call("call_a", "run_shell", '{"command":"ls"}')]
         ),
-        _make_non_streaming_response(content="Done.", tool_calls=None),
+        _make_streaming_response(content="Done.", tool_calls=None),
     ])
     observed = []
 
@@ -908,7 +936,7 @@ def test_run_checkpoint_prompt_injected_periodically():
     def side_effect(*args, **kwargs):
         call_count["n"] += 1
         if call_count["n"] <= 20:
-            return _make_non_streaming_response(
+            return _make_streaming_response(
                 content="",
                 tool_calls=[_make_tool_call(
                     f"call_{call_count['n']}",
@@ -916,7 +944,7 @@ def test_run_checkpoint_prompt_injected_periodically():
                     json.dumps({"command": f"ls {call_count['n']}"}),
                 )],
             )
-        return _make_non_streaming_response(content="Done.", tool_calls=None)
+        return _make_streaming_response(content="Done.", tool_calls=None)
 
     mock_client.chat.completions.create.side_effect = side_effect
     mock_executor = MagicMock()
@@ -942,13 +970,13 @@ def test_run_marks_repeated_identical_tool_call():
     """Chamada idêntica a uma anterior ganha runtime_note apontando o hop original."""
     driver, mock_client = _make_driver()
     responses = iter([
-        _make_non_streaming_response(
+        _make_streaming_response(
             content="", tool_calls=[_make_tool_call("call_1", "read_file", '{"path":"x.py"}')]
         ),
-        _make_non_streaming_response(
+        _make_streaming_response(
             content="", tool_calls=[_make_tool_call("call_2", "read_file", '{"path":"x.py"}')]
         ),
-        _make_non_streaming_response(content="Done.", tool_calls=None),
+        _make_streaming_response(content="Done.", tool_calls=None),
     ])
     mock_client.chat.completions.create.side_effect = lambda *a, **k: next(responses)
     mock_executor = MagicMock()
@@ -1075,15 +1103,12 @@ def test_chat_streaming_supports_structured_diff_chunks():
 
 
 # ---------------------------------------------------------------------------
-# Testes de _chat_with_tools (com ferramentas — modo não-streaming)
+# Testes de streaming com ferramentas e reasoning
 # ---------------------------------------------------------------------------
 
-def test_chat_with_tools_uses_non_streaming():
-    """Quando tools estão presentes, usa stream=False para evitar o bug do Ollama."""
+def test_chat_with_tools_uses_streaming():
     driver, mock_client = _make_driver()
-    mock_client.chat.completions.create.return_value = _make_non_streaming_response(
-        content="ok", tool_calls=None
-    )
+    _setup_stream(mock_client, [_make_chunk(content="ok")])
     mock_executor = MagicMock()
     mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db")
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
@@ -1091,60 +1116,97 @@ def test_chat_with_tools_uses_non_streaming():
     driver._chat([{"role": "user", "content": "x"}], tools=resolve_tool_schemas(mock_executor))
 
     call_kwargs = mock_client.chat.completions.create.call_args[1]
-    assert call_kwargs.get("stream") is False
+    assert call_kwargs["stream"] is True
     assert call_kwargs["tool_choice"] == "auto"
     assert call_kwargs["tools"] == TOOL_SCHEMAS
     assert "temperature" not in call_kwargs
 
 
-def test_chat_with_tools_returns_structured_tool_calls():
-    """Verifica que Test chat with tools returns structured tool calls."""
+def test_chat_with_tools_accumulates_fragmented_tool_calls():
     driver, mock_client = _make_driver()
-    tc = _make_tool_call("call_abc", "read_file", '{"path":"app.py"}')
-    mock_client.chat.completions.create.return_value = _make_non_streaming_response(
-        content="", tool_calls=[tc]
-    )
+    chunks = [
+        _make_chunk(tool_calls=[_make_tool_call_delta(0, tc_id="call_abc", name="read_file")]),
+        _make_chunk(tool_calls=[_make_tool_call_delta(0, arguments='{"path":')]),
+        _make_chunk(tool_calls=[_make_tool_call_delta(0, arguments='"app.py"}')]),
+    ]
+    _setup_stream(mock_client, chunks)
 
     text, tool_calls = driver._chat([], tools=TOOL_SCHEMAS)
+
+    assert text == ""
     assert len(tool_calls) == 1
     assert tool_calls[0]["id"] == "call_abc"
     assert tool_calls[0]["name"] == "read_file"
     assert tool_calls[0]["arguments"] == {"path": "app.py"}
+    assert tool_calls[0]["raw_arguments"] == '{"path":"app.py"}'
+    assert tool_calls[0]["argument_error"] is None
+
+
+def test_chat_with_tools_streams_reasoning_before_tool_call():
+    driver, mock_client = _make_driver()
+    chunks = [
+        _make_chunk(reasoning_content="Vou inspecionar "),
+        _make_chunk(reasoning_content="o arquivo."),
+        _make_chunk(tool_calls=[_make_tool_call_delta(0, tc_id="call_1", name="read_file", arguments='{"path":"app.py"}')]),
+    ]
+    _setup_stream(mock_client, chunks)
+    received = []
+
+    text, tool_calls = driver._chat([], tools=TOOL_SCHEMAS, on_text_chunk=received.append)
+
+    assert text == ""
+    assert [tc["name"] for tc in tool_calls] == ["read_file"]
+    assert received == [
+        "<think>Vou inspecionar ",
+        "o arquivo.",
+        "</think>",
+    ]
+
+
+def test_chat_with_tools_streams_reasoning_content_and_text_in_same_turn():
+    driver, mock_client = _make_driver()
+    chunks = [
+        _make_chunk(reasoning="Penso primeiro."),
+        _make_chunk(content="Resposta "),
+        _make_chunk(content="final."),
+    ]
+    _setup_stream(mock_client, chunks)
+    received = []
+
+    text, tool_calls = driver._chat([], tools=TOOL_SCHEMAS, on_text_chunk=received.append)
+
+    assert text == "Resposta final."
+    assert tool_calls == []
+    assert received == ["<think>Penso primeiro.", "</think>", "Resposta ", "final."]
 
 
 def test_chat_with_tools_invalid_json_records_validation_error():
-    """JSON invalido permanece marcado para impedir execucao com argumentos vazios."""
     driver, mock_client = _make_driver()
-    tc = _make_tool_call("x", "run_shell", "NOT_JSON")
-    mock_client.chat.completions.create.return_value = _make_non_streaming_response(
-        content="", tool_calls=[tc]
-    )
+    _setup_stream(mock_client, [
+        _make_chunk(tool_calls=[_make_tool_call_delta(0, tc_id="x", name="run_shell", arguments="NOT_JSON")])
+    ])
 
     _, tool_calls = driver._chat([], tools=TOOL_SCHEMAS)
+
     assert tool_calls[0]["arguments"] == {}
     assert tool_calls[0]["raw_arguments"] == "NOT_JSON"
     assert isinstance(tool_calls[0]["argument_error"], ToolValidationError)
 
 
 def test_chat_with_tools_no_tool_calls_in_response():
-    """Verifica que Test chat with tools no tool calls in response."""
     driver, mock_client = _make_driver()
-    mock_client.chat.completions.create.return_value = _make_non_streaming_response(
-        content="</function>\nSó texto, sem ferramentas.", tool_calls=None
-    )
+    _setup_stream(mock_client, [_make_chunk(content="</function>\nSó texto, sem ferramentas.")])
 
     text, tool_calls = driver._chat([], tools=TOOL_SCHEMAS)
+
     assert text == "</function>\nSó texto, sem ferramentas."
     assert tool_calls == []
 
 
 def test_chat_with_tools_ignores_textual_function_like_tool_call():
-    """Verifica que Test chat with tools ignores textual function like tool call."""
     driver, mock_client = _make_driver()
     textual = '<function=read_file><parameter=path>secret.txt</function>'
-    mock_client.chat.completions.create.return_value = _make_non_streaming_response(
-        content=textual, tool_calls=None
-    )
+    _setup_stream(mock_client, [_make_chunk(content=textual)])
 
     text, tool_calls = driver._chat([], tools=TOOL_SCHEMAS)
 
@@ -1235,7 +1297,7 @@ def test_run_preserves_function_like_text_in_final_response():
 def test_run_tools_system_prompt_guides_tool_usage():
     """Driver injeta prompt curto de uso de ferramentas e orçamento separado."""
     driver, mock_client = _make_driver()
-    mock_client.chat.completions.create.return_value = _make_non_streaming_response(
+    mock_client.chat.completions.create.return_value = _make_streaming_response(
         content="ok", tool_calls=None
     )
     mock_executor = MagicMock()
@@ -1326,15 +1388,15 @@ def test_run_returns_none_on_empty_response():
 
 
 def test_run_tool_loop_one_hop():
-    """Modelo chama read_file (não-streaming), recebe resultado, responde com texto final (streaming)."""
+    """Modelo chama read_file via streaming, recebe resultado e responde no stream seguinte."""
     driver, mock_client = _make_driver()
 
     tc_id = "call_1"
     tc = _make_tool_call(tc_id, "read_file", '{"path":"x.py"}')
-    # 1ª chamada: não-streaming com tool call
-    resp_1 = _make_non_streaming_response(content="", tool_calls=[tc])
-    # 2ª chamada: não-streaming sem tool calls (resposta final)
-    resp_2 = _make_non_streaming_response(content="Arquivo lido com sucesso.", tool_calls=None)
+    # 1ª chamada: streaming com tool call
+    resp_1 = _make_streaming_response(content="", tool_calls=[tc])
+    # 2ª chamada: streaming sem tool calls (resposta final)
+    resp_2 = _make_streaming_response(content="Arquivo lido com sucesso.", tool_calls=None)
     mock_client.chat.completions.create.side_effect = [resp_1, resp_2]
 
     mock_executor = MagicMock()
@@ -1353,11 +1415,11 @@ def test_run_tool_loop_one_hop():
 def test_run_sanitizes_intermediate_tool_text_and_persists_thinking(tmp_path):
     driver, mock_client = _make_driver()
     mock_client.chat.completions.create.side_effect = [
-        _make_non_streaming_response(
+        _make_streaming_response(
             content="<think>vou investigar</think>Consultando.",
             tool_calls=[_make_tool_call("call-1", "read_file", '{"path":"x.py"}')],
         ),
-        _make_non_streaming_response(content="Concluído.", tool_calls=None),
+        _make_streaming_response(content="Concluído.", tool_calls=None),
     ]
     mock_executor = MagicMock()
     mock_executor.config = SimpleNamespace(db_path=None, workspace_root=str(tmp_path))
@@ -1395,8 +1457,8 @@ def test_run_tool_loop_sends_tool_result_message():
 
     tc_id = "call_xyz"
     tc = _make_tool_call(tc_id, "run_shell", '{"command":"ls"}')
-    resp_1 = _make_non_streaming_response(content="", tool_calls=[tc])
-    resp_2 = _make_non_streaming_response(content="Done.", tool_calls=None)
+    resp_1 = _make_streaming_response(content="", tool_calls=[tc])
+    resp_2 = _make_streaming_response(content="Done.", tool_calls=None)
     mock_client.chat.completions.create.side_effect = [resp_1, resp_2]
 
     mock_executor = MagicMock()
@@ -1420,9 +1482,9 @@ def test_run_invalid_json_returns_tool_error_and_allows_model_correction():
     invalid_call = _make_tool_call("call_invalid", "read_file", '{"path":')
     corrected_call = _make_tool_call("call_corrected", "read_file", '{"path":"app.py"}')
     mock_client.chat.completions.create.side_effect = [
-        _make_non_streaming_response(content="", tool_calls=[invalid_call]),
-        _make_non_streaming_response(content="", tool_calls=[corrected_call]),
-        _make_non_streaming_response(content="corrigido", tool_calls=None),
+        _make_streaming_response(content="", tool_calls=[invalid_call]),
+        _make_streaming_response(content="", tool_calls=[corrected_call]),
+        _make_streaming_response(content="corrigido", tool_calls=None),
     ]
 
     mock_executor = MagicMock()
@@ -1478,11 +1540,11 @@ def test_run_invalid_json_preserves_valid_calls_from_same_turn():
     invalid_call = _make_tool_call("call_bad", "read_file", "NOT_JSON")
     valid_call = _make_tool_call("call_good", "read_file", '{"path":"ok.py"}')
     mock_client.chat.completions.create.side_effect = [
-        _make_non_streaming_response(
+        _make_streaming_response(
             content="",
             tool_calls=[invalid_call, valid_call],
         ),
-        _make_non_streaming_response(content="final", tool_calls=None),
+        _make_streaming_response(content="final", tool_calls=None),
     ]
 
     mock_executor = MagicMock()
@@ -1524,8 +1586,8 @@ def test_run_tool_loop_updates_remaining_budget_each_hop():
     tc = _make_tool_call(tc_id, "run_shell", '{"command":"ls"}')
     responses = iter(
         [
-            _make_non_streaming_response(content="", tool_calls=[tc]),
-            _make_non_streaming_response(content="Done.", tool_calls=None),
+            _make_streaming_response(content="", tool_calls=[tc]),
+            _make_streaming_response(content="Done.", tool_calls=None),
         ]
     )
     observed_budget_prompts = []
@@ -1559,8 +1621,8 @@ def test_run_tool_loop_uses_minimal_prompt_payload_and_valid_json():
 
     tc_id = "call_minimal"
     tc = _make_tool_call(tc_id, "run_shell", '{"command":"ls"}')
-    resp_1 = _make_non_streaming_response(content="", tool_calls=[tc])
-    resp_2 = _make_non_streaming_response(content="Done.", tool_calls=None)
+    resp_1 = _make_streaming_response(content="", tool_calls=[tc])
+    resp_2 = _make_streaming_response(content="Done.", tool_calls=None)
     mock_client.chat.completions.create.side_effect = [resp_1, resp_2]
 
     mock_executor = MagicMock()
@@ -1599,11 +1661,11 @@ def test_run_tool_loop_prunes_messages_between_hops():
     def side_effect(*args, **kwargs):
         if len(mock_client.chat.completions.create.call_args_list) < 4:
             tc_id = f"call_{len(mock_client.chat.completions.create.call_args_list)}"
-            return _make_non_streaming_response(
+            return _make_streaming_response(
                 content="",
                 tool_calls=[_make_tool_call(tc_id, "run_shell", '{"command":"ls"}')],
             )
-        return _make_non_streaming_response(content="Done.", tool_calls=None)
+        return _make_streaming_response(content="Done.", tool_calls=None)
 
     mock_client.chat.completions.create.side_effect = side_effect
 
@@ -2119,6 +2181,8 @@ def test_driver_repl_reload_forwards_limits_and_closes_previous_driver():
         max_connections=2,
         max_model_requests=17,
         request_timeout=45.0,
+        context_window=32_768,
+        context_reserve_tokens=4_096,
     )
     profile = SimpleNamespace(
         name="openai-test",
@@ -2151,6 +2215,8 @@ def test_driver_repl_reload_forwards_limits_and_closes_previous_driver():
         "extra_body": {"reasoning": {"effort": "high"}},
         "max_connections": 2,
         "max_model_requests": 17,
+        "context_window": 32_768,
+        "context_reserve_tokens": 4_096,
     }
 
 
@@ -2315,7 +2381,7 @@ def test_run_max_hops_returns_last_text():
     tc = _make_tool_call("c", "run_shell", '{"command":"x"}')
 
     def always_tool_response(*args, **kwargs):
-        return _make_non_streaming_response(content="parcial", tool_calls=[tc])
+        return _make_streaming_response(content="parcial", tool_calls=[tc])
 
     mock_client.chat.completions.create.side_effect = always_tool_response
 
@@ -2339,7 +2405,7 @@ def test_run_low_reliability_uses_lower_max_hops():
     tc = _make_tool_call("c", "run_shell", '{"command":"x"}')
 
     def always_tool_response(*args, **kwargs):
-        return _make_non_streaming_response(content="parcial", tool_calls=[tc])
+        return _make_streaming_response(content="parcial", tool_calls=[tc])
 
     mock_client.chat.completions.create.side_effect = always_tool_response
 
@@ -2363,7 +2429,7 @@ def test_run_aborts_on_repeated_policy_error_for_all_reliabilities():
         driver.tool_use_reliability = reliability
         threshold = get_invalid_tool_loop_threshold(reliability)
         mock_client.chat.completions.create.side_effect = [
-            _make_non_streaming_response(content="", tool_calls=[tc])
+            _make_streaming_response(content="", tool_calls=[tc])
             for _ in range(threshold)
         ]
 
@@ -2395,7 +2461,7 @@ def test_run_aborts_repeated_invalid_json_without_executing_tools():
     driver.tool_use_reliability = "medium"
     threshold = get_invalid_tool_loop_threshold("medium")
     mock_client.chat.completions.create.side_effect = [
-        _make_non_streaming_response(
+        _make_streaming_response(
             content="",
             tool_calls=[_make_tool_call(f"bad_{index}", "read_file", '{"path":')],
         )
@@ -2433,9 +2499,9 @@ def test_run_does_not_abort_on_different_policy_error_signatures():
     driver, mock_client = _make_driver()
     tc = _make_tool_call("c", "run_shell", '{"command":"x"}')
     mock_client.chat.completions.create.side_effect = [
-        _make_non_streaming_response(content="", tool_calls=[tc]),
-        _make_non_streaming_response(content="", tool_calls=[tc]),
-        _make_non_streaming_response(content="resposta final", tool_calls=[]),
+        _make_streaming_response(content="", tool_calls=[tc]),
+        _make_streaming_response(content="", tool_calls=[tc]),
+        _make_streaming_response(content="resposta final", tool_calls=[]),
     ]
 
     mock_executor = MagicMock()
@@ -2469,10 +2535,10 @@ def test_run_allows_same_policy_signature_before_threshold():
     tc = _make_tool_call("c", "run_shell", '{"command":"x"}')
     mock_client.chat.completions.create.side_effect = [
         *[
-            _make_non_streaming_response(content="", tool_calls=[tc])
+            _make_streaming_response(content="", tool_calls=[tc])
             for _ in range(threshold - 1)
         ],
-        _make_non_streaming_response(content="resposta final", tool_calls=[]),
+        _make_streaming_response(content="resposta final", tool_calls=[]),
     ]
 
     mock_executor = MagicMock()
@@ -2501,7 +2567,7 @@ def test_run_reports_tool_abort_callback():
     threshold = get_invalid_tool_loop_threshold("high")
     tc = _make_tool_call("c", "bad_tool", '{"path":"x"}')
     mock_client.chat.completions.create.side_effect = [
-        _make_non_streaming_response(content="", tool_calls=[tc])
+        _make_streaming_response(content="", tool_calls=[tc])
         for _ in range(threshold)
     ]
 
@@ -2625,7 +2691,7 @@ def test_run_cancel_event_between_hops():
         nonlocal call_count
         call_count += 1
         cancel_event.set()  # sinaliza cancelamento após primeira resposta
-        return _make_non_streaming_response(content="parcial", tool_calls=[tc])
+        return _make_streaming_response(content="parcial", tool_calls=[tc])
 
     mock_client.chat.completions.create.side_effect = side_effect
 
@@ -2801,7 +2867,7 @@ def test_concurrent_runs_block_at_max_connections():
         first_can_finish.wait(timeout=5)
         if kwargs.get("stream") is True:
             return iter([_make_chunk(content="ok")])
-        return _make_non_streaming_response(content="ok", tool_calls=None)
+        return _make_streaming_response(content="ok", tool_calls=None)
 
     mock_client.chat.completions.create.side_effect = slow_create
     _setup_stream(mock_client, [_make_chunk(content="ok")])
@@ -3007,21 +3073,22 @@ def test_run_releases_backend_slot_while_tool_executes():
     tool_started = threading.Event()
     release_tool = threading.Event()
     second_request_completed = threading.Event()
-    non_stream_calls = {"count": 0}
+    request_calls = {"count": 0}
     lock = threading.Lock()
 
     tool_call = _make_tool_call("call_wait", "read_file", '{"path":"a.py"}')
 
     def create(*args, **kwargs):
-        if kwargs.get("stream") is True:
-            second_request_completed.set()
-            return iter([_make_chunk(content="segunda")])
+        assert kwargs.get("stream") is True
         with lock:
-            non_stream_calls["count"] += 1
-            call_number = non_stream_calls["count"]
+            request_calls["count"] += 1
+            call_number = request_calls["count"]
         if call_number == 1:
-            return _make_non_streaming_response(content="", tool_calls=[tool_call])
-        return _make_non_streaming_response(content="primeira-final", tool_calls=None)
+            return _make_streaming_response(content="", tool_calls=[tool_call])
+        if call_number == 2:
+            second_request_completed.set()
+            return _make_streaming_response(content="segunda")
+        return _make_streaming_response(content="primeira-final")
 
     mock_client.chat.completions.create.side_effect = create
 
@@ -3069,7 +3136,7 @@ def test_run_stops_before_exceeding_model_request_budget():
     """O orçamento independente impede novo request após tool call já executada."""
     driver, mock_client = _make_driver(max_model_requests=1)
     tool_call = _make_tool_call("call_once", "read_file", '{"path":"a.py"}')
-    mock_client.chat.completions.create.return_value = _make_non_streaming_response(
+    mock_client.chat.completions.create.return_value = _make_streaming_response(
         content="", tool_calls=[tool_call]
     )
 
@@ -3094,7 +3161,7 @@ def test_run_stops_before_exceeding_model_request_budget():
 def test_tool_budget_prompt_exposes_model_request_budget():
     """O modelo recebe os budgets de hops e requests restantes."""
     driver, mock_client = _make_driver(max_model_requests=7)
-    mock_client.chat.completions.create.return_value = _make_non_streaming_response(
+    mock_client.chat.completions.create.return_value = _make_streaming_response(
         content="ok", tool_calls=None
     )
     executor = MagicMock()
@@ -3106,3 +3173,122 @@ def test_tool_budget_prompt_exposes_model_request_budget():
     budget = mock_client.chat.completions.create.call_args.kwargs["messages"][-1]["content"]
     assert "max_model_requests=7" in budget
     assert "remaining_model_requests=7" in budget
+
+
+def test_context_pruning_preserves_current_user_and_drops_old_conversation():
+    messages = [
+        {"role": "system", "content": "system rules"},
+        {"role": "user", "content": "old-user-" + "x" * 5000},
+        {"role": "assistant", "content": "old-assistant-" + "y" * 5000},
+        {"role": "user", "content": "CURRENT REQUEST MUST STAY"},
+    ]
+
+    pruned, fits = _prune_request_messages(
+        messages,
+        [],
+        context_window=2500,
+        context_reserve_tokens=512,
+        extra_chars=100,
+    )
+
+    assert fits is True
+    assert any(message.get("content") == "system rules" for message in pruned)
+    assert any(message.get("content") == "CURRENT REQUEST MUST STAY" for message in pruned)
+    assert not any(str(message.get("content", "")).startswith("old-user-") for message in pruned)
+
+
+def test_context_pruning_counts_tool_schemas_in_request_budget():
+    messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "CURRENT"},
+    ]
+    tools = [{"type": "function", "function": {"name": "large", "description": "z" * 9000}}]
+
+    _pruned, fits = _prune_request_messages(
+        messages,
+        tools,
+        context_window=2500,
+        context_reserve_tokens=512,
+    )
+
+    assert fits is False
+
+
+def test_context_reserve_tokens_is_not_sent_as_generation_cap():
+    driver, mock_client = _make_driver(context_reserve_tokens=4096)
+    _setup_stream(mock_client, [_make_chunk(content="ok")])
+
+    assert driver.run(_prompt("hello"), tool_executor=None) == "ok"
+
+    assert "max_tokens" not in mock_client.chat.completions.create.call_args.kwargs
+
+
+def test_context_pruning_is_disabled_without_context_window():
+    messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "old-" + "x" * 20000},
+        {"role": "assistant", "content": "old-answer-" + "y" * 20000},
+        {"role": "user", "content": "CURRENT"},
+    ]
+
+    pruned, fits = _prune_request_messages(
+        messages,
+        [],
+        context_window=None,
+        context_reserve_tokens=None,
+    )
+
+    assert fits is True
+    assert pruned == messages
+
+
+def test_context_window_rolls_oldest_plain_history_first():
+    messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "OLD USER " + "x" * 5000},
+        {"role": "assistant", "content": "OLD ANSWER " + "y" * 5000},
+        {"role": "user", "content": "NEWER USER " + "z" * 1000},
+        {"role": "assistant", "content": "NEWER ANSWER " + "w" * 1000},
+        {"role": "user", "content": "CURRENT REQUEST"},
+    ]
+
+    pruned, fits = _prune_request_messages(
+        messages,
+        [],
+        context_window=2500,
+        context_reserve_tokens=512,
+    )
+
+    assert fits is True
+    contents = [str(message.get("content", "")) for message in pruned]
+    assert "rules" in contents
+    assert "CURRENT REQUEST" in contents
+    assert not any(content.startswith("OLD USER") for content in contents)
+    assert not any(content.startswith("OLD ANSWER") for content in contents)
+    # A janela deve favorecer o presente: conteudo mais novo sobrevive se houver espaco.
+    assert any(content.startswith("NEWER USER") for content in contents)
+    assert any(content.startswith("NEWER ANSWER") for content in contents)
+
+
+def test_driver_splits_recent_conversation_independently_of_context_pruning():
+    prompt = _rendered(
+        '<header title="Identity">Usuario humano: ALEX</header>\n'
+        '<recent_conversation title="Recent">\n'
+        '[ALEX]: old question\n'
+        '[AGENT]: old answer\n'
+        '[ALEX]: newer question\n'
+        '</recent_conversation>\n'
+        '<current_turn title="Current">do it now</current_turn>'
+    )
+
+    plain_driver, _ = _make_driver(context_window=None)
+    rolling_driver, _ = _make_driver(context_window=32768)
+
+    plain_messages = plain_driver._build_messages_from_prompt(prompt)
+    rolling_messages = rolling_driver._build_messages_from_prompt(prompt)
+
+    assert [m["role"] for m in plain_messages][-4:] == [
+        "user", "assistant", "user", "user",
+    ]
+    assert [m["role"] for m in rolling_messages][-4:] == ["user", "assistant", "user", "user"]
+    assert rolling_messages[-1]["content"] == "do it now"

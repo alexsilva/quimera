@@ -39,6 +39,8 @@ class OpenAIConnection:
     max_connections: int = 4
     max_model_requests: Optional[int] = None
     request_timeout: float = 300.0
+    context_window: Optional[int] = None
+    context_reserve_tokens: Optional[int] = None
     """Número máximo de conexões concorrentes ao backend para este agente.
     Evita estouro de rate-limit quando múltiplos agentes chamam a API em paralelo."""
     """Parâmetros extras mesclados no corpo da requisição à API.
@@ -128,6 +130,8 @@ def _connection_from_dict(data: dict) -> Connection:
         max_connections=data.get("max_connections", 4),
         max_model_requests=data.get("max_model_requests"),
         request_timeout=data.get("request_timeout", 300.0),
+        context_window=data.get("context_window"),
+        context_reserve_tokens=data.get("context_reserve_tokens"),
     )
 
 

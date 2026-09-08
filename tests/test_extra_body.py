@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 from argparse import Namespace
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -211,10 +210,7 @@ def test_chat_with_tools_passes_extra_body():
     extra = {"thinking": {"type": "disabled"}}
     driver, mock_client = _make_driver_extra(extra_body=extra)
 
-    # Resposta sem tool calls
-    msg = SimpleNamespace(content="ok", tool_calls=None)
-    choice = SimpleNamespace(message=msg)
-    mock_client.chat.completions.create.return_value = SimpleNamespace(choices=[choice])
+    mock_client.chat.completions.create.return_value = iter([])
 
     driver._chat(
         [{"role": "user", "content": "x"}],
@@ -230,9 +226,7 @@ def test_chat_with_tools_no_extra_body_when_none():
     """Sem extra_body, a chave extra_body não deve aparecer na chamada."""
     driver, mock_client = _make_driver_extra(extra_body=None)
 
-    msg = SimpleNamespace(content="ok", tool_calls=None)
-    choice = SimpleNamespace(message=msg)
-    mock_client.chat.completions.create.return_value = SimpleNamespace(choices=[choice])
+    mock_client.chat.completions.create.return_value = iter([])
 
     driver._chat(
         [{"role": "user", "content": "x"}],

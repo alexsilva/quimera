@@ -266,6 +266,8 @@ class ConnectionConfigurator:
             supports_native_tools=supports_tools,
             extra_body=extra_body,
             max_connections=max_connections,
+            context_window=getattr(api_defaults, "context_window", None),
+            context_reserve_tokens=getattr(api_defaults, "context_reserve_tokens", None),
         )
         # Preserve existing connection if unchanged to avoid unnecessary reloads
         if isinstance(current, OpenAIConnection) and new_conn == current:
