@@ -234,3 +234,20 @@ def test_agent_routing_property_and_setter(tmp_path):
     data = json.loads(config_file.read_text())
     assert "frozen_agent" not in data
     assert "orchestrator_agent" not in data
+
+
+def test_resumer_agent_property_and_setter(tmp_path):
+    """resumer_agent persiste o agente escolhido para /context resumer; None remove a chave."""
+    from quimera.config import ConfigManager
+
+    config_file = tmp_path / "config.json"
+    cm = ConfigManager(config_file)
+
+    assert cm.resumer_agent is None
+
+    cm.set_resumer_agent("gemma4")
+    assert ConfigManager(config_file).resumer_agent == "gemma4"
+
+    cm.set_resumer_agent(None)
+    assert ConfigManager(config_file).resumer_agent is None
+    assert "resumer_agent" not in json.loads(config_file.read_text())

@@ -82,6 +82,8 @@ class SystemLayerDependencies:
     max_deferred_messages_getter: Callable | None = None
     workspace_policy_getter: Callable | None = None
     workspace_policy_setter: Callable | None = None
+    resumer_agent_getter: Callable | None = None
+    resumer_agent_setter: Callable | None = None
     display_service: DisplayService | None = None
 
 
@@ -140,6 +142,8 @@ class AppSystemLayer:
         max_deferred_messages_getter=None,
         workspace_policy_getter=None,
         workspace_policy_setter=None,
+        resumer_agent_getter=None,
+        resumer_agent_setter=None,
         display_service=None,
     ):
         """Inicializa uma instância de AppSystemLayer."""
@@ -184,6 +188,8 @@ class AppSystemLayer:
         self._max_deferred_messages_getter = max_deferred_messages_getter
         self.workspace_policy_getter = workspace_policy_getter
         self.workspace_policy_setter = workspace_policy_setter
+        self.resumer_agent_getter = resumer_agent_getter
+        self.resumer_agent_setter = resumer_agent_setter
 
     @property
     def _display(self):
@@ -397,13 +403,8 @@ class AppSystemLayer:
                 return agent_name
         return None
 
-    def _resolve_connect_target(self, command: str) -> str | None:
-        """Resolve o agente alvo para configuração de conexão."""
-        raw_target = command[len(CMD_CONNECT):].strip().lower()
-        if not raw_target:
-            return None
-
-        normalized = raw_target[1:] if raw_target.startswith("/") else raw_target
+    def _match_known_agent(self, normalized: str) -> str | None:
+        """Casa um nome normalizado contra nome, prefixo ou alias de profiles conhecidos."""
         for profile in getattr(self.profile_resolver, "profiles", []):
             if normalized == profile.name.lower():
                 return profile.name
@@ -411,7 +412,58 @@ class AppSystemLayer:
             candidates.update(alias.lower().lstrip("/") for alias in (getattr(profile, "aliases", None) or []))
             if normalized in candidates:
                 return profile.name
+        return None
+
+    def _resolve_agent_name(self, raw: str) -> str | None:
+        """Resolve o nome canônico de um agente a partir de nome, prefixo ou alias."""
+        raw_target = raw.strip().lower()
+        if not raw_target:
+            return None
+        normalized = raw_target[1:] if raw_target.startswith("/") else raw_target
+        matched = self._match_known_agent(normalized)
+        if matched:
+            return matched
         return normalized if is_valid_agent_name(normalized) else None
+
+    def _resolve_connect_target(self, command: str) -> str | None:
+        """Resolve o agente alvo para configuração de conexão."""
+        return self._resolve_agent_name(command[len(CMD_CONNECT):])
+
+    def _handle_context_resumer(self, args: list[str]) -> None:
+        """Processa /context resumer [<agente>|clear]: configura o agente resumidor.
+
+        A ausência ou falha do agente configurado é resolvida no momento do
+        resumo (ver ``build_chain_summarizer``), que já cai automaticamente
+        para outro agente da sessão atual.
+        """
+        if not args:
+            current = self.resumer_agent_getter() if callable(self.resumer_agent_getter) else None
+            if current:
+                self._display.show_system(f"[resumer] agente configurado: {current}")
+            else:
+                self._display.show_system(
+                    "[resumer] nenhum agente configurado; fallback automático entre os agentes da sessão."
+                )
+            return
+
+        target = args[0].strip().lower()
+        if target in {"clear", "none", "auto"}:
+            if callable(self.resumer_agent_setter):
+                self.resumer_agent_setter(None)
+            self._display.show_system("[resumer] preferência removida; volta ao fallback automático.")
+            return
+
+        resolved = self._resolve_agent_name(target)
+        if resolved is None:
+            self._display.show_warning_message(f"Agente '{target}' desconhecido.")
+            return
+
+        if callable(self.resumer_agent_setter):
+            self.resumer_agent_setter(resolved)
+        self._display.show_system(
+            f"[resumer] agente configurado: {resolved}. "
+            "Se ausente ou falhar, o resumo usa automaticamente outro agente da sessão."
+        )
 
     def list_connected_agents(self) -> list[str]:
         """Retorna nomes dos agentes com conexão persistida."""
@@ -652,9 +704,11 @@ class AppSystemLayer:
                 self.context_manager.edit()
             elif sub == "branch":
                 self.context_manager.handle_context_branch(command)
+            elif sub == "resumer":
+                self._handle_context_resumer(parts[1:])
             else:
                 self._display.show_warning_message(
-                    "Uso: /context [show|edit|branch [nome]]"
+                    "Uso: /context [show|edit|branch [nome]|resumer [<agente>|clear]]"
                 )
             return True
 

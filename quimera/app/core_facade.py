@@ -161,7 +161,9 @@ class CoreFacadeMixin:
     def _command_argument_resolver(self, command: str, partial: str) -> list[str]:
         """Resolve sugestões de argumentos para comandos com autocomplete contextual."""
         if command == CMD_CONTEXT:
-            return ["show", "edit", "branch"]
+            if partial.startswith("resumer "):
+                return ["resumer clear", *(f"resumer {a}" for a in sorted(self.agent_pool))]
+            return ["show", "edit", "branch", "resumer"]
         if command == CMD_PROMPT:
             return sorted(self.agent_pool)
         if command in {CMD_CONNECT, CMD_DISCONNECT}:
@@ -508,6 +510,18 @@ class CoreFacadeMixin:
         if callable(setter):
             setter(normalized)
         self._apply_workspace_policy_to_tool_executor(self.__dict__.get("tool_executor"))
+        return normalized
+
+    def get_resumer_agent(self) -> str | None:
+        """Retorna o agente configurado para resumir o contexto, se houver."""
+        return getattr(self.config, "resumer_agent", None)
+
+    def set_resumer_agent(self, name: str | None) -> str | None:
+        """Define e persiste o agente preferido para resumir o contexto."""
+        normalized = str(name).strip() if name else None
+        setter = getattr(self.config, "set_resumer_agent", None)
+        if callable(setter):
+            setter(normalized)
         return normalized
 
     def _apply_workspace_policy_to_tool_executor(self, executor) -> None:

@@ -75,6 +75,8 @@ def build_help(agent_names: Sequence[str]) -> str:
             "- /context [show]: mostra o contexto atual\n"
             "- /context edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"
             "- /context branch [branch]: mostra ou define a branch de template de contexto persistente\n"
+            "- /context resumer [<agente>|clear]: mostra, define ou remove o agente preferido para resumir o contexto"
+            " (fallback automático para outro agente da sessão se ausente ou falhar)\n"
             "- /edit: abre o editor ($EDITOR, ou nano/vim/vi como fallback) para compor uma mensagem longa\n"
             "- /file <caminho>: usa o conteúdo de um arquivo como mensagem\n"
             "- /reset state: limpa o shared_state (objetivo, passo, critérios)\n"

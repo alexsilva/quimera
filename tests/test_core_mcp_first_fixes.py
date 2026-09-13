@@ -325,6 +325,44 @@ def test_session_summarize_preserves_concurrent_persisted_message():
     assert storage.saved_history == history
 
 
+def test_auto_summarize_prefers_configured_resumer():
+    """O resumidor persistido vence o agente do turno e mantém fallback habilitado."""
+    history = [{"role": "human", "content": f"m{i}"} for i in range(12)]
+    storage = _Storage()
+    renderer = _Renderer()
+    context = _ContextManager()
+
+    class Summarizer:
+        def __init__(self):
+            self.preferred_agent = None
+            self.fallback = None
+
+        def summarize(self, messages, existing_summary=None, preferred_agent=None, fallback=True):
+            self.preferred_agent = preferred_agent
+            self.fallback = fallback
+            return "resumo"
+
+    summarizer = Summarizer()
+    service = AppSessionServices(
+        session_state=SessionRuntimeState.from_legacy(history=history, shared_state={}),
+        storage=storage,
+        renderer=renderer,
+        agent_pool=SimpleNamespace(primary="claude"),
+        context_manager=context,
+        session_summarizer=summarizer,
+        task_services=Mock(stop_task_executors=Mock()),
+        prompt_builder=SimpleNamespace(history_window=6),
+        auto_summarize_threshold=8,
+        summary_agent_preference="claude",
+        resumer_agent_getter=lambda: "gemma4",
+    )
+
+    service.maybe_auto_summarize(preferred_agent="codex")
+    service.join_summarization(timeout=3)
+
+    assert summarizer.preferred_agent == "gemma4"
+    assert summarizer.fallback is True
+
 
 def test_session_summarize_does_not_save_summary_when_snapshot_changes():
     """Verifica que session summarize does not save summary when snapshot changes."""
@@ -417,6 +455,45 @@ def test_session_shutdown_summarizes_stable_history_snapshot_after_pending_save(
         {"role": "assistant", "content": "mutated during shutdown summary"},
     ]
     assert context.saved_summary == "shutdown summary"
+
+
+def test_session_shutdown_configured_resumer_enables_session_fallback():
+    """No shutdown, a preferência explícita é enviada com fallback habilitado."""
+    history = [{"role": "human", "content": "before shutdown"}]
+    storage = _Storage()
+    renderer = _Renderer()
+    context = _ContextManager()
+
+    class Summarizer:
+        def __init__(self):
+            self.preferred_agent = None
+            self.fallback = None
+
+        def summarize(self, messages, existing_summary=None, preferred_agent=None, fallback=True):
+            self.preferred_agent = preferred_agent
+            self.fallback = fallback
+            return "shutdown summary"
+
+    summarizer = Summarizer()
+    service = AppSessionServices(
+        session_state=SessionRuntimeState.from_legacy(history=history, shared_state={}),
+        storage=storage,
+        renderer=renderer,
+        agent_pool=SimpleNamespace(primary="codex"),
+        context_manager=context,
+        session_summarizer=summarizer,
+        task_services=Mock(stop_task_executors=Mock()),
+        prompt_builder=SimpleNamespace(history_window=2),
+        summary_agent_preference="codex",
+        resumer_agent_getter=lambda: "gemma4",
+    )
+
+    service.shutdown()
+
+    assert summarizer.preferred_agent == "gemma4"
+    assert summarizer.fallback is True
+    assert context.saved_summary == "shutdown summary"
+
 
 def test_restored_session_clears_volatile_agent_goal_state_only():
     """Verifica que restored session clears volatile agent goal state only."""

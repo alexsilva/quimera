@@ -269,6 +269,8 @@ def system_layer_from_app(app, **overrides):
         profile_registry=getattr(app, "_profile_registry", None),
         workspace_policy_getter=getattr(app, "get_workspace_policy_name", None),
         workspace_policy_setter=getattr(app, "set_workspace_policy_name", None),
+        resumer_agent_getter=getattr(app, "get_resumer_agent", None),
+        resumer_agent_setter=getattr(app, "set_resumer_agent", None),
         deferred_messages_getter=lambda: getattr(app, "_deferred_system_messages", []),
         max_deferred_messages_getter=lambda: getattr(app, "_MAX_DEFERRED_SYSTEM_MESSAGES", 20),
     )

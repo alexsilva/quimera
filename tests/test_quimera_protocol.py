@@ -42,7 +42,7 @@ from quimera.app.session_bootstrap import (
 )
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
-from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_POLICY, CMD_PROMPT, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
+from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_CONTEXT, CMD_DISCONNECT, CMD_HELP, CMD_POLICY, CMD_PROMPT, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
 from quimera.constants import CMD_DEBATE
 from quimera.profiles import ExecutionProfile
 from quimera.prompt_templates import PromptText
@@ -477,6 +477,7 @@ def _make_session_services(app):
         auto_summarize_threshold=getattr(app, "auto_summarize_threshold", None),
         summary_agent_preference=getattr(app, "summary_agent_preference", None),
         agent_client=getattr(app, "agent_client", None),
+        resumer_agent_getter=getattr(app, "get_resumer_agent", None),
     )
 
 
@@ -1322,6 +1323,92 @@ class ProtocolTests(unittest.TestCase):
             app.renderer.warnings,
             ["Nenhuma conexão persistida encontrada para chatgpt."],
         )
+
+    def test_context_command_argument_resolver_suggests_resumer(self):
+        """/context sugere o subcomando resumer; 'resumer ' sugere agentes e clear."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.agent_pool = ["claude", "codex"]
+
+        self.assertEqual(
+            app._command_argument_resolver(CMD_CONTEXT, ""),
+            ["show", "edit", "branch", "resumer"],
+        )
+        self.assertEqual(
+            app._command_argument_resolver(CMD_CONTEXT, "resumer "),
+            ["resumer clear", "resumer claude", "resumer codex"],
+        )
+
+    def test_handle_command_context_resumer_shows_current_preference(self):
+        """/context resumer sem args mostra o agente configurado (ou o fallback automático)."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.context_manager = Mock()
+        app.get_resumer_agent = Mock(side_effect=[None, "gemma4"])
+        app.system_layer = system_layer_from_app(app)
+
+        materialize_internal_services(app)
+        handled = app.system_layer.handle_command("/context resumer")
+
+        self.assertTrue(handled)
+        self.assertIn(
+            "[resumer] nenhum agente configurado; fallback automático entre os agentes da sessão.",
+            app.renderer.system_messages,
+        )
+
+        app.system_layer.handle_command("/context resumer")
+        self.assertIn("[resumer] agente configurado: gemma4", app.renderer.system_messages)
+
+    def test_handle_command_context_resumer_sets_agent(self):
+        """/context resumer <agente> persiste a preferência via setter injetado."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.context_manager = Mock()
+        app.set_resumer_agent = Mock()
+        app.system_layer = system_layer_from_app(app)
+
+        materialize_internal_services(app)
+        handled = app.system_layer.handle_command("/context resumer gemma4")
+
+        self.assertTrue(handled)
+        app.set_resumer_agent.assert_called_once_with("gemma4")
+        self.assertIn(
+            "[resumer] agente configurado: gemma4. "
+            "Se ausente ou falhar, o resumo usa automaticamente outro agente da sessão.",
+            app.renderer.system_messages,
+        )
+
+    def test_handle_command_context_resumer_clears_agent(self):
+        """/context resumer clear remove a preferência persistida."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.context_manager = Mock()
+        app.set_resumer_agent = Mock()
+        app.system_layer = system_layer_from_app(app)
+
+        materialize_internal_services(app)
+        handled = app.system_layer.handle_command("/context resumer clear")
+
+        self.assertTrue(handled)
+        app.set_resumer_agent.assert_called_once_with(None)
+        self.assertIn(
+            "[resumer] preferência removida; volta ao fallback automático.",
+            app.renderer.system_messages,
+        )
+
+    def test_handle_command_context_resumer_warns_on_invalid_agent(self):
+        """/context resumer com nome inválido não persiste e avisa o usuário."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.context_manager = Mock()
+        app.set_resumer_agent = Mock()
+        app.system_layer = system_layer_from_app(app)
+
+        materialize_internal_services(app)
+        handled = app.system_layer.handle_command("/context resumer !!!")
+
+        self.assertTrue(handled)
+        app.set_resumer_agent.assert_not_called()
+        self.assertEqual(app.renderer.warnings, ["Agente '!!!' desconhecido."])
 
     def test_configure_connection_interactively_openai_returns_dataclass_connection(self):
         """Verifica que configure connection interactively openai returns dataclass connection."""
@@ -2800,6 +2887,56 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(agent_client.calls, [("chatgpt", "resuma", True, False)])
         self.assertEqual(summarizer_call.last_outcome, "unavailable")
+
+    def test_chain_summarizer_uses_session_agent_when_preferred_is_absent(self):
+        """Agente resumidor ausente do pool cai para um agente da sessão atual."""
+        class DummyAgentClient:
+            def __init__(self):
+                self._user_cancelled = False
+                self._cancel_event = threading.Event()
+                self.calls = []
+
+            def call(self, agent, prompt, silent=False, allow_tools=True):
+                self.calls.append((agent, prompt, silent, allow_tools))
+                return "resumo pelo agente da sessão"
+
+        agent_client = DummyAgentClient()
+        summarizer_call = build_chain_summarizer(agent_client, ["codex", "claude"])
+
+        result = summarizer_call("resuma", preferred_agent="gemma4", fallback=True)
+
+        self.assertEqual(result, "resumo pelo agente da sessão")
+        self.assertEqual(agent_client.calls, [("codex", "resuma", True, False)])
+        self.assertEqual(summarizer_call.last_outcome, "success")
+
+    def test_chain_summarizer_uses_another_session_agent_when_preferred_fails(self):
+        """Falha do resumidor preferido cai para o próximo agente da sessão atual."""
+        class DummyAgentClient:
+            def __init__(self):
+                self._user_cancelled = False
+                self._cancel_event = threading.Event()
+                self.calls = []
+
+            def call(self, agent, prompt, silent=False, allow_tools=True):
+                self.calls.append((agent, prompt, silent, allow_tools))
+                if agent == "gemma4":
+                    return None
+                return "resumo pelo fallback"
+
+        agent_client = DummyAgentClient()
+        summarizer_call = build_chain_summarizer(agent_client, ["gemma4", "codex"])
+
+        result = summarizer_call("resuma", preferred_agent="gemma4", fallback=True)
+
+        self.assertEqual(result, "resumo pelo fallback")
+        self.assertEqual(
+            agent_client.calls,
+            [
+                ("gemma4", "resuma", True, False),
+                ("codex", "resuma", True, False),
+            ],
+        )
+        self.assertEqual(summarizer_call.last_outcome, "success")
 
 
     def test_chain_summarizer_does_not_emit_per_agent_unavailable_messages(self):

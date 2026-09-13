@@ -58,6 +58,7 @@ class AppSessionServices:
         auto_summarize_threshold: int | None = None,
         summary_agent_preference: str | None = None,
         agent_client=None,
+        resumer_agent_getter=None,
     ):
         self._session_state = session_state
         # Compatibilidade: outras camadas ainda observam a mesma lista/dict mutáveis.
@@ -75,6 +76,7 @@ class AppSessionServices:
         self._auto_summarize_threshold = auto_summarize_threshold
         self._summary_agent_preference = summary_agent_preference
         self._agent_client = agent_client
+        self._resumer_agent_getter = resumer_agent_getter
         self._last_save_time: float = 0.0
         self._unsaved_messages: int = 0
         self._summarization_running = threading.Event()
@@ -134,6 +136,17 @@ class AppSessionServices:
         """Retorna uma cópia rasa do histórico da sessão."""
         return self._session_state.history_snapshot()
 
+    def _resumer_override(self) -> str | None:
+        """Retorna o agente preferido configurado explicitamente (``/context resumer``), se houver."""
+        getter = self._resumer_agent_getter
+        if not callable(getter):
+            return None
+        try:
+            value = getter()
+        except Exception:
+            return None
+        return value if isinstance(value, str) and value else None
+
     def maybe_auto_summarize(self, preferred_agent=None):
         """Sumariza e trunca o histórico quando excede o threshold configurado."""
         self._flush_pending_summary_completion()
@@ -163,7 +176,12 @@ class AppSessionServices:
         if self._summarization_running.is_set():
             return
 
-        summary_agent = preferred_agent or self._summary_agent_preference or self._agent_pool.primary
+        summary_agent = (
+            self._resumer_override()
+            or preferred_agent
+            or self._summary_agent_preference
+            or self._agent_pool.primary
+        )
 
         def _run_summarize():
             renderer = self._renderer
@@ -261,11 +279,15 @@ class AppSessionServices:
 
         def _run_summary():
             try:
+                override = self._resumer_override()
                 result[0] = self._session_summarizer.summarize(
                     history_snapshot,
                     existing_summary=self._context_manager.load_session_summary(),
-                    preferred_agent=self._summary_agent_preference,
-                    fallback=False,
+                    preferred_agent=override or self._summary_agent_preference,
+                    # Preferência explícita (/context resumer) cai para outro agente
+                    # da sessão se ausente/falhar; o heurístico automático mantém o
+                    # comportamento de tentativa única no shutdown.
+                    fallback=bool(override),
                 )
             except Exception:
                 pass

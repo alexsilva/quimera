@@ -427,6 +427,8 @@ class AppAssembler:
                 profile_registry=plat.profile_registry,
                 workspace_policy_getter=app.get_workspace_policy_name,
                 workspace_policy_setter=app.set_workspace_policy_name,
+                resumer_agent_getter=app.get_resumer_agent,
+                resumer_agent_setter=app.set_resumer_agent,
             )
         )
         input_services = AppInputServices(
@@ -720,6 +722,7 @@ class AppAssembler:
             auto_summarize_threshold=rt.auto_summarize_threshold,
             summary_agent_preference=app.summary_agent_preference,
             agent_client=rt.agent_client,
+            resumer_agent_getter=app.get_resumer_agent,
         )
         dispatch_services = AppDispatchServices.from_dependencies(
             DispatchDependencies(

@@ -183,6 +183,16 @@ class ConfigManager:
         )
 
     @property
+    def resumer_agent(self) -> str | None:
+        """Retorna o agente preferido para resumir o contexto, se configurado."""
+        value = self._load().get("resumer_agent")
+        return value if isinstance(value, str) and value else None
+
+    def set_resumer_agent(self, value: str | None):
+        """Persiste o agente preferido para resumir o contexto; None remove a preferência."""
+        self._update(resumer_agent=value if isinstance(value, str) and value else None)
+
+    @property
     def mcp_clients(self) -> list[str] | None:
         """Retorna specs de MCP client persistidos."""
         value = self._load().get("mcp_clients")
