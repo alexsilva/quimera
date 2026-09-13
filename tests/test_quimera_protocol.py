@@ -1208,6 +1208,22 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(result, ["chatgpt", "codex"])
         get_overrides.assert_called_once_with()
 
+    def test_connect_and_disconnect_autocomplete_suggest_connected_agents(self):
+        """Connect e disconnect compartilham o autocomplete de conexões salvas."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.system_layer = Mock()
+        app.system_layer.list_connected_agents.return_value = ["chatgpt", "codex"]
+
+        self.assertEqual(
+            app._command_argument_resolver(CMD_CONNECT, "chat"),
+            ["chatgpt", "codex"],
+        )
+        self.assertEqual(
+            app._command_argument_resolver(CMD_DISCONNECT, "chat"),
+            ["chatgpt", "codex"],
+        )
+        self.assertEqual(app.system_layer.list_connected_agents.call_count, 2)
+
     def test_handle_command_warns_when_connect_target_is_missing(self):
         """Verifica que handle command warns when connect target is missing."""
         app = QuimeraApp.__new__(QuimeraApp)

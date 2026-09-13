@@ -164,7 +164,7 @@ class CoreFacadeMixin:
             return ["show", "edit", "branch"]
         if command == CMD_PROMPT:
             return sorted(self.agent_pool)
-        if command == CMD_DISCONNECT:
+        if command in {CMD_CONNECT, CMD_DISCONNECT}:
             return self.system_layer.list_connected_agents()
         if command == CMD_BUGS:
             return ["list", "show", "close", "analyze", "stats"]
