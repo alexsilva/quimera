@@ -1462,6 +1462,33 @@ def test_freeze_agente_desconhecido_avisa_e_nao_congela():
     assert result is True
 
 
+@pytest.mark.parametrize(
+    ("agents", "expected_count"),
+    [
+        (["claude", "codex"], "1 agente disponível"),
+        (["claude", "codex", "gemini", "opencode"], "3 agentes disponíveis"),
+    ],
+)
+def test_orchestrator_exibe_contagem_dinamica_sem_listar_agentes(
+    agents, expected_count
+):
+    layer, pool, app = _make_layer_with_pool(agents)
+
+    result = layer.handle_command("o/claude")
+
+    assert result is True
+    assert pool.orchestrator_agent == "claude"
+    assert app.renderer.system_messages == [
+        "[orquestrador] claude ativado — todo input passa por ele antes de delegar."
+        f" {expected_count} para delegação."
+    ]
+    assert all(
+        agent not in app.renderer.system_messages[0]
+        for agent in agents
+        if agent != "claude"
+    )
+
+
 def test_unfreeze_descongela_pool():
     """Verifica que Test unfreeze descongela pool."""
     layer, pool, _ = _make_layer_with_pool()

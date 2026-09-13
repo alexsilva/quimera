@@ -752,9 +752,13 @@ class AppSystemLayer:
                     f"Agente '{agent}' não está no pool ativo."
                 )
                 return True
+            available_count = len(others)
+            available_label = (
+                "agente disponível" if available_count == 1 else "agentes disponíveis"
+            )
             self._display.show_system(
                 f"[orquestrador] {agent} ativado — todo input passa por ele antes de delegar."
-                f" Agentes disponíveis: {', '.join(others)}."
+                f" {available_count} {available_label} para delegação."
             )
             if trailing:
                 return trailing
