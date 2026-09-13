@@ -259,61 +259,91 @@ class DelegateTools(ToolBase):
             return None
         return str(raw)
 
-    # ── async HTTP path ──────────────────────────────────────────────────
+    # ── tracking unificado (job/task no banco) ───────────────────────────
 
-    def _delegate_http_async(
+    @staticmethod
+    def _tracking_job_desc(steps: list[dict]) -> str:
+        """Descrição curta do job que representa a delegação no banco."""
+        step_one = steps[0]
+        return f"delegate → {step_one['target_agent']}: {step_one['request'][:80]}"
+
+    def _tracking_created_by(self, call: ToolCall) -> str:
+        """Identifica quem originou a delegação para o registro no banco."""
+        calling_agent = self._get_calling_agent(call)
+        if calling_agent:
+            return calling_agent
+        return "mcp_http" if self._get_transport(call) == "http_mcp" else "delegate"
+
+    def _insert_tracking_task(
+        self, job_id: int, steps: list[dict], db_path: str,
+    ) -> tuple[int, dict]:
+        """Cria a task de acompanhamento e ativa o job; levanta exceção em falha."""
+        step_one = steps[0]
+        body = json.dumps(steps, ensure_ascii=False)
+        task_id = create_task(
+            job_id,
+            step_one["request"][:120],
+            body=body,
+            assigned_to=step_one["target_agent"],
+            origin="delegate",
+            status="in_progress",
+            db_path=db_path,
+        )
+        update_job_status(job_id, "active", db_path=db_path)
+        job_snapshot = get_job(job_id, db_path=db_path) or {}
+        return task_id, job_snapshot
+
+    def _finalize_tracking(
+        self, job_id: int, task_id: int, result: ToolResult, db_path: str,
+    ) -> None:
+        """Grava o desfecho da delegação na task/job de acompanhamento."""
+        try:
+            if result.ok:
+                complete_task(task_id, result=result.content, db_path=db_path)
+                update_job_status(job_id, "completed", db_path=db_path)
+            else:
+                fail_task(task_id, reason=result.error, db_path=db_path)
+                update_job_status(job_id, "failed", db_path=db_path)
+        except Exception as exc:
+            logger.warning(
+                "delegate tracking: failed to update task/job %s: %s", task_id, exc
+            )
+
+    # ── async path (wait=false e HTTP MCP sem SSE) ───────────────────────
+
+    def _delegate_async(
         self,
         call: ToolCall,
         steps: list[dict],
+        parallel: bool = False,
     ) -> ToolResult:
-        """Executa delegate via HTTP MCP.
+        """Registra a delegação como job/task e executa em background thread.
 
-        Com SSE: executa inline na thread pool — o resultado chega ao cliente
-        via SSE quando a thread pool completar.
-        Sem SSE: cria job/task no banco e executa em background thread.
+        Retorna imediatamente {job_id, task_id, status: in_progress} para o
+        chamador acompanhar via list_tasks/get_job; o resultado final é
+        persistido na task (completed/failed). Usado por wait=false em
+        qualquer transporte e sempre por HTTP MCP sem SSE, que não sustenta
+        uma chamada bloqueante longa.
         """
-        meta_state = call.metadata.get("_mcp_state") or {}
-        sse_available = meta_state.get("sse_queue") is not None
-
-        if sse_available:
-            _bg_fn = self._background_delegate_fn or self._delegate_fn
-            return self._execute_steps_inner(
-                steps,
-                _bg_fn,
-                self._progress_callback,
-                self._resolve_active_agents,
-                self._normalize_agent_identity,
-                cleanup_callback=self._cleanup_callback,
-            )
-
         db_path = self._get_db_path()
         if not db_path:
             return ToolResult(
                 ok=False,
                 tool_name=call.name,
-                error="db_path not configured — cannot run delegate async via HTTP MCP",
+                error="db_path not configured — cannot run delegate async (wait=false / HTTP MCP)",
             )
 
-        step_one = steps[0]
-        job_desc = f"delegate → {step_one['target_agent']}: {step_one['request'][:80]}"
         try:
-            job_id = add_job(job_desc, created_by="mcp_http", db_path=db_path)
+            job_id = add_job(
+                self._tracking_job_desc(steps),
+                created_by=self._tracking_created_by(call),
+                db_path=db_path,
+            )
         except Exception as exc:
             return ToolResult(ok=False, tool_name=call.name, error=f"Failed to create job: {exc}")
 
-        body = json.dumps(steps, ensure_ascii=False)
         try:
-            task_id = create_task(
-                job_id,
-                step_one["request"][:120],
-                body=body,
-                assigned_to=step_one["target_agent"],
-                origin="mcp_http_delegate",
-                status="in_progress",
-                db_path=db_path,
-            )
-            update_job_status(job_id, "active", db_path=db_path)
-            job_snapshot = get_job(job_id, db_path=db_path) or {}
+            task_id, job_snapshot = self._insert_tracking_task(job_id, steps, db_path)
         except Exception as exc:
             return ToolResult(ok=False, tool_name=call.name, error=f"Failed to create task: {exc}")
 
@@ -324,48 +354,69 @@ class DelegateTools(ToolBase):
         _cleanup_cb = self._cleanup_callback
 
         def _run() -> None:
-            result = self._execute_steps_inner(
-                steps,
-                _fn,
-                _progress_cb,
-                _resolve_active,
-                _normalize,
-                cleanup_callback=_cleanup_cb,
-            )
-            try:
-                if result.ok:
-                    complete_task(task_id, result=result.content, db_path=db_path)
-                    update_job_status(job_id, "completed", db_path=db_path)
-                else:
-                    fail_task(task_id, reason=result.error, db_path=db_path)
-                    update_job_status(job_id, "failed", db_path=db_path)
-            except Exception as exc:
-                logger.warning(
-                    "delegate async: failed to update task/job %d: %s", task_id, exc
+            if parallel and len(steps) > 1:
+                result = self._execute_steps_parallel(
+                    steps,
+                    _fn,
+                    _progress_cb,
+                    _resolve_active,
+                    _normalize,
+                    cleanup_callback=_cleanup_cb,
                 )
+            else:
+                result = self._execute_steps_inner(
+                    steps,
+                    _fn,
+                    _progress_cb,
+                    _resolve_active,
+                    _normalize,
+                    cleanup_callback=_cleanup_cb,
+                )
+            self._finalize_tracking(job_id, task_id, result, db_path)
 
         t = threading.Thread(target=_run, daemon=True, name=f"delegate-{task_id}")
         t.start()
 
+        payload = {
+            "job_id": job_id,
+            "task_id": task_id,
+            "status": "in_progress",
+            "job_status": job_snapshot.get("status", "active"),
+            "task_status": "in_progress",
+            "started_at": job_snapshot.get("started_at"),
+            "hint": (
+                f"acompanhe com list_tasks {{\"id\": {task_id}}}; "
+                "o resultado final é salvo na task"
+            ),
+        }
         return ToolResult(
             ok=True,
             tool_name=call.name,
-            content=json.dumps({
-                "job_id": job_id,
-                "task_id": task_id,
-                "status": "in_progress",
-                "job_status": job_snapshot.get("status", "active"),
-                "task_status": "in_progress",
-                "started_at": job_snapshot.get("started_at"),
-            }),
-            data={
-                "job_id": job_id,
-                "task_id": task_id,
-                "job_status": job_snapshot.get("status", "active"),
-                "task_status": "in_progress",
-                "started_at": job_snapshot.get("started_at"),
-            },
+            content=json.dumps(payload, ensure_ascii=False),
+            data=dict(payload),
         )
+
+    def _delegate_http_async(
+        self,
+        call: ToolCall,
+        steps: list[dict],
+        parallel: bool = False,
+    ) -> ToolResult:
+        """Executa delegate via HTTP MCP.
+
+        Com SSE: executa inline na thread pool (bloqueante, com tracking) — o
+        resultado chega ao cliente via SSE quando a thread pool completar.
+        Sem SSE: delegação assíncrona idêntica a wait=false — job/task no
+        banco, execução em background e {job_id, task_id} imediato p/ polling.
+        """
+        meta_state = call.metadata.get("_mcp_state") or {}
+        sse_available = meta_state.get("sse_queue") is not None
+
+        if sse_available:
+            _bg_fn = self._background_delegate_fn or self._delegate_fn
+            return self._execute_tracked_sync(call, steps, parallel, _bg_fn)
+
+        return self._delegate_async(call, steps, parallel)
 
     # ── synchronous execution core ───────────────────────────────────────
 
@@ -745,6 +796,74 @@ class DelegateTools(ToolBase):
 
         return ToolResult(ok=True, tool_name=tool_name, content="\n\n".join(step_outputs))
 
+    def _execute_tracked_sync(
+        self,
+        call: ToolCall,
+        steps: list[dict],
+        parallel: bool,
+        delegate_fn: _DelegateFnProto,
+        cancel_checker: Callable[[], bool] | None = None,
+        request_cancel_event: threading.Event | None = None,
+    ) -> ToolResult:
+        """Executa steps bloqueando o chamador, com a delegação registrada como task.
+
+        Mesmo substrato de acompanhamento do caminho assíncrono: task
+        in_progress durante a execução e completed/failed ao final, com o
+        resultado persistido. O rastreio é best-effort — sem db_path (ou com
+        falha no banco) a execução segue sem registro, preservando o
+        comportamento síncrono.
+        """
+        db_path = self._get_db_path()
+        tracking: tuple[int, int] | None = None
+        if db_path:
+            try:
+                job_id = add_job(
+                    self._tracking_job_desc(steps),
+                    created_by=self._tracking_created_by(call),
+                    db_path=db_path,
+                )
+                task_id, _snapshot = self._insert_tracking_task(job_id, steps, db_path)
+                tracking = (job_id, task_id)
+            except Exception as exc:
+                logger.warning("delegate tracking: failed to create job/task: %s", exc)
+
+        if parallel and len(steps) > 1:
+            result = self._execute_steps_parallel(
+                steps,
+                delegate_fn,
+                self._progress_callback,
+                self._resolve_active_agents,
+                self._normalize_agent_identity,
+                cleanup_callback=self._cleanup_callback,
+                cancel_checker=cancel_checker,
+                request_cancel_event=request_cancel_event,
+            )
+        else:
+            result = self._execute_steps_inner(
+                steps,
+                delegate_fn,
+                self._progress_callback,
+                self._resolve_active_agents,
+                self._normalize_agent_identity,
+                cleanup_callback=self._cleanup_callback,
+                cancel_checker=cancel_checker,
+                request_cancel_event=request_cancel_event,
+            )
+
+        if tracking is not None:
+            job_id, task_id = tracking
+            self._finalize_tracking(job_id, task_id, result, db_path)
+            result.data["job_id"] = job_id
+            result.data["task_id"] = task_id
+            result.data["task_status"] = "completed" if result.ok else "failed"
+            if result.ok:
+                footer = (
+                    f"[delegação registrada como task {task_id} (job {job_id}); "
+                    "resultado persistido — consultável via list_tasks]"
+                )
+                result.content = f"{result.content}\n\n{footer}" if result.content else footer
+        return result
+
     @staticmethod
     def _truncate_delegate_text(value: str, max_chars: int, label: str) -> tuple[str, str | None]:
         """Trunca texto acima do limite, deixando marcador no payload e devolvendo aviso.
@@ -1036,11 +1155,32 @@ class DelegateTools(ToolBase):
             )
         parallel = bool(parallel_raw)
 
+        wait_raw = arguments.get("wait")
+        if wait_raw is not None and not isinstance(wait_raw, bool):
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="'wait' must be a boolean when provided",
+            )
+        wait = True if wait_raw is None else wait_raw
+
         transport = self._get_transport(call)
+        if transport == "http_mcp":
+            meta_state = call.metadata.get("_mcp_state") or {}
+            if meta_state.get("sse_queue") is None:
+                # Streamable HTTP sem SSE não sustenta chamada bloqueante
+                # longa: a delegação é sempre assíncrona neste transporte.
+                wait = False
+
+        if not wait:
+            return self._attach_truncation_warnings(
+                self._delegate_async(call, steps, parallel),
+                truncation_warnings,
+            )
 
         if transport == "http_mcp":
             return self._attach_truncation_warnings(
-                self._delegate_http_async(call, steps),
+                self._delegate_http_async(call, steps, parallel),
                 truncation_warnings,
             )
 
@@ -1057,29 +1197,12 @@ class DelegateTools(ToolBase):
                 or (callable(self._cancel_checker) and self._cancel_checker())
             )
 
-        if parallel and len(steps) > 1:
-            return self._attach_truncation_warnings(
-                self._execute_steps_parallel(
-                    steps,
-                    self._delegate_fn,
-                    self._progress_callback,
-                    self._resolve_active_agents,
-                    self._normalize_agent_identity,
-                    cleanup_callback=self._cleanup_callback,
-                    cancel_checker=request_cancelled,
-                    request_cancel_event=request_cancel_event,
-                ),
-                truncation_warnings,
-            )
-
         return self._attach_truncation_warnings(
-            self._execute_steps_inner(
+            self._execute_tracked_sync(
+                call,
                 steps,
+                parallel,
                 self._delegate_fn,
-                self._progress_callback,
-                self._resolve_active_agents,
-                self._normalize_agent_identity,
-                cleanup_callback=self._cleanup_callback,
                 cancel_checker=request_cancelled,
                 request_cancel_event=request_cancel_event,
             ),
@@ -1138,6 +1261,9 @@ class DelegateToolsValidator(ValidatableTool):
         fallback_agents = call.arguments.get("fallback_agents", [])
         if fallback_agents is not None and not isinstance(fallback_agents, list):
             raise ToolPolicyError("delegate.fallback_agents deve ser uma lista")
+        wait = call.arguments.get("wait")
+        if wait is not None and not isinstance(wait, bool):
+            raise ToolPolicyError("delegate.wait deve ser booleano quando fornecido")
         steps = call.arguments.get("steps")
         if steps is not None:
             if not isinstance(steps, list):

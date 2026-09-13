@@ -662,7 +662,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='delegate',
-        description="Delega uma tarefa para outro agente. Use quando precisar de especialidade específica, revisão independente, execução paralela ou fallback entre agentes existentes. Use 'list_agents' para descobrir agentes ativos, incluindo conexões registradas no workspace.",
+        description="Delega uma tarefa para outro agente. Use quando precisar de especialidade específica, revisão independente, execução paralela ou fallback entre agentes existentes. Use 'list_agents' para descobrir agentes ativos, incluindo conexões registradas no workspace. Toda delegação é registrada como task no banco (job/task), acompanhável via 'list_tasks'/'get_job' em qualquer transporte; com wait=false a tool retorna imediatamente job_id/task_id e o resultado final fica salvo na task.",
         parameters={'type': 'object',
  'properties': {'target_agent': {'type': 'string',
                                  'description': "Nome do agente obtido por 'list_agents'."},
@@ -710,13 +710,28 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                 'parallel': {'type': 'boolean',
                              'description': 'Quando true, executa o target_agent principal e todos '
                                             'os steps simultaneamente em paralelo. Padrão: false '
-                                            '(execução sequencial).'}},
+                                            '(execução sequencial).'},
+                'wait': {'type': 'boolean',
+                         'description': 'Padrão: true — bloqueia até o(s) agente(s) responderem e '
+                                        'retorna a resposta. Quando false, registra a delegação '
+                                        'como task, retorna imediatamente job_id/task_id e executa '
+                                        'em background; acompanhe com list_tasks (o resultado '
+                                        'final é salvo na task). Via HTTP MCP sem SSE a delegação '
+                                        'é sempre assíncrona, equivalente a wait=false.'}},
  'required': ['target_agent', 'request']},
         output_schema={'type': 'object',
  'properties': {'ok': {'type': 'boolean'},
                 'content': {'type': 'string',
                             'description': 'Concatenated agent responses. Multi-step prefixed with '
-                                           "'[agent_name] response'."},
+                                           "'[agent_name] response'. Com wait=false (ou HTTP MCP "
+                                           'sem SSE), JSON com job_id/task_id/status para '
+                                           'acompanhamento via list_tasks.'},
+                'data': {'type': 'object',
+                         'description': 'IDs de rastreamento da delegação quando o banco de tasks '
+                                        'está configurado.',
+                         'properties': {'job_id': {'type': 'integer'},
+                                        'task_id': {'type': 'integer'},
+                                        'task_status': {'type': 'string'}}},
                 'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
  'required': ['ok', 'content']},
     ),
