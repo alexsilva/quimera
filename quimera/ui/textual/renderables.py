@@ -104,6 +104,35 @@ def _submission_marker_style(submission) -> str | None:
     return f"bold {color}"
 
 
+# Sintaxe que justifica renderizar o thinking transitório como Markdown; texto
+# sem marcadores permanece plano para preservar quebras de linha literais
+# (stdout de agentes CLI é orientado a linhas).
+_LIVE_MARKDOWN_HINT_RE = re.compile(
+    r"(\*\*|`|^#{1,6} |^\s{0,3}[-*] |^\s{0,3}\d+\. |\[[^\]]+\]\([^)]+\))",
+    re.MULTILINE,
+)
+# O bloco transitório é re-renderizado a cada frame do pulso (0.25s); acima
+# deste tamanho o re-parse de markdown deixa de valer o custo no terminal.
+_LIVE_MARKDOWN_MAX_CHARS = 16_000
+_LIVE_MARKDOWN_CACHE_LIMIT = 8
+_live_markdown_cache: dict[tuple[str, str], Markdown] = {}
+
+
+def _live_markdown(text: str, style: str) -> Markdown | None:
+    """Markdown do thinking transitório, ou None quando texto plano é mais fiel."""
+    if len(text) > _LIVE_MARKDOWN_MAX_CHARS or not _LIVE_MARKDOWN_HINT_RE.search(text):
+        return None
+    key = (text, style)
+    cached = _live_markdown_cache.get(key)
+    if cached is not None:
+        return cached
+    if len(_live_markdown_cache) >= _LIVE_MARKDOWN_CACHE_LIMIT:
+        _live_markdown_cache.clear()
+    rendered = Markdown(text, style=style)
+    _live_markdown_cache[key] = rendered
+    return rendered
+
+
 def _gutter_row(marker: str, marker_style: str, content):
     """Linha com coluna de gutter fixa: glifo/guia à esquerda, conteúdo alinhado.
 
@@ -213,13 +242,17 @@ def _build_agent_live_body(
     marker_style = f"dim {style}"
     text = str(content or "").strip()
     if text:
-        head = Text(no_wrap=False, overflow="fold")
-        if thinking:
-            head.append(f"{_thinking_pulse_marker()} ", style=f"bold {style}")
-            head.append(text, style="italic")
+        markdown_body = _live_markdown(text, "italic") if thinking else None
+        if markdown_body is not None:
+            head = _gutter_row(_thinking_pulse_marker(), f"bold {style}", markdown_body)
         else:
-            head.append("· ", style="dim")
-            head.append(text, style="dim")
+            head = Text(no_wrap=False, overflow="fold")
+            if thinking:
+                head.append(f"{_thinking_pulse_marker()} ", style=f"bold {style}")
+                head.append(text, style="italic")
+            else:
+                head.append("· ", style="dim")
+                head.append(text, style="dim")
         parts.append(_gutter_row(marker, marker_style, head))
     tools_renderable = _build_tools_renderable(tools, style, guide=guide)
     if tools_renderable is not None:

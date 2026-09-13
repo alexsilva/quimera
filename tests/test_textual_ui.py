@@ -1333,6 +1333,85 @@ def test_textual_render_event_groups_mcp_http_identity_tools_and_summary():
     assert "3 ferramentas · 3 concluídas · 1.2s" in output
 
 
+def _find_markdown(node):
+    from rich.markdown import Markdown
+    from rich.table import Table
+
+    if isinstance(node, Markdown):
+        return node
+    if isinstance(node, Table):
+        for column in node.columns:
+            for cell in column._cells:
+                found = _find_markdown(cell)
+                if found is not None:
+                    return found
+    if isinstance(node, Group):
+        for child in node.renderables:
+            found = _find_markdown(child)
+            if found is not None:
+                return found
+    if isinstance(node, Padding):
+        return _find_markdown(node.renderable)
+    return None
+
+
+def _thinking_update_event(content: str) -> TextualUiEvent:
+    return TextualUiEvent(
+        "agent_update",
+        {"content": content, "label": "Codex", "style": "cyan", "theme": "chat"},
+        agent="codex",
+    )
+
+
+def test_textual_thinking_with_markdown_renders_markdown():
+    renderables._live_markdown_cache.clear()
+    event = _thinking_update_event("**Plano**\n\n- ler o arquivo\n- aplicar patch")
+    renderable = _render_event(event)
+
+    assert _find_markdown(renderable) is not None
+
+    console = Console(record=True, width=80)
+    console.print(renderable)
+    output = console.export_text()
+    assert "**" not in output
+    assert "Plano" in output
+    assert "aplicar patch" in output
+
+
+def test_textual_thinking_plain_text_preserves_line_breaks():
+    # Sem marcadores markdown o texto segue plano — Markdown colapsaria as
+    # quebras de linha literais do stdout de agentes CLI.
+    event = _thinking_update_event("linha um\nlinha dois")
+    renderable = _render_event(event)
+
+    assert _find_markdown(renderable) is None
+
+    console = Console(record=True, width=80)
+    console.print(renderable)
+    output = console.export_text()
+    assert "linha um" in output
+    assert "linha dois" in output
+
+
+def test_textual_thinking_markdown_skips_oversized_content():
+    text = "**bloco** " + "a" * renderables._LIVE_MARKDOWN_MAX_CHARS
+    renderable = _render_event(_thinking_update_event(text))
+    assert _find_markdown(renderable) is None
+
+
+def test_textual_lifecycle_status_never_renders_markdown():
+    body = renderables._build_agent_live_body("**status** operacional", None, "cyan", thinking=False)
+    assert _find_markdown(body) is None
+
+
+def test_textual_thinking_markdown_cache_reuses_instance():
+    renderables._live_markdown_cache.clear()
+    first = renderables._live_markdown("**mesmo** texto", "italic")
+    second = renderables._live_markdown("**mesmo** texto", "italic")
+    assert first is not None
+    assert first is second
+
+
 def test_textual_feed_structured_tool_preview_stays_in_same_run():
     model = TextualFeedModel()
     payload = {"label": "OpenCode", "style": "blue", "run_id": "agentrun:opencode"}
