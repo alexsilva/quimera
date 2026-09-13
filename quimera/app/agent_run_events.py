@@ -6,6 +6,7 @@ rendering behavior.
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -13,6 +14,78 @@ from typing import Any, Callable, Protocol
 
 
 _FINAL_EVENT_KINDS = frozenset({"finished", "failed", "cancelled", "tool_finished", "tool_failed", "tool_cancelled"})
+
+
+class ThinkingStreamParser:
+    """Extrai blocos <think>/<thinking> de um stream de texto bruto.
+
+    Mantém o último bloco de raciocínio visto (parcial enquanto aberto, completo
+    após fechar) e uma cauda limitada do stream bruto como fallback para agentes
+    que não emitem tags de raciocínio (ex.: CLIs cujo stdout já é o raciocínio).
+    """
+
+    _OPEN_RE = re.compile(r"<think(?:ing)?>")
+    _CLOSE_RE = re.compile(r"</think(?:ing)?>")
+    _TAIL_KEEP = 12
+
+    def __init__(
+        self,
+        on_thinking: Callable[[str], None] | None = None,
+        tail_limit: int = 400,
+    ) -> None:
+        self._on_thinking = on_thinking
+        self._tail_limit = max(1, int(tail_limit))
+        self._buffer = ""
+        self._in_think = False
+        self._thinking_text = ""
+        self._last_thinking = ""
+        self._stream_tail = ""
+
+    @property
+    def last_thinking(self) -> str:
+        """Último bloco de raciocínio observado (parcial ou completo)."""
+        return self._last_thinking
+
+    @property
+    def stream_tail(self) -> str:
+        """Cauda recente do stream bruto, limitada a tail_limit caracteres."""
+        return self._stream_tail
+
+    def feed(self, chunk_text: str) -> None:
+        """Processa um novo pedaço de texto bruto do stream."""
+        if not chunk_text:
+            return
+        self._stream_tail = (self._stream_tail + chunk_text)[-self._tail_limit:]
+        self._buffer += chunk_text
+        while True:
+            if not self._in_think:
+                match = self._OPEN_RE.search(self._buffer)
+                if not match:
+                    self._buffer = self._buffer[-self._TAIL_KEEP:]
+                    return
+                self._in_think = True
+                self._buffer = self._buffer[match.end():]
+                self._thinking_text = ""
+                continue
+            match = self._CLOSE_RE.search(self._buffer)
+            if not match:
+                self._thinking_text += self._buffer[:-self._TAIL_KEEP] if len(self._buffer) > self._TAIL_KEEP else ""
+                self._buffer = self._buffer[-self._TAIL_KEEP:]
+                self._publish()
+                return
+            self._thinking_text += self._buffer[:match.start()]
+            self._buffer = self._buffer[match.end():]
+            self._in_think = False
+            self._publish()
+            self._thinking_text = ""
+
+    def _publish(self) -> None:
+        text = self._thinking_text.strip()
+        if not text:
+            return
+        self._last_thinking = text
+        if self._on_thinking is not None:
+            self._on_thinking(text)
 
 
 def _event_status(kind: str, explicit: str = "") -> str:
@@ -66,6 +139,8 @@ class AgentRunRecord:
     finished_at: float | None = None
     last_event_kind: str = ""
     last_text: str = ""
+    last_thinking: str = ""
+    stream_tail: str = ""
     event_count: int = 0
 
 
@@ -97,6 +172,7 @@ class AgentRunRegistry:
         self._max_runs = max(1, int(max_runs))
         self._on_prune = on_prune
         self._runs: dict[str, AgentRunRecord] = {}
+        self._stream_parsers: dict[str, ThinkingStreamParser] = {}
         self._lock = threading.RLock()
 
     @property
@@ -111,7 +187,22 @@ class AgentRunRegistry:
         now = self._clock()
         with self._lock:
             current = self._runs.get(run_id)
+            if event.kind == "delta" and current is not None and current.finished_at is not None:
+                # Uma thread leitora de CLI pode encerrar alguns instantes após
+                # cancelamento/timeout. O delta tardio não pode ressuscitar um
+                # run já terminal como "running".
+                return current
             status = _event_status(event.kind, self._field(event, "status"))
+            last_thinking = current.last_thinking if current else ""
+            stream_tail = current.stream_tail if current else ""
+            if event.kind == "delta" and event.text:
+                parser = self._stream_parsers.get(run_id)
+                if parser is None:
+                    parser = ThinkingStreamParser()
+                    self._stream_parsers[run_id] = parser
+                parser.feed(str(event.text))
+                last_thinking = parser.last_thinking or last_thinking
+                stream_tail = parser.stream_tail or stream_tail
             record = AgentRunRecord(
                 run_id=run_id,
                 agent=str(event.agent or (current.agent if current else "")),
@@ -124,9 +215,13 @@ class AgentRunRegistry:
                 finished_at=now if event.kind in _FINAL_EVENT_KINDS else (current.finished_at if current else None),
                 last_event_kind=str(event.kind or ""),
                 last_text=str(event.text or ""),
+                last_thinking=last_thinking,
+                stream_tail=stream_tail,
                 event_count=(current.event_count if current else 0) + 1,
             )
             self._runs[run_id] = record
+            if event.kind in _FINAL_EVENT_KINDS:
+                self._stream_parsers.pop(run_id, None)
             pruned = self._prune_locked()
         self._notify_pruned(pruned)
         return record
@@ -151,6 +246,7 @@ class AgentRunRegistry:
         pruned: list[str] = []
         for run in candidates[:excess]:
             if self._runs.pop(run.run_id, None) is not None:
+                self._stream_parsers.pop(run.run_id, None)
                 pruned.append(run.run_id)
         return pruned
 
@@ -173,6 +269,38 @@ class AgentRunRegistry:
                 for run in self._runs.values()
                 if run.status not in {"finished", "failed", "cancelled"}
             ]
+
+    def find_by_delegation(self, delegation_id: str) -> AgentRunRecord | None:
+        """Retorna o run mais recente associado a um delegation_id.
+
+        Fallbacks e retries reutilizam o mesmo delegation_id em runs distintos;
+        o run com updated_at mais recente é o que reflete o estado atual.
+        """
+        wanted = str(delegation_id or "")
+        if not wanted:
+            return None
+        with self._lock:
+            matches = [run for run in self._runs.values() if run.delegation_id == wanted]
+        if not matches:
+            return None
+        return max(matches, key=lambda run: (run.updated_at, run.run_id))
+
+    def live_delegation_view(self, delegation_id: str) -> dict[str, Any] | None:
+        """Snapshot resumido de uma delegação em execução, pronto para exibição.
+
+        last_thinking prioriza o raciocínio extraído de tags <think>; sem tags,
+        cai para a cauda recente do stream (comportamento natural para agentes
+        CLI, cujo stdout já é o raciocínio).
+        """
+        record = self.find_by_delegation(delegation_id)
+        if record is None:
+            return None
+        return {
+            "agent": record.agent,
+            "status": record.status,
+            "last_thinking": record.last_thinking or record.stream_tail,
+            "updated_seconds_ago": max(0.0, round(self._clock() - record.updated_at, 1)),
+        }
 
     @staticmethod
     def _field(event: AgentRunEvent, name: str) -> str:

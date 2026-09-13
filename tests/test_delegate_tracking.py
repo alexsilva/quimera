@@ -150,7 +150,9 @@ class TestWaitFalse:
         liberar = threading.Event()
 
         def dispatch(agent, **_kw):
-            liberar.wait(timeout=5)
+            # Margem generosa: sob carga, expirar antes do assert de
+            # in_progress completa a task cedo demais e o teste flake-a.
+            liberar.wait(timeout=30)
             return "resultado tardio"
 
         tools.set_delegate_fn(dispatch)

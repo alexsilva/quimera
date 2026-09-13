@@ -413,7 +413,10 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='list_tasks',
-        description='Lista tarefas com filtros opcionais do job atual ou de qualquer job.',
+        description='Lista tarefas com filtros opcionais do job atual ou de qualquer job. '
+                    'Tasks de delegação em execução (origin=delegate, status=in_progress) '
+                    "incluem o campo 'live' com o último raciocínio (thinking) do agente "
+                    'delegado — útil para acompanhar uma delegação com wait=false.',
         parameters={'type': 'object',
  'properties': {'job_id': {'type': 'integer', 'description': 'Filtrar por job ID.'},
                 'status': {'type': 'string',
@@ -424,7 +427,10 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
  'required': []},
         output_schema={'type': 'object',
  'properties': {'ok': {'type': 'boolean'},
-                'content': {'type': 'string', 'description': 'JSON array of TaskRecord objects'},
+                'content': {'type': 'string',
+                            'description': 'JSON array of TaskRecord objects; delegações '
+                                           "in_progress trazem 'live': [{delegation_id, agent, "
+                                           'status, last_thinking, updated_seconds_ago}]'},
                 'truncated': {'type': 'boolean'},
                 'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
  'required': ['ok', 'content']},

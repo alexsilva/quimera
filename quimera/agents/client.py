@@ -54,6 +54,80 @@ _GUI_VARS = frozenset({
 })
 
 
+def _extract_cli_text_chunks(line: str, output_format: str | None) -> list[str]:
+    """Extrai pensamento/resposta legíveis de uma linha emitida pelo CLI."""
+    raw = str(line or "").strip()
+    if not raw:
+        return []
+    if output_format not in {"stream-json", "codex-json", "opencode-json"}:
+        return [raw]
+    try:
+        event = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(event, dict):
+        return []
+
+    chunks: list[str] = []
+
+    def _append(value, *, thinking: bool = False) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        chunks.append(f"<think>{text}</think>" if thinking else text)
+
+    if output_format == "stream-json":
+        etype = event.get("type")
+        if etype == "assistant":
+            content = (event.get("message") or {}).get("content") or []
+        elif etype == "message" and event.get("role") == "assistant":
+            content = event.get("content") or []
+        else:
+            content = []
+        if isinstance(content, str):
+            _append(content)
+        elif isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type in {"thinking", "reasoning"}:
+                    _append(
+                        block.get("thinking") or block.get("reasoning") or block.get("text"),
+                        thinking=True,
+                    )
+                elif block_type == "text":
+                    _append(block.get("text"))
+        return chunks
+
+    if output_format == "codex-json":
+        if event.get("type") not in {"item.started", "item.completed"}:
+            return []
+        item = event.get("item") or {}
+        if not isinstance(item, dict):
+            return []
+        if item.get("type") == "reasoning":
+            _append(item.get("text") or item.get("summary"), thinking=True)
+        elif item.get("type") == "agent_message":
+            _append(item.get("text"))
+        return chunks
+
+    part = event.get("part") or {}
+    if not isinstance(part, dict):
+        return []
+    part_type = part.get("type")
+    event_type = event.get("type")
+    if part_type in {"reasoning", "thinking"} or event_type in {"reasoning", "thinking"}:
+        _append(
+            part.get("text") or part.get("reasoning") or part.get("thinking")
+            or event.get("text") or event.get("reasoning") or event.get("thinking"),
+            thinking=True,
+        )
+    elif part_type == "text" or event_type == "text":
+        _append(part.get("text") or event.get("text"))
+    return chunks
+
+
 class AgentClient:
     """Executa os agentes externos no diretório de trabalho do projeto."""
 
@@ -616,6 +690,7 @@ class AgentClient:
         cwd=None,
         _primed_proc=None,
         progress_callback=None,
+        on_text_chunk=None,
     ):
         """Executa um comando (agente CLI) e retorna o stdout completo."""
         if self._agent_running:
@@ -682,12 +757,27 @@ class AgentClient:
         log_queue = queue.Queue(maxsize=self._MAX_LOG_QUEUE_ITEMS) if not silent else None
         stderr_lines_shown = 0
         self._spy_output_presenter.reset()
+        text_chunk_callback_failed = False
+
+        def _relay_text_chunks(line: str) -> None:
+            """Entrega cada linha de stdout sem interferir no renderer."""
+            nonlocal text_chunk_callback_failed
+            if text_chunk_callback_failed or not callable(on_text_chunk):
+                return
+            try:
+                on_text_chunk(line)
+            except Exception:
+                # Streaming ao vivo é observabilidade best-effort: uma falha
+                # no consumidor não pode derrubar o processo do agente.
+                text_chunk_callback_failed = True
+                _logger.warning("CLI on_text_chunk callback failed", exc_info=True)
 
         def _read_stdout():
             try:
                 if proc.stdout:
                     for line in proc.stdout:
                         self._append_capped_stdout(result_holder, line)
+                        _relay_text_chunks(line)
                         if log_queue is not None and self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
                             self._enqueue_log_item(log_queue, ("stdout", line))
             except Exception as exc:
@@ -1209,6 +1299,12 @@ class AgentClient:
             "show_status": show_status,
             "progress_callback": progress_callback,
         }
+        if on_text_chunk is not None:
+            def _on_cli_stdout_line(line: str) -> None:
+                for text in _extract_cli_text_chunks(line, output_format):
+                    on_text_chunk({"text": text, "_quimera_cli_semantic": True})
+
+            run_kwargs["on_text_chunk"] = _on_cli_stdout_line
         if extra_env is not None:
             run_kwargs["extra_env"] = extra_env
         if cwd is not None:

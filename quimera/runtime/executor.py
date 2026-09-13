@@ -40,6 +40,7 @@ class ToolExecutorWiring:
         ("delegate_fn", "set_delegate_fn"),
         ("background_delegate_fn", "set_background_delegate_fn"),
         ("task_create_fn", "set_task_create_fn"),
+        ("delegation_run_lookup", "set_delegation_run_lookup"),
         ("active_agents_provider", "set_active_agents_provider"),
         ("orchestrator_provider", "set_orchestrator_provider"),
         ("cancel_checker", "set_cancel_checker"),
@@ -53,6 +54,7 @@ class ToolExecutorWiring:
     delegate_fn: Callable | None = None
     background_delegate_fn: Callable | None = None
     task_create_fn: Callable | None = None
+    delegation_run_lookup: Callable | None = None
     active_agents_provider: Callable | None = None
     orchestrator_provider: Callable | None = None
     cancel_checker: Callable | None = None
@@ -270,6 +272,14 @@ class ToolExecutor:
     def is_tasks_available(self) -> bool:
         """Indica se a tool tasks está ligada ao serviço da aplicação."""
         return self._task_tools.is_tasks_available()
+
+    def set_delegation_run_lookup(self, fn) -> None:
+        """Injeta lookup do run ao vivo de delegações para o list_tasks.
+
+        Assinatura esperada: fn(delegation_id: str) -> dict | None
+        """
+        self._wiring.delegation_run_lookup = fn
+        self._task_tools.set_delegation_run_lookup(fn)
 
     def set_background_delegate_fn(self, fn) -> None:
         """Injeta callable isolado para delegação assíncrona via HTTP MCP.

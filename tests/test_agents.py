@@ -18,6 +18,7 @@ from quimera.agents import (
     _strip_spinner,
     _should_ignore_stderr_line,
 )
+from quimera.agents.client import _extract_cli_text_chunks
 from quimera.agents.process_runner import ProcessRunner
 from quimera.constants import Visibility
 from quimera.profiles import get as get_profile
@@ -793,6 +794,39 @@ def test_agent_client_call(renderer):
                                         silent=False, agent="mock", show_status=True, progress_callback=None)
 
 
+def test_agent_client_call_forwards_text_chunk_callback_to_cli_run(renderer):
+    """call() conecta seu callback de streaming ao runner CLI."""
+    client = AgentClient(renderer)
+    callback = MagicMock()
+    with patch("quimera.profiles.get") as mock_get:
+        mock_profile = MagicMock()
+        mock_profile.cmd = ["mock-agent"]
+        mock_profile.prompt_as_arg = False
+        mock_profile.effective_cmd.return_value = ["mock-agent"]
+        mock_profile.effective_prompt_as_arg.return_value = False
+        mock_get.return_value = mock_profile
+
+        with patch.object(client, "run", return_value="output") as mock_run:
+            result = client.call("mock", "prompt", on_text_chunk=callback)
+
+    assert result == "output"
+    mock_run.assert_called_once_with(
+        ["mock-agent"],
+        input_text="prompt",
+        _primed_proc=None,
+        silent=False,
+        agent="mock",
+        show_status=True,
+        progress_callback=None,
+        on_text_chunk=ANY,
+    )
+    cli_callback = mock_run.call_args.kwargs["on_text_chunk"]
+    cli_callback("linha legível\n")
+    callback.assert_called_once_with(
+        {"text": "linha legível", "_quimera_cli_semantic": True}
+    )
+
+
 def test_agent_client_call_prompt_as_arg(renderer):
     """Verifica que agent client call prompt as arg."""
     client = AgentClient(renderer)
@@ -866,6 +900,68 @@ def test_agent_client_run_streaming(renderer):
             result = client.run(["echo"], silent=False, show_status=True)
             assert "line1" in result
             assert "line2" in result
+
+
+def test_agent_client_run_relays_each_cli_stdout_line(renderer):
+    """Runner entrega stdout incremental; a normalização pertence ao call()."""
+    client = AgentClient(renderer)
+    chunks = []
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([
+            '{"type":"item.started","item":{"type":"reasoning","summary":"Vou revisar o fluxo"}}\n',
+            '{"type":"item.started","item":{"type":"command_execution","command":"pytest"}}\n',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"Revisão concluída"}}\n',
+        ])
+        mock_proc.stderr = iter([])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            result = client.run(
+                ["codex", "exec"],
+                silent=True,
+                agent="codex",
+                on_text_chunk=chunks.append,
+            )
+
+    assert result is not None
+    assert chunks == [
+        '{"type":"item.started","item":{"type":"reasoning","summary":"Vou revisar o fluxo"}}\n',
+        '{"type":"item.started","item":{"type":"command_execution","command":"pytest"}}\n',
+        '{"type":"item.completed","item":{"type":"agent_message","text":"Revisão concluída"}}\n',
+    ]
+
+
+def test_agent_client_run_survives_cli_text_chunk_callback_failure(renderer):
+    """Falha do observador de chunks não pode abortar o subprocess CLI."""
+    client = AgentClient(renderer)
+    callback = MagicMock(side_effect=RuntimeError("registry offline"))
+    with patch("subprocess.Popen") as mock_popen, patch("quimera.agents.client._logger") as mock_logger:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([
+            '{"type":"item.started","item":{"type":"reasoning","summary":"Pensando"}}\n',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"Pronto"}}\n',
+        ])
+        mock_proc.stderr = iter([])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            result = client.run(
+                ["codex", "exec"],
+                silent=True,
+                agent="codex",
+                on_text_chunk=callback,
+            )
+
+    assert result is not None
+    callback.assert_called_once_with(
+        '{"type":"item.started","item":{"type":"reasoning","summary":"Pensando"}}\n'
+    )
+    mock_logger.warning.assert_called_once()
 
 
 def test_agent_client_run_timeout(renderer):
@@ -1783,6 +1879,41 @@ def test_parse_codex_json_with_text(renderer):
     raw = '{"type":"item.completed","item":{"type":"agent_message","text":"final text"}}'
     result = client._parse_codex_json(raw, "codex")
     assert result == "final text"
+
+
+@pytest.mark.parametrize(
+    ("output_format", "line", "expected"),
+    [
+        (
+            "stream-json",
+            '{"type":"assistant","message":{"content":['
+            '{"type":"thinking","thinking":"Analisando Claude"},'
+            '{"type":"text","text":"Resposta Claude"}]}}',
+            ["<think>Analisando Claude</think>", "Resposta Claude"],
+        ),
+        (
+            "codex-json",
+            '{"type":"item.started","item":{"type":"reasoning","summary":"Analisando Codex"}}',
+            ["<think>Analisando Codex</think>"],
+        ),
+        (
+            "opencode-json",
+            '{"type":"reasoning","part":{"type":"reasoning","text":"Analisando OpenCode"}}',
+            ["<think>Analisando OpenCode</think>"],
+        ),
+        (
+            "opencode-json",
+            '{"type":"text","part":{"type":"text","text":"Resposta OpenCode"}}',
+            ["Resposta OpenCode"],
+        ),
+        (None, "saída textual simples\n", ["saída textual simples"]),
+        ("codex-json", "json inválido", []),
+        ("codex-json", "[]", []),
+    ],
+)
+def test_extract_cli_text_chunks(output_format, line, expected):
+    """Normaliza formatos CLI sem vazar envelopes JSON ao live thinking."""
+    assert _extract_cli_text_chunks(line, output_format) == expected
 
 
 def test_format_codex_spy_event_command():

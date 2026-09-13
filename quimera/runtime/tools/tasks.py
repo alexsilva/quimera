@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
-from typing import Protocol
+from typing import Callable, Protocol
 
 from ..approval import TrustedToolExecutionContext
 from ..config import ToolRuntimeConfig
@@ -17,7 +18,10 @@ from ...tasks.api import (
 from ._helpers import resolve_current_job_id
 from .base import ToolBase, ValidatableTool
 
+logger = logging.getLogger(__name__)
+
 _TASK_TOOL_NAMES = ["tasks", "list_tasks", "list_jobs", "get_job"]
+_LIVE_THINKING_MAX_CHARS = 400
 
 
 class _TaskCreationReceipt(Protocol):
@@ -48,10 +52,20 @@ class TaskTools(ToolBase):
         """Inicializa uma instância de TaskTools."""
         super().__init__(config)
         self._create_task_fn: _CreateTaskFn | None = None
+        self._delegation_run_lookup: Callable[[str], dict | None] | None = None
 
     def set_create_task_fn(self, fn: _CreateTaskFn | None) -> None:
         """Injeta o serviço canônico que cria tasks da sessão."""
         self._create_task_fn = fn
+
+    def set_delegation_run_lookup(self, fn: Callable[[str], dict | None] | None) -> None:
+        """Injeta lookup do run ao vivo de uma delegação por delegation_id.
+
+        Assinatura esperada: fn(delegation_id) -> {agent, status, last_thinking,
+        updated_seconds_ago} | None. O lookup consulta o registry de runs em
+        memória do processo — visibilidade cross-processo fica fora do escopo.
+        """
+        self._delegation_run_lookup = fn
 
     def is_tasks_available(self) -> bool:
         """Indica se a criação de tasks está ligada ao serviço da aplicação."""
@@ -146,6 +160,56 @@ class TaskTools(ToolBase):
                     return task
         return None
 
+    def _attach_live_delegation(self, task: dict) -> dict:
+        """Anexa o estado ao vivo (thinking) a tasks de delegação em execução.
+
+        Best-effort: qualquer falha no lookup deixa a task intocada — a
+        listagem nunca quebra por causa do enriquecimento.
+        """
+        if not callable(self._delegation_run_lookup):
+            return task
+        if task.get("origin") != "delegate" or task.get("status") != "in_progress":
+            return task
+        try:
+            steps = json.loads(task.get("body") or "[]")
+        except (TypeError, ValueError):
+            return task
+        if not isinstance(steps, list):
+            return task
+        live: list[dict] = []
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            delegation_id = str(step.get("delegation_id") or "")
+            if not delegation_id:
+                continue
+            try:
+                view = self._delegation_run_lookup(delegation_id)
+            except Exception:
+                logger.warning(
+                    "list_tasks: delegation run lookup failed for %s", delegation_id, exc_info=True,
+                )
+                continue
+            if not isinstance(view, dict):
+                continue
+            thinking = str(view.get("last_thinking") or "")
+            if len(thinking) > _LIVE_THINKING_MAX_CHARS:
+                thinking = "…" + thinking[-_LIVE_THINKING_MAX_CHARS:]
+            live.append(
+                {
+                    "delegation_id": delegation_id,
+                    "agent": str(view.get("agent") or step.get("target_agent") or ""),
+                    "status": str(view.get("status") or ""),
+                    "last_thinking": thinking,
+                    "updated_seconds_ago": view.get("updated_seconds_ago"),
+                }
+            )
+        if not live:
+            return task
+        enriched = dict(task)
+        enriched["live"] = live
+        return enriched
+
     def list_tasks(self, call: ToolCall) -> ToolResult:
         """Lista tasks."""
         filt = self._build_filters(call.arguments)
@@ -153,7 +217,7 @@ class TaskTools(ToolBase):
             tasks = _list_tasks(filt, db_path=self.config.db_path)
             max_results = int(call.arguments.get("max_results", self.config.max_task_results))
             truncated = len(tasks) > max_results
-            tasks = tasks[:max_results]
+            tasks = [self._attach_live_delegation(task) for task in tasks[:max_results]]
             return ToolResult(
                 ok=True,
                 tool_name=call.name,

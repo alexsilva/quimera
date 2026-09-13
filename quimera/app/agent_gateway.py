@@ -1,13 +1,12 @@
 """AgentGateway — chamada bruta a agentes: prompt, backend, streaming."""
 import queue as _queue_module
-import re
 import time
 import uuid
 from contextlib import nullcontext
 
 from ..agents.capabilities import get_cancel_event, is_user_cancelled
 from ..prompt_kinds import PromptKind
-from .agent_run_events import AgentRunEvent, coerce_agent_run_sink
+from .agent_run_events import AgentRunEvent, ThinkingStreamParser, coerce_agent_run_sink
 from .config import logger
 from .render_event import RenderEvent
 
@@ -24,48 +23,16 @@ class _ThinkingStreamRelay:
     raciocínio do modelo) já aparece no feed transitório enquanto o turno roda.
     """
 
-    _OPEN_RE = re.compile(r"<think(?:ing)?>")
-    _CLOSE_RE = re.compile(r"</think(?:ing)?>")
-    _TAIL_KEEP = 12
-
     def __init__(self, renderer, agent) -> None:
         self._renderer = renderer
         self._agent = agent
-        self._buffer = ""
-        self._in_think = False
-        self._thinking_text = ""
+        self._parser = ThinkingStreamParser(on_thinking=self._publish)
 
     def feed(self, chunk_text: str) -> None:
         """Processa um novo pedaço de texto bruto do stream."""
-        if not chunk_text:
-            return
-        self._buffer += chunk_text
-        while True:
-            if not self._in_think:
-                match = self._OPEN_RE.search(self._buffer)
-                if not match:
-                    self._buffer = self._buffer[-self._TAIL_KEEP:]
-                    return
-                self._in_think = True
-                self._buffer = self._buffer[match.end():]
-                self._thinking_text = ""
-                continue
-            match = self._CLOSE_RE.search(self._buffer)
-            if not match:
-                self._thinking_text += self._buffer[:-self._TAIL_KEEP] if len(self._buffer) > self._TAIL_KEEP else ""
-                self._buffer = self._buffer[-self._TAIL_KEEP:]
-                self._publish()
-                return
-            self._thinking_text += self._buffer[:match.start()]
-            self._buffer = self._buffer[match.end():]
-            self._in_think = False
-            self._publish()
-            self._thinking_text = ""
+        self._parser.feed(chunk_text)
 
-    def _publish(self) -> None:
-        text = self._thinking_text.strip()
-        if not text:
-            return
+    def _publish(self, text: str) -> None:
         if self._renderer is not None:
             self._renderer.update_agent_transient(self._agent, text)
 
@@ -225,14 +192,19 @@ class AgentGateway:
         )
 
         def _on_text_chunk(chunk):
-            if emit_run_deltas and chunk:
-                self._agent_run_sink.emit(
-                    _run_event("delta", text=str(chunk))
-                )
-            if silent or not show_output or not chunk:
+            if not chunk:
                 return
-            if thinking_relay is not None:
-                text = chunk.get("text") if isinstance(chunk, dict) else chunk
+            text = chunk.get("text") if isinstance(chunk, dict) else chunk
+            cli_semantic = bool(
+                isinstance(chunk, dict) and chunk.get("_quimera_cli_semantic") is True
+            )
+            if emit_run_deltas and text:
+                self._agent_run_sink.emit(
+                    _run_event("delta", text=str(text))
+                )
+            if silent or not show_output:
+                return
+            if thinking_relay is not None and not cli_semantic:
                 thinking_relay.feed(text)
             _stream_buffer.append(chunk)
 

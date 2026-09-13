@@ -956,6 +956,12 @@ class AppAssembler:
         tasks.tool_executor.set_delegate_fn(background_delegate_fn)
         tasks.tool_executor.set_background_delegate_fn(background_delegate_fn)
         tasks.tool_executor.set_task_create_fn(tasks.task_services.create_agent_task)
+        # list_tasks enxerga o thinking ao vivo de delegações em execução via
+        # o registry de runs em memória, correlacionado pelo delegation_id
+        # persistido no body da task.
+        tasks.tool_executor.set_delegation_run_lookup(
+            ui.agent_run_sink.registry.live_delegation_view
+        )
         # ESC/Ctrl+C no fluxo principal também cancela delegações em background,
         # que possuem cancel_event próprio.
         rt.agent_client.add_cancel_listener(tasks.task_services.cancel_background_work)
