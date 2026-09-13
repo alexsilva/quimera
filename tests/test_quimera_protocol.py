@@ -1377,6 +1377,44 @@ class ProtocolTests(unittest.TestCase):
             app.renderer.system_messages,
         )
 
+    def test_handle_command_context_resumer_works_without_context_manager(self):
+        """A configuração do resumidor não depende do gerenciador de contexto textual."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.context_manager = None
+        app.set_resumer_agent = Mock()
+        app.system_layer = system_layer_from_app(app)
+
+        materialize_internal_services(app)
+        handled = app.system_layer.handle_command("/context resumer gemma4")
+
+        self.assertTrue(handled)
+        app.set_resumer_agent.assert_called_once_with("gemma4")
+
+    def test_handle_command_context_resumer_warns_when_configuration_is_unavailable(self):
+        """Não anuncia persistência quando o setter da configuração não foi injetado."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.context_manager = Mock()
+        app.system_layer = system_layer_from_app(app, resumer_agent_setter=None)
+
+        materialize_internal_services(app)
+        self.assertTrue(app.system_layer.handle_command("/context resumer gemma4"))
+        self.assertTrue(app.system_layer.handle_command("/context resumer clear"))
+
+        self.assertEqual(
+            app.renderer.warnings,
+            [
+                "[resumer] configuração indisponível.",
+                "[resumer] configuração indisponível.",
+            ],
+        )
+        self.assertNotIn("[resumer] agente configurado: gemma4", app.renderer.system_messages)
+        self.assertNotIn(
+            "[resumer] preferência removida; volta ao fallback automático.",
+            app.renderer.system_messages,
+        )
+
     def test_handle_command_context_resumer_clears_agent(self):
         """/context resumer clear remove a preferência persistida."""
         app = QuimeraApp.__new__(QuimeraApp)

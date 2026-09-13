@@ -448,8 +448,10 @@ class AppSystemLayer:
 
         target = args[0].strip().lower()
         if target in {"clear", "none", "auto"}:
-            if callable(self.resumer_agent_setter):
-                self.resumer_agent_setter(None)
+            if not callable(self.resumer_agent_setter):
+                self._display.show_warning_message("[resumer] configuração indisponível.")
+                return
+            self.resumer_agent_setter(None)
             self._display.show_system("[resumer] preferência removida; volta ao fallback automático.")
             return
 
@@ -458,8 +460,10 @@ class AppSystemLayer:
             self._display.show_warning_message(f"Agente '{target}' desconhecido.")
             return
 
-        if callable(self.resumer_agent_setter):
-            self.resumer_agent_setter(resolved)
+        if not callable(self.resumer_agent_setter):
+            self._display.show_warning_message("[resumer] configuração indisponível.")
+            return
+        self.resumer_agent_setter(resolved)
         self._display.show_system(
             f"[resumer] agente configurado: {resolved}. "
             "Se ausente ou falhar, o resumo usa automaticamente outro agente da sessão."
@@ -694,18 +698,18 @@ class AppSystemLayer:
             return True
 
         if command == CMD_CONTEXT or command.startswith(f"{CMD_CONTEXT} "):
-            if self.context_manager is None:
-                return True
             parts = command[len(CMD_CONTEXT):].strip().split()
             sub = parts[0] if parts else None
-            if sub is None or sub == "show":
+            if sub == "resumer":
+                self._handle_context_resumer(parts[1:])
+            elif self.context_manager is None:
+                return True
+            elif sub is None or sub == "show":
                 self.context_manager.show()
             elif sub == "edit":
                 self.context_manager.edit()
             elif sub == "branch":
                 self.context_manager.handle_context_branch(command)
-            elif sub == "resumer":
-                self._handle_context_resumer(parts[1:])
             else:
                 self._display.show_warning_message(
                     "Uso: /context [show|edit|branch [nome]|resumer [<agente>|clear]]"
