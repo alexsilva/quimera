@@ -1338,6 +1338,75 @@ def test_flush_deferred_t2_retry_annotation_integration():
     assert app.renderer.system_messages == [
         "⚙ [task 1] codex: concluída (após 1 tentativas)",
     ]
+
+
+# ---------------------------------------------------------------------------
+# T3: Compactação preserva conteúdo do review (veredito e "review concluído")
+# ---------------------------------------------------------------------------
+
+
+def test_compact_deferred_preserves_review_content_with_terminal():
+    """Veredito multi-linha e 'review concluído' sobrevivem à conclusão no mesmo lote."""
+    deferred = [
+        ("neutral", "[task 4] rev: revisando execução de codex"),
+        ("neutral", "[task 4] rev:\nACEITE\nJustificativa do veredito"),
+        ("neutral", "[task 4] rev: review concluído"),
+        ("system", "[task 4] concluída: resultado final"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [
+        ("neutral", "[task 4] rev:\nACEITE\nJustificativa do veredito"),
+        ("neutral", "[task 4] rev: review concluído"),
+        ("system", "⚙ [task 4] concluída: resultado final"),
+    ]
+
+
+def test_compact_deferred_preserves_multiline_without_terminal():
+    """Sem terminal no lote: dedup não descarta mensagens multi-linha."""
+    deferred = [
+        ("neutral", "[task 4] rev: revisando task"),
+        ("neutral", "[task 4] rev:\nACEITE\nJustificativa"),
+        ("neutral", "[task 4] rev: aguardando review de outro agente"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [
+        ("neutral", "[task 4] rev:\nACEITE\nJustificativa"),
+        ("neutral", "[task 4] rev: aguardando review de outro agente"),
+    ]
+
+
+def test_dedup_without_terminal_preserves_non_task_messages():
+    """Mensagens sem task não são descartadas quando há status de task no lote."""
+    deferred = [
+        ("system", "mensagem sem task"),
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: processando"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [
+        ("system", "mensagem sem task"),
+        ("system", "[task 1] codex: processando"),
+    ]
+
+
+def test_flush_deferred_review_verdict_integration():
+    """flush_deferred_messages exibe veredito e 'review concluído' junto da conclusão."""
+    app = make_app()
+    app._deferred_system_messages = [
+        ("neutral", "[task 4] rev: revisando execução de codex"),
+        ("neutral", "[task 4] rev:\nACEITE\nJustificativa"),
+        ("neutral", "[task 4] rev: review concluído"),
+        ("system", "[task 4] concluída: resultado"),
+    ]
+
+    system_layer_from_app(app).flush_deferred_messages()
+
+    assert app.renderer.neutral_messages == [
+        "[task 4] rev:\nACEITE\nJustificativa",
+        "[task 4] rev: review concluído",
+    ]
+    assert app.renderer.system_messages == ["⚙ [task 4] concluída: resultado"]
+    assert app._deferred_system_messages == []
     assert app._deferred_system_messages == []
 
 

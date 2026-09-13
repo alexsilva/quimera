@@ -123,6 +123,15 @@ class DisplayService:
         return any(kw in first_line for kw in _TERMINAL_TASK_KEYWORDS)
 
     @staticmethod
+    def _is_compactable_task_status(message: str) -> bool:
+        """Status transitório de task que a compactação pode descartar.
+
+        Mensagens multi-linha (veredito do review, resultado) e o marco
+        'review concluído' carregam conteúdo final e nunca são descartadas.
+        """
+        return "\n" not in message and "review concluído" not in message
+
+    @staticmethod
     def _format_task_summary(task_id: int, message: str, retry_count: int = 0) -> str:
         """Formata mensagem terminal de task como linha compacta."""
         task_tag = f"[task {task_id}]"
@@ -160,19 +169,20 @@ class DisplayService:
             task_id = DisplayService._extract_task_id(msg)
 
             if task_id is not None and task_id in terminal_tasks:
-                if not DisplayService._is_terminal_task_message(msg):
-                    continue
-                if idx != last_terminal_idx.get(task_id):
-                    continue
+                if DisplayService._is_terminal_task_message(msg):
+                    if idx != last_terminal_idx.get(task_id):
+                        continue
 
-                retry_count = retry_counts.get(task_id, 0)
-                formatted = DisplayService._format_task_summary(
-                    task_id, msg, retry_count,
-                )
-                if isinstance(item, tuple) and len(item) == 2:
-                    item = (item[0], formatted)
-                else:
-                    item = formatted
+                    retry_count = retry_counts.get(task_id, 0)
+                    formatted = DisplayService._format_task_summary(
+                        task_id, msg, retry_count,
+                    )
+                    if isinstance(item, tuple) and len(item) == 2:
+                        item = (item[0], formatted)
+                    else:
+                        item = formatted
+                elif DisplayService._is_compactable_task_status(msg):
+                    continue
 
             result.append(item)
 
@@ -180,15 +190,31 @@ class DisplayService:
 
     @staticmethod
     def _dedup_without_terminal(deferred: list) -> list:
-        """Dedup messages even when no terminal message exists (task still running)."""
-        last_msg_by_task: dict[int, tuple] = {}
-        for item in deferred:
+        """Dedup messages even when no terminal message exists (task still running).
+
+        Apenas status transitórios são deduplicados (fica o último por task);
+        mensagens com conteúdo e mensagens sem task preservam a ordem original.
+        """
+        last_status_idx: dict[int, int] = {}
+        for idx, item in enumerate(deferred):
             msg = item[1] if isinstance(item, tuple) and len(item) == 2 else str(item)
             task_id = DisplayService._extract_task_id(msg)
-            if task_id is not None:
-                last_msg_by_task[task_id] = item
+            if task_id is not None and DisplayService._is_compactable_task_status(msg):
+                last_status_idx[task_id] = idx
 
-        return list(last_msg_by_task.values()) if last_msg_by_task else list(deferred)
+        result: list = []
+        for idx, item in enumerate(deferred):
+            msg = item[1] if isinstance(item, tuple) and len(item) == 2 else str(item)
+            task_id = DisplayService._extract_task_id(msg)
+            if (
+                task_id is not None
+                and DisplayService._is_compactable_task_status(msg)
+                and idx != last_status_idx.get(task_id)
+            ):
+                continue
+            result.append(item)
+
+        return result
 
     def _is_input_reading(self) -> bool:
         """Normaliza leitura de estado de prompt ativo (bool moderno ou string legada)."""
