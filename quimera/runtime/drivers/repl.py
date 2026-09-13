@@ -10,6 +10,9 @@ Uso via CLI:
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -28,6 +31,7 @@ from ..executor import ToolExecutor
 from ..models import ToolResult
 
 _SEP = "─" * 60
+_logger = logging.getLogger(__name__)
 
 
 def _header(text: str) -> None:
@@ -163,52 +167,79 @@ class DriverRepl:
             )
         return connection
 
+    @staticmethod
+    def _connection_signature(connection: OpenAIConnection) -> tuple:
+        """Cria snapshot estável de todos os campos que afetam o driver."""
+        extra_body = getattr(connection, "extra_body", None)
+        extra_body_signature = json.dumps(
+            extra_body,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ) if isinstance(extra_body, dict) else extra_body
+        api_key = (
+            os.environ.get(connection.api_key_env, "")
+            if connection.api_key_env
+            else "ollama"
+        )
+        return (
+            connection.model,
+            connection.base_url,
+            connection.api_key_env,
+            connection.provider,
+            connection.supports_native_tools,
+            connection.max_connections,
+            connection.max_model_requests,
+            connection.request_timeout,
+            hashlib.sha256(api_key.encode("utf-8")).hexdigest(),
+            extra_body_signature,
+        )
+
     def _connection_has_changed(self) -> bool:
         """Verifica se a conexão mudou desde a última verificação."""
-        current_conn = self._get_current_connection()
-        # Criar uma assinatura simples baseada nos campos que afetam o driver
-        signature = (
-            current_conn.model,
-            current_conn.base_url,
-            current_conn.api_key_env,
-            # Também considerar o valor real da api_key se api_key_env estiver definida
-            os.environ.get(current_conn.api_key_env, "") if current_conn.api_key_env else ""
+        return (
+            self._connection_signature(self._get_current_connection())
+            != self._last_connection_signature
         )
-        changed = signature != self._last_connection_signature
-        self._last_connection_signature = signature
-        return changed
 
     def _update_driver(self) -> None:
         """Atualiza o driver com a conexão atual."""
         connection = self._get_current_connection()
+        common_kwargs = {
+            "model": connection.model,
+            "base_url": connection.base_url,
+            "timeout": getattr(connection, "request_timeout", None),
+            "tool_use_reliability": getattr(self.profile, "tool_use_reliability", "medium"),
+            "extra_body": connection.extra_body,
+            "max_connections": getattr(connection, "max_connections", 4),
+            "max_model_requests": getattr(connection, "max_model_requests", None),
+        }
         if str(getattr(connection, "provider", "") or "").strip().lower() == "codexcloud":
             from .codexcloud import CodexCloudDriver
 
-            self.driver = CodexCloudDriver(
-                model=connection.model,
-                base_url=connection.base_url,
-                timeout=getattr(connection, "request_timeout", None),
-                tool_use_reliability=getattr(self.profile, "tool_use_reliability", "medium"),
-                extra_body=connection.extra_body,
-            )
-            return
-        api_key = "ollama"
-        if connection.api_key_env:
-            api_key = os.environ.get(connection.api_key_env, "")
-            if not api_key:
-                print(
-                    f"[aviso] Variável de ambiente '{connection.api_key_env}' não definida. "
-                    "Usando string vazia como api_key.",
-                    file=sys.stderr,
-                )
+            new_driver = CodexCloudDriver(**common_kwargs)
+        else:
+            api_key = "ollama"
+            if connection.api_key_env:
+                api_key = os.environ.get(connection.api_key_env, "")
+                if not api_key:
+                    print(
+                        f"[aviso] Variável de ambiente '{connection.api_key_env}' não definida. "
+                        "Usando string vazia como api_key.",
+                        file=sys.stderr,
+                    )
+            new_driver = OpenAICompatDriver(api_key=api_key, **common_kwargs)
 
-        self.driver = OpenAICompatDriver(
-            model=connection.model,
-            base_url=connection.base_url,
-            api_key=api_key,
-            tool_use_reliability=getattr(self.profile, "tool_use_reliability", "medium"),
-            extra_body=connection.extra_body,
-        )
+        previous_driver = getattr(self, "driver", None)
+        self.driver = new_driver
+        # A assinatura só é confirmada depois da construção bem-sucedida.
+        self._last_connection_signature = self._connection_signature(connection)
+        if previous_driver is not None and previous_driver is not new_driver:
+            try:
+                previous_driver.close()
+            except Exception:
+                _logger.exception("falha ao fechar driver anterior do REPL")
 
     def _probe_url(self) -> str:
         """Executa probe url."""

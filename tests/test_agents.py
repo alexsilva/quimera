@@ -2459,6 +2459,39 @@ def test_call_api_rotated_key_recreates_and_closes_cached_driver(renderer, monke
     assert driver_cls.call_args_list[1].kwargs["api_key"] == "key-two"
 
 
+def test_call_api_nested_extra_body_mutation_recreates_cached_driver(renderer):
+    connection = OpenAIConnection(
+        model="test-model",
+        base_url="https://api.example/v1",
+        api_key_env=None,
+        extra_body={"reasoning": {"effort": "medium"}},
+    )
+    profile = SimpleNamespace(
+        driver="openai_compat",
+        supports_tools=False,
+        tool_use_reliability="medium",
+        effective_connection=lambda: connection,
+    )
+    client = AgentClient(renderer)
+    first = MagicMock()
+    first.run.return_value = "first"
+    second = MagicMock()
+    second.run.return_value = "second"
+
+    with patch(
+        "quimera.agents.client.OpenAICompatDriver",
+        side_effect=[first, second],
+    ) as driver_cls, patch.object(client, "_start_esc_monitor"), patch.object(
+        client, "_stop_esc_monitor"
+    ):
+        assert client._call_api("openai", profile, "prompt") == "first"
+        connection.extra_body["reasoning"]["effort"] = "high"
+        assert client._call_api("openai", profile, "prompt") == "second"
+
+    assert driver_cls.call_count == 2
+    first.close.assert_called_once_with()
+
+
 def test_call_api_uses_connection_request_timeout(renderer):
     connection = OpenAIConnection(
         model="test-model",

@@ -23,8 +23,8 @@ from .openai_compat import (
     OpenAICompatDriver,
     ToolLoopBudget,
     TransientAPIError,
+    _parse_retry_after,
     _parse_tool_arguments,
-    _sanitize_assistant_text,
 )
 
 _logger = logging.getLogger(__name__)
@@ -67,6 +67,32 @@ a sense of momentum and clarity for the user to understand your next actions.
 - **Keep your tone light, friendly and curious**: add small touches of \
 personality in preambles to feel collaborative and engaging.
 - Write every preamble in the same language as the conversation."""
+
+_TRANSIENT_STREAM_ERROR_CODES = (
+    "rate_limit",
+    "server_error",
+    "timeout",
+    "overloaded",
+    "unavailable",
+)
+
+
+def _raise_stream_error(code: str, message: str) -> None:
+    """Converte erros terminais do SSE em falhas retryable ou fatais."""
+    normalized = str(code or "").strip().lower()
+    detail = str(message or "falha sem detalhe").strip()
+    if "rate_limit" in normalized:
+        raise TransientAPIError(
+            f"codexcloud: {detail}",
+            rate_limited=True,
+        )
+    if any(marker in normalized for marker in _TRANSIENT_STREAM_ERROR_CODES):
+        raise TransientAPIError(f"codexcloud: {detail}")
+    raise FatalAPIError(
+        f"codexcloud: backend Codex falhou: {detail}",
+        user_message="O Codex Cloud não conseguiu concluir a resposta.",
+    )
+
 
 def _content_parts_to_text(content) -> str:
     """Extrai texto de content chat-style (str ou lista de partes)."""
@@ -311,15 +337,10 @@ class CodexCloudDriver(OpenAICompatDriver):
         except httpx.HTTPError:
             pass
         if status == 429:
-            retry_after_raw = response.headers.get("retry-after")
-            try:
-                retry_after = float(retry_after_raw) if retry_after_raw else None
-            except ValueError:
-                retry_after = None
             raise TransientAPIError(
                 f"codexcloud: rate limit do backend Codex (HTTP 429): {detail}",
                 rate_limited=True,
-                retry_after=retry_after,
+                retry_after=_parse_retry_after(response.headers.get("retry-after")),
             )
         if status >= 500:
             raise TransientAPIError(
@@ -356,6 +377,7 @@ class CodexCloudDriver(OpenAICompatDriver):
         # Itens de mensagem com phase=commentary (narração de progresso dos
         # modelos gpt-5.6-*): exibidos como thinking, fora do texto final.
         commentary_item_ids: set[str] = set()
+        completed = False
 
         def _emit(piece: str) -> None:
             if on_text_chunk is not None and piece:
@@ -448,16 +470,34 @@ class CodexCloudDriver(OpenAICompatDriver):
                 error = (event.get("response") or {}).get("error") or {}
                 code = str(error.get("code") or "")
                 message = str(error.get("message") or "resposta marcada como failed")
-                if "rate_limit" in code:
+                _raise_stream_error(code, message)
+
+            if etype == "response.incomplete":
+                _close_reasoning()
+                response_data = event.get("response") or {}
+                details = response_data.get("incomplete_details") or {}
+                reason = str(details.get("reason") or "motivo desconhecido")
+                if reason in {"server_error", "timeout"}:
                     raise TransientAPIError(
-                        f"codexcloud: {message}", rate_limited=True
+                        f"codexcloud: resposta incompleta ({reason})"
                     )
                 raise FatalAPIError(
-                    f"codexcloud: backend Codex falhou: {message}",
-                    user_message="O Codex Cloud não conseguiu concluir a resposta.",
+                    f"codexcloud: resposta incompleta ({reason})",
+                    user_message=(
+                        "O Codex Cloud interrompeu a resposta antes de concluir "
+                        f"({reason})."
+                    ),
+                )
+
+            if etype == "error":
+                _close_reasoning()
+                _raise_stream_error(
+                    str(event.get("code") or ""),
+                    str(event.get("message") or "erro no stream"),
                 )
 
             if etype == "response.completed":
+                completed = True
                 usage = (event.get("response") or {}).get("usage") or {}
                 _logger.info(
                     "codexcloud: turno concluído model=%s input_tokens=%s output_tokens=%s",
@@ -469,6 +509,12 @@ class CodexCloudDriver(OpenAICompatDriver):
 
         _close_reasoning()
 
+        cancelled = cancel_event is not None and cancel_event.is_set()
+        if not completed and not cancelled:
+            raise TransientAPIError(
+                "codexcloud: stream encerrado sem evento terminal response.completed"
+            )
+
         tool_calls: list[dict] = []
         for raw in raw_tool_calls:
             arguments, argument_error = _parse_tool_arguments(raw["name"], raw["arguments"])
@@ -479,7 +525,7 @@ class CodexCloudDriver(OpenAICompatDriver):
                 "raw_arguments": raw["arguments"],
                 "argument_error": argument_error,
             })
-        return _sanitize_assistant_text(text), tool_calls
+        return text, tool_calls
 
     # ------------------------------------------------------------------
     # Overrides do transporte herdado

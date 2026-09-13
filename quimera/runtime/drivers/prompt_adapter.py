@@ -23,6 +23,7 @@ _MULTIMODAL_USER_BLOCKS = frozenset({"current_turn", "task_delegation", "task_re
 _CONVERSATION_ENTRY_RE = re.compile(r"(?m)^\[([^\]\n]+)\]:[ \t]?(.*)$")
 _HUMAN_NAME_RE = re.compile(r"(?im)^Usu[aá]rio humano:\s*(.+?)\s*$")
 _SELF_NAME_RE = re.compile(r"(?im)^Voc[eê] [eé]\s+(.+?)\.?\s*$")
+_AGENT_NAMES_RE = re.compile(r"(?im)^Agentes de IA nesta conversa:\s*(.+?)\s*$")
 _GENERIC_HUMAN_ROLES = frozenset({"human", "user", "usuário", "usuario"})
 
 # Mapa direto: PromptKind -> nome do bloco -> role no payload OpenAI-compatible.
@@ -102,10 +103,27 @@ def _self_role_names(blocks) -> set[str]:
     return names
 
 
+def _declared_agent_names(blocks) -> set[str]:
+    """Extrai agentes declarados no header para distinguir fala de conteúdo."""
+    names: set[str] = set()
+    for block in blocks:
+        if block.name != "header":
+            continue
+        match = _AGENT_NAMES_RE.search(str(block.content or ""))
+        if match:
+            names.update(
+                name.strip().casefold()
+                for name in match.group(1).split(",")
+                if name.strip()
+            )
+    return names
+
+
 def _split_recent_conversation(
     content: str,
     human_roles: set[str],
     self_names: set[str],
+    declared_agent_names: set[str] | None = None,
 ) -> list[dict]:
     """Reconstrói papéis do bloco canônico ``[PAPEL]: conteúdo``.
 
@@ -120,10 +138,21 @@ def _split_recent_conversation(
     if not text or text == "[sem itens residuais na conversa recente]":
         return []
     matches = list(_CONVERSATION_ENTRY_RE.finditer(text))
+    if declared_agent_names:
+        known_speakers = human_roles | self_names | declared_agent_names
+        matches = [
+            match for match in matches
+            if match.group(1).strip().casefold() in known_speakers
+        ]
     if not matches:
         return [{"role": "user", "content": text}]
 
     messages: list[dict] = []
+    leading_content = text[:matches[0].start()].strip()
+    if leading_content:
+        # Um agente que participou do histórico pode já não estar na lista
+        # ativa do header. Preserve sua fala rotulada em vez de descartá-la.
+        messages.append({"role": "user", "content": leading_content})
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         first_line = match.group(2)
@@ -165,6 +194,9 @@ def _build_openai_messages_from_prompt(
     messages: list[dict] = []
     human_roles = _human_role_names(blocks) if split_recent_conversation else set()
     self_names = _self_role_names(blocks) if split_recent_conversation else set()
+    declared_agent_names = (
+        _declared_agent_names(blocks) if split_recent_conversation else set()
+    )
 
     for block in blocks:
         role = roles.get(block.name)
@@ -172,7 +204,12 @@ def _build_openai_messages_from_prompt(
             continue
         if split_recent_conversation and block.name == "recent_conversation":
             messages.extend(
-                _split_recent_conversation(block.content, human_roles, self_names)
+                _split_recent_conversation(
+                    block.content,
+                    human_roles,
+                    self_names,
+                    declared_agent_names,
+                )
             )
             continue
         messages.append(_message_from_block(block, role))

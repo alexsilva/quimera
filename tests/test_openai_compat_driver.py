@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 import threading
 import time
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
@@ -23,6 +25,9 @@ from quimera.runtime.drivers.openai_compat import (
      MAX_TOOL_HOPS_BY_RELIABILITY,
      OpenAICompatDriver,
      ToolLoopBudget,
+     _api_retry_after,
+     _categorize_api_exception,
+     _parse_retry_after,
      _prune_tool_loop_messages,
      _sanitize_assistant_text,
      _strip_thinking,
@@ -287,6 +292,11 @@ def test_strip_thinking_multiple_blocks():
     """Verifica que Test strip thinking multiple blocks."""
     text = "<think>a</think>Texto<think>b</think>Final"
     assert _strip_thinking(text) == "TextoFinal"
+
+
+def test_strip_thinking_removes_unclosed_case_insensitive_block():
+    """Reasoning truncado não pode vazar quando falta a tag de fechamento."""
+    assert _strip_thinking("Resposta.\n<THINKING>segredo interno") == "Resposta."
 
 
 def test_strip_thinking_persists_evidence_before_removal(tmp_path):
@@ -1017,6 +1027,29 @@ def test_chat_no_tools_uses_streaming():
     assert "tool_choice" not in call_kwargs
 
 
+def test_chat_streaming_closes_stream_when_cancelled():
+    """Cancelamento fecha a resposta HTTP para devolver a conexão ao pool."""
+    driver, mock_client = _make_driver()
+
+    class ClosableStream:
+        def __init__(self):
+            self.close = MagicMock()
+
+        def __iter__(self):
+            return iter([_make_chunk(content="não deve ser consumido")])
+
+    stream = ClosableStream()
+    mock_client.chat.completions.create.return_value = stream
+    cancel_event = threading.Event()
+    cancel_event.set()
+
+    text, tool_calls = driver._chat_streaming([], cancel_event=cancel_event)
+
+    assert text == ""
+    assert tool_calls == []
+    stream.close.assert_called_once_with()
+
+
 def test_chat_streaming_supports_structured_diff_chunks():
     """Verifica que Test chat streaming supports structured diff chunks."""
     driver, mock_client = _make_driver()
@@ -1061,6 +1094,7 @@ def test_chat_with_tools_uses_non_streaming():
     assert call_kwargs.get("stream") is False
     assert call_kwargs["tool_choice"] == "auto"
     assert call_kwargs["tools"] == TOOL_SCHEMAS
+    assert "temperature" not in call_kwargs
 
 
 def test_chat_with_tools_returns_structured_tool_calls():
@@ -1314,6 +1348,45 @@ def test_run_tool_loop_one_hop():
     assert result == "Arquivo lido com sucesso."
     assert mock_executor.execute.call_count == 1
     assert mock_client.chat.completions.create.call_count == 2
+
+
+def test_run_sanitizes_intermediate_tool_text_and_persists_thinking(tmp_path):
+    driver, mock_client = _make_driver()
+    mock_client.chat.completions.create.side_effect = [
+        _make_non_streaming_response(
+            content="<think>vou investigar</think>Consultando.",
+            tool_calls=[_make_tool_call("call-1", "read_file", '{"path":"x.py"}')],
+        ),
+        _make_non_streaming_response(content="Concluído.", tool_calls=None),
+    ]
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path=None, workspace_root=str(tmp_path))
+    mock_executor.registry.names.return_value = ["read_file"]
+    mock_executor.execute.return_value = ToolResult(
+        ok=True,
+        tool_name="read_file",
+        content="conteúdo",
+    )
+
+    result = driver.run(
+        _prompt(),
+        tool_executor=mock_executor,
+        agent_name="openai-agent",
+        session_id="session-thinking",
+        base_dir=tmp_path,
+    )
+
+    assert result == "Concluído."
+    second_messages = mock_client.chat.completions.create.call_args_list[1].kwargs["messages"]
+    assistant = next(
+        message for message in second_messages if message.get("role") == "assistant"
+    )
+    assert assistant["content"] == "Consultando."
+    with EvidenceStore(tmp_path, "session-thinking") as store:
+        evidence = store.query("session-thinking")
+    assert [item.summary for item in evidence if item.type == "think_summary"] == [
+        "vou investigar"
+    ]
 
 
 def test_run_tool_loop_sends_tool_result_message():
@@ -1581,6 +1654,36 @@ def test_run_rate_limit_raises_transient_error():
     assert error.rate_limited is True
     assert error.retry_after == 15.0
     assert error.retryable is True
+
+
+def test_api_retry_after_accepts_http_date():
+    retry_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+    exc = SimpleNamespace(headers={"retry-after": format_datetime(retry_at, usegmt=True)})
+
+    delay = _api_retry_after(exc)
+
+    assert delay is not None
+    assert 0 <= delay <= 31
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("-2", 0.0), ("nan", None), ("invalid", None)],
+)
+def test_parse_retry_after_rejects_unsafe_values(raw, expected):
+    assert _parse_retry_after(raw) == expected
+
+
+@pytest.mark.parametrize("status", [408, 409])
+def test_categorize_retryable_http_statuses(status):
+    openai = pytest.importorskip("openai")
+    import httpx
+
+    request = httpx.Request("POST", "http://localhost/v1/chat/completions")
+    response = httpx.Response(status, request=request)
+    exc = openai.APIStatusError("retryable", response=response, body=None)
+
+    assert _categorize_api_exception(exc) == ("transient", None)
 
 
 def test_run_connection_error_raises_transient_error():
@@ -1978,14 +2081,19 @@ def test_driver_repl_load_user_name_from_config_falls_back_to_default():
         assert DriverRepl._load_user_name_from_config() == DEFAULT_USER_NAME
 
 
-def test_driver_repl_connection_signature_tracks_model_url_and_api_key_env():
-    """Verifica que Test driver repl connection signature tracks model url and api key env."""
-    profile = SimpleNamespace(
-        name="ollama-qwen",
-        driver="openai_compat",
+def test_driver_repl_connection_signature_tracks_full_connection_and_nested_body():
+    """REPL detecta chave rotacionada e mutações internas de extra_body."""
+    connection = OpenAIConnection(
         model="qwen3-coder:30b",
         base_url="http://localhost:11434/v1",
         api_key_env="MY_TEST_API_KEY",
+        extra_body={"reasoning": {"effort": "medium"}},
+    )
+    profile = SimpleNamespace(
+        name="ollama-qwen",
+        driver="openai_compat",
+        tool_use_reliability="medium",
+        effective_connection=lambda: connection,
     )
     with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
             patch.dict("os.environ", {"MY_TEST_API_KEY": "k1"}, clear=False):
@@ -1994,10 +2102,56 @@ def test_driver_repl_connection_signature_tracks_model_url_and_api_key_env():
             get_profile=lambda _: profile,
             all_profiles=lambda: [profile],
         )
-        assert repl._connection_has_changed() is True
         assert repl._connection_has_changed() is False
+        connection.extra_body["reasoning"]["effort"] = "high"
+        assert repl._connection_has_changed() is True
+        repl._last_connection_signature = repl._connection_signature(connection)
         with patch.dict("os.environ", {"MY_TEST_API_KEY": "k2"}, clear=False):
             assert repl._connection_has_changed() is True
+
+
+def test_driver_repl_reload_forwards_limits_and_closes_previous_driver():
+    connection = OpenAIConnection(
+        model="model-x",
+        base_url="https://example.test/v1",
+        api_key_env="TEST_KEY",
+        extra_body={"reasoning": {"effort": "high"}},
+        max_connections=2,
+        max_model_requests=17,
+        request_timeout=45.0,
+    )
+    profile = SimpleNamespace(
+        name="openai-test",
+        driver="openai_compat",
+        tool_use_reliability="high",
+        effective_connection=lambda: connection,
+    )
+    first = MagicMock()
+    second = MagicMock()
+
+    with patch(
+        "quimera.runtime.drivers.repl.OpenAICompatDriver",
+        side_effect=[first, second],
+    ) as driver_cls, patch.dict("os.environ", {"TEST_KEY": "secret"}, clear=False):
+        repl = DriverRepl(
+            "openai-test",
+            get_profile=lambda _: profile,
+            all_profiles=lambda: [profile],
+        )
+        repl._update_driver()
+
+    first.close.assert_called_once_with()
+    assert repl.driver is second
+    assert driver_cls.call_args.kwargs == {
+        "model": "model-x",
+        "base_url": "https://example.test/v1",
+        "api_key": "secret",
+        "timeout": 45.0,
+        "tool_use_reliability": "high",
+        "extra_body": {"reasoning": {"effort": "high"}},
+        "max_connections": 2,
+        "max_model_requests": 17,
+    }
 
 
 def test_driver_repl_get_current_connection_rejects_when_profile_driver_changes():

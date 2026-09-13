@@ -505,6 +505,7 @@ def test_responses_turn_reports_invalid_tool_arguments():
             "type": "function_call", "call_id": "call-1",
             "name": "read_file", "arguments": "{invalid",
         }},
+        {"type": "response.completed", "response": {"usage": {}}},
     ]
     driver = _make_driver(lambda request: httpx.Response(200, text=_sse(events)))
 
@@ -523,6 +524,7 @@ def test_responses_turn_retries_once_on_401_with_forced_refresh():
             return httpx.Response(401, json={"detail": "expired"})
         return httpx.Response(200, text=_sse([
             {"type": "response.output_text.delta", "delta": "ok"},
+            {"type": "response.completed", "response": {"usage": {}}},
         ]))
 
     auth = _FakeAuth()
@@ -562,7 +564,37 @@ def test_responses_turn_response_failed_event_raises():
         "response": {"error": {"code": "server_error", "message": "explodiu"}},
     }]
     driver = _make_driver(lambda request: httpx.Response(200, text=_sse(events)))
-    with pytest.raises(FatalAPIError, match="explodiu"):
+    with pytest.raises(TransientAPIError, match="explodiu"):
+        driver._responses_turn([{"role": "user", "content": "oi"}], [])
+    driver.close()
+
+
+def test_responses_turn_rejects_stream_without_terminal_event():
+    events = [{"type": "response.output_text.delta", "delta": "parcial"}]
+    driver = _make_driver(lambda request: httpx.Response(200, text=_sse(events)))
+
+    with pytest.raises(TransientAPIError, match="sem evento terminal"):
+        driver._responses_turn([{"role": "user", "content": "oi"}], [])
+    driver.close()
+
+
+def test_responses_turn_maps_incomplete_and_error_events():
+    incomplete = [{
+        "type": "response.incomplete",
+        "response": {"incomplete_details": {"reason": "max_output_tokens"}},
+    }]
+    driver = _make_driver(lambda request: httpx.Response(200, text=_sse(incomplete)))
+    with pytest.raises(FatalAPIError, match="max_output_tokens"):
+        driver._responses_turn([{"role": "user", "content": "oi"}], [])
+    driver.close()
+
+    stream_error = [{
+        "type": "error",
+        "code": "server_error",
+        "message": "temporariamente indisponível",
+    }]
+    driver = _make_driver(lambda request: httpx.Response(200, text=_sse(stream_error)))
+    with pytest.raises(TransientAPIError, match="temporariamente indisponível"):
         driver._responses_turn([{"role": "user", "content": "oi"}], [])
     driver.close()
 

@@ -9,10 +9,13 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import math
 import re
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Optional
 
@@ -137,8 +140,27 @@ class APIExecutionError(Exception):
         )
 
 
+def _parse_retry_after(raw) -> float | None:
+    """Converte Retry-After (segundos ou HTTP-date) em atraso não negativo."""
+    if raw is None:
+        return None
+    try:
+        delay = float(raw)
+    except (TypeError, ValueError):
+        pass
+    else:
+        return max(delay, 0.0) if math.isfinite(delay) else None
+    try:
+        retry_at = parsedate_to_datetime(str(raw))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    return max((retry_at - datetime.now(timezone.utc)).total_seconds(), 0.0)
+
+
 def _api_retry_after(exc: Exception) -> float | None:
-    """Lê o header ``retry-after`` da resposta HTTP quando disponível."""
+    """Lê ``retry-after`` da resposta HTTP quando disponível."""
     headers = getattr(exc, "headers", None)
     if headers is None:
         response = getattr(exc, "response", None)
@@ -148,13 +170,7 @@ def _api_retry_after(exc: Exception) -> float | None:
     get = getattr(headers, "get", None)
     if not callable(get):
         return None
-    raw = get("retry-after") or get("Retry-After")
-    if raw is None:
-        return None
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return None
+    return _parse_retry_after(get("retry-after") or get("Retry-After"))
 
 
 def _categorize_api_exception(exc: Exception) -> tuple[str, float | None] | None:
@@ -182,7 +198,7 @@ def _categorize_api_exception(exc: Exception) -> tuple[str, float | None] | None
         return "transient", None
     if _OAIStatusError is not Exception and isinstance(exc, _OAIStatusError):
         status = getattr(exc, "status_code", None)
-        if isinstance(status, int) and 500 <= status < 600:
+        if isinstance(status, int) and (status in {408, 409} or 500 <= status < 600):
             return "transient", None
         return "fatal", None
     return None
@@ -211,8 +227,13 @@ def _fatal_api_error_message(exc: Exception) -> str | None:
 
 _logger = logging.getLogger(__name__)
 
-# Remove blocos <think>...</think> ou <thinking>...</thinking> que modelos Qwen3 emitem.
-_THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
+# Remove blocos <think>...</think> ou <thinking>...</thinking> que modelos
+# OpenAI-compatible emitem. O fechamento é opcional para impedir vazamento de
+# reasoning quando o stream termina ou é cancelado no meio do bloco.
+_THINK_RE = re.compile(
+    r"<think(?:ing)?>.*?(?:</think(?:ing)?>|$)",
+    re.DOTALL | re.IGNORECASE,
+)
 
 # Trunca tool results para evitar explosão de memória no array messages.
 _MAX_TOOL_RESULT_CHARS = 32_000
@@ -379,7 +400,12 @@ def _strip_thinking(
         evidences: list[Evidence] = []
         for match in _THINK_RE.finditer(text):
             content = match.group(0)
-            inner = re.sub(r"^<think(?:ing)?>|</think(?:ing)?>$", "", content, flags=re.DOTALL).strip()
+            inner = re.sub(
+                r"^<think(?:ing)?>|</think(?:ing)?>$",
+                "",
+                content,
+                flags=re.DOTALL | re.IGNORECASE,
+            ).strip()
             if not inner:
                 continue
             evidences.append(
@@ -948,38 +974,33 @@ class OpenAICompatDriver:
                             ) from exc
                         return None
 
+                    # Sanitização centralizada: preserva evidence de thinking
+                    # em respostas finais e intermediárias antes de inserir o
+                    # texto no histórico do loop de tools.
+                    response_text = _sanitize_assistant_text(
+                        response_text,
+                        agent_name=agent_name,
+                        session_id=session_id,
+                        base_dir=base_dir,
+                    )
+
                     if cancel_event is not None and cancel_event.is_set():
                         # Streaming pode terminar por cancelamento depois de
                         # já produzir texto válido. Preserve somente essa saída
                         # textual parcial; nunca continue uma sequência parcial
                         # de chamadas de ferramenta.
                         if response_text and not tool_calls:
-                            return _sanitize_assistant_text(
-                                response_text,
-                                agent_name=agent_name,
-                                session_id=session_id,
-                                base_dir=base_dir,
-                            )
+                            return response_text
                         return None
 
                     if not tool_calls:
-                        return _sanitize_assistant_text(
-                            response_text,
-                            agent_name=agent_name,
-                            session_id=session_id,
-                            base_dir=base_dir,
-                        ) if response_text else None
+                        return response_text or None
 
                     if hop == max_tool_hops:
                         _logger.warning("OpenAICompatDriver: max tool hops (%d) reached", max_tool_hops)
                         if on_tool_abort is not None:
                             on_tool_abort("max_tool_hops")
-                        return _sanitize_assistant_text(
-                            response_text,
-                            agent_name=agent_name,
-                            session_id=session_id,
-                            base_dir=base_dir,
-                        ) if response_text else "Limite de chamadas de ferramenta atingido."
+                        return response_text or "Limite de chamadas de ferramenta atingido."
 
                     # Adiciona turno do assistente com os tool calls
                     assistant_msg: dict = {
@@ -1147,7 +1168,6 @@ class OpenAICompatDriver:
         response = self._client.chat.completions.create(
             model=self.model,
             messages=messages,
-            temperature=0.0,
             tools=tools,
             tool_choice="auto",
             **( {"extra_body": self.extra_body} if self.extra_body else {} ),
@@ -1195,7 +1215,7 @@ class OpenAICompatDriver:
                 })
 
 
-        return _sanitize_assistant_text(text), tool_calls
+        return text, tool_calls
 
     def _chat_streaming(self, messages: list[dict], cancel_event=None, on_text_chunk=None) -> tuple[str, list[dict]]:
         """
@@ -1210,41 +1230,48 @@ class OpenAICompatDriver:
         )
         text = ""
         reasoning_open = False
-        for chunk in stream:
-            if cancel_event is not None and cancel_event.is_set():
-                break
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            content = getattr(delta, "content", None)
-            reasoning = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
-            diff = normalize_stream_diff(getattr(delta, "diff", None))
+        try:
+            for chunk in stream:
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                content = getattr(delta, "content", None)
+                reasoning = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
+                diff = normalize_stream_diff(getattr(delta, "diff", None))
 
-            if reasoning:
-                if on_text_chunk is not None:
-                    piece = f"<think>{reasoning}" if not reasoning_open else reasoning
-                    on_text_chunk(piece)
-                reasoning_open = True
-                continue
+                if reasoning:
+                    if on_text_chunk is not None:
+                        piece = f"<think>{reasoning}" if not reasoning_open else reasoning
+                        on_text_chunk(piece)
+                    reasoning_open = True
+                    continue
 
-            if reasoning_open and (content or diff):
-                reasoning_open = False
-                if on_text_chunk is not None:
-                    on_text_chunk("</think>")
+                if reasoning_open and (content or diff):
+                    reasoning_open = False
+                    if on_text_chunk is not None:
+                        on_text_chunk("</think>")
 
-            if diff:
-                text = apply_stream_diff(text, diff)
-                if on_text_chunk is not None:
-                    on_text_chunk({"text": content or "", "diff": diff})
-                continue
+                if diff:
+                    text = apply_stream_diff(text, diff)
+                    if on_text_chunk is not None:
+                        on_text_chunk({"text": content or "", "diff": diff})
+                    continue
 
-            if content:
-                text += content
-                if on_text_chunk is not None:
-                    on_text_chunk(content)
-
-        if reasoning_open and on_text_chunk is not None:
-            on_text_chunk("</think>")
+                if content:
+                    text += content
+                    if on_text_chunk is not None:
+                        on_text_chunk(content)
+        finally:
+            if reasoning_open and on_text_chunk is not None:
+                on_text_chunk("</think>")
+            close = getattr(stream, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    _logger.exception("OpenAICompatDriver: falha ao fechar stream")
         return text.strip(), []
 
     def _execute_tool(

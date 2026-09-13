@@ -1044,7 +1044,15 @@ class AgentClient:
         """Retorna assinatura estável da conexão usada para cache do driver API."""
         extra_body = getattr(connection, "extra_body", None)
         if isinstance(extra_body, dict):
-            extra_body_sig = tuple(sorted(extra_body.items()))
+            # Snapshot profundo: tuple(sorted(items)) retinha referências para
+            # dicts internos; mutações in-place ficavam invisíveis ao cache.
+            extra_body_sig = json.dumps(
+                extra_body,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
         else:
             extra_body_sig = extra_body
         api_key_env = getattr(connection, "api_key_env", None)

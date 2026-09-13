@@ -101,6 +101,61 @@ def test_split_recent_conversation_keeps_other_agents_as_labeled_user():
     assert messages[3]["content"] == "vou revisar"
 
 
+def test_split_recent_conversation_does_not_treat_bracketed_content_as_speaker():
+    """Rótulos técnicos desconhecidos no corpo permanecem na fala original."""
+    prompt = (
+        '<header title="Identificação">\n'
+        'Você é claude-fable.\nUsuário humano: ALEX\n'
+        'Agentes de IA nesta conversa: claude-fable, codex-gpt-5-6\n'
+        '</header>\n'
+        '<recent_conversation title="Conversa recente">\n'
+        '[ALEX]: revise o log\n'
+        '[CLAUDE-FABLE]: encontrei isto\n'
+        '[INFO]: conexão reiniciada\n'
+        '[ALEX]: continue\n'
+        '</recent_conversation>'
+    )
+
+    messages = _build_openai_messages_from_prompt(
+        _rendered(prompt),
+        split_recent_conversation=True,
+    )
+
+    assert [message["role"] for message in messages] == [
+        "system", "user", "assistant", "user",
+    ]
+    assert messages[2]["content"] == (
+        "encontrei isto\n[INFO]: conexão reiniciada"
+    )
+
+
+def test_split_recent_conversation_preserves_leading_disconnected_agent():
+    """Fala antiga não some só porque o agente não está mais ativo no header."""
+    prompt = (
+        '<header title="Identificação">\n'
+        'Você é claude-fable.\nUsuário humano: ALEX\n'
+        'Agentes de IA nesta conversa: claude-fable\n'
+        '</header>\n'
+        '<recent_conversation title="Conversa recente">\n'
+        '[AGENTE-DESCONECTADO]: achei a causa\n'
+        '[ALEX]: confirme\n'
+        '[CLAUDE-FABLE]: confirmado\n'
+        '</recent_conversation>'
+    )
+
+    messages = _build_openai_messages_from_prompt(
+        _rendered(prompt),
+        split_recent_conversation=True,
+    )
+
+    assert [message["role"] for message in messages] == [
+        "system", "user", "user", "assistant",
+    ]
+    assert messages[1]["content"] == (
+        "[AGENTE-DESCONECTADO]: achei a causa"
+    )
+
+
 def test_split_recent_conversation_without_self_name_keeps_legacy_assistant():
     """Sem "Você é <nome>" no header, todo não-humano segue como assistant."""
     prompt = (
