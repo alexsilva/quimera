@@ -530,16 +530,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 event.input.save_history(self._history_file_path)
             bridge.submit_input(value)
             if value:
-                # Enviar um prompt leva o scroll ao fim do chat uma única vez;
-                # depois disso o acompanhamento volta a depender do "pinned".
+                # Enviar um prompt reengata a âncora do feed: o scroll vai ao
+                # fim agora e o compositor segue o fim até o usuário rolar.
                 self._scroll_feed_on_submit = True
-                feed = self.query_one("#feed", _UnifiedFeed)
-                self.call_after_refresh(
-                    feed.scroll_end,
-                    animate=False,
-                    immediate=True,
-                    x_axis=False,
-                )
+                self.query_one("#feed", _UnifiedFeed).anchor()
 
         def _set_question_overlay(self, payload) -> None:
             overlay = self.query_one("#question_overlay", Static)
@@ -650,25 +644,20 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 for token, renderable in self._feed_renderable_cache.items()
                 if token in active_tokens
             }
-            was_pinned = feed.is_vertical_scroll_end
             if self._scroll_feed_on_submit:
                 # O envio de prompt força o scroll ao fim exatamente uma vez,
                 # mesmo que o usuário estivesse lendo o histórico lá em cima.
                 self._scroll_feed_on_submit = False
                 scroll_end = True
             feed.sync_entries(entries, force=force)
-            if scroll_end or was_pinned:
-                self.call_after_refresh(
-                    feed.scroll_end,
-                    animate=False,
-                    immediate=True,
-                    x_axis=False,
-                )
+            if scroll_end:
+                # Reengata a âncora; o acompanhamento contínuo do fim fica a
+                # cargo do compositor enquanto o feed estiver ancorado.
+                feed.anchor()
 
         def _sync_transient_feed_slots(self) -> None:
             """Atualiza somente slots transitórios quando apenas o pulso mudou."""
             feed = self.query_one("#feed", _UnifiedFeed)
-            was_pinned = feed.is_vertical_scroll_end
             for index, item in self._feed_model.transient_items():
                 token = id(item.event)
                 renderable = _render_event(item.event)
@@ -676,13 +665,6 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     self._sync_feed()
                     return
                 self._feed_renderable_cache[token] = renderable
-            if was_pinned:
-                self.call_after_refresh(
-                    feed.scroll_end,
-                    animate=False,
-                    immediate=True,
-                    x_axis=False,
-                )
 
         def _sync_submission_feed_slots(self, slots) -> None:
             """Re-renderiza turnos humanos com submissão ativa para a esfera pulsar."""

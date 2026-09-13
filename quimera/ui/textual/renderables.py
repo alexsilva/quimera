@@ -118,6 +118,32 @@ _LIVE_MARKDOWN_CACHE_LIMIT = 8
 _live_markdown_cache: dict[tuple[str, str], Markdown] = {}
 
 
+# Janela deslizante do conteúdo vivo: sem teto de altura, o bloco transitório
+# cresce a cada chunk e colapsa a cada hop do agente, fazendo a scrollbar do
+# feed pulsar durante toda a execução. Só a cauda fica visível ao vivo; o
+# texto integral entra no feed como mensagem final do turno.
+_LIVE_TAIL_LINE_LIMIT = 8
+_LIVE_TAIL_MAX_CHARS = 1_600
+
+
+def _live_tail(text: str) -> tuple[str, str]:
+    """Cauda visível do conteúdo vivo e rótulo do trecho oculto ('' se íntegro)."""
+    lines = text.splitlines()
+    tail = "\n".join(lines[-_LIVE_TAIL_LINE_LIMIT:])
+    if len(tail) > _LIVE_TAIL_MAX_CHARS:
+        cut = tail[-_LIVE_TAIL_MAX_CHARS:]
+        newline = cut.find("\n")
+        if 0 <= newline < len(cut) - 1:
+            cut = cut[newline + 1:]
+        tail = cut
+    if tail == text:
+        return text, ""
+    hidden = len(lines) - (tail.count("\n") + 1)
+    if hidden > 0:
+        return tail, f"⋮ +{hidden} linhas anteriores"
+    return tail, "⋮ trecho anterior oculto"
+
+
 def _live_markdown(text: str, style: str) -> Markdown | None:
     """Markdown do thinking transitório, ou None quando texto plano é mais fiel."""
     if len(text) > _LIVE_MARKDOWN_MAX_CHARS or not _LIVE_MARKDOWN_HINT_RE.search(text):
@@ -241,8 +267,13 @@ def _build_agent_live_body(
     marker = _GUTTER_GUIDE if guide else ""
     marker_style = f"dim {style}"
     text = str(content or "").strip()
+    hidden_label = ""
+    if text and thinking:
+        text, hidden_label = _live_tail(text)
     if text:
-        markdown_body = _live_markdown(text, "italic") if thinking else None
+        # Cauda truncada não passa por markdown: o documento parcial pode
+        # começar no meio de um bloco e renderizar artefatos.
+        markdown_body = _live_markdown(text, "italic") if thinking and not hidden_label else None
         if markdown_body is not None:
             head = _gutter_row(_thinking_pulse_marker(), f"bold {style}", markdown_body)
         else:
@@ -253,6 +284,10 @@ def _build_agent_live_body(
             else:
                 head.append("· ", style="dim")
                 head.append(text, style="dim")
+        if hidden_label:
+            parts.append(
+                _gutter_row(marker, marker_style, Text(hidden_label, style="dim"))
+            )
         parts.append(_gutter_row(marker, marker_style, head))
     tools_renderable = _build_tools_renderable(tools, style, guide=guide)
     if tools_renderable is not None:

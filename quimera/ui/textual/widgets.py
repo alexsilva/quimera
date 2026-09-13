@@ -38,6 +38,12 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
         self._entry_widgets: list[_FeedEntry] = []
         self._entry_tokens: list[int] = []
 
+    def on_mount(self) -> None:
+        # Âncora nativa: o compositor recola o scroll no fim no mesmo frame em
+        # que a altura do conteúdo muda, sem frame intermediário defasado.
+        # Rolar para cima solta a âncora; voltar ao fim reengata sozinho.
+        self.anchor()
+
     def sync_entries(
         self,
         entries: Iterable[tuple[int, bool, object, bool]],

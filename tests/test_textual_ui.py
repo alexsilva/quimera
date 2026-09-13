@@ -1457,6 +1457,46 @@ def test_textual_thinking_markdown_cache_reuses_instance():
     assert first is second
 
 
+def test_textual_live_tail_keeps_short_content_intact():
+    assert renderables._live_tail("linha um\nlinha dois") == ("linha um\nlinha dois", "")
+
+
+def test_textual_live_tail_hides_older_lines_with_counter():
+    limit = renderables._LIVE_TAIL_LINE_LIMIT
+    text = "\n".join(f"l{index}" for index in range(limit + 12))
+    tail, label = renderables._live_tail(text)
+    assert tail.splitlines() == [f"l{index}" for index in range(12, limit + 12)]
+    assert label == "⋮ +12 linhas anteriores"
+
+
+def test_textual_live_tail_caps_giant_single_line():
+    tail, label = renderables._live_tail("x" * 5000)
+    assert len(tail) == renderables._LIVE_TAIL_MAX_CHARS
+    assert label == "⋮ trecho anterior oculto"
+
+
+def test_textual_live_thinking_shows_only_tail_of_long_content():
+    # O bloco vivo tem altura limitada: sem teto, a scrollbar do feed pulsa a
+    # cada chunk/hop enquanto o agente executa.
+    lines = [f"pensamento {index:02d}" for index in range(1, 31)]
+    renderable = _render_event(_thinking_update_event("\n".join(lines)))
+
+    console = Console(record=True, width=80)
+    console.print(renderable)
+    output = console.export_text()
+    assert "pensamento 30" in output
+    assert "pensamento 01" not in output
+    assert "linhas anteriores" in output
+
+
+def test_textual_live_thinking_truncated_tail_never_renders_markdown():
+    # Documento parcial pode abrir no meio de um bloco markdown; a cauda
+    # truncada renderiza como texto plano.
+    lines = [f"**pensamento {index}**" for index in range(30)]
+    renderable = _render_event(_thinking_update_event("\n".join(lines)))
+    assert _find_markdown(renderable) is None
+
+
 def test_textual_feed_structured_tool_preview_stays_in_same_run():
     model = TextualFeedModel()
     payload = {"label": "OpenCode", "style": "blue", "run_id": "agentrun:opencode"}
@@ -3830,6 +3870,40 @@ def test_textual_unified_feed_updates_single_matching_slot_only():
     asyncio.run(run_test())
 
 
+def test_textual_unified_feed_anchors_to_bottom_on_mount():
+    import asyncio
+
+    from textual.app import App, ComposeResult
+
+    class FeedApp(App):
+        def compose(self) -> ComposeResult:
+            yield _UnifiedFeed(id="feed")
+
+    async def run_test() -> None:
+        app = FeedApp()
+        async with app.run_test(size=(60, 8)) as pilot:
+            feed = app.query_one("#feed", _UnifiedFeed)
+            # Ancorado desde o mount: o compositor mantém o scroll colado ao
+            # fim mesmo quando o conteúdo muda de altura entre frames.
+            assert feed.is_anchored
+
+            feed.sync_entries(
+                [(index, False, f"mensagem {index}", False) for index in range(40)]
+            )
+            await pilot.pause()
+            assert feed.scroll_y == feed.max_scroll_y > 0
+
+            # Rolar para cima libera a âncora; o feed para de seguir o fim.
+            feed.scroll_home(animate=False)
+            feed.sync_entries(
+                [(index, False, f"mensagem {index}", False) for index in range(50)]
+            )
+            await pilot.pause()
+            assert feed.scroll_y < feed.max_scroll_y
+
+    asyncio.run(run_test())
+
+
 def test_toolbar_coordinator_formats_agent_names_with_profile_icons():
     from types import SimpleNamespace
 
@@ -4321,7 +4395,7 @@ def test_textual_app_syncs_last_expired_tool_before_early_return():
     assert "self._sync_transient_feed_slots()" in pulse_source
 
 
-def test_textual_unified_feed_uses_actual_scroll_position_for_auto_follow():
+def test_textual_unified_feed_follows_bottom_via_native_anchor():
     import inspect
 
     source = inspect.getsource(run_textual_quimera_app)
@@ -4329,8 +4403,14 @@ def test_textual_unified_feed_uses_actual_scroll_position_for_auto_follow():
     sync_end = source.index("def _redraw_feed", sync_start)
     sync_source = source[sync_start:sync_end]
 
+    # O acompanhamento do fim é da âncora nativa: o compositor recola o scroll
+    # no mesmo frame em que a altura muda. _sync_feed não reposiciona o scroll
+    # por conta própria (o call_after_refresh(scroll_end) gerava um frame
+    # defasado a cada mudança de altura do bloco transitório).
     assert "_feed_pinned_to_bottom" not in source
-    assert "was_pinned = feed.is_vertical_scroll_end" in sync_source
+    assert "is_vertical_scroll_end" not in source
+    assert "call_after_refresh" not in sync_source
+    assert "feed.anchor()" in sync_source
     assert "if renderable is not None:" in sync_source
 
 
@@ -4342,16 +4422,16 @@ def test_textual_prompt_submission_scrolls_feed_to_end_once():
     submit_start = source.index("def on_input_submitted")
     submit_end = source.index("def _set_question_overlay", submit_start)
     submit_source = source[submit_start:submit_end]
-    # Enviar o prompt leva o scroll ao fim imediatamente e agenda o pin
+    # Enviar o prompt reengata a âncora imediatamente e agenda o pin
     # para quando o turno do usuário entrar no feed.
     assert "self._scroll_feed_on_submit = True" in submit_source
-    assert "feed.scroll_end" in submit_source
+    assert ".anchor()" in submit_source
 
     sync_start = source.index("def _sync_feed")
     sync_end = source.index("def _sync_transient_feed_slots", sync_start)
     sync_source = source[sync_start:sync_end]
     # A flag é consumida uma única vez: depois o auto-follow volta a
-    # depender do usuário estar no fim (was_pinned).
+    # depender da âncora nativa (liberada quando o usuário rola para cima).
     assert "self._scroll_feed_on_submit = False" in sync_source
     assert sync_source.index("self._scroll_feed_on_submit = False") < sync_source.index(
         "feed.sync_entries(entries, force=force)"
