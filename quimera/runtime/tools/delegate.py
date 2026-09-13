@@ -745,6 +745,39 @@ class DelegateTools(ToolBase):
 
         return ToolResult(ok=True, tool_name=tool_name, content="\n\n".join(step_outputs))
 
+    @staticmethod
+    def _truncate_delegate_text(value: str, max_chars: int, label: str) -> tuple[str, str | None]:
+        """Trunca texto acima do limite, deixando marcador no payload e devolvendo aviso.
+
+        O marcador é embutido no próprio texto para que o agente alvo saiba que
+        recebeu conteúdo incompleto; o aviso retornado é anexado ao resultado da
+        tool para que o agente chamador também fique ciente do corte.
+        """
+        if len(value) <= max_chars:
+            return value, None
+        original_len = len(value)
+        marker = (
+            f"\n...[truncado pela tool delegate: {label} original tinha "
+            f"{original_len} caracteres, limite {max_chars}]"
+        )
+        truncated = value[: max(0, max_chars - len(marker))] + marker
+        warning = (
+            f"{label} excedeu o limite de {max_chars} caracteres e foi truncado "
+            f"({original_len} → {max_chars}); o excedente não foi enviado ao agente."
+        )
+        return truncated, warning
+
+    @staticmethod
+    def _attach_truncation_warnings(result: ToolResult, warnings: list[str]) -> ToolResult:
+        """Anexa avisos de truncamento de entrada ao resultado da delegação."""
+        if not warnings:
+            return result
+        result.data["truncation_warnings"] = list(warnings)
+        notice = "\n".join(f"⚠ Aviso de truncamento: {w}" for w in warnings)
+        if result.ok:
+            result.content = f"{notice}\n\n{result.content}" if result.content else notice
+        return result
+
     def delegate(self, call: ToolCall) -> ToolResult:
         """Despacha uma tarefa para outro agente Quimera via MCP tool."""
         if not self.is_delegate_available():
@@ -795,10 +828,14 @@ class DelegateTools(ToolBase):
                     ),
                 )
 
+        truncation_warnings: list[str] = []
         target_agent = str(target_agent_raw).strip() if isinstance(target_agent_raw, str) else ""
         request = str(request_raw).strip() if isinstance(request_raw, str) else ""
-        if len(request) > self._DELEGATE_MAX_REQUEST_CHARS:
-            request = request[: self._DELEGATE_MAX_REQUEST_CHARS]
+        request, request_warning = self._truncate_delegate_text(
+            request, self._DELEGATE_MAX_REQUEST_CHARS, "request",
+        )
+        if request_warning:
+            truncation_warnings.append(request_warning)
 
         if calling_agent and self._normalize_agent_identity(target_agent) == calling_agent:
             return ToolResult(
@@ -816,8 +853,11 @@ class DelegateTools(ToolBase):
                     error="'context' must be a string when provided",
                 )
             context = context_raw.strip()
-            if len(context) > self._DELEGATE_MAX_CONTEXT_CHARS:
-                context = context[: self._DELEGATE_MAX_CONTEXT_CHARS]
+            context, context_warning = self._truncate_delegate_text(
+                context, self._DELEGATE_MAX_CONTEXT_CHARS, "context",
+            )
+            if context_warning:
+                truncation_warnings.append(context_warning)
 
         try:
             role = self._normalize_role(role_raw)
@@ -959,11 +999,21 @@ class DelegateTools(ToolBase):
                     normalized_extra_fallback.append(fb.strip())
 
                 normalized_context = extra_context.strip() if isinstance(extra_context, str) else ""
-                if len(normalized_context) > self._DELEGATE_MAX_CONTEXT_CHARS:
-                    normalized_context = normalized_context[: self._DELEGATE_MAX_CONTEXT_CHARS]
+                normalized_context, step_context_warning = self._truncate_delegate_text(
+                    normalized_context,
+                    self._DELEGATE_MAX_CONTEXT_CHARS,
+                    f"steps[{idx}].context",
+                )
+                if step_context_warning:
+                    truncation_warnings.append(step_context_warning)
                 normalized_task = extra_task.strip()
-                if len(normalized_task) > self._DELEGATE_MAX_REQUEST_CHARS:
-                    normalized_task = normalized_task[: self._DELEGATE_MAX_REQUEST_CHARS]
+                normalized_task, step_task_warning = self._truncate_delegate_text(
+                    normalized_task,
+                    self._DELEGATE_MAX_REQUEST_CHARS,
+                    f"steps[{idx}].request",
+                )
+                if step_task_warning:
+                    truncation_warnings.append(step_task_warning)
                 steps.append(
                     {
                         "target_agent": extra_agent.strip(),
@@ -989,7 +1039,10 @@ class DelegateTools(ToolBase):
         transport = self._get_transport(call)
 
         if transport == "http_mcp":
-            return self._delegate_http_async(call, steps)
+            return self._attach_truncation_warnings(
+                self._delegate_http_async(call, steps),
+                truncation_warnings,
+            )
 
         raw_cancel_event = call.metadata.get("_mcp_cancel_event")
         request_cancel_event = (
@@ -1005,7 +1058,22 @@ class DelegateTools(ToolBase):
             )
 
         if parallel and len(steps) > 1:
-            return self._execute_steps_parallel(
+            return self._attach_truncation_warnings(
+                self._execute_steps_parallel(
+                    steps,
+                    self._delegate_fn,
+                    self._progress_callback,
+                    self._resolve_active_agents,
+                    self._normalize_agent_identity,
+                    cleanup_callback=self._cleanup_callback,
+                    cancel_checker=request_cancelled,
+                    request_cancel_event=request_cancel_event,
+                ),
+                truncation_warnings,
+            )
+
+        return self._attach_truncation_warnings(
+            self._execute_steps_inner(
                 steps,
                 self._delegate_fn,
                 self._progress_callback,
@@ -1014,17 +1082,8 @@ class DelegateTools(ToolBase):
                 cleanup_callback=self._cleanup_callback,
                 cancel_checker=request_cancelled,
                 request_cancel_event=request_cancel_event,
-            )
-
-        return self._execute_steps_inner(
-            steps,
-            self._delegate_fn,
-            self._progress_callback,
-            self._resolve_active_agents,
-            self._normalize_agent_identity,
-            cleanup_callback=self._cleanup_callback,
-            cancel_checker=request_cancelled,
-            request_cancel_event=request_cancel_event,
+            ),
+            truncation_warnings,
         )
 
 

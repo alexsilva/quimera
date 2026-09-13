@@ -559,3 +559,122 @@ def test_inspect_symbols_rejects_non_python_file(tools, config):
     assert result.ok is False
     assert "Arquivo Python inválido" in result.error
 
+
+def test_file_tools_grep_search_supports_regex(tools, config):
+    """regex=true interpreta o padrão como expressão regular Python."""
+    workspace = config.workspace_root
+    (workspace / "app.py").write_text(
+        "def alpha():\n    pass\n\ndef beta():\n    pass\n\nalpha = 1\n",
+        encoding="utf-8",
+    )
+
+    result = tools.grep_search(
+        ToolCall(
+            name="grep_search",
+            arguments={"pattern": r"^def \w+\(", "regex": True},
+        )
+    )
+
+    assert result.ok is True
+    assert result.content.splitlines() == [
+        "app.py:1:def alpha():",
+        "app.py:4:def beta():",
+    ]
+
+
+def test_file_tools_grep_search_regex_invalid_returns_error(tools, config):
+    """Regex inválida retorna erro explícito em vez de busca vazia."""
+    workspace = config.workspace_root
+    (workspace / "app.py").write_text("qualquer coisa\n", encoding="utf-8")
+
+    result = tools.grep_search(
+        ToolCall(
+            name="grep_search",
+            arguments={"pattern": "([", "regex": True},
+        )
+    )
+
+    assert result.ok is False
+    assert "Regex inválida" in result.error
+
+
+def test_file_tools_grep_search_supports_ignore_case_substring(tools, config):
+    """ignore_case=true faz match de substring sem diferenciar maiúsculas."""
+    workspace = config.workspace_root
+    (workspace / "app.py").write_text("Marker_Token aqui\noutra linha\n", encoding="utf-8")
+
+    exact = tools.grep_search(
+        ToolCall(name="grep_search", arguments={"pattern": "marker_token"})
+    )
+    insensitive = tools.grep_search(
+        ToolCall(
+            name="grep_search",
+            arguments={"pattern": "marker_token", "ignore_case": True},
+        )
+    )
+
+    assert exact.content == ""
+    assert insensitive.content.splitlines() == ["app.py:1:Marker_Token aqui"]
+
+
+def test_file_tools_grep_search_supports_ignore_case_with_regex(tools, config):
+    """ignore_case combina com regex via re.IGNORECASE."""
+    workspace = config.workspace_root
+    (workspace / "app.py").write_text("TODO: revisar\nnada aqui\n", encoding="utf-8")
+
+    result = tools.grep_search(
+        ToolCall(
+            name="grep_search",
+            arguments={"pattern": r"^todo:", "regex": True, "ignore_case": True},
+        )
+    )
+
+    assert result.content.splitlines() == ["app.py:1:TODO: revisar"]
+
+
+def test_inspect_symbols_lists_nested_symbols(tools, config):
+    """inspect_symbols enxerga funções aninhadas, classes internas e defs sob blocos."""
+    workspace = config.workspace_root
+    (workspace / "module.py").write_text(
+        "def outer():\n"
+        "    def inner():\n"
+        "        pass\n"
+        "    return inner\n"
+        "\n"
+        "class Service:\n"
+        "    class Config:\n"
+        "        def load(self):\n"
+        "            pass\n"
+        "\n"
+        "    def run(self):\n"
+        "        async def worker():\n"
+        "            pass\n"
+        "        return worker\n"
+        "\n"
+        "if True:\n"
+        "    def conditional():\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+
+    result = tools.inspect_symbols(ToolCall(name="inspect_symbols", arguments={"path": "module.py"}))
+
+    assert result.ok is True
+    assert result.content.splitlines() == [
+        "def outer:1",
+        "  def inner:2",
+        "class Service:6",
+        "  class Config:7",
+        "    def load:8",
+        "  def run:11",
+        "    async def worker:12",
+        "def conditional:17",
+    ]
+    symbols = result.data["symbols"]
+    assert symbols[0]["children"][0]["name"] == "inner"
+    service = symbols[1]
+    assert [c["name"] for c in service["children"]] == ["Config", "run"]
+    assert [m["name"] for m in service["methods"]] == ["run"]
+    assert service["children"][1]["children"][0]["kind"] == "async def"
+    assert symbols[2]["name"] == "conditional"
+

@@ -5,6 +5,7 @@ import logging
 import ast
 import fnmatch
 import os
+import re
 import threading
 from pathlib import Path
 
@@ -53,6 +54,43 @@ def set_staging_root(path: Path | None) -> None:
         _logger.debug("staging initialized: %s (thread=%s)", path, threading.current_thread().name)
     else:
         _logger.debug("staging cleared (thread=%s)", threading.current_thread().name)
+
+
+_SYMBOL_DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+
+def _symbol_kind(node: ast.AST) -> str:
+    """Rótulo do símbolo AST ('class', 'def' ou 'async def')."""
+    if isinstance(node, ast.ClassDef):
+        return "class"
+    if isinstance(node, ast.AsyncFunctionDef):
+        return "async def"
+    return "def"
+
+
+def _iter_scope_symbols(node: ast.AST):
+    """Itera defs/classes do escopo imediato, atravessando blocos como if/try/with."""
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, _SYMBOL_DEF_NODES):
+            yield child
+        elif isinstance(child, ast.stmt):
+            yield from _iter_scope_symbols(child)
+
+
+def _collect_scope_symbols(node: ast.AST, *, depth: int, rendered: list[str]) -> list[dict]:
+    """Coleta símbolos recursivamente, renderizando com indentação por nível."""
+    symbols: list[dict] = []
+    for child in _iter_scope_symbols(node):
+        kind = _symbol_kind(child)
+        symbol = {"kind": kind, "name": child.name, "line": child.lineno}
+        rendered.append(f"{'  ' * depth}{kind} {child.name}:{child.lineno}")
+        children = _collect_scope_symbols(child, depth=depth + 1, rendered=rendered)
+        if children:
+            symbol["children"] = children
+        if kind == "class":
+            symbol["methods"] = [c for c in children if c["kind"] != "class"]
+        symbols.append(symbol)
+    return symbols
 
 
 class FileTools(ToolBase):
@@ -297,6 +335,24 @@ class FileTools(ToolBase):
         max_results = self._resolve_search_limit(call.arguments.get("max_results"))
         context_lines = self._resolve_context_lines(call.arguments.get("context_lines"))
         excluded_dirs = self._resolve_excluded_search_dirs(call.arguments.get("exclude_dirs"))
+        use_regex = bool(call.arguments.get("regex", False))
+        ignore_case = bool(call.arguments.get("ignore_case", False))
+        if use_regex:
+            try:
+                compiled = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
+            except re.error as exc:
+                return ToolResult(ok=False, tool_name=call.name, error=f"Regex inválida: {exc}")
+
+            def matches(line: str) -> bool:
+                return compiled.search(line) is not None
+        elif ignore_case:
+            needle = pattern.lower()
+
+            def matches(line: str) -> bool:
+                return needle in line.lower()
+        else:
+            def matches(line: str) -> bool:
+                return pattern in line
         results: list[str] = []
         match_count = 0
 
@@ -333,7 +389,7 @@ class FileTools(ToolBase):
 
                 lines = text.splitlines()
                 for line_no, line in enumerate(lines, start=1):
-                    if pattern in line:
+                    if matches(line):
                         match_key = (str(display_path), line_no, line)
                         if match_key in seen_results:
                             continue
@@ -357,7 +413,7 @@ class FileTools(ToolBase):
         return ToolResult(ok=True, tool_name=call.name, content="\n".join(results))
 
     def inspect_symbols(self, call: ToolCall) -> ToolResult:
-        """Lista símbolos Python de alto nível usando AST, sem executar o arquivo."""
+        """Lista símbolos Python (incluindo aninhados) usando AST, sem executar o arquivo."""
         raw_path = call.arguments["path"]
         path = self._resolve(raw_path)
         if path.suffix != ".py" or not path.is_file():
@@ -371,24 +427,8 @@ class FileTools(ToolBase):
         except OSError as exc:
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
-        symbols: list[dict] = []
         rendered: list[str] = []
-        for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                kind = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
-                symbol = {"kind": kind, "name": node.name, "line": node.lineno}
-                symbols.append(symbol)
-                rendered.append(f"{kind} {node.name}:{node.lineno}")
-            elif isinstance(node, ast.ClassDef):
-                symbol = {"kind": "class", "name": node.name, "line": node.lineno, "methods": []}
-                rendered.append(f"class {node.name}:{node.lineno}")
-                for child in node.body:
-                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        method_kind = "async def" if isinstance(child, ast.AsyncFunctionDef) else "def"
-                        method = {"kind": method_kind, "name": child.name, "line": child.lineno}
-                        symbol["methods"].append(method)
-                        rendered.append(f"  {method_kind} {child.name}:{child.lineno}")
-                symbols.append(symbol)
+        symbols = _collect_scope_symbols(tree, depth=0, rendered=rendered)
 
         return ToolResult(
             ok=True,

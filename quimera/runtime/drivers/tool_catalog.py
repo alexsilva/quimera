@@ -197,7 +197,17 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         description='Busca um padrão de texto em arquivos dentro do workspace.',
         parameters={'type': 'object',
  'properties': {'pattern': {'type': 'string',
-                            'description': 'Substring literal a buscar (não suporta regex).'},
+                            'description': 'Padrão a buscar. Por padrão é substring literal; com '
+                                           'regex=true é interpretado como expressão regular '
+                                           'Python.'},
+                'regex': {'type': 'boolean',
+                          'description': 'Quando true, interpreta pattern como expressão regular '
+                                         'Python (re.search por linha). Regex inválida retorna '
+                                         'erro. Padrão: false (substring literal).'},
+                'ignore_case': {'type': 'boolean',
+                                'description': 'Quando true, ignora maiúsculas/minúsculas no '
+                                               'match (vale para substring e regex). Padrão: '
+                                               'false.'},
                 'path': {'type': 'string',
                          'description': "Caminho relativo onde buscar. Use '.' para todo o "
                                         'workspace.'},
@@ -226,7 +236,10 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='inspect_symbols',
-        description='Lista classes, funções e métodos de um arquivo Python usando AST, sem executar código.',
+        description='Lista classes, funções e métodos de um arquivo Python usando AST, sem '
+                    'executar código. Inclui símbolos aninhados (funções internas, classes '
+                    'aninhadas e defs dentro de blocos como if/try), indentados por nível. '
+                    'Suporta apenas arquivos .py.',
         parameters={'type': 'object',
  'properties': {'path': {'type': 'string',
                          'description': 'Caminho relativo de um arquivo .py dentro do workspace.'}},
@@ -234,7 +247,8 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         output_schema={'type': 'object',
  'properties': {'ok': {'type': 'boolean'},
                 'content': {'type': 'string',
-                            'description': 'Símbolos em formato legível com linhas.'},
+                            'description': 'Símbolos em formato legível com linhas, indentados '
+                                           'por nível de aninhamento.'},
                 'data': {'type': 'object'},
                 'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
  'required': ['ok', 'content']},
@@ -653,9 +667,13 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
  'properties': {'target_agent': {'type': 'string',
                                  'description': "Nome do agente obtido por 'list_agents'."},
                 'request': {'type': 'string',
-                            'description': 'Descrição clara do que o agente deve fazer.'},
+                            'description': 'Descrição clara do que o agente deve fazer. Máximo de '
+                                           '1200 caracteres; acima disso o texto é truncado e um '
+                                           'aviso é anexado ao resultado.'},
                 'context': {'type': 'string',
-                            'description': 'Contexto adicional relevante (opcional).'},
+                            'description': 'Contexto adicional relevante (opcional). Máximo de '
+                                           '4000 caracteres; acima disso o texto é truncado e um '
+                                           'aviso é anexado ao resultado.'},
                 'role': {'type': 'string',
                          'enum': ['planner', 'executor', 'reviewer', 'verifier', 'synthesizer'],
                          'description': 'Papel opcional do agente nesta delegação. Valores: '

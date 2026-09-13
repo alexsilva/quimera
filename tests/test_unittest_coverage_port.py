@@ -245,7 +245,8 @@ class ContextCoverageTests(unittest.TestCase):
         """Verifica que Test show empty and non empty."""
         manager = ContextManager(self.base, self.session, self.renderer)
         manager.show()
-        self.renderer.show_plain.assert_called_once()
+        self.renderer.show_text_window.assert_called_once()
+        self.assertEqual(self.renderer.show_text_window.call_args.args[0], "Contexto")
         empty = ContextManager(self.base.with_name("missing.md"), self.session.with_name("other.md"), self.renderer)
         empty.show()
         self.renderer.show_system.assert_called_with("\n[contexto vazio]\n")
