@@ -1482,6 +1482,21 @@ def test_spy_output_presenter_finalize_turn_skips_summary_for_non_cli(renderer):
     assert detail["tools"]
 
 
+def test_spy_output_presenter_renders_explicit_openai_summary(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+    presenter.set_turn_runtime("openai")
+    presenter.record_tool_call("read_file", {"path": "README.md"})
+    presenter.record_tool_result(
+        SimpleNamespace(ok=True, tool_name="read_file", error=None)
+    )
+
+    detail = presenter.finalize_turn("codexcloud", render_summary=True)
+
+    renderer.show_turn_summary.assert_called_once_with("codexcloud", detail)
+    assert detail["runtime"] == "openai"
+    assert detail["tools"][0]["status"] == "ok"
+
+
 def test_spy_output_presenter_full_mode_renders_tool_timeline(renderer):
     """Verifica que spy output presenter full mode renders tool timeline."""
     presenter = SpyOutputPresenter(renderer, Visibility.FULL)
@@ -1757,6 +1772,43 @@ def test_agent_client_call_api_driver(renderer):
                 result = client.call("test-agent", "prompt")
             assert result == "api response"
             mock_driver_cls.assert_called()
+
+
+def test_agent_client_api_tools_emit_one_turn_summary(renderer):
+    """CodexCloud/OpenAI compatível devem resumir tools como os agentes CLI."""
+    client = AgentClient(renderer, idle_timeout=60, visibility=Visibility.SUMMARY)
+    client.tool_executor = MagicMock()
+    client.tool_event_callback = MagicMock()
+    mock_driver = MagicMock()
+
+    def run_with_tools(**kwargs):
+        kwargs["on_tool_call"]("read_file", {"path": "README.md"})
+        kwargs["on_tool_result"](
+            SimpleNamespace(ok=True, tool_name="read_file", error=None)
+        )
+        kwargs["on_tool_call"]("run_shell", {"command": "false"})
+        kwargs["on_tool_result"](
+            SimpleNamespace(ok=False, tool_name="run_shell", error="exit 1")
+        )
+        return "api response"
+
+    mock_driver.run.side_effect = run_with_tools
+    with patch("quimera.profiles.get", return_value=_make_api_profile()):
+        with patch.object(client, "_api_drivers", {"test-agent": mock_driver}):
+            result = client.call("test-agent", "prompt")
+
+    assert result == "api response"
+    renderer.show_turn_summary.assert_not_called()
+    client.flush_pending_summary()
+
+    renderer.show_turn_summary.assert_called_once()
+    summary_agent, detail = renderer.show_turn_summary.call_args.args
+    assert summary_agent == "test-agent"
+    assert detail["runtime"] == "openai"
+    assert [tool["tool"] for tool in detail["tools"]] == ["read_file", "run_shell"]
+    assert [tool["status"] for tool in detail["tools"]] == ["ok", "error"]
+    assert all(isinstance(tool["duration_ms"], int) for tool in detail["tools"])
+    assert client.tool_event_callback.call_count == 2
 
 
 def _make_api_profile(agent="test-agent"):

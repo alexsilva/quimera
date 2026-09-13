@@ -212,6 +212,43 @@ class SpyOutputPresenter:
             record["error"] = data.get("error")
         self._active_tool_calls.pop(key, None)
 
+    def record_tool_call(self, tool: str, arguments: dict | None = None) -> None:
+        """Registra início de tool executada por um driver sem stdout próprio."""
+        self._record_tool_event(
+            SpyEvent(
+                kind="tool",
+                text=f"usando {tool}",
+                transient=True,
+                data={
+                    "tool": str(tool or "ferramenta"),
+                    "operation": "start",
+                    "status": "running",
+                    "input": dict(arguments) if isinstance(arguments, dict) else None,
+                },
+            )
+        )
+
+    def record_tool_result(self, result) -> None:
+        """Registra conclusão de ToolResult sem duplicar a preview visual."""
+        tool = str(getattr(result, "tool_name", None) or "ferramenta")
+        ok = bool(getattr(result, "ok", False))
+        error = str(getattr(result, "error", None) or "").strip()
+        data = {
+            "tool": tool,
+            "operation": "end",
+            "status": "ok" if ok else "error",
+        }
+        if error:
+            data["error"] = {"type": "ToolError", "message": error}
+        self._record_tool_event(
+            SpyEvent(
+                kind="tool",
+                text=f"{'✓' if ok else '✗'} {tool}",
+                transient=True,
+                data=data,
+            )
+        )
+
     def _timeline_text(self, event: SpyEvent) -> str | None:
         data = self._normalize_tool_data(event)
         if not data:
@@ -366,7 +403,7 @@ class SpyOutputPresenter:
         if self.visibility == Visibility.QUIET:
             return
         runtime = str((detail or {}).get("runtime") or "").strip().lower()
-        if runtime and runtime != "cli":
+        if runtime and runtime not in {"cli", "openai"}:
             return
         if not runtime and not self._is_cli_agent(agent):
             return

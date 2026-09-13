@@ -1148,7 +1148,7 @@ class TerminalRenderer(RendererBase):
     def show_turn_summary(self, agent: str | None, detail: dict) -> None:
         """Exibe resumo compacto do turno em uma linha."""
         runtime = str((detail or {}).get("runtime") or "").strip().lower()
-        if runtime and runtime != "cli":
+        if runtime and runtime not in {"cli", "openai"}:
             return
         tools = detail.get("tools", []) if isinstance(detail, dict) else []
         if not isinstance(tools, list) or not tools:

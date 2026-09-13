@@ -439,7 +439,7 @@ def test_textual_feed_replaces_agent_lifecycle_with_final_message():
     assert not model.last_change.redraw
 
 
-def test_textual_feed_moves_turn_summary_after_agent_message():
+def test_textual_feed_merges_turn_summary_into_agent_message_block():
     model = TextualFeedModel()
     summary = TextualUiEvent(
         "turn_summary",
@@ -469,12 +469,163 @@ def test_textual_feed_moves_turn_summary_after_agent_message():
     )
     assert model.apply(final)
 
-    assert [event.kind for event in _events(model)] == [
+    # Stats do turno viram rodapé do próprio bloco da resposta — nunca um
+    # item separado que possa aparecer fora de ordem no feed.
+    assert [event.kind for event in _events(model)] == ["agent_message"]
+    footer = model.items[-1].event.payload.get("turn_summary")
+    assert footer["total"] == 5
+    assert footer["ok_count"] == 5
+    assert footer["duration"] == "157.9s"
+    assert model.items[-1].event.payload["content"] == "Resposta concluída."
+
+
+def test_textual_feed_agent_message_absorbs_mcp_tool_burst():
+    """O burst MCP HTTP (chave #mcp-client:) não pode sobrar acima da resposta."""
+    model = TextualFeedModel()
+    common = {
+        "session_id": "session-1",
+        "client_name": "claude-code",
+        "transport": "mcp_http",
+    }
+
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**common, "content": "⚒ grep_search", "mcp_msg_id": "1"},
+        agent="claude-fable",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_state",
+        {
+            **common,
+            "msg_id": "1",
+            "tool_name": "grep_search",
+            "status": "finished",
+            "duration_ms": 1500,
+        },
+        agent="claude-fable",
+    ))
+    assert len(model.items) == 1
+
+    final = TextualUiEvent(
         "agent_message",
-        "turn_summary",
-    ]
-    assert model.items[-1].event is summary
+        {"content": "Resposta final.", "run_id": "agentrun:1"},
+        agent="claude-fable",
+    )
+    assert model.apply(final)
+
+    assert [event.kind for event in _events(model)] == ["agent_message"]
+    payload = model.items[0].event.payload
+    assert payload["content"] == "Resposta final."
+    footer = payload["turn_summary"]
+    assert footer == {
+        "total": 1,
+        "ok_count": 1,
+        "err_count": 0,
+        "duration": "1.5s",
+    }
     assert model.last_change.redraw is True
+    assert not model._mcp_http_tool_stats_by_agent
+
+
+def test_textual_feed_agent_message_absorbs_stats_after_mcp_preview_expires():
+    """O dwell encerra só a preview; os stats aguardam a resposta final."""
+    now = [10.0]
+    model = TextualFeedModel(
+        clock=lambda: now[0],
+        tool_preview_dwell_seconds=0.5,
+    )
+    common = {
+        "session_id": "session-1",
+        "client_name": "codexcloud",
+        "transport": "mcp_http",
+    }
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**common, "content": "⚒ grep_search", "mcp_msg_id": "1"},
+        agent="codexcloud-gpt-5-6",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_state",
+        {
+            **common,
+            "msg_id": "1",
+            "tool_name": "grep_search",
+            "status": "finished",
+            "duration_ms": 750,
+        },
+        agent="codexcloud-gpt-5-6",
+    ))
+
+    now[0] = 10.5
+    assert model.expire_tool_previews()
+    assert model.items == []
+    assert model._mcp_http_tool_stats_by_agent
+
+    assert model.apply(TextualUiEvent(
+        "agent_message",
+        {"content": "Resposta final.", "run_id": "agentrun:codexcloud"},
+        agent="codexcloud-gpt-5-6",
+    ))
+    assert model.items[0].event.payload["turn_summary"] == {
+        "total": 1,
+        "ok_count": 1,
+        "err_count": 0,
+        "duration": "750ms",
+    }
+    assert not model._mcp_http_tool_stats_by_agent
+
+
+def test_textual_feed_prefers_turn_summary_event_over_burst_stats():
+    model = TextualFeedModel()
+    common = {
+        "session_id": "session-1",
+        "client_name": "claude-code",
+        "transport": "mcp_http",
+    }
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        {**common, "content": "⚒ read_file", "mcp_msg_id": "1"},
+        agent="claude-fable",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_state",
+        {
+            **common,
+            "msg_id": "1",
+            "tool_name": "read_file",
+            "status": "finished",
+            "duration_ms": 10,
+        },
+        agent="claude-fable",
+    ))
+    model.apply(TextualUiEvent(
+        "turn_summary",
+        {"total": 7, "ok_count": 6, "err_count": 1, "duration": "42.0s"},
+        agent="claude-fable",
+    ))
+
+    final = TextualUiEvent(
+        "agent_message",
+        {"content": "Resposta final."},
+        agent="claude-fable",
+    )
+    assert model.apply(final)
+
+    assert [event.kind for event in _events(model)] == ["agent_message"]
+    footer = model.items[0].event.payload["turn_summary"]
+    assert footer["total"] == 7
+    assert footer["duration"] == "42.0s"
+
+
+def test_textual_feed_agent_message_without_stats_has_no_footer():
+    model = TextualFeedModel()
+    final = TextualUiEvent(
+        "agent_message",
+        {"content": "Resposta simples."},
+        agent="claude-fable",
+    )
+    assert model.apply(final)
+    assert "turn_summary" not in model.items[0].event.payload
 
 
 def test_textual_feed_discards_stale_turn_summary_when_new_run_starts():
@@ -1376,6 +1527,32 @@ def test_textual_render_event_groups_mcp_http_identity_tools_and_summary():
     assert "☁ 🤖  mcp-http" in output
     assert "git_status" in output
     assert "3 ferramentas · 3 concluídas · 1.2s" in output
+
+
+def test_textual_render_event_agent_message_includes_turn_summary_footer():
+    event = TextualUiEvent(
+        "agent_message",
+        {
+            "content": "Resposta final.",
+            "label": "🤖  Claude Fable",
+            "style": "cyan",
+            "theme": "chat",
+            "turn_summary": {
+                "total": 5,
+                "ok_count": 4,
+                "err_count": 1,
+                "duration": "12.3s",
+            },
+        },
+        agent="claude-fable",
+    )
+    console = Console(record=True, width=120)
+
+    console.print(_render_event(event))
+    output = console.export_text()
+
+    assert "Resposta final." in output
+    assert "5 ferramentas · 4 concluídas · 1 falha · 12.3s" in output
 
 
 def _find_markdown(node):
@@ -2666,6 +2843,22 @@ def test_textual_renderer_exposes_legacy_visual_methods():
     assert emitted[0].compact is True
     assert emitted[-1].payload["total"] == 1
     assert emitted[-1].payload["ok_count"] == 1
+
+
+def test_textual_renderer_emits_openai_turn_summary():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_turn_summary(
+        "codexcloud-gpt-5-6",
+        {"runtime": "openai", "tools": [{"status": "ok", "duration_ms": 20}]},
+    )
+
+    assert [event.kind for event in emitted] == ["turn_summary"]
+    assert emitted[0].payload["total"] == 1
+    assert emitted[0].payload["ok_count"] == 1
 
 
 def test_textual_renderer_emits_structured_retry_activity():

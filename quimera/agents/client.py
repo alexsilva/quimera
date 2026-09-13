@@ -1245,6 +1245,8 @@ class AgentClient:
         if profile is None:
             self._show_error(f"[erro] agente desconhecido: {agent}")
             return None
+        self._pending_summary_render = None
+        self._spy_output_presenter.reset()
         connection = self._resolve_profile_connection(profile)
         if isinstance(connection, OpenAIConnection):
             self._spy_output_presenter.set_turn_runtime("openai")
@@ -1429,6 +1431,9 @@ class AgentClient:
                 show_status and not silent and not quiet) else nullcontext(None)
         status_label = f"[dim]{'conectando' if is_first_call else 'aguardando'} {connection.model}...[/dim]"
         effective_tool_executor = None
+        should_render_turn_summary = (
+            not silent and self.visibility in {Visibility.SUMMARY, Visibility.FULL}
+        )
 
         try:
             with status_cm as status:
@@ -1485,6 +1490,14 @@ class AgentClient:
                     with tool_execution_lock:
                         return active_tool_executions > 0
 
+                def _record_api_tool_call(name, arguments) -> None:
+                    self._spy_output_presenter.record_tool_call(name, arguments)
+
+                def _record_api_tool_result(tool_result) -> None:
+                    self._spy_output_presenter.record_tool_result(tool_result)
+                    if self.tool_event_callback is not None:
+                        self.tool_event_callback(agent, result=tool_result)
+
                 def _run_driver():
                     previous_scope = None
                     previous_cancel_event = None
@@ -1524,8 +1537,8 @@ class AgentClient:
                             base_dir=self.workspace_tmp_root,
                             quiet=quiet,
                             cancel_event=api_cancel_event,
-                            on_tool_result=(lambda tool_result: self.tool_event_callback(agent, result=tool_result))
-                            if self.tool_event_callback else None,
+                            on_tool_call=_record_api_tool_call,
+                            on_tool_result=_record_api_tool_result,
                             on_tool_abort=(
                                 lambda reason: self.tool_event_callback(agent, loop_abort=True, reason=reason))
                             if self.tool_event_callback else None,
@@ -1670,6 +1683,20 @@ class AgentClient:
                 clear_spinner = getattr(effective_tool_executor, "set_spinner_callbacks", None)
                 if callable(clear_spinner):
                     clear_spinner(None, None)
+            detail = self._spy_output_presenter.build_turn_detail()
+            if detail.get("tools"):
+                self.last_spy_turn_detail = self._spy_output_presenter.finalize_turn(
+                    agent,
+                    render_summary=False,
+                )
+                self._pending_summary_render = (
+                    agent,
+                    self.last_spy_turn_detail,
+                    should_render_turn_summary,
+                )
+            else:
+                self.last_spy_turn_detail = detail
+            self._spy_output_presenter.reset()
             self._agent_running = False
             self._running_agent = None
             self._stop_esc_monitor()

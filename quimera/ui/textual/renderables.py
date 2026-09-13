@@ -669,7 +669,7 @@ def _render_event(event: TextualUiEvent):
         style = str(payload.get("style", "cyan") or "cyan")
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         is_orchestrator = bool(payload.get("orchestrator", False))
-        return _render_turn_block(
+        block = _render_turn_block(
             theme_name,
             label,
             style,
@@ -677,6 +677,10 @@ def _render_event(event: TextualUiEvent):
             render_mode=str(payload.get("render_mode") or "auto"),
             is_orchestrator=is_orchestrator,
         )
+        turn_summary = payload.get("turn_summary") if isinstance(payload, dict) else None
+        if isinstance(turn_summary, dict) and int(turn_summary.get("total") or 0) > 0:
+            return Group(block, _build_turn_summary_renderable(turn_summary, event.agent))
+        return block
     if event.kind == "stream_start":
         payload = event.payload or {}
         label = _resolve_transport_label(payload, event.agent)

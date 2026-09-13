@@ -272,17 +272,27 @@ class TextualFeedModel:
             delegation_id = self._event_delegation_id(event)
             if delegation_id and delegation_id in self._delegation_slots:
                 return self._finish_delegation_group(event, delegation_id)
-            replaced, agent_key = self._replace_transient_with_final(event)
-            summary = self._pending_turn_summary_by_agent.pop(agent_key, None)
-            if summary is not None:
-                self._items.append(TextualFeedItem(summary, transient=False))
-                self._last_change = TextualFeedChange(True, redraw=True)
-            else:
-                self._last_change = TextualFeedChange(
-                    True,
-                    redraw=replaced,
-                    appended=None if replaced else self._items[-1],
+            summary = self._pop_pending_turn_summary(event)
+            burst_stats, bursts_removed = self._consume_mcp_tool_bursts(
+                event, exclude_key=self._final_replacement_key(event)
+            )
+            footer = self._turn_summary_footer(summary, burst_stats)
+            final_event = event
+            if footer is not None:
+                payload = (
+                    dict(event.payload)
+                    if isinstance(event.payload, dict)
+                    else {"content": str(event.payload or "")}
                 )
+                payload["turn_summary"] = footer
+                final_event = TextualUiEvent(event.kind, payload, agent=event.agent)
+            replaced, _ = self._replace_transient_with_final(final_event)
+            redraw = replaced or bursts_removed
+            self._last_change = TextualFeedChange(
+                True,
+                redraw=redraw,
+                appended=None if redraw else self._items[-1],
+            )
             return True
         if event.kind == "stream_start":
             agent = self._agent_key(event)
@@ -691,7 +701,12 @@ class TextualFeedModel:
         self._last_change = TextualFeedChange(changed, redraw=changed)
         return changed
 
-    def _remove_transient_keys(self, keys: list[str]) -> bool:
+    def _remove_transient_keys(
+        self,
+        keys: list[str],
+        *,
+        preserve_mcp_stats: bool = False,
+    ) -> bool:
         indexes = sorted(
             {
                 index
@@ -711,8 +726,9 @@ class TextualFeedModel:
             self._tool_request_lines_by_agent.pop(key, None)
             self._tool_request_seen_at_by_agent.pop(key, None)
             self._tool_request_expiry_by_agent.pop(key, None)
-            self._completed_tool_requests_by_agent.pop(key, None)
-            self._mcp_http_tool_stats_by_agent.pop(key, None)
+            if not preserve_mcp_stats:
+                self._completed_tool_requests_by_agent.pop(key, None)
+                self._mcp_http_tool_stats_by_agent.pop(key, None)
         if not indexes:
             return False
         for index in indexes:
@@ -886,6 +902,99 @@ class TextualFeedModel:
             ]
         merged["tools"] = visible_tools
         return TextualUiEvent(event.kind, merged, agent=event.agent)
+
+    def _pop_pending_turn_summary(self, event: TextualUiEvent) -> TextualUiEvent | None:
+        """Resgata o resumo pendente do turno tolerando variação de chave.
+
+        O ``turn_summary`` pode ter sido registrado com run context
+        (``base#run:<id>``) enquanto a resposta final resolve para outra chave
+        (ou vice-versa); qualquer pendência do mesmo agente base pertence ao
+        turno que está sendo finalizado agora.
+        """
+        key = self._final_replacement_key(event)
+        summary = self._pending_turn_summary_by_agent.pop(key, None)
+        if summary is not None:
+            return summary
+        base = str(event.agent or "__global__")
+        prefix = f"{base}#"
+        for candidate in list(self._pending_turn_summary_by_agent):
+            if candidate == base or candidate.startswith(prefix):
+                return self._pending_turn_summary_by_agent.pop(candidate)
+        return None
+
+    def _consume_mcp_tool_bursts(
+        self,
+        event: TextualUiEvent,
+        *,
+        exclude_key: str,
+    ) -> tuple[dict[str, int] | None, bool]:
+        """Absorve os bursts MCP HTTP do agente na resposta final.
+
+        O burst tem identidade própria (``#mcp-client:``), então a resposta
+        final não o substitui; sem esta absorção ele ficaria como bloco
+        separado acima da resposta até o dwell expirar, com os stats fora do
+        bloco de resultado.
+        """
+        base = str(event.agent or "__global__")
+        prefix = f"{base}#mcp-client:"
+        candidate_keys = set(self._transient_index_by_agent) | set(
+            self._mcp_http_tool_stats_by_agent
+        )
+        matched = [
+            key
+            for key in candidate_keys
+            if (key == base or key.startswith(prefix))
+            and (
+                key in self._mcp_http_tool_stats_by_agent
+                or key in self._tool_request_lines_by_agent
+            )
+        ]
+        if not matched:
+            return None, False
+        totals = {"total": 0, "ok_count": 0, "err_count": 0, "duration_ms": 0}
+        has_stats = False
+        for key in matched:
+            stats = self._mcp_http_tool_stats_by_agent.get(key)
+            if not stats:
+                continue
+            has_stats = True
+            for field in totals:
+                totals[field] += int(stats.get(field) or 0)
+        removable = [key for key in matched if key != exclude_key]
+        removed = self._remove_transient_keys(removable) if removable else False
+        if exclude_key in matched:
+            # O slot excluído vira a própria resposta final; só o estado MCP
+            # precisa ser descartado para não vazar para o próximo run.
+            self._tool_request_lines_by_agent.pop(exclude_key, None)
+            self._tool_request_seen_at_by_agent.pop(exclude_key, None)
+            self._tool_request_expiry_by_agent.pop(exclude_key, None)
+            self._completed_tool_requests_by_agent.pop(exclude_key, None)
+            self._mcp_http_tool_stats_by_agent.pop(exclude_key, None)
+        return (totals if has_stats else None), removed
+
+    @staticmethod
+    def _turn_summary_footer(
+        summary: TextualUiEvent | None,
+        burst_stats: dict[str, int] | None,
+    ) -> dict[str, Any] | None:
+        """Payload do rodapé de stats embutido no bloco da resposta final."""
+        if summary is not None and isinstance(summary.payload, dict) and summary.payload:
+            return dict(summary.payload)
+        if not burst_stats or not int(burst_stats.get("total") or 0):
+            return None
+        duration_ms = int(burst_stats.get("duration_ms") or 0)
+        if duration_ms <= 0:
+            duration = ""
+        elif duration_ms < 1000:
+            duration = f"{duration_ms}ms"
+        else:
+            duration = f"{duration_ms / 1000:.1f}s"
+        return {
+            "total": int(burst_stats.get("total") or 0),
+            "ok_count": int(burst_stats.get("ok_count") or 0),
+            "err_count": int(burst_stats.get("err_count") or 0),
+            "duration": duration,
+        }
 
     @staticmethod
     def _is_lifecycle_placeholder_event(event: TextualUiEvent) -> bool:
@@ -1096,7 +1205,8 @@ class TextualFeedModel:
 
         Enquanto houver qualquer tool do cliente ainda rodando, o bloco inteiro
         permanece visível. Quando todas estiverem concluídas e o último prazo de
-        inatividade vencer, removemos o transient completo, incluindo stats.
+        inatividade vencer, removemos o transient visual. O agregado de stats
+        permanece até a resposta final do agente para não depender do dwell.
         """
         now = self._clock()
         expired_agents: list[str] = []
@@ -1111,6 +1221,9 @@ class TextualFeedModel:
 
         changed = False
         for agent in expired_agents:
-            changed = self._remove_transient_keys([agent]) or changed
+            changed = self._remove_transient_keys(
+                [agent],
+                preserve_mcp_stats=True,
+            ) or changed
         self._last_change = TextualFeedChange(changed, redraw=changed)
         return changed
