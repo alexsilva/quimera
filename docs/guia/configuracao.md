@@ -6,7 +6,7 @@ O Quimera procura um diretório gravável entre locais candidatos do usuário e 
 
 | Arquivo | Conteúdo |
 |---|---|
-| `config.json` | Nome do usuário, janela de histórico, tema, densidade e idle timeout. |
+| `config.json` | Nome do usuário, janela de histórico, tema, densidade, idle timeout, visibilidade, threads, seleção de agentes e roteamento congelado/orquestrador. |
 | `connections.json` | Overrides e agentes dinâmicos criados por `--connect`. |
 | `.env` | Chaves simples `KEY=VALUE` para variáveis de modelo/API. |
 
@@ -46,9 +46,13 @@ Temas disponíveis na CLI incluem `panel`, `chat`, `rule`, `minimal`, `card` e `
 - `summary`: início/fim e resumo operacional;
 - `full`: stdout e stderr completos.
 
+Sem a flag, vale o valor salvo em `config.json` (ajustável pela janela
+`/config`); a flag é um override apenas da sessão.
+
 ## Paralelismo e timeouts
 
-- `--threads N` limita quantos agentes rodam em paralelo por rodada.
+- `--threads N` limita quantos agentes rodam em paralelo por rodada; sem a
+  flag, vale o valor salvo em `config.json`.
 - `--timeout N` define timeout de execução de agentes.
 - `--idle-timeout N` define timeout de inatividade do input.
 

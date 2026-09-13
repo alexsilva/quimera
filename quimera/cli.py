@@ -275,17 +275,21 @@ def main():
         help="Ativa métricas e auditoria de renderização em data/logs/render/",
     )
     parser.add_argument("--history-window", type=int, default=None)
-    parser.add_argument("--visibility", choices=[v.value for v in Visibility], default=Visibility.SUMMARY.value,
+    parser.add_argument("--visibility", choices=[v.value for v in Visibility], default=None,
                         help="Nível de visibilidade da execução do agente: quiet (stderr truncado), "
-                             "summary (início+fim), full (stdout+stderr completos). Padrão: summary")
+                             "summary (início+fim), full (stdout+stderr completos). "
+                             "Padrão: valor salvo na config (summary).")
     parser.add_argument(
         "--agents",
         metavar="AGENTE",
         nargs="+",
-        default=["*"],
-        help="Lista de agentes (ex: --agents claude gemini). O primeiro é o agente padrão.",
+        default=None,
+        help="Lista de agentes (ex: --agents claude gemini). O primeiro é o agente padrão. "
+             "Padrão: seleção salva na config, ou todos.",
     )
-    parser.add_argument("--threads", type=int, default=1, help="Máximo de agentes processados em paralelo por rodada")
+    parser.add_argument("--threads", type=int, default=None,
+                        help="Máximo de agentes processados em paralelo por rodada. "
+                             "Padrão: valor salvo na config (1).")
     parser.add_argument("--idle-timeout", dest="idle_timeout", type=int, default=None,
                         help="Idle timeout em segundos (sem stdout do agente). Padrão: valor salvo via --set-idle-timeout ou 180s.")
     parser.add_argument(
@@ -577,15 +581,23 @@ def main():
             _stop_test_fake_openai_backend(fake_openai_backend)
         return
 
-    agents = _expand_patterns(args.agents, agents_available)
-    agents_unknown = [a for a in agents if a not in agents_available]
-    if agents_unknown:
-        parser.error(
-            f"Agente(s) desconhecido(s): {', '.join(agents_unknown)}. Disponíveis: {', '.join(agents_available)}")
-
     cwd = Path.cwd()
     workspace = Workspace(cwd)
     config = ConfigManager(workspace.config_file)
+
+    if args.agents is not None:
+        agents = _expand_patterns(args.agents, agents_available)
+        agents_unknown = [a for a in agents if a not in agents_available]
+        if agents_unknown:
+            parser.error(
+                f"Agente(s) desconhecido(s): {', '.join(agents_unknown)}. Disponíveis: {', '.join(agents_available)}")
+    else:
+        # Sem --agents explícito, restaura a seleção persistida; nomes que
+        # deixaram de existir são ignorados em vez de derrubar a sessão.
+        saved_agents = config.selected_agents
+        agents = [a for a in (saved_agents or []) if a in agents_available]
+        if not agents:
+            agents = _expand_patterns(["*"], agents_available)
 
     if args.name is not None:
         config.set_user_name(" ".join(args.name).strip())
@@ -618,7 +630,7 @@ def main():
 
     _ensure_required_runtime_dependencies()
 
-    visibility = Visibility(args.visibility)
+    visibility = Visibility(args.visibility) if args.visibility else Visibility(config.visibility)
     fake_openai_backend = None
     if args.test and _test_mode_uses_fake_openai(agents):
         fake_openai_backend = _start_test_fake_openai_backend()
@@ -639,7 +651,8 @@ def main():
         app = QuimeraApp(cwd,
                          debug=args.debug,
                          history_window=args.history_window,
-                         agents=agents, threads=args.threads,
+                         agents=agents,
+                         threads=args.threads if args.threads is not None else config.threads,
                          idle_timeout_seconds=args.idle_timeout,
                          workspace=workspace,
                          visibility=visibility,
@@ -649,7 +662,7 @@ def main():
         if args.interactive_test:
             if TerminalRenderer is None or AgentClient is None:
                 raise RuntimeError("Modo interativo não disponível: dependências de UI não instaladas.")
-            default_agent = agents[0] if args.agents != ["*"] and agents else "claude"
+            default_agent = agents[0] if args.agents is not None and agents else "claude"
             default_prompt = "Use uma ferramenta de shell para executar o comando `pwd` e me diga o diretório atual. Se a ferramenta pedir aprovação, mostre o prompt normalmente."
 
             if args.test_agent:

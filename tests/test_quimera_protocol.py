@@ -142,6 +142,11 @@ class DummyConfigManager:
         self.idle_timeout_seconds = 300
         self.theme = None
         self.density = "normal"
+        self.visibility = "summary"
+        self.threads = 1
+        self.selected_agents = None
+        self.frozen_agent = None
+        self.orchestrator_agent = None
 
 
 def _make_summary_fakes(existing_summary, merged_summary):

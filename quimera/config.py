@@ -13,6 +13,9 @@ DEFAULT_MAX_CONVERSATION_ENTRY_CHARS = 8000
 DEFAULT_MAX_PROMPT_CHARS = 128000
 DEFAULT_WORKSPACE_POLICY = "strict"
 WORKSPACE_POLICY_PRESETS = {"strict", "developer", "autonomous"}
+DEFAULT_VISIBILITY = "summary"
+VISIBILITY_OPTIONS = {"quiet", "summary", "full"}
+DEFAULT_THREADS = 1
 
 
 class ConfigManager:
@@ -121,6 +124,63 @@ class ConfigManager:
     def set_density(self, value: str):
         """Persiste a densidade de layout."""
         self._update(density=value if isinstance(value, str) and value in DENSITY_OPTIONS else None)
+
+    @property
+    def visibility(self) -> str:
+        """Retorna o nível de visibilidade persistido; fallback para o padrão."""
+        value = str(self._load().get("visibility") or "").strip().lower()
+        if value in VISIBILITY_OPTIONS:
+            return value
+        return DEFAULT_VISIBILITY
+
+    def set_visibility(self, value: str | None):
+        """Persiste o nível de visibilidade da execução dos agentes."""
+        normalized = str(value or "").strip().lower()
+        self._update(visibility=normalized if normalized in VISIBILITY_OPTIONS else None)
+
+    @property
+    def threads(self) -> int:
+        """Retorna o máximo de agentes processados em paralelo por rodada."""
+        value = self._load().get("threads")
+        if type(value) is int and value > 0:
+            return value
+        return DEFAULT_THREADS
+
+    def set_threads(self, value: int | None):
+        """Persiste o máximo de agentes em paralelo por rodada."""
+        self._update(threads=value if type(value) is int and value > 0 else None)
+
+    @property
+    def selected_agents(self) -> list[str] | None:
+        """Retorna a seleção de agentes persistida; None significa todos."""
+        value = self._load().get("selected_agents")
+        if isinstance(value, list) and value and all(isinstance(s, str) and s for s in value):
+            return value
+        return None
+
+    def set_selected_agents(self, agents: list[str] | None):
+        """Persiste a seleção de agentes ativa; lista vazia remove a chave."""
+        cleaned = [str(a) for a in (agents or []) if isinstance(a, str) and a]
+        self._update(selected_agents=cleaned or None)
+
+    @property
+    def frozen_agent(self) -> str | None:
+        """Retorna o agente congelado (s/<agente>) persistido, se houver."""
+        value = self._load().get("frozen_agent")
+        return value if isinstance(value, str) and value else None
+
+    @property
+    def orchestrator_agent(self) -> str | None:
+        """Retorna o agente orquestrador (o/<agente>) persistido, se houver."""
+        value = self._load().get("orchestrator_agent")
+        return value if isinstance(value, str) and value else None
+
+    def set_agent_routing(self, frozen: str | None, orchestrator: str | None):
+        """Persiste congelamento/orquestrador do pool na mesma escrita atômica."""
+        self._update(
+            frozen_agent=frozen or None,
+            orchestrator_agent=orchestrator or None,
+        )
 
     @property
     def mcp_clients(self) -> list[str] | None:

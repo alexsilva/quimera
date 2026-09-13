@@ -17,9 +17,9 @@ quimera [opções] [test_agent]
 | `--whoami` | Mostra identificação/configuração relacionada ao usuário. |
 | `--debug` | Ativa métricas e auditoria de renderização em logs. |
 | `--history-window N` | Define janela de histórico desta sessão. |
-| `--visibility quiet|summary|full` | Controla detalhe da execução de agentes. |
-| `--agents AGENTE [AGENTE ...]` | Lista agentes ativos; o primeiro é o primário. |
-| `--threads N` | Máximo de agentes processados em paralelo por rodada. |
+| `--visibility quiet|summary|full` | Controla detalhe da execução de agentes nesta sessão; sem a flag, vale o valor salvo na config. |
+| `--agents AGENTE [AGENTE ...]` | Lista agentes ativos desta sessão; o primeiro é o primário. Sem a flag, vale a seleção salva na config (ou todos). |
+| `--threads N` | Máximo de agentes processados em paralelo por rodada nesta sessão; sem a flag, vale o valor salvo na config. |
 | `--idle-timeout N` | Timeout de inatividade do input (sem stdout do agente). Padrão: 180s. |
 | `--set-idle-timeout N` | Persiste idle timeout padrão na config e encerra. |
 | `--interactive-test` | Modo de teste interativo para automação. |

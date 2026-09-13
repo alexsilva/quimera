@@ -108,6 +108,19 @@ class ConfigScreen(ModalScreen[None]):
                     id="cfg_workspace_policy",
                 )
 
+                yield Label("Visibilidade da Execução:")
+                active_visibility = getattr(
+                    getattr(self.quimera_app, "visibility", None), "value", None
+                ) or self.config.visibility
+                yield Select(
+                    [(v, v) for v in ("quiet", "summary", "full")],
+                    value=active_visibility,
+                    id="cfg_visibility",
+                )
+
+                yield Label("Agentes em Paralelo (threads):")
+                yield Input(value=str(self.config.threads), id="cfg_threads")
+
                 yield Label("Tema:")
                 theme_options = [(t, t) for t in theme_names()]
                 yield Select(theme_options, value=self.config.theme, id="cfg_theme")
@@ -167,7 +180,16 @@ class ConfigScreen(ModalScreen[None]):
             self.parent_app.notify("Timeout inativo deve ser um número inteiro positivo.", severity="error")
             return
 
+        try:
+            threads = int(self.query_one("#cfg_threads", Input).value)
+            if threads <= 0:
+                raise ValueError
+        except ValueError:
+            self.parent_app.notify("Threads deve ser um número inteiro positivo.", severity="error")
+            return
+
         workspace_policy = self.query_one("#cfg_workspace_policy", Select).value
+        visibility = self.query_one("#cfg_visibility", Select).value
         theme = self.query_one("#cfg_theme", Select).value
         density = self.query_one("#cfg_density", Select).value
 
@@ -177,23 +199,50 @@ class ConfigScreen(ModalScreen[None]):
             density = self.config.density
         if workspace_policy is None or workspace_policy is Select.BLANK:
             workspace_policy = self.config.workspace_policy
+        if visibility is None or visibility is Select.BLANK:
+            visibility = self.config.visibility
 
         # Salvar no config manager
         self.config.set_user_name(user_name)
         self.config.set_history_window(history_window)
         self.config.set_auto_summarize_threshold(auto_summarize)
         self.config.set_idle_timeout_seconds(idle_timeout)
-        self.config.set_workspace_policy(str(workspace_policy))
         self.config.set_theme(str(theme))
         self.config.set_density(str(density))
+        threads_changed = threads != getattr(self.quimera_app, "threads", threads)
+        self.config.set_threads(threads)
+
+        # Policy e visibility propagam para a sessão viva quando o app expõe
+        # os setters (que também persistem); senão persiste-se direto.
+        policy_setter = getattr(self.quimera_app, "set_workspace_policy_name", None)
+        if callable(policy_setter):
+            policy_setter(str(workspace_policy))
+        else:
+            self.config.set_workspace_policy(str(workspace_policy))
+        visibility_setter = getattr(self.quimera_app, "set_visibility_name", None)
+        if callable(visibility_setter):
+            visibility_setter(str(visibility))
+        else:
+            self.config.set_visibility(str(visibility))
 
         # Atualizar dinamicamente
         input_widget = self.parent_app.query_one("#input")
         input_widget.set_prefix(PromptFormatter.format_user_prompt(user_name))
+        effective_user_name = user_name or self.config.user_name
+        if hasattr(self.quimera_app, "user_name"):
+            self.quimera_app.user_name = effective_user_name
+        memory_selector = getattr(
+            getattr(self.quimera_app, "prompt_builder", None), "memory_selector", None
+        )
+        if memory_selector is not None:
+            memory_selector.user_name = effective_user_name
 
         renderer = getattr(self.quimera_app, "renderer", None)
         if renderer is not None and callable(getattr(renderer, "set_theme", None)):
             renderer.set_theme(str(theme))
 
-        self.parent_app.notify("Configurações salvas com sucesso!", severity="information")
+        message = "Configurações salvas com sucesso!"
+        if threads_changed:
+            message += " Threads vale a partir da próxima sessão."
+        self.parent_app.notify(message, severity="information")
         self.dismiss()

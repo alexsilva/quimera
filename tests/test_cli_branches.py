@@ -34,6 +34,9 @@ class _FakeConfig:
         self.user_name = "Tester"
         self.theme_set = None
         self.history_window_set = None
+        self.selected_agents = None
+        self.visibility = "summary"
+        self.threads = 1
         _FakeConfig.last_instance = self
 
     def set_user_name(self, name):
@@ -1149,3 +1152,102 @@ def test_main_mcp_http_ignora_token_estatico_loaded_from_app_env_file(monkeypatc
         assert _FakeAppLoadsEnv.last_instance.mcp_http_tokens == []
     finally:
         os.environ.pop("QUIMERA_MCP_TOKEN", None)
+
+
+def _run_main_with_mcp_stub(monkeypatch):
+    with patch("quimera.runtime.mcp.session.MCPServer"):
+        cli.main()
+
+
+def test_main_sem_agents_usa_selecao_persistida(monkeypatch):
+    """Sem --agents, a seleção salva na config define o pool da sessão."""
+
+    class _ConfigComSelecao(_FakeConfig):
+        def __init__(self, config_file):
+            super().__init__(config_file)
+            self.selected_agents = ["codex"]
+
+    _patch_main_basics(monkeypatch, agent_names=["claude", "codex"])
+    monkeypatch.setattr(cli, "ConfigManager", _ConfigComSelecao)
+    _FakeApp.last_instance = None
+    monkeypatch.setattr(sys, "argv", ["quimera"])
+
+    _run_main_with_mcp_stub(monkeypatch)
+
+    assert _FakeApp.last_instance.kwargs["agents"] == ["codex"]
+
+
+def test_main_selecao_persistida_ignora_agentes_desconhecidos(monkeypatch):
+    """Nomes salvos que não existem mais são descartados sem derrubar o boot."""
+
+    class _ConfigComSelecao(_FakeConfig):
+        def __init__(self, config_file):
+            super().__init__(config_file)
+            self.selected_agents = ["fantasma", "claude"]
+
+    _patch_main_basics(monkeypatch, agent_names=["claude"])
+    monkeypatch.setattr(cli, "ConfigManager", _ConfigComSelecao)
+    _FakeApp.last_instance = None
+    monkeypatch.setattr(sys, "argv", ["quimera"])
+
+    _run_main_with_mcp_stub(monkeypatch)
+
+    assert _FakeApp.last_instance.kwargs["agents"] == ["claude"]
+
+
+def test_main_agents_explicito_ignora_selecao_persistida(monkeypatch):
+    """--agents explícito é override de sessão e vence a seleção salva."""
+
+    class _ConfigComSelecao(_FakeConfig):
+        def __init__(self, config_file):
+            super().__init__(config_file)
+            self.selected_agents = ["codex"]
+
+    _patch_main_basics(monkeypatch, agent_names=["claude", "codex"])
+    monkeypatch.setattr(cli, "ConfigManager", _ConfigComSelecao)
+    _FakeApp.last_instance = None
+    monkeypatch.setattr(sys, "argv", ["quimera", "--agents", "claude"])
+
+    _run_main_with_mcp_stub(monkeypatch)
+
+    assert _FakeApp.last_instance.kwargs["agents"] == ["claude"]
+
+
+def test_main_visibility_e_threads_caem_na_config(monkeypatch):
+    """Sem flags, visibility e threads vêm dos valores persistidos na config."""
+
+    class _ConfigComPreferencias(_FakeConfig):
+        def __init__(self, config_file):
+            super().__init__(config_file)
+            self.visibility = "full"
+            self.threads = 3
+
+    _patch_main_basics(monkeypatch)
+    monkeypatch.setattr(cli, "ConfigManager", _ConfigComPreferencias)
+    _FakeApp.last_instance = None
+    monkeypatch.setattr(sys, "argv", ["quimera"])
+
+    _run_main_with_mcp_stub(monkeypatch)
+
+    assert _FakeApp.last_instance.kwargs["visibility"] == cli.Visibility.FULL
+    assert _FakeApp.last_instance.kwargs["threads"] == 3
+
+
+def test_main_flags_de_sessao_vencem_config(monkeypatch):
+    """--visibility e --threads explícitos são overrides de sessão."""
+
+    class _ConfigComPreferencias(_FakeConfig):
+        def __init__(self, config_file):
+            super().__init__(config_file)
+            self.visibility = "quiet"
+            self.threads = 5
+
+    _patch_main_basics(monkeypatch)
+    monkeypatch.setattr(cli, "ConfigManager", _ConfigComPreferencias)
+    _FakeApp.last_instance = None
+    monkeypatch.setattr(sys, "argv", ["quimera", "--visibility", "summary", "--threads", "2"])
+
+    _run_main_with_mcp_stub(monkeypatch)
+
+    assert _FakeApp.last_instance.kwargs["visibility"] == cli.Visibility.SUMMARY
+    assert _FakeApp.last_instance.kwargs["threads"] == 2

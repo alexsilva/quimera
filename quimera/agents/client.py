@@ -337,6 +337,13 @@ class AgentClient:
         """Callback que suspende idle timeout durante operações externas."""
         return self._pause_idle_if
 
+    def set_visibility(self, visibility) -> None:
+        """Atualiza o nível de visibilidade em runtime, incluindo o spy presenter."""
+        self.visibility = Visibility(visibility)
+        presenter = getattr(self, "_spy_output_presenter", None)
+        if presenter is not None:
+            presenter.visibility = self.visibility
+
     def share_cancel_event(self, cancel_event: threading.Event) -> None:
         """Compartilha um evento de cancelamento com outro fluxo de execução."""
         if not all(callable(getattr(cancel_event, name, None)) for name in ("set", "clear", "is_set")):

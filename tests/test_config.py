@@ -160,3 +160,77 @@ def test_preserves_existing_keys(tmp_path):
     assert data["user_name"] == "Alice"
     assert data["history_window"] == 5
     assert data["idle_timeout_seconds"] == 90
+
+
+def test_visibility_property_and_setter(tmp_path):
+    """visibility persiste níveis válidos e cai no default para inválidos."""
+    from quimera.config import ConfigManager
+
+    config_file = tmp_path / "config.json"
+    cm = ConfigManager(config_file)
+
+    assert cm.visibility == "summary"
+
+    cm.set_visibility("full")
+    assert ConfigManager(config_file).visibility == "full"
+
+    cm.set_visibility("invalid")
+    assert ConfigManager(config_file).visibility == "summary"
+    assert "visibility" not in json.loads(config_file.read_text())
+
+
+def test_threads_property_and_setter(tmp_path):
+    """threads persiste inteiros positivos e ignora valores inválidos."""
+    from quimera.config import ConfigManager
+
+    config_file = tmp_path / "config.json"
+    cm = ConfigManager(config_file)
+
+    assert cm.threads == 1
+
+    cm.set_threads(4)
+    assert ConfigManager(config_file).threads == 4
+
+    cm.set_threads(0)
+    assert ConfigManager(config_file).threads == 1
+    assert "threads" not in json.loads(config_file.read_text())
+
+
+def test_selected_agents_property_and_setter(tmp_path):
+    """selected_agents persiste a seleção; lista vazia remove a chave."""
+    from quimera.config import ConfigManager
+
+    config_file = tmp_path / "config.json"
+    cm = ConfigManager(config_file)
+
+    assert cm.selected_agents is None
+
+    cm.set_selected_agents(["claude", "codex"])
+    assert ConfigManager(config_file).selected_agents == ["claude", "codex"]
+
+    cm.set_selected_agents([])
+    assert ConfigManager(config_file).selected_agents is None
+    assert "selected_agents" not in json.loads(config_file.read_text())
+
+
+def test_agent_routing_property_and_setter(tmp_path):
+    """frozen/orchestrator persistem juntos e limpam ao voltar para None."""
+    from quimera.config import ConfigManager
+
+    config_file = tmp_path / "config.json"
+    cm = ConfigManager(config_file)
+
+    assert cm.frozen_agent is None
+    assert cm.orchestrator_agent is None
+
+    cm.set_agent_routing("claude", None)
+    assert ConfigManager(config_file).frozen_agent == "claude"
+    assert ConfigManager(config_file).orchestrator_agent is None
+
+    cm.set_agent_routing("claude", "claude")
+    assert ConfigManager(config_file).orchestrator_agent == "claude"
+
+    cm.set_agent_routing(None, None)
+    data = json.loads(config_file.read_text())
+    assert "frozen_agent" not in data
+    assert "orchestrator_agent" not in data

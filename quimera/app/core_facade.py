@@ -25,6 +25,7 @@ from ..constants import (
     CMD_POLICY, CMD_PROMPT, CMD_RELOAD, CMD_RESET, CMD_STATS, CMD_TASK,
     CMD_CONFIG,
     MSG_SESSION_LOG,
+    Visibility,
 )
 from ..modes import MODES
 from ..runtime.workspace_policy import WorkspacePolicy
@@ -47,6 +48,9 @@ class CoreFacadeMixin:
 
     def set_selected_agents(self, agents: list[str]) -> None:
         self.selected_agents = list(agents)
+        setter = getattr(self.__dict__.get("config"), "set_selected_agents", None)
+        if callable(setter):
+            setter(list(agents))
 
     def get_approval_handler(self):
         return self.__dict__.get("_approval_handler")
@@ -517,6 +521,23 @@ class CoreFacadeMixin:
         approval_config = getattr(approval, "config", None)
         if approval_config is not None:
             approval_config.workspace_policy = self.workspace_policy
+
+    def get_visibility(self) -> Visibility:
+        """Retorna o nível de visibilidade ativo da sessão."""
+        return self.visibility
+
+    def set_visibility_name(self, name: str) -> str:
+        """Define, persiste e propaga o nível de visibilidade dos agentes."""
+        visibility = Visibility(str(name).strip().lower())
+        self.visibility = visibility
+        setter = getattr(self.__dict__.get("config"), "set_visibility", None)
+        if callable(setter):
+            setter(visibility.value)
+        agent_client = self.__dict__.get("agent_client")
+        set_client_visibility = getattr(agent_client, "set_visibility", None)
+        if callable(set_client_visibility):
+            set_client_visibility(visibility)
+        return visibility.value
 
     @property
     def execution_mode(self) -> object | None:

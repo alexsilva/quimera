@@ -186,6 +186,10 @@ class AppAssembler:
         workspace = opts.workspace if opts.workspace is not None else Workspace(opts.cwd)
         EnvConfig(workspace.env_file).apply_to_environ()
         config = ConfigManager(workspace.config_file)
+        self._restore_agent_routing(agent_pool, config, selected_agents)
+        routing_setter = getattr(config, "set_agent_routing", None)
+        if callable(routing_setter):
+            agent_pool.set_routing_listener(routing_setter)
         workspace_policy_name = WorkspacePolicy.normalize_name(
             getattr(config, "workspace_policy", "strict")
         )
@@ -253,6 +257,19 @@ class AppAssembler:
         app.agent_bug_detector = plat.agent_bug_detector
         app.bug_correlator = plat.bug_correlator
 
+    @staticmethod
+    def _restore_agent_routing(agent_pool: AgentPool, config: ConfigManager, selected_agents: list) -> None:
+        """Reaplica congelamento/orquestrador persistidos (s/, o/) no pool novo."""
+        orchestrator = getattr(config, "orchestrator_agent", None)
+        frozen = getattr(config, "frozen_agent", None)
+        if orchestrator:
+            # o/ exige pelo menos um outro agente; se a sessão não permite,
+            # não degrada para freeze — o estado salvo era de orquestração.
+            if orchestrator in selected_agents and len(selected_agents) > 1:
+                agent_pool.set_orchestrator(orchestrator)
+        elif frozen and frozen in selected_agents:
+            agent_pool.freeze(frozen)
+
     # ------------------------------------------------------------------
     # Fase 2: UI — renderer, input gate/broker e canais de evento
     # ------------------------------------------------------------------
@@ -263,6 +280,15 @@ class AppAssembler:
         )
         if opts.renderer_override is not None:
             renderer = opts.renderer_override
+            # O renderer externo (Textual) nasce com o tema default; sem este
+            # replay, o tema/densidade persistidos nunca chegam à TUI.
+            set_theme = getattr(renderer, "set_theme", None)
+            if callable(set_theme) and plat.active_theme:
+                set_theme(plat.active_theme)
+            set_density = getattr(renderer, "set_density", None)
+            density = getattr(plat.config, "density", None)
+            if callable(set_density) and density:
+                set_density(density)
         else:
             renderer = TerminalRenderer(
                 theme=plat.active_theme,
@@ -660,7 +686,9 @@ class AppAssembler:
             task_classifier=app.task_classifier,
             user_name=ui.user_name,
             prompt_builder=rt.prompt_builder,
-            visibility=ui.visibility,
+            # Getter em vez de valor fixo: mudanças de visibility em runtime
+            # (tela /config) valem também para execuções em background.
+            get_visibility=app.get_visibility,
             show_error_message=sess.system_layer.show_error_message,
             show_muted_message=sess.system_layer.show_muted_message,
             get_execution_mode=app.execution_mode_state.get,

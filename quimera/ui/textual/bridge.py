@@ -116,13 +116,15 @@ class TextualUiBridge:
         label = "Alex"
         with self._lock:
             user_name = getattr(self.quimera_app, "user_name", None)
+            renderer = getattr(self.quimera_app, "renderer", None)
         if str(user_name or "").strip():
             label = str(user_name).strip()
+        theme_name = getattr(renderer, "theme_name", None) or themes.DEFAULT_THEME
         payload = {
             "content": clean,
             "label": label,
             "style": "green",
-            "theme": themes.DEFAULT_THEME,
+            "theme": theme_name,
         }
         if submission is not None:
             payload["submission_id"] = submission.submission_id

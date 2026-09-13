@@ -88,3 +88,59 @@ def test_wire_registers_cancel_propagation_to_background_clients(wired):
         call(tasks.task_services.cancel_background_work),
         call(tasks.debate_service.cancel_active),
     ]
+
+
+class _RoutingConfig:
+    """Config mínima com estado de roteamento persistido."""
+
+    def __init__(self, frozen=None, orchestrator=None):
+        self.frozen_agent = frozen
+        self.orchestrator_agent = orchestrator
+
+
+def test_restore_agent_routing_reaplica_orquestrador_persistido():
+    """Orquestrador salvo volta ativo quando o agente segue no pool com companhia."""
+    from quimera.app.agent_pool import AgentPool
+
+    pool = AgentPool(["claude", "codex"])
+    wiring.AppAssembler._restore_agent_routing(
+        pool, _RoutingConfig(frozen="claude", orchestrator="claude"), ["claude", "codex"]
+    )
+    assert pool.orchestrator_agent == "claude"
+    assert pool.frozen_agent == "claude"
+
+
+def test_restore_agent_routing_reaplica_congelado_sem_orquestrador():
+    """Sem orquestrador salvo, o freeze persiste sozinho."""
+    from quimera.app.agent_pool import AgentPool
+
+    pool = AgentPool(["claude", "codex"])
+    wiring.AppAssembler._restore_agent_routing(
+        pool, _RoutingConfig(frozen="codex"), ["claude", "codex"]
+    )
+    assert pool.frozen_agent == "codex"
+    assert pool.orchestrator_agent is None
+
+
+def test_restore_agent_routing_ignora_agente_fora_da_selecao():
+    """Roteamento salvo para agente ausente da sessão não derruba o boot."""
+    from quimera.app.agent_pool import AgentPool
+
+    pool = AgentPool(["codex"])
+    wiring.AppAssembler._restore_agent_routing(
+        pool, _RoutingConfig(frozen="claude", orchestrator="claude"), ["codex"]
+    )
+    assert pool.frozen_agent is None
+    assert pool.orchestrator_agent is None
+
+
+def test_restore_agent_routing_orquestrador_exige_outro_agente():
+    """Orquestrador sozinho no pool não é restaurado (o/ exige outro agente)."""
+    from quimera.app.agent_pool import AgentPool
+
+    pool = AgentPool(["claude"])
+    wiring.AppAssembler._restore_agent_routing(
+        pool, _RoutingConfig(frozen="claude", orchestrator="claude"), ["claude"]
+    )
+    assert pool.orchestrator_agent is None
+    assert pool.frozen_agent is None

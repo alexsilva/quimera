@@ -13,6 +13,20 @@ class AgentPool:
         self._agents = list(agents)
         self._frozen_agent: str | None = None
         self._orchestrator_agent: str | None = None
+        self._routing_listener = None
+
+    def set_routing_listener(self, callback) -> None:
+        """Registra callback(frozen, orchestrator) chamado após mudanças de roteamento."""
+        self._routing_listener = callback
+
+    def _notify_routing(self) -> None:
+        # Fora do lock: o listener pode fazer IO (persistência em disco).
+        listener = self._routing_listener
+        if not callable(listener):
+            return
+        with self._lock:
+            frozen, orchestrator = self._frozen_agent, self._orchestrator_agent
+        listener(frozen, orchestrator)
 
     @property
     def agents(self) -> list[str]:
@@ -45,6 +59,7 @@ class AgentPool:
                 raise ValueError(f"Agente {agent_name} não está no pool")
             self._frozen_agent = agent_name
             self._orchestrator_agent = None
+        self._notify_routing()
 
     @property
     def orchestrator_agent(self) -> str | None:
@@ -66,12 +81,14 @@ class AgentPool:
                 raise ValueError(f"Agente {agent_name} não está no pool")
             self._orchestrator_agent = agent_name
             self._frozen_agent = agent_name
+        self._notify_routing()
 
     def unfreeze(self) -> None:
         """Descongela: take_primary() volta a rotacionar. Também limpa o orquestrador."""
         with self._lock:
             self._frozen_agent = None
             self._orchestrator_agent = None
+        self._notify_routing()
 
     @property
     def frozen_agent(self) -> str | None:
@@ -84,19 +101,27 @@ class AgentPool:
                 self._agents.append(name)
 
     def remove(self, name: str) -> None:
+        cleared = False
         with self._lock:
             if name in self._agents:
                 self._agents.remove(name)
                 if self._frozen_agent == name:
                     self._frozen_agent = None
                     self._orchestrator_agent = None
+                    cleared = True
+        if cleared:
+            self._notify_routing()
 
     def set(self, agents: list[str]) -> None:
+        cleared = False
         with self._lock:
             self._agents = list(agents)
             if self._frozen_agent is not None and self._frozen_agent not in self._agents:
                 self._frozen_agent = None
                 self._orchestrator_agent = None
+                cleared = True
+        if cleared:
+            self._notify_routing()
 
     def rotate(self) -> None:
         with self._lock:

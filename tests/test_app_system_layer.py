@@ -1483,6 +1483,32 @@ def test_readd_apos_set_nao_reactiva_orquestrador():
     assert pool.orchestrator_agent is None
 
 
+def test_routing_listener_notificado_em_freeze_orquestrador_e_unfreeze():
+    """O listener de roteamento recebe cada transição de freeze/orquestrador."""
+    pool = AgentPool(["claude", "codex"])
+    events = []
+    pool.set_routing_listener(lambda frozen, orchestrator: events.append((frozen, orchestrator)))
+
+    pool.freeze("claude")
+    pool.set_orchestrator("codex")
+    pool.unfreeze()
+
+    assert events == [("claude", None), ("codex", "codex"), (None, None)]
+
+
+def test_routing_listener_notificado_quando_remove_limpa_congelado():
+    """remove()/set() só notificam quando de fato limpam o estado congelado."""
+    pool = AgentPool(["claude", "codex"])
+    pool.freeze("claude")
+    events = []
+    pool.set_routing_listener(lambda frozen, orchestrator: events.append((frozen, orchestrator)))
+
+    pool.remove("codex")   # não era o congelado: sem notificação
+    pool.remove("claude")  # limpa o congelado: notifica
+
+    assert events == [(None, None)]
+
+
 class StructuredRenderer(DummyRenderer):
     """Renderer com canal estruturado de atividade de agente."""
 
@@ -1594,3 +1620,45 @@ def test_handle_command_safely_returns_handler_result():
     app.handle_command = layer.handle_command
 
     assert _handle_command_safely(app, "/nao-existe") is False
+
+
+def test_set_selected_agents_persiste_selecao_na_config(tmp_path):
+    """Mudança de seleção em runtime (/connect, /reload) sobrevive ao restart."""
+    from quimera.app.core import QuimeraApp
+    from quimera.config import ConfigManager
+
+    app = QuimeraApp.__new__(QuimeraApp)
+    app.config = ConfigManager(tmp_path / "config.json")
+
+    app.set_selected_agents(["claude", "codex"])
+
+    assert app.selected_agents == ["claude", "codex"]
+    assert ConfigManager(tmp_path / "config.json").selected_agents == ["claude", "codex"]
+
+
+def test_set_selected_agents_sem_config_nao_quebra():
+    """Instâncias parciais (via __new__) seguem funcionando sem config."""
+    from quimera.app.core import QuimeraApp
+
+    app = QuimeraApp.__new__(QuimeraApp)
+    app.set_selected_agents(["claude"])
+
+    assert app.selected_agents == ["claude"]
+
+
+def test_set_visibility_name_persiste_e_propaga(tmp_path):
+    """set_visibility_name grava na config e propaga para o agent_client."""
+    from quimera.app.core import QuimeraApp
+    from quimera.config import ConfigManager
+    from quimera.constants import Visibility
+
+    app = QuimeraApp.__new__(QuimeraApp)
+    app.config = ConfigManager(tmp_path / "config.json")
+    received = []
+    app.agent_client = SimpleNamespace(set_visibility=received.append)
+
+    assert app.set_visibility_name("full") == "full"
+
+    assert app.visibility == Visibility.FULL
+    assert ConfigManager(tmp_path / "config.json").visibility == "full"
+    assert received == [Visibility.FULL]
