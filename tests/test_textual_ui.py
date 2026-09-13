@@ -274,6 +274,22 @@ def test_textual_renderer_routes_prompt_preview_to_modal_event():
     }
 
 
+def test_textual_renderer_routes_text_window_to_modal_event():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_text_window("Contexto", "linha 1\nlinha 2")
+
+    assert len(emitted) == 1
+    assert emitted[0].kind == "text_window"
+    assert emitted[0].payload == {
+        "title": "Contexto",
+        "content": "linha 1\nlinha 2",
+    }
+
+
 def test_textual_renderer_adds_run_metadata_to_agent_events():
     bridge = TextualUiBridge()
     emitted = []
@@ -357,6 +373,35 @@ def test_prompt_preview_screen_shows_content_and_closes_with_button():
             await pilot.pause()
             assert not isinstance(app.screen, PromptPreviewScreen)
             assert app.ALLOW_SELECT is True
+
+    asyncio.run(run_test())
+
+
+def test_prompt_preview_screen_accepts_custom_title():
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import Label
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test() as pilot:
+            app.push_screen(
+                PromptPreviewScreen("", "conteúdo do contexto", title="Contexto")
+            )
+            await pilot.pause()
+
+            screen = app.screen
+            assert isinstance(screen, PromptPreviewScreen)
+            assert screen.window_title == "Contexto"
+            title = screen.query_one("#prompt_preview_title", Label)
+            assert "Contexto" in str(title.render())
+            content = screen.query_one("#prompt_preview_content", PromptPreviewLog)
+            assert "conteúdo do contexto" in str(content.lines[0])
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, PromptPreviewScreen)
 
     asyncio.run(run_test())
 

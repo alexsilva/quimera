@@ -140,6 +140,10 @@ class RendererBase:
     def show_prompt_preview(self, agent, preview):
         return None
 
+    def show_text_window(self, title, content):
+        """Exibe texto longo em janela dedicada; fallback textual via show_plain."""
+        self.show_plain(f"\n{content}\n")
+
     def update_agent_transient(self, agent, message):
         return None
 

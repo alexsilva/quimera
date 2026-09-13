@@ -773,6 +773,15 @@ class TextualRenderer(RendererBase):
             )
         )
 
+    def show_text_window(self, title: str, content: str) -> None:
+        """Solicita a exibição de texto longo em uma janela modal."""
+        self._bridge.emit(
+            TextualUiEvent(
+                "text_window",
+                {"title": str(title), "content": str(content)},
+            )
+        )
+
     def set_summarizing(self, active: bool) -> None:
         """Sinaliza início/fim de sumarização para animação no header."""
         self._bridge.emit(TextualUiEvent("summarizing", active))

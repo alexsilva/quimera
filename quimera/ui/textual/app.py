@@ -794,6 +794,16 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     )
                 )
                 return
+            if event.kind == "text_window":
+                payload = event.payload if isinstance(event.payload, dict) else {}
+                self.push_screen(
+                    PromptPreviewScreen(
+                        str(payload.get("agent") or event.agent or ""),
+                        str(payload.get("content") or ""),
+                        title=str(payload.get("title") or "") or None,
+                    )
+                )
+                return
             if event.kind == "notification":
                 payload = event.payload or {}
                 message = str(payload.get("message") or "").strip()

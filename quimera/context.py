@@ -159,12 +159,12 @@ class ContextManager:
         return ""
 
     def show(self):
-        """Exibe show."""
+        """Exibe o contexto atual em janela dedicada (modal na TUI, texto no CLI)."""
         context = self.load()
         if not context:
             self.renderer.show_system("\n[contexto vazio]\n")
             return
-        self.renderer.show_plain(f"\n{context}\n")
+        self.renderer.show_text_window("Contexto", context)
 
     def edit(self):
         """Executa edit."""

@@ -28,6 +28,7 @@ CONTRACT = [
     "show_no_response",
     "show_delegation",
     "show_prompt_preview",
+    "show_text_window",
     "notify_agent_retry",
     "notify_agent_failover",
     "show_notification",
@@ -140,6 +141,11 @@ class TestRendererBaseContract(unittest.TestCase):
             renderer.system_messages,
             ["linha", "TOOLS: 1 chamadas · 1 ok · 0 erro · 1.2s"],
         )
+
+    def test_show_text_window_falls_back_to_show_plain(self):
+        renderer = _RecordingRenderer()
+        renderer.show_text_window("Contexto", "conteúdo longo")
+        self.assertEqual(renderer.system_messages, ["\nconteúdo longo\n"])
 
     def test_capability_defaults(self):
         self.assertFalse(RendererBase.supports_agent_feed)

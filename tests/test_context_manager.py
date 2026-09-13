@@ -100,11 +100,14 @@ def test_load_empty(tmp_path, renderer):
 
 
 def test_show(temp_files, renderer):
-    """Verifica que show exibe o conteúdo base através do renderer."""
+    """Verifica que show exibe o conteúdo em janela dedicada através do renderer."""
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     cm.show()
-    renderer.show_plain.assert_called_once()
+    renderer.show_text_window.assert_called_once()
+    title, content = renderer.show_text_window.call_args[0]
+    assert title == "Contexto"
+    assert "Base Content" in content
 
 
 def test_show_empty(tmp_path, renderer):

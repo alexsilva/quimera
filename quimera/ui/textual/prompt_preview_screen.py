@@ -60,18 +60,19 @@ class PromptPreviewScreen(ModalScreen[None]):
     BINDINGS = [("escape", "close", "Fechar")]
     AUTO_FOCUS = "#prompt_preview_content"
 
-    def __init__(self, agent: str, preview: str) -> None:
+    def __init__(self, agent: str, preview: str, *, title: str | None = None) -> None:
         """Inicializa o modal com o agente e o texto já construído."""
         super().__init__()
         self.agent = str(agent or "agente")
         self.preview = str(preview or "")
+        self.window_title = str(title) if title else f"Prompt Preview - {self.agent}"
         self._previous_app_allow_select: bool | None = None
 
     def compose(self) -> ComposeResult:
         """Monta o conteúdo rolável e o comando de fechamento."""
         with Container(id="prompt_preview_dialog"):
             yield Label(
-                f"Prompt Preview - {self.agent}",
+                self.window_title,
                 id="prompt_preview_title",
             )
             yield PromptPreviewLog(
