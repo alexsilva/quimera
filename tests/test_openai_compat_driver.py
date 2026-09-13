@@ -22,6 +22,7 @@ from quimera.runtime.drivers.openai_compat import (
      DEFAULT_MAX_CONNECTIONS,
      MAX_TOOL_HOPS_BY_RELIABILITY,
      OpenAICompatDriver,
+     ToolLoopBudget,
      _prune_tool_loop_messages,
      _sanitize_assistant_text,
      _strip_thinking,
@@ -341,6 +342,30 @@ def test_run_sends_quimera_current_turn_as_final_user_message_to_openai_api():
     assert "Leia o README" in messages[-2]["content"]
 
 
+def test_base_driver_restores_recent_conversation_roles():
+    """O driver genérico também restaura papéis reais do histórico.
+
+    Sem o split, a conversa inteira chega achatada em um único bloco user e o
+    modelo nunca vê as próprias falas no papel assistant — fonte de confusão
+    de identidade em salas multiagente.
+    """
+    driver, _mock_client = _make_driver()
+    prompt = _rendered(
+        '<header title="Identificação">\n'
+        'Você é deepseek-v4.\nUsuário humano: ALEX\n'
+        '</header>\n'
+        '<recent_conversation title="Conversa recente">\n'
+        '[ALEX]: pedido anterior\n[DEEPSEEK-V4]: resposta anterior\n'
+        '</recent_conversation>\n'
+        '<current_turn title="Pedido atual de ALEX">continue</current_turn>'
+    )
+
+    messages = driver._build_messages_from_prompt(prompt)
+
+    assert [message["role"] for message in messages] == [
+        "system", "user", "assistant", "user",
+    ]
+    assert messages[2]["content"] == "resposta anterior"
 
 
 def test_prune_tool_loop_messages_keeps_head_and_recent_tail():
@@ -783,6 +808,52 @@ def test_prune_records_dropped_calls_in_ledger_and_accumulates():
     assert "padrão-0" in ledger2["content"]
     assert "padrão-12" in ledger2["content"]
     assert repruned[-1]["tool_call_id"] == "call_139"
+
+
+def test_prune_tool_loop_messages_honors_custom_budget():
+    """Um orçamento maior mantém intacto o que o default já podaria (e vice-versa)."""
+    messages = [{"role": "user", "content": "user"}]
+    for i in range(4):
+        messages.append({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": f"call_{i}",
+                "type": "function",
+                "function": {"name": "foo", "arguments": "{}"},
+            }],
+        })
+        messages.append({"role": "tool", "tool_call_id": f"call_{i}", "content": "x" * 400})
+
+    # Dentro do orçamento default nada muda.
+    assert _prune_tool_loop_messages(list(messages)) == messages
+
+    tight = ToolLoopBudget(max_messages=5, max_chars=1_200, recent_window_chars=600)
+    pruned = _prune_tool_loop_messages(list(messages), tight)
+
+    assert len(pruned) <= tight.max_messages
+    ledger = pruned[1]
+    assert ledger["content"].startswith(openai_compat_module._LEDGER_HEADER)
+    assert pruned[-1]["tool_call_id"] == "call_3"
+
+
+def test_driver_loop_budget_defaults_and_override():
+    custom = ToolLoopBudget(
+        max_messages=480,
+        max_chars=720_000,
+        recent_window_chars=360_000,
+        max_tool_result_chars=48_000,
+    )
+    with patch("quimera.runtime.drivers.openai_compat.OpenAI"):
+        default_driver = OpenAICompatDriver(model="m", base_url="http://x")
+        custom_driver = OpenAICompatDriver(model="m", base_url="http://x", loop_budget=custom)
+
+    assert default_driver._loop_budget == ToolLoopBudget(
+        max_messages=_MAX_TOOL_LOOP_MESSAGES,
+        max_chars=_MAX_TOOL_LOOP_CHARS,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    )
+    assert custom_driver._loop_budget == custom
 
 
 def test_run_request_prefix_stable_and_guidance_ephemeral():

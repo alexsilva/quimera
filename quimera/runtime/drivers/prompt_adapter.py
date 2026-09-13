@@ -22,6 +22,7 @@ _MULTIMODAL_USER_BLOCKS = frozenset({"current_turn", "task_delegation", "task_re
 
 _CONVERSATION_ENTRY_RE = re.compile(r"(?m)^\[([^\]\n]+)\]:[ \t]?(.*)$")
 _HUMAN_NAME_RE = re.compile(r"(?im)^Usu[aá]rio humano:\s*(.+?)\s*$")
+_SELF_NAME_RE = re.compile(r"(?im)^Voc[eê] [eé]\s+(.+?)\.?\s*$")
 _GENERIC_HUMAN_ROLES = frozenset({"human", "user", "usuário", "usuario"})
 
 # Mapa direto: PromptKind -> nome do bloco -> role no payload OpenAI-compatible.
@@ -89,8 +90,32 @@ def _human_role_names(blocks) -> set[str]:
     return names
 
 
-def _split_recent_conversation(content: str, human_roles: set[str]) -> list[dict]:
-    """Reconstrói papéis do bloco canônico ``[PAPEL]: conteúdo``."""
+def _self_role_names(blocks) -> set[str]:
+    """Nomes pelos quais o próprio agente aparece rotulado na conversa."""
+    names: set[str] = set()
+    for block in blocks:
+        if block.name != "header":
+            continue
+        match = _SELF_NAME_RE.search(str(block.content or ""))
+        if match:
+            names.add(match.group(1).strip().casefold())
+    return names
+
+
+def _split_recent_conversation(
+    content: str,
+    human_roles: set[str],
+    self_names: set[str],
+) -> list[dict]:
+    """Reconstrói papéis do bloco canônico ``[PAPEL]: conteúdo``.
+
+    Humanos viram ``user`` e falas do próprio agente viram ``assistant``,
+    ambos sem o rótulo. Falas de outros agentes viram ``user`` com o rótulo
+    ``[NOME]:`` preservado — sem isso o modelo receberia mensagens alheias no
+    papel assistant e as trataria como suas, confundindo identidade em salas
+    multiagente. Se o header não identifica o próprio agente, todo não-humano
+    vira ``assistant`` (comportamento anterior).
+    """
     text = str(content or "").strip()
     if not text or text == "[sem itens residuais na conversa recente]":
         return []
@@ -106,9 +131,14 @@ def _split_recent_conversation(content: str, human_roles: set[str]) -> list[dict
         body = (first_line + continuation).strip()
         if not body:
             continue
-        label = match.group(1).strip().casefold()
-        role = "user" if label in human_roles else "assistant"
-        messages.append({"role": role, "content": body})
+        label = match.group(1).strip()
+        label_key = label.casefold()
+        if label_key in human_roles:
+            messages.append({"role": "user", "content": body})
+        elif label_key in self_names or not self_names:
+            messages.append({"role": "assistant", "content": body})
+        else:
+            messages.append({"role": "user", "content": f"[{label}]: {body}"})
     return messages
 
 
@@ -134,13 +164,16 @@ def _build_openai_messages_from_prompt(
         raise ValueError(f"PromptKind sem mapeamento de roles no adapter: {kind.value}")
     messages: list[dict] = []
     human_roles = _human_role_names(blocks) if split_recent_conversation else set()
+    self_names = _self_role_names(blocks) if split_recent_conversation else set()
 
     for block in blocks:
         role = roles.get(block.name)
         if not role:
             continue
         if split_recent_conversation and block.name == "recent_conversation":
-            messages.extend(_split_recent_conversation(block.content, human_roles))
+            messages.extend(
+                _split_recent_conversation(block.content, human_roles, self_names)
+            )
             continue
         messages.append(_message_from_block(block, role))
 

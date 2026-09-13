@@ -21,20 +21,32 @@ from .openai_compat import (
     DEFAULT_MAX_CONNECTIONS,
     FatalAPIError,
     OpenAICompatDriver,
+    ToolLoopBudget,
     TransientAPIError,
     _parse_tool_arguments,
     _sanitize_assistant_text,
 )
-from .prompt_adapter import _build_openai_messages_from_prompt
 
 _logger = logging.getLogger(__name__)
 
 DEFAULT_CODEX_CLOUD_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
-# Máximo de itens de reasoning retidos para reenvio junto aos function_calls.
-# O backend exige o item de reasoning imediatamente antes do function_call
-# correspondente quando `store=false`.
+# Máximo de function_calls com cadeia de reasoning retida para reenvio.
+# Com `store=false` o backend exige que os itens de reasoning sejam
+# reenviados a cada request; cada entrada guarda TODOS os itens que
+# precederam o function_call correspondente, não apenas o último — descartar
+# parte da cadeia faz o modelo perder a memória de trabalho entre hops.
 _MAX_REASONING_ITEMS = 256
+
+# Orçamento do loop de tools dimensionado para a janela dos modelos do
+# backend Codex (gpt-5.x, ~272k tokens): o default herdado (240k chars) força
+# compactação prematura com ~¾ da janela ainda livre, e o modelo "esquece"
+# o que leu em hops antigos muito antes do necessário.
+CODEX_LOOP_BUDGET = ToolLoopBudget(
+    max_messages=480,
+    max_chars=720_000,
+    recent_window_chars=360_000,
+)
 
 # Equivalente à seção "Preamble messages" do system prompt do Codex CLI.
 # Sem esta instrução, os modelos gpt-5.6-* reduzem o canal commentary
@@ -125,6 +137,7 @@ class CodexCloudDriver(OpenAICompatDriver):
         max_model_requests: int | None = None,
         auth: CodexCloudAuth | None = None,
         http_client: httpx.Client | None = None,
+        loop_budget: ToolLoopBudget | None = None,
     ) -> None:
         super().__init__(
             model=model,
@@ -135,6 +148,7 @@ class CodexCloudDriver(OpenAICompatDriver):
             extra_body=extra_body,
             max_connections=max_connections,
             max_model_requests=max_model_requests,
+            loop_budget=loop_budget or CODEX_LOOP_BUDGET,
         )
         self._responses_url = base_url.rstrip("/") + "/responses"
         self._auth = auth or CodexCloudAuth()
@@ -144,8 +158,9 @@ class CodexCloudDriver(OpenAICompatDriver):
             timeout=httpx.Timeout(connect=15.0, read=read_timeout, write=30.0, pool=30.0),
         )
         self._owns_http = http_client is None
-        # call_id -> item de reasoning que precede o function_call no output.
-        self._reasoning_items: OrderedDict[str, dict] = OrderedDict()
+        # call_id -> itens de reasoning que precedem o function_call no output,
+        # na ordem original do stream.
+        self._reasoning_items: OrderedDict[str, tuple[dict, ...]] = OrderedDict()
 
     def close(self) -> None:
         """Fecha o cliente HTTP próprio além dos recursos herdados."""
@@ -159,13 +174,6 @@ class CodexCloudDriver(OpenAICompatDriver):
     # ------------------------------------------------------------------
     # Conversão chat -> Responses
     # ------------------------------------------------------------------
-
-    def _build_messages_from_prompt(self, prompt) -> list[dict]:
-        """Preserva os papéis reais do histórico no backend Codex."""
-        return _build_openai_messages_from_prompt(
-            prompt,
-            split_recent_conversation=True,
-        )
 
     def _build_responses_payload(self, messages: list[dict], tools: list[dict]) -> dict:
         """Monta o corpo da requisição Responses a partir do histórico chat."""
@@ -197,9 +205,7 @@ class CodexCloudDriver(OpenAICompatDriver):
                 for tool_call in message.get("tool_calls") or []:
                     function = tool_call.get("function") or {}
                     call_id = tool_call.get("id")
-                    reasoning_item = self._reasoning_items.get(str(call_id))
-                    if reasoning_item is not None:
-                        input_items.append(reasoning_item)
+                    input_items.extend(self._reasoning_items.get(str(call_id)) or ())
                     input_items.append({
                         "type": "function_call",
                         "call_id": call_id,
@@ -329,8 +335,8 @@ class CodexCloudDriver(OpenAICompatDriver):
             user_message=f"O Codex Cloud rejeitou a requisição (HTTP {status}).",
         )
 
-    def _remember_reasoning(self, call_id: str, item: dict) -> None:
-        self._reasoning_items[call_id] = item
+    def _remember_reasoning(self, call_id: str, items: list[dict]) -> None:
+        self._reasoning_items[call_id] = tuple(items)
         while len(self._reasoning_items) > _MAX_REASONING_ITEMS:
             self._reasoning_items.popitem(last=False)
 
@@ -343,7 +349,9 @@ class CodexCloudDriver(OpenAICompatDriver):
         """Consome os eventos SSE de um turno e retorna (texto, tool_calls)."""
         text = ""
         raw_tool_calls: list[dict] = []
-        pending_reasoning: dict | None = None
+        # Todos os itens de reasoning desde o último function_call, na ordem
+        # do stream — a cadeia inteira precisa ser reenviada nos próximos hops.
+        pending_reasoning: list[dict] = []
         reasoning_open = False
         # Itens de mensagem com phase=commentary (narração de progresso dos
         # modelos gpt-5.6-*): exibidos como thinking, fora do texto final.
@@ -422,12 +430,12 @@ class CodexCloudDriver(OpenAICompatDriver):
                 if itype == "message" and str(item.get("id") or "") in commentary_item_ids:
                     _close_reasoning()
                 elif itype == "reasoning":
-                    pending_reasoning = item
+                    pending_reasoning.append(item)
                 elif itype == "function_call":
                     call_id = str(item.get("call_id") or "")
-                    if pending_reasoning is not None and call_id:
+                    if pending_reasoning and call_id:
                         self._remember_reasoning(call_id, pending_reasoning)
-                        pending_reasoning = None
+                        pending_reasoning = []
                     raw_tool_calls.append({
                         "call_id": call_id,
                         "name": item.get("name") or "",

@@ -21,12 +21,14 @@ from quimera.profiles.codexcloud import (
 )
 from quimera.runtime.codex_auth import CodexAuthError, CodexCloudAuth
 from quimera.runtime.drivers.codexcloud import (
+    CODEX_LOOP_BUDGET,
     PREAMBLE_INSTRUCTIONS,
     CodexCloudDriver,
     _chat_tools_to_responses_tools,
 )
 from quimera.runtime.drivers.openai_compat import (
     FatalAPIError,
+    ToolLoopBudget,
     TransientAPIError,
     _categorize_api_exception,
 )
@@ -206,7 +208,7 @@ def test_auth_rejects_api_key_only_login(tmp_path):
 
 def test_build_responses_payload_maps_roles_and_tools():
     driver = _make_driver(lambda request: httpx.Response(500))
-    driver._remember_reasoning("call-1", {"type": "reasoning", "id": "rs-1", "summary": []})
+    driver._remember_reasoning("call-1", [{"type": "reasoning", "id": "rs-1", "summary": []}])
     messages = [
         {"role": "system", "content": "regra 1"},
         {"role": "system", "content": "regra 2"},
@@ -259,9 +261,13 @@ def test_build_responses_payload_appends_preamble_without_system():
 def test_codexcloud_driver_restores_structured_history_roles():
     driver = _make_driver(lambda request: httpx.Response(500))
     prompt = PromptText(
-        '<header title="Identificação">\nUsuário humano: ALEX\n</header>\n'
+        '<header title="Identificação">\n'
+        'Você é codexcloud-gpt-5-6.\nUsuário humano: ALEX\n'
+        '</header>\n'
         '<recent_conversation title="Conversa recente">\n'
-        '[ALEX]: pedido anterior\n[CODEXCLOUD-GPT-5-6]: resposta anterior\n'
+        '[ALEX]: pedido anterior\n'
+        '[CODEXCLOUD-GPT-5-6]: resposta anterior\n'
+        '[CLAUDE-SONNET]: observação de outro agente\n'
         '</recent_conversation>\n'
         '<current_turn title="Pedido atual de ALEX">continue</current_turn>'
     )
@@ -269,9 +275,19 @@ def test_codexcloud_driver_restores_structured_history_roles():
     messages = driver._build_messages_from_prompt(prompt)
 
     assert [message["role"] for message in messages] == [
-        "system", "user", "assistant", "user",
+        "system", "user", "assistant", "user", "user",
     ]
+    assert messages[2]["content"] == "resposta anterior"
+    assert messages[3]["content"] == "[CLAUDE-SONNET]: observação de outro agente"
     assert messages[-1]["content"] == "continue"
+    driver.close()
+
+
+def test_codexcloud_uses_long_context_loop_budget():
+    driver = _make_driver(lambda request: httpx.Response(500))
+    assert driver._loop_budget == CODEX_LOOP_BUDGET
+    assert driver._loop_budget.max_chars > ToolLoopBudget().max_chars
+    assert driver._loop_budget.recent_window_chars > ToolLoopBudget().recent_window_chars
     driver.close()
 
 
@@ -420,7 +436,66 @@ def test_responses_turn_collects_function_calls_and_reasoning_items():
     assert tool_calls[0]["id"] == "call-9"
     assert tool_calls[0]["arguments"] == {"path": "x"}
     assert tool_calls[0]["argument_error"] is None
-    assert driver._reasoning_items["call-9"] == reasoning_item
+    assert driver._reasoning_items["call-9"] == (reasoning_item,)
+    driver.close()
+
+
+def test_responses_turn_retains_full_reasoning_chain_per_function_call():
+    """Todos os itens de reasoning antes do function_call são retidos, em ordem.
+
+    Sequência real dos gpt-5.x: reasoning intercalado com commentary antes da
+    chamada. Com store=false o backend espera a cadeia inteira reenviada nos
+    hops seguintes; guardar só o último item quebra a memória de trabalho.
+    """
+    reasoning_1 = {"type": "reasoning", "id": "rs-1", "encrypted_content": "enc-1"}
+    reasoning_2 = {"type": "reasoning", "id": "rs-2", "encrypted_content": "enc-2"}
+    events = [
+        {"type": "response.output_item.done", "item": reasoning_1},
+        {"type": "response.output_item.added", "item": {
+            "type": "message", "phase": "commentary", "id": "msg-c1",
+        }},
+        {"type": "response.output_item.done", "item": {
+            "type": "message", "phase": "commentary", "id": "msg-c1",
+        }},
+        {"type": "response.output_item.done", "item": reasoning_2},
+        {"type": "response.output_item.done", "item": {
+            "type": "function_call", "call_id": "call-1",
+            "name": "read_file", "arguments": '{"path": "x"}',
+        }},
+        {"type": "response.completed", "response": {"usage": {}}},
+    ]
+    driver = _make_driver(lambda request: httpx.Response(200, text=_sse(events)))
+
+    _text, tool_calls = driver._responses_turn([{"role": "user", "content": "oi"}], [])
+
+    assert [call["id"] for call in tool_calls] == ["call-1"]
+    assert driver._reasoning_items["call-1"] == (reasoning_1, reasoning_2)
+    driver.close()
+
+
+def test_build_responses_payload_replays_reasoning_chain_in_order():
+    driver = _make_driver(lambda request: httpx.Response(500))
+    reasoning_1 = {"type": "reasoning", "id": "rs-1", "encrypted_content": "enc-1"}
+    reasoning_2 = {"type": "reasoning", "id": "rs-2", "encrypted_content": "enc-2"}
+    driver._remember_reasoning("call-1", [reasoning_1, reasoning_2])
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": '{"path": "a.txt"}'},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": '{"ok": true}'},
+    ]
+
+    body = driver._build_responses_payload(messages, [])
+
+    assert [item.get("id") or item["type"] for item in body["input"]] == [
+        "rs-1", "rs-2", "function_call", "function_call_output",
+    ]
     driver.close()
 
 

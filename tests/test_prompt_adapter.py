@@ -47,7 +47,7 @@ def test_build_openai_messages_can_restore_recent_conversation_roles_for_codexcl
         '</header>\n'
         '<recent_conversation title="Conversa recente">\n'
         '[ALEX]: investigue o erro\n'
-        '[CODEX-GPT-5-6]: vou verificar\nlinha complementar\n'
+        '[CODEXCLOUD-GPT-5-6]: vou verificar\nlinha complementar\n'
         '[ALEX]: prossiga\n'
         '</recent_conversation>\n'
         '<current_turn title="Pedido atual de ALEX">\n'
@@ -66,6 +66,60 @@ def test_build_openai_messages_can_restore_recent_conversation_roles_for_codexcl
     assert messages[1]["content"] == "investigue o erro"
     assert messages[2]["content"] == "vou verificar\nlinha complementar"
     assert messages[-1]["content"] == "corrija agora"
+
+
+def test_split_recent_conversation_keeps_other_agents_as_labeled_user():
+    """Falas de outros agentes não podem chegar como assistant sem rótulo.
+
+    O papel assistant significa "eu disse isso"; mensagens alheias nesse papel
+    fazem o modelo confundir identidade em salas multiagente. Elas viram user
+    com o rótulo [NOME]: preservado para manter a atribuição.
+    """
+    prompt = (
+        '<header title="Identificação">\n'
+        'Você é claude-fable.\nUsuário humano: ALEX\n'
+        'Agentes de IA nesta conversa: claude-sonnet, codex-gpt-5-6\n'
+        '</header>\n'
+        '<recent_conversation title="Conversa recente">\n'
+        '[ALEX]: analisa isso\n'
+        '[CODEX-GPT-5-6]: já olhei o arquivo\n'
+        '[CLAUDE-FABLE]: vou revisar\n'
+        '</recent_conversation>\n'
+        '<current_turn title="Pedido atual de ALEX">segue</current_turn>'
+    )
+
+    messages = _build_openai_messages_from_prompt(
+        _rendered(prompt),
+        split_recent_conversation=True,
+    )
+
+    assert [message["role"] for message in messages] == [
+        "system", "user", "user", "assistant", "user",
+    ]
+    assert messages[1]["content"] == "analisa isso"
+    assert messages[2]["content"] == "[CODEX-GPT-5-6]: já olhei o arquivo"
+    assert messages[3]["content"] == "vou revisar"
+
+
+def test_split_recent_conversation_without_self_name_keeps_legacy_assistant():
+    """Sem "Você é <nome>" no header, todo não-humano segue como assistant."""
+    prompt = (
+        '<header title="Identificação">\nUsuário humano: ALEX\n</header>\n'
+        '<recent_conversation title="Conversa recente">\n'
+        '[ALEX]: pedido\n[AGENTE-X]: resposta\n'
+        '</recent_conversation>\n'
+        '<current_turn title="Pedido atual de ALEX">segue</current_turn>'
+    )
+
+    messages = _build_openai_messages_from_prompt(
+        _rendered(prompt),
+        split_recent_conversation=True,
+    )
+
+    assert [message["role"] for message in messages] == [
+        "system", "user", "assistant", "user",
+    ]
+    assert messages[2]["content"] == "resposta"
 
 
 def test_split_recent_conversation_omits_empty_history_sentinel():

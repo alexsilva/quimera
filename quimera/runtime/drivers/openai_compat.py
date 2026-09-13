@@ -12,6 +12,7 @@ import logging
 import re
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -229,6 +230,23 @@ _COMPACTION_NOTE = (
     "\n…[saída antiga compactada pelo runtime; o conteúdo integral já foi "
     "processado em um hop anterior]"
 )
+
+
+@dataclass(frozen=True)
+class ToolLoopBudget:
+    """Orçamentos do harness de contexto do loop de tools.
+
+    Medidos em caracteres serializados (proxy de tokens sem tokenizer). Os
+    defaults servem modelos de janela modesta (~128k tokens); drivers de
+    modelos com janela maior devem passar valores proporcionais — orçamento
+    muito abaixo da janela real força compactação prematura e o modelo perde
+    o que leu em hops antigos.
+    """
+
+    max_messages: int = _MAX_TOOL_LOOP_MESSAGES
+    max_chars: int = _MAX_TOOL_LOOP_CHARS
+    recent_window_chars: int = _RECENT_TOOL_WINDOW_CHARS
+    max_tool_result_chars: int = _MAX_TOOL_RESULT_CHARS
 
 # Ledger de chamadas removidas do contexto: evita que o modelo re-explore
 # ações cujos pares foram descartados por limite de espaço.
@@ -511,7 +529,10 @@ def _build_ledger_message(entries: list[str]) -> dict:
     return {"role": "user", "content": body}
 
 
-def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
+def _prune_tool_loop_messages(
+    messages: list[dict],
+    budget: ToolLoopBudget | None = None,
+) -> list[dict]:
     """Compacta e limita o histórico do loop de tools sem apagar a memória.
 
     Política em camadas, aplicada apenas quando o histórico excede os limites:
@@ -524,10 +545,12 @@ def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
     O prefixo (prompt, conversa e ledger anterior) nunca é removido, e os
     invariantes assistant/tool_call_id são preservados em todas as fases.
     """
+    if budget is None:
+        budget = ToolLoopBudget()
     messages = _clean_message_sequence(messages)
     if (
-        len(messages) <= _MAX_TOOL_LOOP_MESSAGES
-        and _messages_size(messages) <= _MAX_TOOL_LOOP_CHARS
+        len(messages) <= budget.max_messages
+        and _messages_size(messages) <= budget.max_chars
     ):
         return messages
 
@@ -569,8 +592,8 @@ def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
 
     def _over_budget(candidate_messages: list[dict]) -> bool:
         return (
-            len(candidate_messages) > _MAX_TOOL_LOOP_MESSAGES
-            or _messages_size(candidate_messages) > _MAX_TOOL_LOOP_CHARS
+            len(candidate_messages) > budget.max_messages
+            or _messages_size(candidate_messages) > budget.max_chars
         )
 
     # Fase 1: compacta pares fora da janela recente (medida em caracteres),
@@ -581,7 +604,7 @@ def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
         assistant, tools = pairs[index]
         pair_chars = _messages_size([assistant, *tools])
         if (
-            cumulative + pair_chars > _RECENT_TOOL_WINDOW_CHARS
+            cumulative + pair_chars > budget.recent_window_chars
             and index < len(pairs) - _MIN_RECENT_PAIRS_FULL
         ):
             keep_full_from = index + 1
@@ -727,12 +750,16 @@ class OpenAICompatDriver:
         extra_body: Optional[dict] = None,
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
         max_model_requests: int | None = None,
+        loop_budget: ToolLoopBudget | None = None,
     ) -> None:
         """Inicializa uma instância de OpenAICompatDriver.
         extra_body: dicionário opcional mesclado no corpo da requisição (ex: {"thinking": {"type": "enabled"}}).
         max_connections: limite de chamadas concorrentes ao backend (padrão: 4).
         max_model_requests: orçamento de requests por execução; None preserva
-            o limite histórico associado a tool_use_reliability."""
+            o limite histórico associado a tool_use_reliability.
+        loop_budget: orçamentos do harness de contexto do loop de tools; None
+            usa os defaults de ToolLoopBudget. Drivers de modelos com janela
+            grande devem passar valores proporcionais à janela real."""
         self._semaphore = _backend_semaphore(base_url, api_key, max_connections)
         if OpenAI is None:
             raise ImportError(
@@ -760,10 +787,19 @@ class OpenAICompatDriver:
             else default_request_budget
         )
         self.extra_body = dict(extra_body) if extra_body else None
+        self._loop_budget = loop_budget or ToolLoopBudget()
 
     def _build_messages_from_prompt(self, prompt: PromptText) -> list[dict]:
-        """Converte o prompt preservando um ponto de extensão por provider."""
-        return _build_openai_messages_from_prompt(prompt)
+        """Converte o prompt preservando um ponto de extensão por provider.
+
+        A conversa recente é restaurada com papéis reais (user/assistant) em
+        vez de um bloco user achatado: sem isso o modelo nunca vê as próprias
+        falas no papel assistant e confunde identidade em salas multiagente.
+        """
+        return _build_openai_messages_from_prompt(
+            prompt,
+            split_recent_conversation=True,
+        )
 
     def _build_turn_guidance(self, hop: int, max_tool_hops: int) -> str:
         """Nota efêmera de orçamento e convergência anexada ao fim do request.
@@ -1006,7 +1042,7 @@ class OpenAICompatDriver:
                         )
                         if on_tool_result is not None:
                             on_tool_result(result)
-                        payload = result.to_prompt_payload(_MAX_TOOL_RESULT_CHARS)
+                        payload = result.to_prompt_payload(self._loop_budget.max_tool_result_chars)
                         signature = (tc["name"], _canonical_call_arguments(tc))
                         previous_hop = executed_call_hops.get(signature)
                         if previous_hop is not None:
@@ -1046,7 +1082,7 @@ class OpenAICompatDriver:
                         if on_tool_abort is not None:
                             on_tool_abort("invalid_tool_loop")
                         return "Falha: loop de ferramenta inválida detectado."
-                    messages = _prune_tool_loop_messages(messages)
+                    messages = _prune_tool_loop_messages(messages, self._loop_budget)
 
                 return None
             finally:
