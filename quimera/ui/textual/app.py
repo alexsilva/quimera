@@ -266,10 +266,12 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 return False
             self._restored_history_hydrated = True
             resolver = getattr(quimera_app, "_resolve_profile_style", None)
+            renderer = getattr(quimera_app, "renderer", None)
             return self._feed_model.hydrate_from_history(
                 list(history),
                 user_label=str(getattr(quimera_app, "user_name", ">>>") or ">>>"),
                 agent_resolver=resolver if callable(resolver) else None,
+                theme=getattr(renderer, "theme_name", None),
             )
 
         def _status_preview_text(self, value) -> str:

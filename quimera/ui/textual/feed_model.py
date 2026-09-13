@@ -199,8 +199,10 @@ class TextualFeedModel:
             *,
             user_label: str = ">>>",
             agent_resolver: Callable[[str], tuple[str, str] | None] | None = None,
+            theme: str | None = None,
     ) -> bool:
         """Reconstrói itens persistentes do feed a partir do histórico salvo."""
+        theme_name = str(theme or "").strip()
         hydrated: list[TextualFeedItem] = []
         for message in messages or []:
             if not isinstance(message, dict):
@@ -210,17 +212,17 @@ class TextualFeedModel:
             if not role or not content.strip():
                 continue
             if role == USER_ROLE:
+                payload = {
+                    "content": content,
+                    "label": user_label,
+                    "style": "green",
+                    "render_mode": "plain",
+                }
+                if theme_name:
+                    payload["theme"] = theme_name
                 hydrated.append(
                     TextualFeedItem(
-                        TextualUiEvent(
-                            "user_message",
-                            {
-                                "content": content,
-                                "label": user_label,
-                                "style": "green",
-                                "render_mode": "plain",
-                            },
-                        ),
+                        TextualUiEvent("user_message", payload),
                         transient=False,
                     )
                 )
@@ -234,18 +236,17 @@ class TextualFeedModel:
                     resolved = None
                 if resolved:
                     style, label = str(resolved[0] or "cyan"), str(resolved[1] or role)
+            payload = {
+                "content": content,
+                "label": label,
+                "style": style,
+                "render_mode": "auto",
+            }
+            if theme_name:
+                payload["theme"] = theme_name
             hydrated.append(
                 TextualFeedItem(
-                    TextualUiEvent(
-                        "agent_message",
-                        {
-                            "content": content,
-                            "label": label,
-                            "style": style,
-                            "render_mode": "auto",
-                        },
-                        agent=role,
-                    ),
+                    TextualUiEvent("agent_message", payload, agent=role),
                     transient=False,
                 )
             )

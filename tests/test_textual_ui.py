@@ -1415,6 +1415,35 @@ def test_textual_feed_hydrates_restored_history():
     assert model.items[1].event.payload["label"] == "Codex"
 
 
+def test_textual_feed_hydrated_history_carries_active_theme():
+    """Mensagens restauradas devem renderizar com o tema persistido, não o default."""
+    model = TextualFeedModel()
+
+    assert model.hydrate_from_history(
+        [
+            {"role": "human", "content": "olá"},
+            {"role": "claude", "content": "feito"},
+        ],
+        theme="classic",
+    )
+
+    assert all(item.event.payload["theme"] == "classic" for item in model.items)
+
+
+def test_textual_feed_hydrated_history_without_theme_omits_key():
+    model = TextualFeedModel()
+
+    assert model.hydrate_from_history(
+        [
+            {"role": "human", "content": "olá"},
+            {"role": "claude", "content": "feito"},
+        ],
+        theme=None,
+    )
+
+    assert all("theme" not in item.event.payload for item in model.items)
+
+
 def test_textual_feed_clears_tool_preview_on_stream_abort():
     model = TextualFeedModel()
 
