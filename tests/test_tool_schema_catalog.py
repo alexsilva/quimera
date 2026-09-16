@@ -16,7 +16,7 @@ from quimera.runtime.tools import memory as memory_tools
 from quimera.runtime.tools import todo as todo_tools
 
 _EXPECTED_SCHEMA_FINGERPRINT = (
-    "8141ca7d90de882fde4092fcf557833ced0b1f471775da1b47b48a8e4382c7c5"
+    "7e6a8dd59be2706f2ef811c98772708fb1ec35e810eef2cc2b8fb53b057e6d9a"
 )
 
 

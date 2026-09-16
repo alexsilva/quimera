@@ -804,21 +804,21 @@ def test_executor_delegate_rejects_inactive_agent_between_delegation_steps(tmp_p
     assert spy.call_args[0][0] == "codex"
 
 
-def test_executor_delegate_truncates_long_context_and_task(tmp_path):
-    """delegate deve limitar tamanho de task/context para reduzir payload."""
+def test_executor_delegate_preserves_detailed_request_within_limits(tmp_path):
+    """delegate deve preservar instruções detalhadas que cabem no orçamento atual."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
     dispatch = MagicMock(return_value="ok")
     executor.set_delegate_fn(dispatch)
 
-    long_task = "t" * 3000
-    long_context = "c" * 8000
+    detailed_task = "t" * 8_294
+    detailed_context = "c" * 12_000
     result = executor.execute(
         ToolCall(
             name="delegate",
             arguments={
                 "target_agent": "codex",
-                "request": long_task,
-                "context": long_context,
+                "request": detailed_task,
+                "context": detailed_context,
             },
         )
     )
@@ -826,5 +826,6 @@ def test_executor_delegate_truncates_long_context_and_task(tmp_path):
     assert result.ok is True
     kwargs = dispatch.call_args.kwargs
     delegation = kwargs["delegation"]
-    assert len(delegation["task"]) == 1200
-    assert len(delegation["context"]) == 4000
+    assert delegation["task"] == detailed_task
+    assert delegation["context"] == detailed_context
+    assert "truncation_warnings" not in result.data

@@ -9,7 +9,11 @@ import time
 import uuid
 from typing import Protocol, Callable
 
-from ..config import ToolRuntimeConfig
+from ..config import (
+    DEFAULT_DELEGATE_MAX_CONTEXT_CHARS,
+    DEFAULT_DELEGATE_MAX_REQUEST_CHARS,
+    ToolRuntimeConfig,
+)
 from ..models import ToolCall, ToolResult
 from ..policy import ToolPolicyError
 from ...tasks.api import (
@@ -114,8 +118,8 @@ class _DelegateFnProto(Protocol):
 class DelegateTools(ToolBase):
     """Ferramentas de delegação entre agentes via MCP."""
 
-    _DELEGATE_MAX_REQUEST_CHARS = 1_200
-    _DELEGATE_MAX_CONTEXT_CHARS = 4_000
+    _DELEGATE_MAX_REQUEST_CHARS = DEFAULT_DELEGATE_MAX_REQUEST_CHARS
+    _DELEGATE_MAX_CONTEXT_CHARS = DEFAULT_DELEGATE_MAX_CONTEXT_CHARS
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de DelegateTools."""

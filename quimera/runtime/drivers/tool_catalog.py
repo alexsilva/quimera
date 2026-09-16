@@ -9,6 +9,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from ..config import (
+    DEFAULT_DELEGATE_MAX_CONTEXT_CHARS,
+    DEFAULT_DELEGATE_MAX_REQUEST_CHARS,
+)
+
 JsonSchema = Mapping[str, Any]
 
 
@@ -673,13 +678,17 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
  'properties': {'target_agent': {'type': 'string',
                                  'description': "Nome do agente obtido por 'list_agents'."},
                 'request': {'type': 'string',
-                            'description': 'Descrição clara do que o agente deve fazer. Máximo de '
-                                           '1200 caracteres; acima disso o texto é truncado e um '
-                                           'aviso é anexado ao resultado.'},
+                            'description': (
+                                'Descrição clara do que o agente deve fazer. Máximo de '
+                                f'{DEFAULT_DELEGATE_MAX_REQUEST_CHARS} caracteres; acima disso o '
+                                'texto é truncado e um aviso é anexado ao resultado.'
+                            )},
                 'context': {'type': 'string',
-                            'description': 'Contexto adicional relevante (opcional). Máximo de '
-                                           '4000 caracteres; acima disso o texto é truncado e um '
-                                           'aviso é anexado ao resultado.'},
+                            'description': (
+                                'Contexto adicional relevante (opcional). Máximo de '
+                                f'{DEFAULT_DELEGATE_MAX_CONTEXT_CHARS} caracteres; acima disso o '
+                                'texto é truncado e um aviso é anexado ao resultado.'
+                            )},
                 'role': {'type': 'string',
                          'enum': ['planner', 'executor', 'reviewer', 'verifier', 'synthesizer'],
                          'description': 'Papel opcional do agente nesta delegação. Valores: '

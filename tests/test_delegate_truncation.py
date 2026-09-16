@@ -1,7 +1,6 @@
 """Testes para o aviso de truncamento de request/context na tool delegate.
 
-Antes, request acima de 1200 caracteres e context acima de 4000 eram cortados
-silenciosamente — nem o chamador nem o agente alvo ficavam sabendo. Agora:
+Requests e contexts excessivamente grandes continuam limitados, mas o corte é explícito:
   - o payload truncado carrega um marcador embutido para o agente alvo;
   - o resultado da tool traz aviso em content e em data["truncation_warnings"];
   - o comprimento final respeita exatamente o limite.
@@ -73,7 +72,7 @@ class TestDelegateRequestTruncation:
     def test_request_longo_gera_aviso_no_resultado(self, delegation_tools, dispatch_fn):
         call = _make_call({
             "target_agent": "codex",
-            "request": "faz algo " * 400,
+            "request": "r" * (MAX_REQUEST + 500),
         })
         result = delegation_tools.delegate(call)
         assert result.ok
@@ -86,7 +85,7 @@ class TestDelegateRequestTruncation:
     def test_request_truncado_chega_com_marcador_ao_agente(self, delegation_tools, dispatch_fn):
         call = _make_call({
             "target_agent": "codex",
-            "request": "faz algo " * 400,
+            "request": "r" * (MAX_REQUEST + 500),
         })
         delegation_tools.delegate(call)
         delegation = dispatch_fn.call_args.kwargs["delegation"]

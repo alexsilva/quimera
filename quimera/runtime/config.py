@@ -12,6 +12,8 @@ if TYPE_CHECKING:
 
 
 DEFAULT_MCP_TOOL_TIMEOUT_SECONDS = 600
+DEFAULT_DELEGATE_MAX_REQUEST_CHARS = 16_000
+DEFAULT_DELEGATE_MAX_CONTEXT_CHARS = 32_000
 # Delegações rodam trabalho longo (revisões, análises) e têm orçamento próprio,
 # muito acima do teto das tools comuns.
 DEFAULT_DELEGATE_TIMEOUT_SECONDS = 3600
