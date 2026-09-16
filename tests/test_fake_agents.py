@@ -13,6 +13,7 @@ from quimera.profiles.fake import register_fake_profiles
 from quimera.devtools.fake_agents import FakeOpenAIHandler, _build_completion, _extract_quimera_current_turn
 from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.mcp import MCPServer
 
@@ -125,9 +126,9 @@ def test_openai_mcp_cli_calls_fake_openai_and_executes_tool_via_mcp(tmp_path):
     base_url = f"http://127.0.0.1:{http.server_address[1]}/v1"
 
     socket_path = str(tmp_path / "quimera-mcp.sock")
-    am = ApprovalManager(ToolRuntimeConfig(workspace_root=tmp_path))
+    am = ApprovalManager(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     am.set_approve_all(True)
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), am)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), am)
     mcp = MCPServer(executor, auth_token="test-token")
     mcp.start_background(socket_path)
     for _ in range(50):
@@ -168,9 +169,9 @@ def test_openai_mcp_cli_calls_fake_openai_and_executes_tool_via_mcp(tmp_path):
 def test_mcp_delegation_cli_calls_delegate_via_mcp(tmp_path):
     """Verifica que mcp delegation cli calls call agent via mcp."""
     socket_path = str(tmp_path / "quimera-mcp.sock")
-    am = ApprovalManager(ToolRuntimeConfig(workspace_root=tmp_path))
+    am = ApprovalManager(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     am.set_approve_all(True)
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), am)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), am)
     executor.set_active_agents_provider(lambda: ["fake-openai"])
 
     def delegate(agent_name, **kwargs):
@@ -223,9 +224,9 @@ def test_mcp_delegation_cli_calls_delegate_via_mcp(tmp_path):
 def test_mcp_delegation_cli_delegates_only_current_turn_via_delegate(tmp_path):
     """Verifica que mcp delegation cli delegates only current turn via call agent."""
     socket_path = str(tmp_path / "quimera-mcp-current-turn.sock")
-    am = ApprovalManager(ToolRuntimeConfig(workspace_root=tmp_path))
+    am = ApprovalManager(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     am.set_approve_all(True)
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), am)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), am)
     executor.set_active_agents_provider(lambda: ["fake-openai"])
 
     def delegate(agent_name, **kwargs):

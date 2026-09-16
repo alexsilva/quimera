@@ -7,6 +7,7 @@ import pytest
 
 from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
@@ -45,7 +46,7 @@ def git_repo(tmp_path):
 
 @pytest.fixture
 def config(git_repo):
-    return ToolRuntimeConfig(workspace_root=git_repo)
+    return ToolRuntimeConfig(workspace=Workspace(git_repo))
 
 
 @pytest.fixture
@@ -90,7 +91,7 @@ def test_git_status_clean(tool):
 
 
 def test_git_status_untracked(tool, config):
-    (config.workspace_root / "new.py").write_text("x = 1")
+    (config.workspace.cwd / "new.py").write_text("x = 1")
     result = tool.git_status(_call("git_status"))
     assert result.ok
     assert "new.py" in result.data["untracked"]
@@ -98,7 +99,7 @@ def test_git_status_untracked(tool, config):
 
 
 def test_git_status_staged(tool, config):
-    (config.workspace_root / "new.py").write_text("x = 1")
+    (config.workspace.cwd / "new.py").write_text("x = 1")
     tool._run_git(["add", "new.py"])
     result = tool.git_status(_call("git_status"))
     assert result.ok
@@ -107,7 +108,7 @@ def test_git_status_staged(tool, config):
 
 
 def test_git_status_unstaged(tool, config):
-    (config.workspace_root / "README.md").write_text("modified")
+    (config.workspace.cwd / "README.md").write_text("modified")
     result = tool.git_status(_call("git_status"))
     assert result.ok
     unstaged_paths = [s["path"] for s in result.data["unstaged"]]
@@ -115,7 +116,7 @@ def test_git_status_unstaged(tool, config):
 
 
 def test_git_status_not_a_repo(tmp_path):
-    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
     tool = GitTool(config)
     result = tool.git_status(_call("git_status"))
     assert not result.ok
@@ -138,7 +139,7 @@ def test_git_log_returns_commits(tool):
 
 def test_git_log_max_count(tool, config):
     for i in range(5):
-        (config.workspace_root / f"f{i}.txt").write_text(str(i))
+        (config.workspace.cwd / f"f{i}.txt").write_text(str(i))
         tool._run_git(["add", f"f{i}.txt"])
         tool._run_git(["commit", "-m", f"commit {i}"])
 
@@ -151,7 +152,7 @@ def test_git_log_empty_repo(tmp_path):
     subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
     subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=str(tmp_path), capture_output=True)
     subprocess.run(["git", "config", "user.name", "T"], cwd=str(tmp_path), capture_output=True)
-    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
     tool = GitTool(config)
     result = tool.git_log(_call("git_log"))
     # git log em repo vazio retorna erro (no commits yet)
@@ -170,14 +171,14 @@ def test_git_diff_clean(tool):
 
 
 def test_git_diff_unstaged(tool, config):
-    (config.workspace_root / "README.md").write_text("modified content")
+    (config.workspace.cwd / "README.md").write_text("modified content")
     result = tool.git_diff(_call("git_diff"))
     assert result.ok
     assert "README.md" in result.content
 
 
 def test_git_diff_staged(tool, config):
-    (config.workspace_root / "README.md").write_text("staged content")
+    (config.workspace.cwd / "README.md").write_text("staged content")
     tool._run_git(["add", "README.md"])
     result = tool.git_diff(_call("git_diff", staged=True))
     assert result.ok
@@ -185,7 +186,7 @@ def test_git_diff_staged(tool, config):
 
 
 def test_git_diff_ref(tool, config):
-    (config.workspace_root / "f.py").write_text("x = 1")
+    (config.workspace.cwd / "f.py").write_text("x = 1")
     tool._run_git(["add", "f.py"])
     tool._run_git(["commit", "-m", "add f.py"])
     result = tool.git_diff(_call("git_diff", ref1="HEAD~1", ref2="HEAD"))
@@ -220,15 +221,15 @@ def test_git_branch_shows_current(tool):
 
 
 def test_git_add_specific_file(tool, config):
-    (config.workspace_root / "added.txt").write_text("hello")
+    (config.workspace.cwd / "added.txt").write_text("hello")
     result = tool.git_add(_call("git_add", paths="added.txt"))
     assert result.ok
     assert "added.txt" in result.data["staged"]
 
 
 def test_git_add_all(tool, config):
-    (config.workspace_root / "a.txt").write_text("a")
-    (config.workspace_root / "b.txt").write_text("b")
+    (config.workspace.cwd / "a.txt").write_text("a")
+    (config.workspace.cwd / "b.txt").write_text("b")
     result = tool.git_add(_call("git_add"))
     assert result.ok
     staged = result.data["staged"]
@@ -237,7 +238,7 @@ def test_git_add_all(tool, config):
 
 
 def test_git_add_list_of_paths(tool, config):
-    (config.workspace_root / "x.txt").write_text("x")
+    (config.workspace.cwd / "x.txt").write_text("x")
     result = tool.git_add(_call("git_add", paths=["x.txt"]))
     assert result.ok
     assert "x.txt" in result.data["staged"]
@@ -254,7 +255,7 @@ def test_git_add_nonexistent_file(tool):
 
 
 def test_git_commit_creates_commit(tool, config):
-    (config.workspace_root / "c.txt").write_text("c")
+    (config.workspace.cwd / "c.txt").write_text("c")
     tool.git_add(_call("git_add", paths="c.txt"))
     result = tool.git_commit(_call("git_commit", message="add c.txt"))
     assert result.ok
@@ -393,7 +394,7 @@ def test_executor_git_branch_registered(executor):
 
 
 def test_executor_git_add_commit_cycle(executor, config):
-    (config.workspace_root / "cycle.txt").write_text("content")
+    (config.workspace.cwd / "cycle.txt").write_text("content")
     add_result = executor.execute(_call("git_add", paths="cycle.txt"))
     assert add_result.ok
     commit_result = executor.execute(_call("git_commit", message="cycle commit"))

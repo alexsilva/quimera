@@ -271,7 +271,9 @@ def test_resolve_tool_schemas_hides_delegate_when_not_bound():
 def test_resolve_tool_schemas_hides_tasks_when_not_bound():
     """Oculta criação de tasks quando o serviço da aplicação não foi ligado."""
     mock_executor = MagicMock()
-    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db")
+    mock_executor.config = SimpleNamespace(
+        workspace=SimpleNamespace(tasks_db="/tmp/tasks.db")
+    )
     mock_executor.policy = SimpleNamespace(blocked_tools=[])
     mock_executor.is_delegate_available.return_value = True
     mock_executor.is_tasks_available.return_value = False
@@ -1110,7 +1112,9 @@ def test_chat_with_tools_uses_streaming():
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content="ok")])
     mock_executor = MagicMock()
-    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db")
+    mock_executor.config = SimpleNamespace(
+        workspace=SimpleNamespace(tasks_db="/tmp/tasks.db")
+    )
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
 
     driver._chat([{"role": "user", "content": "x"}], tools=resolve_tool_schemas(mock_executor))

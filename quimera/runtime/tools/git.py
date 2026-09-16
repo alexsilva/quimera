@@ -1,9 +1,12 @@
 """Ferramentas git estruturadas para o runtime do Quimera."""
 from __future__ import annotations
 
+import os
 import re
 
 from quimera import process_factory as subprocess
+from quimera.environment import RuntimeSecrets, build_env_vars
+from quimera.sandbox.bwrap import build_secret_mask_cmd
 
 from ..models import ToolCall, ToolResult
 from ..policy import ToolPolicyError
@@ -308,9 +311,25 @@ class GitTool(ToolBase, tool_prefix="git"):
 
     def _run_git(self, args: list[str]) -> tuple[int, str, str]:
         """Executa um comando git no workspace root."""
+        workspace = self.workspace
+        workspace_root = workspace.cwd
+        env = build_env_vars(
+            os.environ,
+            workspace=workspace,
+            runtime_secrets=RuntimeSecrets(workspace),
+        )
+        command = ["git"] + args
+        if workspace is not None:
+            command = build_secret_mask_cmd(
+                str(workspace_root),
+                command,
+                [str(path) for path in workspace.protected_files],
+                die_with_parent=True,
+            )
         proc = subprocess.run(
-            ["git"] + args,
-            cwd=str(self.config.workspace_root),
+            command,
+            cwd=str(workspace_root),
+            env=env,
             capture_output=True,
             text=True,
             timeout=self.config.command_timeout_seconds,

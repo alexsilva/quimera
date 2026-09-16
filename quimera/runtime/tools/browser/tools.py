@@ -62,7 +62,7 @@ class BrowserTool(
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         super().__init__(config)
-        self._service = BrowserService(config.workspace_root)
+        self._service = BrowserService(self.workspace)
 
     def __del__(self) -> None:
         try:
@@ -140,7 +140,14 @@ class BrowserTool(
         if not raw_path:
             stamp = time.strftime("%Y%m%d-%H%M%S")
             raw_path = f"{stamp}.png"
-        artifacts_root = self.config.artifacts_root
+        session_paths = self.config.session_paths
+        if session_paths is None:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="Diretório de artefatos não configurado para o runtime",
+            )
+        artifacts_root = session_paths.artifacts_dir
         try:
             output_path = _resolve_screenshot_output_path(
                 artifacts_root,
@@ -332,8 +339,12 @@ class BrowserToolValidator(ValidatableTool):
         self._validate_optional_selector(call)
         raw_path = str(call.arguments.get("path", "")).strip()
         if raw_path:
+            session_paths = self.config.session_paths
+            if session_paths is None:
+                raise ToolPolicyError("Diretório de artefatos não configurado para o runtime")
+            artifacts_root = session_paths.artifacts_dir
             _resolve_screenshot_output_path(
-                self.config.artifacts_root,
+                artifacts_root,
                 str(call.arguments["session_id"]),
                 raw_path,
             )
@@ -369,7 +380,7 @@ class BrowserToolValidator(ValidatableTool):
             return
         if parsed.scheme == "file":
             path = Path(urllib.parse.unquote(parsed.path)).resolve()
-            if is_path_inside(path, self.config.workspace_root):
+            if is_path_inside(path, self.workspace.cwd):
                 return
             raise ToolPolicyError(f"URL file fora da workspace: {path}")
         raise ToolPolicyError("browser aceita apenas http://, https://, about:blank ou file:// dentro da workspace")

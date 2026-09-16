@@ -1025,7 +1025,9 @@ class OpenAICompatDriver:
             max_tool_hops = get_max_tool_hops(self.tool_use_reliability)
             if tools:
                 tool_names = [t["function"]["name"] for t in tools]
-                workspace_root = getattr(getattr(tool_executor, "config", None), "workspace_root", None)
+                config = getattr(tool_executor, "config", None)
+                workspace = getattr(config, "workspace", None)
+                workspace_root = workspace.cwd if workspace is not None else None
                 shell_allowlist = getattr(getattr(tool_executor, "config", None), "shell_allowlist", None)
                 messages.append({
                     "role": "system",

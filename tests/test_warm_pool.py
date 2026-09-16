@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from quimera.agents import AgentClient
 from quimera.agents.warm_pool import WarmPool, _WarmSlot
+from quimera.workspace import Workspace
 
 
 # ---------------------------------------------------------------------------
@@ -456,22 +457,23 @@ class TestAgentClientWarmPool:
     def test_build_run_env_strips_gui_vars(self, renderer):
         """Verifica que _build_run_env exclui variáveis de GUI e aplica overrides padrão."""
         import os
+        client = AgentClient(renderer)
         with patch.dict(os.environ, {"DISPLAY": ":0", "HOME": "/home/user"}):
-            env = AgentClient._build_run_env()
+            env = client._build_run_env()
         assert "DISPLAY" not in env
         assert "HOME" in env
         assert env["NO_COLOR"] == "1"
         assert env["TERM"] == "dumb"
 
-    def test_build_run_env_applies_extra_env(self):
+    def test_build_run_env_applies_extra_env(self, renderer):
         """Verifica que _build_run_env aplica variáveis extras ao ambiente."""
-        env = AgentClient._build_run_env({"MY_VAR": "value"})
+        env = AgentClient(renderer)._build_run_env({"MY_VAR": "value"})
         assert env["MY_VAR"] == "value"
 
     def test_build_effective_cmd_no_bwrap(self, renderer, tmp_path):
         """Verifica que sem execution_mode retorna o comando original."""
 
-        client = AgentClient(renderer, working_dir=str(tmp_path))
+        client = AgentClient(renderer, workspace=Workspace(tmp_path))
         cmd, cwd = client._build_effective_cmd(["codex", "--json"], "codex", None)
         assert cmd == ["codex", "--json"]
         assert cwd == str(tmp_path)
@@ -480,6 +482,6 @@ class TestAgentClientWarmPool:
         """Verifica que cwd explícito tem precedência sobre working_dir."""
 
         override = str(tmp_path / "sub")
-        client = AgentClient(renderer, working_dir=str(tmp_path))
+        client = AgentClient(renderer, workspace=Workspace(tmp_path))
         _, effective_cwd = client._build_effective_cmd(["codex"], "codex", override)
         assert effective_cwd == override

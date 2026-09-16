@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 class EnvConfig:
-    """Configurações de modelo como variáveis de ambiente em ~/.local/share/quimera/.env.
+    """Leitor/escritor simples para arquivos ``KEY=VALUE`` no formato .env.
 
     O arquivo usa o formato KEY=VALUE por linha (padrão .env).
     Linhas vazias e linhas começando com '#' são ignoradas.

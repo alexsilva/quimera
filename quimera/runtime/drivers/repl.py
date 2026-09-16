@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import Callable, Optional
@@ -21,8 +20,11 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 from ...config import ConfigManager as GlobalConfigManager, DEFAULT_USER_NAME
+from ...environment import RuntimeSecrets
 from ...paths import CANDIDATE_DIRS, find_base_writable
 from ...profiles.base import OpenAIConnection
+from ...session_paths import SessionPaths
+from ...workspace import Workspace
 from ...app.prompt_formatter import PromptFormatter
 from .openai_compat import OpenAICompatDriver
 from ..approval import ApprovalManager
@@ -120,13 +122,19 @@ class DriverRepl:
             )
 
         self.profile = profile
-        self.working_dir = (working_dir or Path.cwd()).resolve()
+        self.workspace = Workspace((working_dir or Path.cwd()).resolve())
+        self.session_paths = SessionPaths(self.workspace)
+        self._runtime_secrets = RuntimeSecrets(self.workspace)
+        self._runtime_secrets.apply_to_environ()
         self._last_connection_signature = None
         self._update_driver()
         self._input_prompt = self._resolve_input_prompt()
         self._input_gate = input_gate
 
-        rt_config = ToolRuntimeConfig(workspace_root=self.working_dir)
+        rt_config = ToolRuntimeConfig(
+            workspace=self.workspace,
+            session_paths=self.session_paths,
+        )
         self._rt_config = rt_config
         self._approval = ApprovalManager(rt_config, input_gate=self._input_gate)
         self.tool_executor = ToolExecutor(rt_config, self._approval)
@@ -167,8 +175,7 @@ class DriverRepl:
             )
         return connection
 
-    @staticmethod
-    def _connection_signature(connection: OpenAIConnection) -> tuple:
+    def _connection_signature(self, connection: OpenAIConnection) -> tuple:
         """Cria snapshot estável de todos os campos que afetam o driver."""
         extra_body = getattr(connection, "extra_body", None)
         extra_body_signature = json.dumps(
@@ -179,7 +186,7 @@ class DriverRepl:
             default=str,
         ) if isinstance(extra_body, dict) else extra_body
         api_key = (
-            os.environ.get(connection.api_key_env, "")
+            self._runtime_secrets.get(connection.api_key_env, "")
             if connection.api_key_env
             else "ollama"
         )
@@ -220,11 +227,14 @@ class DriverRepl:
         if str(getattr(connection, "provider", "") or "").strip().lower() == "codexcloud":
             from .codexcloud import CodexCloudDriver
 
-            new_driver = CodexCloudDriver(**common_kwargs)
+            new_driver = CodexCloudDriver(
+                **common_kwargs,
+                runtime_secrets=self._runtime_secrets,
+            )
         else:
             api_key = "ollama"
             if connection.api_key_env:
-                api_key = os.environ.get(connection.api_key_env, "")
+                api_key = self._runtime_secrets.get(connection.api_key_env, "")
                 if not api_key:
                     print(
                         f"[aviso] Variável de ambiente '{connection.api_key_env}' não definida. "
@@ -305,7 +315,7 @@ class DriverRepl:
         print(f"  Driver REPL  •  {self.profile.name}")
         print(f"  Modelo : {self.connection.model}")
         print(f"  URL    : {self.connection.base_url}")
-        print(f"  Dir    : {self.working_dir}")
+        print(f"  Dir    : {self.workspace.cwd}")
         print(f"{'=' * 60}")
 
         if one_shot_prompt is not None:
@@ -353,7 +363,7 @@ class DriverRepl:
                 print(f"  profile      : {self.profile.name}")
                 print(f"  modelo      : {self._get_current_connection().model}")
                 print(f"  base_url    : {self._get_current_connection().base_url}")
-                print(f"  working_dir : {self.working_dir}")
+                print(f"  working_dir : {self.workspace.cwd}")
                 print(f"  ferramentas : {'sim' if use_tools else 'não'}")
                 continue
 

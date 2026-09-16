@@ -16,7 +16,12 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from quimera.environment import RuntimeSecrets, build_env_vars
+
+if TYPE_CHECKING:
+    from quimera.workspace import Workspace
 
 
 @dataclass(slots=True)
@@ -84,10 +89,18 @@ class BrowserService:
     an abandoned operation.
     """
 
-    def __init__(self, workspace_root: Path, *, _worker_process: bool = False) -> None:
-        self.workspace_root = workspace_root.resolve()
+    def __init__(
+        self,
+        workspace: Workspace | None = None,
+        *,
+        _worker_process: bool = False,
+    ) -> None:
+        self.workspace = workspace
         self._worker_process = _worker_process
+        if not _worker_process and workspace is None:
+            raise TypeError("BrowserService exige Workspace no processo principal")
         self._process: subprocess.Popen[bytes] | None = None
+        self._process_workspace_root: Path | None = None
         self._connection: _SocketConnection | None = None
         self._start_lock = threading.Lock()
         self._request_lock = threading.Lock()
@@ -184,9 +197,19 @@ class BrowserService:
 
     def _ensure_process(self) -> None:
         with self._start_lock:
+            if self.workspace is None:
+                raise RuntimeError("BrowserService sem Workspace no processo principal")
+            current_workspace_root = self.workspace.cwd.resolve()
             process = self._process
-            if process is not None and process.poll() is None and self._connection is not None:
+            if (
+                process is not None
+                and process.poll() is None
+                and self._connection is not None
+                and self._process_workspace_root == current_workspace_root
+            ):
                 return
+            if process is not None and process.poll() is None:
+                self._reset_process_locked(terminate=True)
             self._close_parent_connection()
             parent_socket, child_socket = socket.socketpair()
             child_fd = child_socket.fileno()
@@ -195,8 +218,12 @@ class BrowserService:
                     sys.executable,
                     str(Path(__file__).with_name("worker.py")),
                     str(child_fd),
-                    str(self.workspace_root),
                 ],
+                env=build_env_vars(
+                    os.environ,
+                    workspace=self.workspace,
+                    runtime_secrets=RuntimeSecrets(self.workspace),
+                ),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -206,6 +233,7 @@ class BrowserService:
             )
             child_socket.close()
             self._process = process
+            self._process_workspace_root = current_workspace_root
             self._connection = _SocketConnection(parent_socket)
 
     def _serve_process(self, connection: _SocketConnection) -> None:
@@ -253,17 +281,22 @@ class BrowserService:
 
     def _reset_process(self, *, terminate: bool) -> None:
         with self._start_lock:
-            process = self._process
-            self._process = None
-            self._close_parent_connection()
-            if process is None:
-                return
-            if terminate and process.poll() is None:
-                self._terminate_process_group(process)
-            try:
-                process.wait(timeout=1)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+            self._reset_process_locked(terminate=terminate)
+
+    def _reset_process_locked(self, *, terminate: bool) -> None:
+        """Reseta o worker com ``_start_lock`` já adquirido."""
+        process = self._process
+        self._process = None
+        self._process_workspace_root = None
+        self._close_parent_connection()
+        if process is None:
+            return
+        if terminate and process.poll() is None:
+            self._terminate_process_group(process)
+        try:
+            process.wait(timeout=1)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     def _close_parent_connection(self) -> None:
         connection = self._connection

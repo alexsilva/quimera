@@ -4,14 +4,19 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import os
 import re
 import socket
 import tempfile
-from html import unescape
 import urllib.parse
+from html import unescape
 from pathlib import Path
 
 from quimera import process_factory as subprocess
+from quimera.environment import (
+    RuntimeSecrets,
+    build_env_vars,
+)
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
@@ -55,6 +60,16 @@ def _curl_resolve_spec(parsed: urllib.parse.ParseResult, resolved_ip: str) -> st
     return f"{parsed.hostname}:{port}:{curl_ip}"
 
 
+def _tool_environment(config: ToolRuntimeConfig) -> dict[str, str]:
+    """Retorna o ambiente já tratado para subprocessos da WebTool."""
+    workspace = config.workspace
+    return build_env_vars(
+        os.environ,
+        workspace=workspace,
+        runtime_secrets=RuntimeSecrets(workspace),
+    )
+
+
 def fetch_url_text(url: str, *, timeout: int = 30) -> str:
     """Baixa uma URL publica e retorna o texto sem HTML.
 
@@ -84,6 +99,7 @@ def fetch_url_text(url: str, *, timeout: int = 30) -> str:
     try:
         result = subprocess.run(
             args,
+            env=build_env_vars(os.environ),
             capture_output=True,
             text=True,
             timeout=timeout + 5,
@@ -150,7 +166,13 @@ class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)
             args.extend(["-d", str(body)])
         args.append(url)
         try:
-            result = subprocess.run(args, capture_output=True, text=True, timeout=timeout + 5)
+            result = subprocess.run(
+                args,
+                env=_tool_environment(self.config),
+                capture_output=True,
+                text=True,
+                timeout=timeout + 5,
+            )
         except subprocess.TimeoutExpired:
             return ToolResult(ok=False, tool_name=call.name, error=f"http_request excedeu timeout de {timeout}s")
         raw = result.stdout or ""
@@ -338,6 +360,7 @@ class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)
         try:
             result = subprocess.run(
                 args,
+                env=_tool_environment(self.config),
                 capture_output=True,
                 text=True,
                 timeout=timeout + 5,
@@ -367,6 +390,7 @@ class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)
             ]
             result = subprocess.run(
                 args,
+                env=_tool_environment(self.config),
                 capture_output=True,
                 text=True,
                 timeout=timeout + 5,

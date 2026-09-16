@@ -18,6 +18,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from quimera.environment import RuntimeSecrets
+
 import httpx
 
 _logger = logging.getLogger(__name__)
@@ -71,10 +73,12 @@ class CodexCloudAuth:
         *,
         token_url: str = CODEX_OAUTH_TOKEN_URL,
         http_client: httpx.Client | None = None,
+        runtime_secrets: RuntimeSecrets | None = None,
     ) -> None:
         self._codex_home = Path(codex_home) if codex_home else default_codex_home()
         self._token_url = token_url
         self._http_client = http_client
+        self._runtime_secrets = runtime_secrets
         self._lock = threading.Lock()
         self._tokens: dict | None = None
 
@@ -141,7 +145,12 @@ class CodexCloudAuth:
                 f"refresh_token ausente em {self.auth_file}; impossível renovar. "
                 "Rode `codex login` novamente."
             )
-        client_id = (os.environ.get("CODEX_OAUTH_CLIENT_ID") or "").strip()
+        client_id = (
+            self._runtime_secrets.get("CODEX_OAUTH_CLIENT_ID")
+            if self._runtime_secrets is not None
+            else os.environ.get("CODEX_OAUTH_CLIENT_ID")
+        )
+        client_id = (client_id or "").strip()
         if not client_id:
             raise CodexAuthError(
                 "Variável de ambiente CODEX_OAUTH_CLIENT_ID ausente; "

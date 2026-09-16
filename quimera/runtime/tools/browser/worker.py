@@ -24,12 +24,11 @@ from quimera.runtime.tools.browser.service import BrowserService, _SocketConnect
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
+    if len(sys.argv) != 2:
         return 2
     fd = int(sys.argv[1])
-    workspace_root = Path(sys.argv[2])
     channel = socket.socket(fileno=fd)
-    service = BrowserService(workspace_root, _worker_process=True)
+    service = BrowserService(_worker_process=True)
     service._serve_process(_SocketConnection(channel))
     return 0
 

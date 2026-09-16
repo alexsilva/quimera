@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from quimera import process_factory as subprocess
+from quimera.environment import RuntimeSecrets, build_env_vars
+from quimera.sandbox.bwrap import build_secret_mask_cmd
 
 from . import files as file_tools
 from ..config import ToolRuntimeConfig
@@ -127,7 +129,7 @@ class ShellTool(ToolBase):
         staging = file_tools.get_staging_root()
         if staging:
             warnings.warn(
-                f"run_shell called in parallel mode with staging - cwd={self.config.workspace_root}, "
+                f"run_shell called in parallel mode with staging - cwd={self.workspace.cwd}, "
                 f"staging={staging}. Shell writes bypass staging isolation.",
                 UserWarning,
                 stacklevel=2,
@@ -137,12 +139,19 @@ class ShellTool(ToolBase):
         workdir = self._resolve_workdir(call.arguments.get("workdir"))
         command = self._rewrite_command_for_local_venv(command, workdir)
         env = self._build_workspace_environment(workdir)
+        workspace = self.config.workspace
+        protected_files = workspace.protected_files if workspace is not None else ()
+        masked_command = build_secret_mask_cmd(
+            str(workdir),
+            ["/bin/sh", "-c", command],
+            [str(path) for path in protected_files],
+            die_with_parent=True,
+        )
         timeout_seconds = self._resolve_timeout_seconds(call.arguments.get("timeout"))
         started = time.perf_counter()
         try:
             proc = subprocess.run(
-                command,
-                shell=True,
+                masked_command,
                 cwd=str(workdir),
                 env=env,
                 capture_output=True,
@@ -246,7 +255,7 @@ class ShellTool(ToolBase):
         staging = file_tools.get_staging_root()
         if staging:
             warnings.warn(
-                f"exec_command called in parallel mode with staging - cwd={self.config.workspace_root}, "
+                f"exec_command called in parallel mode with staging - cwd={self.workspace.cwd}, "
                 f"staging={staging}. Shell writes bypass staging isolation.",
                 UserWarning,
                 stacklevel=2,
@@ -436,12 +445,12 @@ class ShellTool(ToolBase):
     def _resolve_workdir(self, raw_workdir: str | None) -> Path:
         """Resolve o diretório de trabalho do comando dentro da workspace."""
         if not raw_workdir:
-            return self.config.workspace_root
+            return self.workspace.cwd
         path = Path(raw_workdir)
         if not path.is_absolute():
-            path = self.config.workspace_root / path
+            path = self.workspace.cwd / path
         resolved = path.resolve()
-        if not is_path_inside(resolved, self.config.workspace_root):
+        if not is_path_inside(resolved, self.workspace.cwd):
             raise ToolPolicyError(f"workdir fora da workspace: {raw_workdir}")
         return resolved
 
@@ -484,7 +493,7 @@ class ShellTool(ToolBase):
     def _find_workspace_virtualenv(self, workdir: Path) -> Path | None:
         """Encontra o `.venv` mais próximo sem ultrapassar a raiz da workspace."""
         current = workdir.resolve()
-        workspace_root = self.config.workspace_root.resolve()
+        workspace_root = self.workspace.cwd.resolve()
         while is_path_inside(current, workspace_root):
             candidate = current / ".venv"
             if (candidate / "bin").is_dir():
@@ -503,7 +512,11 @@ class ShellTool(ToolBase):
         filhos; quando não possui, o virtualenv herdado é removido do PATH e
         de VIRTUAL_ENV para que o shell use o ambiente normal do usuário.
         """
-        env = os.environ.copy()
+        env = build_env_vars(
+            os.environ,
+            workspace=self.workspace,
+            runtime_secrets=RuntimeSecrets(self.workspace),
+        )
         inherited_venv = env.pop("VIRTUAL_ENV", None)
         path_entries = env.get("PATH", "").split(os.pathsep)
 
@@ -534,6 +547,14 @@ class ShellTool(ToolBase):
     ) -> tuple[subprocess.ProcessHandle, int | None]:
         """Cria o subprocesso usado por exec_command."""
         shell_args = [shell, "-lc" if login else "-c", command]
+        workspace = self.config.workspace
+        protected_files = workspace.protected_files if workspace is not None else ()
+        shell_args = build_secret_mask_cmd(
+            str(workdir),
+            shell_args,
+            [str(path) for path in protected_files],
+            die_with_parent=False,
+        )
         if tty:
             master_fd, slave_fd = pty.openpty()
             process = subprocess.Popen(
@@ -1066,9 +1087,9 @@ class ShellToolValidator(ValidatableTool):
             return first_token
         candidate = Path(first_token).expanduser()
         if not candidate.is_absolute():
-            candidate = self.config.workspace_root / candidate
+            candidate = self.workspace.cwd / candidate
         resolved_parent = candidate.parent.resolve()
-        if not is_path_inside(resolved_parent, self.config.workspace_root):
+        if not is_path_inside(resolved_parent, self.workspace.cwd):
             raise ToolPolicyError(f"Executável fora do workspace: {first_token}")
         return candidate.name
 
@@ -1133,9 +1154,9 @@ class ShellToolValidator(ValidatableTool):
         for raw_path in paths:
             candidate = Path(raw_path).expanduser()
             if not candidate.is_absolute():
-                candidate = self.config.workspace_root / candidate
+                candidate = self.workspace.cwd / candidate
             resolved = candidate.resolve()
-            if not is_path_inside(resolved, self.config.workspace_root):
+            if not is_path_inside(resolved, self.workspace.cwd):
                 raise ToolPolicyError(f"Caminho fora do workspace: {raw_path}")
 
     def _validate_shell_file_paths(self, args: list[str]) -> None:
@@ -1146,7 +1167,7 @@ class ShellToolValidator(ValidatableTool):
                 continue
             resolved = expanded.resolve()
             from ..policy import is_path_inside
-            if not is_path_inside(resolved, self.config.workspace_root):
+            if not is_path_inside(resolved, self.workspace.cwd):
                 raise ToolPolicyError(f"Caminho fora do workspace: {arg}")
 
 

@@ -6,6 +6,7 @@ import json
 import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicyError
 from quimera.runtime.tools.web import WebTool, WebToolValidator, fetch_url_text
@@ -18,7 +19,7 @@ from quimera.runtime.tools.web import WebTool, WebToolValidator, fetch_url_text
 @pytest.fixture
 def web_tool(tmp_path):
     """Retorna uma instância de WebTool com workspace temporário."""
-    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
     return WebTool(config)
 
 

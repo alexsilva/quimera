@@ -38,13 +38,14 @@ from quimera.evidence import EvidenceStore
 from quimera.ui.base import RendererBase
 from quimera.runtime.approval import AutoApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.executor import ToolExecutor
 
 
 def _build_tool_executor(workspace_root):
     """Constrói um ToolExecutor real e auto-aprovado para os testes de fork."""
     config = ToolRuntimeConfig(
-        workspace_root=Path(workspace_root),
+        workspace=Workspace(Path(workspace_root)),
         require_approval_for_mutations=False,
     )
     return ToolExecutor(config, AutoApprovalHandler())
@@ -551,7 +552,7 @@ def test_agent_client_fork_for_concurrent_run_isolates_process_state(renderer):
         renderer,
         metrics_file="metrics.jsonl",
         idle_timeout=17,
-        working_dir="/workspace",
+        workspace=Workspace(Path("/workspace")),
         session_id="session-test",
     )
     tool_executor = _build_tool_executor(client.working_dir)
@@ -1601,9 +1602,9 @@ def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
 
 
 def test_agent_client_run_uses_working_dir(renderer, tmp_path):
-    """Verifica que agent client run uses working dir."""
-    workspace = str(tmp_path)
-    client = AgentClient(renderer, working_dir=workspace)
+    """O diretório de execução vem do Workspace."""
+    workspace = Workspace(tmp_path)
+    client = AgentClient(renderer, workspace=workspace)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.stdout = ["ok\n"]
@@ -1613,13 +1614,13 @@ def test_agent_client_run_uses_working_dir(renderer, tmp_path):
 
         client.run(["echo", "hi"], silent=True)
         call_kwargs = mock_popen.call_args[1]
-        assert call_kwargs.get("cwd") == workspace
+        assert call_kwargs.get("cwd") == str(workspace.cwd)
 
 
-def test_agent_client_run_legacy_workspace_root_alias(renderer, tmp_path):
-    """Verifica que agent client run legacy workspace root alias."""
-    workspace = str(tmp_path)
-    client = AgentClient(renderer, workspace_root=workspace)
+def test_agent_client_run_observes_workspace(renderer, tmp_path):
+    """AgentClient consulta a mesma instância de Workspace."""
+    workspace = Workspace(tmp_path)
+    client = AgentClient(renderer, workspace=workspace)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.stdout = ["ok\n"]
@@ -1629,7 +1630,18 @@ def test_agent_client_run_legacy_workspace_root_alias(renderer, tmp_path):
 
         client.run(["echo", "hi"], silent=True)
         call_kwargs = mock_popen.call_args[1]
-        assert call_kwargs.get("cwd") == workspace
+        assert call_kwargs.get("cwd") == str(workspace.cwd)
+
+
+def test_agent_client_uses_workspace_as_working_directory(renderer, tmp_path):
+    """O client usa a instância de Workspace como fonte do diretório de trabalho."""
+    project = tmp_path / "project"
+    project.mkdir()
+    workspace = Workspace(project)
+    client = AgentClient(renderer, workspace=workspace)
+
+    assert client.working_dir == str(project.resolve())
+    assert client.workspace is workspace
 
 
 def test_agent_client_run_without_working_dir_passes_none(renderer):

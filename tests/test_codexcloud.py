@@ -139,6 +139,36 @@ def test_auth_refreshes_expired_token_and_persists(tmp_path, monkeypatch):
     assert persisted["last_refresh"].endswith("Z")
 
 
+def test_auth_refresh_uses_injected_runtime_secrets(tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_OAUTH_CLIENT_ID", raising=False)
+    expired = _fake_jwt(time.time() - 10)
+    fresh = _fake_jwt(time.time() + 3600)
+    _write_auth_file(tmp_path, expired, refresh_token="refresh-old")
+    requests_seen = []
+
+    class _Secrets:
+        @staticmethod
+        def get(key, default=None):
+            if key == "CODEX_OAUTH_CLIENT_ID":
+                return "client-from-runtime-secrets"
+            return default
+
+    def handler(request):
+        requests_seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"access_token": fresh})
+
+    auth = CodexCloudAuth(
+        codex_home=tmp_path,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        runtime_secrets=_Secrets(),
+    )
+
+    access_token, _ = auth.credentials()
+
+    assert access_token == fresh
+    assert requests_seen[0]["client_id"] == "client-from-runtime-secrets"
+
+
 def test_auth_force_refresh_ignores_valid_expiry(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_OAUTH_CLIENT_ID", "client-from-environment")
     valid = _fake_jwt(time.time() + 3600)

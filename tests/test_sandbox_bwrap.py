@@ -1,12 +1,17 @@
 """Testes para quimera.sandbox.bwrap."""
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
 from quimera.modes import get_mode
-from quimera.sandbox.bwrap import build_bwrap_cmd, is_bwrap_available
+from quimera.sandbox.bwrap import (
+    build_bwrap_cmd,
+    build_secret_mask_cmd,
+    is_bwrap_available,
+)
 
 ANALYSIS = get_mode("/analysis")
 PLANNING = get_mode("/planning")
@@ -72,6 +77,90 @@ class TestBuildBwrapCmd(unittest.TestCase):
             any(a == "--ro-bind" and b == home and c == home for a, b, c in pairs),
             f"--ro-bind {home} {home} não encontrado em: {result}",
         )
+
+    def test_hidden_file_is_masked_without_hiding_quimera_data_dir(self):
+        """Mascara apenas o segredo, preservando acesso ao restante do storage global."""
+        from unittest.mock import patch
+        secret = str(Path.home() / ".local" / "share" / "quimera" / "secrets.env")
+        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+            "quimera.sandbox.bwrap.os.path.isfile", return_value=True
+        ):
+            result = build_bwrap_cmd(EXECUTE, "/tmp", ["echo"], hidden_paths=[secret])
+        joined = " ".join(result)
+        self.assertIn(f"--dev-bind /dev/null {secret}", joined)
+        self.assertNotIn("--tmpfs", result)
+
+    def test_secret_only_wrapper_masks_file(self):
+        """Wrapper mínimo mantém filesystem normal e sobrepõe somente o arquivo privado."""
+        from unittest.mock import patch
+        secret = "/tmp/runtime/secrets.env"
+        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+            "quimera.sandbox.bwrap.os.path.isfile", return_value=True
+        ):
+            result = build_secret_mask_cmd("/tmp", ["cat", secret], [secret])
+        self.assertEqual(result[0], "bwrap")
+        self.assertIn("--die-with-parent", result)
+        self.assertIn("--unshare-pid", result)
+        self.assertIn("--dev-bind", result)
+        self.assertIn("/dev/null", result)
+        self.assertIn(secret, result)
+
+    def test_secret_wrapper_does_not_trust_inherited_environment_marker(self):
+        """Nenhuma variável global herdada pode desabilitar a máscara."""
+        from unittest.mock import patch
+        secret = "/tmp/runtime/secrets.env"
+        cmd = ["sh", "-c", "printf ok"]
+        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+            "quimera.sandbox.bwrap.os.path.isfile", return_value=True
+        ), patch.dict("os.environ", {"QUIMERA_SECRET_MASK_ACTIVE": "1"}, clear=False):
+            result = build_secret_mask_cmd("/tmp", cmd, [secret])
+        self.assertEqual(result[0], "bwrap")
+        self.assertIn("--dev-bind", result)
+
+    def test_secret_wrapper_can_outlive_creator_thread(self):
+        """Callers persistentes podem desabilitar apenas o vínculo com a thread criadora."""
+        from unittest.mock import patch
+        secret = "/tmp/runtime/secrets.env"
+        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+            "quimera.sandbox.bwrap.os.path.isfile", return_value=True
+        ):
+            result = build_secret_mask_cmd(
+                "/tmp",
+                ["sleep", "1"],
+                [secret],
+                die_with_parent=False,
+            )
+        self.assertNotIn("--die-with-parent", result)
+        self.assertIn("--unshare-pid", result)
+
+    def test_secret_mask_has_no_temporary_source_file(self):
+        """A máscara usa device isolado e não cria estado global/temporário."""
+        from unittest.mock import patch
+        secret = "/tmp/runtime/secrets.env"
+        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+            "quimera.sandbox.bwrap.os.path.isfile", return_value=True
+        ):
+            result = build_secret_mask_cmd("/tmp", ["cat", secret], [secret])
+        self.assertIn("/dev/null", result)
+        self.assertFalse(any("quimera-secret-mask" in part for part in result))
+
+    def test_hidden_mask_is_applied_after_profile_rw_bind(self):
+        """Bind RW do profile não pode reexpor um arquivo privado mascarado."""
+        from unittest.mock import patch
+        private_dir = str(Path.home() / ".local" / "share" / "quimera")
+        secret = f"{private_dir}/state/mcp_oauth.json"
+        profile = self._profile_with_rw_paths(private_dir)
+        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+            "quimera.sandbox.bwrap.os.path.exists", return_value=True
+        ), patch(
+            "quimera.sandbox.bwrap.os.path.isfile", return_value=True
+        ):
+            result = build_bwrap_cmd(EXECUTE, "/tmp", ["echo"], profile=profile, hidden_paths=[secret])
+
+        bind_index = result.index(private_dir, result.index("--bind") + 1)
+        mask_index = result.index(secret)
+        self.assertGreater(mask_index, bind_index)
+        self.assertEqual(result[mask_index - 2:mask_index + 1], ["--dev-bind", "/dev/null", secret])
 
     def test_opencode_data_dir_keeps_rw_bind_inside_read_only_home(self):
         """Verifica que diretório opencode-data tem --bind dentro do home read-only."""
@@ -262,6 +351,55 @@ class TestBwrapIntegration(unittest.TestCase):
                     result, _ = self._run(mode, ["echo", "alive"], working_dir=wd)
                     self.assertEqual(result.returncode, 0)
                     self.assertIn("alive", result.stdout)
+
+    def test_secret_mask_hides_only_secret_file(self):
+        """Arquivos privados ficam mascarados sem quebrar histórico nem /dev/null."""
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            secret = root_path / "secrets.env"
+            oauth = root_path / "mcp_oauth.json"
+            history = root_path / "history.jsonl"
+            secret.write_text("API_KEY=private\n", encoding="utf-8")
+            oauth.write_text('{"access_token":"private"}\n', encoding="utf-8")
+            history.write_text("conversation-history\n", encoding="utf-8")
+
+            command = build_secret_mask_cmd(
+                root,
+                [
+                    "sh",
+                    "-c",
+                    f"cat {history}; test ! -s {secret}; test ! -s {oauth}; printf ok >/dev/null",
+                ],
+                [str(secret), str(oauth)],
+            )
+            result = subprocess.run(command, capture_output=True, text=True)
+
+            self.assertIn("conversation-history", result.stdout)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_secret_wrapper_does_not_leave_descendants_after_wrapper_is_killed(self):
+        """Matar o wrapper também encerra processos internos do namespace."""
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            secret = root_path / "secrets.env"
+            marker = root_path / "orphan.txt"
+            secret.write_text("API_KEY=private\n", encoding="utf-8")
+            command = build_secret_mask_cmd(
+                root,
+                [
+                    "sh",
+                    "-c",
+                    f"(sleep 0.5; printf orphan > {marker}) & wait",
+                ],
+                [str(secret)],
+            )
+            process = subprocess.Popen(command)
+            time.sleep(0.1)
+            process.kill()
+            process.wait(timeout=2)
+            time.sleep(0.7)
+
+            self.assertFalse(marker.exists())
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import queue
+import signal
 import threading
 import time
 import uuid
@@ -16,7 +17,8 @@ import quimera.profiles as profiles
 from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.profiles.base import CliConnection, OpenAIConnection
 from quimera import process_factory as subprocess
-from quimera.sandbox.bwrap import build_bwrap_cmd
+from quimera.environment import RuntimeSecrets, build_env_vars
+from quimera.sandbox.bwrap import build_bwrap_cmd, build_secret_mask_cmd
 from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.runtime.tool_preview import ToolPreview
 from quimera.prompt_templates import PromptText
@@ -135,9 +137,9 @@ class AgentClient:
     _MAX_LOG_QUEUE_ITEMS = 512
 
     def __init__(self, renderer, metrics_file=None, idle_timeout=None, visibility=Visibility.SUMMARY,
-                 working_dir=None, workspace_root=None, tool_executor=None, error_reporter=None,
-                 muted_reporter=None, session_id=None, workspace_tmp_root=None,
-                 process_supervisor=None, pause_idle_if=None):
+                 tool_executor=None, error_reporter=None,
+                 muted_reporter=None, session_id=None, evidence_base_dir=None,
+                 process_supervisor=None, pause_idle_if=None, workspace=None):
         """Inicializa uma instância de AgentClient."""
         self.renderer = renderer
         self.error_reporter = error_reporter
@@ -147,8 +149,8 @@ class AgentClient:
         self.idle_timeout = idle_timeout
         self._pause_idle_if = pause_idle_if
         self.visibility = Visibility(visibility)
-        # `workspace_root` é mantido como alias compatível.
-        self.working_dir = working_dir if working_dir is not None else workspace_root
+        self.workspace = workspace
+        self.runtime_secrets = RuntimeSecrets(workspace)
         # Injetado de app.py após criação do ToolExecutor; usado pelos drivers de API.
         self.tool_executor = tool_executor
         # Cache de instâncias de driver por nome de agente.
@@ -173,12 +175,12 @@ class AgentClient:
         self._process_scope_id = f"agent-client:{uuid.uuid4().hex}"
         self._cancel_listeners: list = []
         self.session_id = session_id
-        self.workspace_tmp_root = Path(workspace_tmp_root) if workspace_tmp_root is not None else None
+        self.evidence_base_dir = Path(evidence_base_dir) if evidence_base_dir is not None else None
         self._spy_output_presenter = SpyOutputPresenter(
             self.renderer,
             self.visibility,
             session_id=self.session_id,
-            base_dir=self.workspace_tmp_root,
+            base_dir=self.evidence_base_dir,
         )
         self.last_spy_turn_detail: dict | None = None
         self._pending_summary_render: tuple | None = None
@@ -187,6 +189,11 @@ class AgentClient:
         self.rate_limit_retry_after: float | None = None
         self._warm_pool = WarmPool()
         self.process_supervisor: ProcessSupervisor | None = process_supervisor
+
+    @property
+    def working_dir(self) -> str | None:
+        """Diretório do projeto resolvido pela instância de Workspace."""
+        return str(self.workspace.cwd) if self.workspace is not None else None
 
     def _show_error(
         self,
@@ -466,14 +473,14 @@ class AgentClient:
             metrics_file=self.metrics_file,
             idle_timeout=self.idle_timeout,
             visibility=self.visibility,
-            working_dir=self.working_dir,
             tool_executor=forked_tool_executor,
             error_reporter=self.error_reporter,
             muted_reporter=self.muted_reporter,
             session_id=self.session_id,
-            workspace_tmp_root=self.workspace_tmp_root,
             process_supervisor=self.process_supervisor,
             pause_idle_if=self._pause_idle_if,
+            workspace=self.workspace,
+            evidence_base_dir=self.evidence_base_dir,
         )
         forked.execution_mode = self.execution_mode
         forked.tool_event_callback = self.tool_event_callback
@@ -653,26 +660,51 @@ class AgentClient:
     # Helpers de ambiente e comando
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _build_run_env(extra_env=None) -> dict:
-        """Constrói o ambiente de execução, filtrando variáveis de GUI."""
-        env = {k: v for k, v in os.environ.items() if k not in _GUI_VARS}
+    def _build_run_env(self, extra_env=None) -> dict:
+        """Constrói ambiente do agente sem expor segredos privados globais."""
+        env = build_env_vars(
+            os.environ,
+            workspace=self.workspace,
+            runtime_secrets=self.runtime_secrets,
+        )
+        env = {k: v for k, v in env.items() if k not in _GUI_VARS}
         env.update({"NO_COLOR": "1", "TERM": "dumb", "COLORTERM": ""})
         if extra_env:
             env.update(extra_env)
         return env
 
-    def _build_effective_cmd(self, cmd: list, agent: str | None, cwd: str | None) -> tuple[list, str | None]:
+    def _build_effective_cmd(
+        self,
+        cmd: list,
+        agent: str | None,
+        cwd: str | None,
+        *,
+        die_with_parent: bool = True,
+    ) -> tuple[list, str | None]:
         """Resolve o comando efetivo, aplicando bwrap se necessário."""
         effective_cwd = cwd or self.working_dir
+        protected_files = (
+            self.workspace.protected_files
+            if self.workspace is not None
+            else self.runtime_secrets.existing_files()
+        )
         if self.execution_mode is not None and effective_cwd:
             effective_cmd = build_bwrap_cmd(
                 self.execution_mode,
                 effective_cwd,
                 cmd,
                 profile=profiles.get(agent) if agent else None,
+                hidden_paths=[str(path) for path in protected_files],
+                die_with_parent=die_with_parent,
             )
             return effective_cmd, effective_cwd
+        if effective_cwd:
+            return build_secret_mask_cmd(
+                effective_cwd,
+                list(cmd),
+                [str(path) for path in protected_files],
+                die_with_parent=die_with_parent,
+            ), effective_cwd
         return list(cmd), effective_cwd
 
     # ------------------------------------------------------------------
@@ -1012,6 +1044,24 @@ class AgentClient:
         if proc.returncode != 0:
             if self._is_expected_termination_return_code(proc.returncode):
                 return None
+            if proc.returncode < 0:
+                signal_number = -proc.returncode
+                try:
+                    signal_name = signal.Signals(signal_number).name
+                except (ValueError, AttributeError):
+                    signal_name = f"SIG{signal_number}"
+                _logger.warning(
+                    "agent subprocess terminou por sinal inesperado: "
+                    "agent=%s command=%s pid=%s scope=%s signal=%s "
+                    "cancel_event=%s user_cancelled=%s",
+                    agent,
+                    cmd[0] if cmd else None,
+                    getattr(proc, "pid", None),
+                    self._process_scope_id,
+                    signal_name,
+                    self._cancel_event.is_set(),
+                    self._user_cancelled,
+                )
             self._show_error(
                 f"[erro] retornou código {proc.returncode}",
                 agent=agent,
@@ -1129,8 +1179,7 @@ class AgentClient:
         explicit_attr = profile_dict.get(name) if isinstance(profile_dict, dict) else None
         return explicit_attr if callable(explicit_attr) else None
 
-    @staticmethod
-    def _api_connection_signature(connection: OpenAIConnection) -> tuple:
+    def _api_connection_signature(self, connection: OpenAIConnection) -> tuple:
         """Retorna assinatura estável da conexão usada para cache do driver API."""
         extra_body = getattr(connection, "extra_body", None)
         if isinstance(extra_body, dict):
@@ -1146,7 +1195,7 @@ class AgentClient:
         else:
             extra_body_sig = extra_body
         api_key_env = getattr(connection, "api_key_env", None)
-        api_key_value = os.environ.get(api_key_env) if api_key_env else "ollama"
+        api_key_value = self.runtime_secrets.get(api_key_env) if api_key_env else "ollama"
         api_key_fingerprint = (
             hashlib.sha256(api_key_value.encode("utf-8")).hexdigest()
             if api_key_value
@@ -1317,7 +1366,12 @@ class AgentClient:
             raw = self.run([*cmd, prompt], input_text=None, **run_kwargs)
         else:
             _extra_env = run_kwargs.get("extra_env")
-            _effective_cmd, _effective_cwd = self._build_effective_cmd(cmd, agent, run_kwargs.get("cwd"))
+            _effective_cmd, _effective_cwd = self._build_effective_cmd(
+                cmd,
+                agent,
+                run_kwargs.get("cwd"),
+                die_with_parent=False,
+            )
             _use_warm_pool = self._should_use_warm_pool(
                 profile,
                 cmd,
@@ -1387,6 +1441,7 @@ class AgentClient:
                     extra_body=connection.extra_body,
                     max_connections=getattr(connection, "max_connections", 4),
                     max_model_requests=getattr(connection, "max_model_requests", None),
+                    runtime_secrets=self.runtime_secrets,
                 )
                 self._api_driver_signatures[agent] = signature
             else:
@@ -1398,7 +1453,7 @@ class AgentClient:
 
                 api_key_env = connection.api_key_env
                 if api_key_env:
-                    api_key = os.environ.get(api_key_env)
+                    api_key = self.runtime_secrets.get(api_key_env)
                     if not api_key:
                         self._show_error(
                             f"[erro] variável de ambiente '{api_key_env}' não definida para {agent}"
@@ -1538,7 +1593,7 @@ class AgentClient:
                             agent_name=agent,
                             parent_agent=from_agent,
                             session_id=self.session_id,
-                            base_dir=self.workspace_tmp_root,
+                            base_dir=self.evidence_base_dir,
                             quiet=quiet,
                             cancel_event=api_cancel_event,
                             on_tool_call=_record_api_tool_call,

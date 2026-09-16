@@ -16,10 +16,16 @@ from quimera.runtime.models import ToolCall, ToolResult
 from quimera.runtime.policy import ToolPolicyError
 from quimera.runtime.tools.browser.service import BrowserService, BrowserWorkerTimeout
 from quimera.runtime.tools.browser.tools import BrowserTool, BrowserToolValidator
+from quimera.session_paths import SessionPaths
+from quimera.workspace import Workspace
 
 
 def _config(tmp_path: Path) -> ToolRuntimeConfig:
-    return ToolRuntimeConfig(workspace_root=tmp_path)
+    workspace = Workspace(tmp_path)
+    return ToolRuntimeConfig(
+        workspace=workspace,
+        session_paths=SessionPaths(workspace),
+    )
 
 
 def test_browser_validator_accepts_local_file_inside_workspace(tmp_path: Path):
@@ -74,7 +80,7 @@ def test_browser_screenshot_custom_path_stays_inside_session(tmp_path: Path, mon
     )
 
     expected = (
-        tool.config.artifacts_root
+        tool.config.session_paths.artifacts_dir
         / "browser"
         / "session-123"
         / "reports"
@@ -139,7 +145,7 @@ def test_browser_screenshot_omits_oversized_inline_image(tmp_path: Path, monkeyp
     reason="Playwright ou Chrome/Chromium indisponível",
 )
 def test_browser_service_timeout_terminates_stuck_worker_and_recovers(tmp_path: Path):
-    service = BrowserService(tmp_path)
+    service = BrowserService(Workspace(tmp_path))
     try:
         first = service.execute(
             "start",
@@ -200,7 +206,7 @@ def test_browser_service_does_not_depend_on_multiprocessing_resource_tracker(tmp
     tracker._fd = stale_fd
     tracker._pid = None
 
-    service = BrowserService(tmp_path)
+    service = BrowserService(Workspace(tmp_path))
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             started = pool.submit(

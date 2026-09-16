@@ -164,6 +164,7 @@ class CodexCloudDriver(OpenAICompatDriver):
         auth: CodexCloudAuth | None = None,
         http_client: httpx.Client | None = None,
         loop_budget: ToolLoopBudget | None = None,
+        runtime_secrets=None,
     ) -> None:
         super().__init__(
             model=model,
@@ -177,7 +178,7 @@ class CodexCloudDriver(OpenAICompatDriver):
             loop_budget=loop_budget or CODEX_LOOP_BUDGET,
         )
         self._responses_url = base_url.rstrip("/") + "/responses"
-        self._auth = auth or CodexCloudAuth()
+        self._auth = auth or CodexCloudAuth(runtime_secrets=runtime_secrets)
         self._session_id = str(uuid.uuid4())
         read_timeout = float(timeout) if timeout else 300.0
         self._http = http_client or httpx.Client(

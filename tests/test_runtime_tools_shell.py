@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicyError
 from quimera.runtime.tools import shell as shell_module
@@ -33,7 +34,7 @@ def test_shell_tool_run_basic(config):
 def test_run_shell_uses_default_timeout_when_omitted(tmp_path):
     """Sem timeout explícito, run_shell usa o default configurado."""
     config = ToolRuntimeConfig(
-        workspace_root=tmp_path,
+        workspace=Workspace(tmp_path),
         command_timeout_seconds=20,
         command_max_timeout_seconds=300,
     )
@@ -49,7 +50,7 @@ def test_run_shell_uses_default_timeout_when_omitted(tmp_path):
 def test_run_shell_allows_timeout_above_default_up_to_configured_max(tmp_path):
     """Timeout explícito pode exceder o default sem exceder o teto da runtime."""
     config = ToolRuntimeConfig(
-        workspace_root=tmp_path,
+        workspace=Workspace(tmp_path),
         command_timeout_seconds=20,
         command_max_timeout_seconds=300,
     )
@@ -67,7 +68,7 @@ def test_run_shell_allows_timeout_above_default_up_to_configured_max(tmp_path):
 def test_run_shell_caps_requested_timeout_at_configured_max(tmp_path):
     """Timeout solicitado acima do teto é limitado pelo máximo da runtime."""
     config = ToolRuntimeConfig(
-        workspace_root=tmp_path,
+        workspace=Workspace(tmp_path),
         command_timeout_seconds=20,
         command_max_timeout_seconds=120,
     )
@@ -123,7 +124,7 @@ def test_rewrite_command_prefers_workdir_virtualenv(tmp_path):
     venv_bin.mkdir(parents=True)
     pytest_bin = venv_bin / "pytest"
     pytest_bin.write_text("#!/bin/sh\n")
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
 
     command = tool._rewrite_command_for_local_venv("pytest tests/test_x.py -q", tmp_path)
 
@@ -136,7 +137,7 @@ def test_rewrite_python3_falls_back_to_virtualenv_python(tmp_path):
     venv_bin.mkdir(parents=True)
     python_bin = venv_bin / "python"
     python_bin.write_text("#!/bin/sh\n")
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
 
     command = tool._rewrite_command_for_local_venv("python3 -m pytest -q", tmp_path)
 
@@ -149,7 +150,7 @@ def test_rewrite_virtualenv_preserves_shell_chaining(tmp_path):
     venv_bin.mkdir(parents=True)
     python_bin = venv_bin / "python"
     python_bin.write_text("#!/bin/sh\n")
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
 
     command = tool._rewrite_command_for_local_venv("python script.py && echo ok", tmp_path)
 
@@ -171,7 +172,7 @@ def test_workspace_environment_uses_project_virtualenv_for_indirect_python(tmp_p
     monkeypatch.setenv("VIRTUAL_ENV", str(quimera_venv))
     monkeypatch.setenv("PATH", f"{quimera_bin}{os.pathsep}{os.environ.get('PATH', '')}")
 
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=workspace))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(workspace)))
     result = _poll_until_completed(
         tool,
         tool.exec_command(
@@ -205,7 +206,7 @@ def test_workspace_environment_removes_quimera_virtualenv_without_project_venv(t
     monkeypatch.setenv("VIRTUAL_ENV", str(quimera_venv))
     monkeypatch.setenv("PATH", os.pathsep.join([str(quimera_bin), "/usr/bin", "/bin"]))
 
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     env = tool._build_workspace_environment(tmp_path)
 
     assert "VIRTUAL_ENV" not in env
@@ -226,7 +227,7 @@ def test_workspace_environment_finds_root_virtualenv_from_nested_workdir(tmp_pat
     monkeypatch.setenv("VIRTUAL_ENV", str(quimera_venv))
     monkeypatch.setenv("PATH", os.pathsep.join([str(quimera_bin), "/usr/bin", "/bin"]))
 
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=workspace))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(workspace)))
     env = tool._build_workspace_environment(nested)
 
     assert env["VIRTUAL_ENV"] == str(workspace / ".venv")
@@ -236,7 +237,7 @@ def test_workspace_environment_finds_root_virtualenv_from_nested_workdir(tmp_pat
 def test_run_shell_supports_workdir(tmp_path):
     subdir = tmp_path / "pkg"
     subdir.mkdir()
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     call = ToolCall(name="run_shell", arguments={"command": "pwd", "workdir": "pkg"})
 
     result = tool.run_shell(call)
@@ -247,7 +248,7 @@ def test_run_shell_supports_workdir(tmp_path):
 
 
 def test_session_output_truncation_is_reported(tmp_path):
-    config = ToolRuntimeConfig(workspace_root=tmp_path, max_output_chars=32)
+    config = ToolRuntimeConfig(workspace=Workspace(tmp_path), max_output_chars=32)
     tool = ShellTool(config)
     call = ToolCall(
         name="exec_command",
@@ -264,7 +265,7 @@ def test_developer_chaining_validates_every_command(tmp_path):
     from quimera.runtime.workspace_policy import WorkspacePolicy
 
     config = ToolRuntimeConfig(
-        workspace_root=tmp_path,
+        workspace=Workspace(tmp_path),
         workspace_policy=WorkspacePolicy.developer(),
     )
     validator = ShellToolValidator(config)
@@ -294,7 +295,7 @@ def _poll_until_completed(tool: ShellTool, result, *, yield_time_ms: int = 500):
 
 def test_exec_command_completes_and_returns_payload(tmp_path):
     """Verifica que Test exec command completes and returns payload."""
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     call = ToolCall(
         name="exec_command",
         arguments={"cmd": f'{sys.executable} -u -c "print(\'hello\')"', "yield_time_ms": 200},
@@ -311,7 +312,7 @@ def test_exec_command_completes_and_returns_payload(tmp_path):
 
 def test_exec_command_supports_polling_running_process(tmp_path):
     """Verifica que Test exec command supports polling running process."""
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     started = tool.exec_command(
         ToolCall(
             name="exec_command",
@@ -349,7 +350,7 @@ def test_exec_command_supports_polling_running_process(tmp_path):
 
 def test_poll_command_session_reads_output_without_stdin_payload(tmp_path):
     """Consulta uma sessão em execução sem enviar chars para stdin."""
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     started = tool.exec_command(
         ToolCall(
             name="exec_command",
@@ -389,7 +390,7 @@ def test_poll_command_session_reads_output_without_stdin_payload(tmp_path):
 
 def test_exec_command_rejects_workdir_outside_workspace_at_runtime(tmp_path):
     """Garante que chamada direta também respeita o limite da workspace."""
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     call = ToolCall(
         name="exec_command",
         arguments={
@@ -404,7 +405,7 @@ def test_exec_command_rejects_workdir_outside_workspace_at_runtime(tmp_path):
 
 def test_exec_command_supports_stdin_roundtrip(tmp_path):
     """Verifica que Test exec command supports stdin roundtrip."""
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     started = tool.exec_command(
         ToolCall(
             name="exec_command",
@@ -437,7 +438,7 @@ def test_exec_command_supports_stdin_roundtrip(tmp_path):
 
 def test_close_command_session_terminates_running_process(tmp_path):
     """Verifica que Test close command session terminates running process."""
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     started = tool.exec_command(
         ToolCall(
             name="exec_command",
@@ -462,7 +463,7 @@ def test_close_command_session_terminates_running_process(tmp_path):
 
 def test_exec_command_supports_tty_mode(tmp_path):
     """Verifica que Test exec command supports tty mode."""
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     result = _poll_until_completed(
         tool,
         tool.exec_command(
@@ -483,7 +484,7 @@ def test_exec_command_supports_tty_mode(tmp_path):
 
 def test_exec_command_tty_waits_for_short_completion_after_yield(tmp_path):
     """Verifica que Test exec command tty waits for short completion after yield."""
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     result = _poll_until_completed(
         tool,
         tool.exec_command(
@@ -618,7 +619,7 @@ def test_drain_session_output_returns_only_new_suffix(config):
 
 def test_exec_command_enforces_session_limit_on_session_creation(tmp_path):
     """Verifica que Test exec command enforces session limit on session creation."""
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     fake_process = MagicMock()
     fake_process.poll.return_value = None
 
@@ -635,7 +636,7 @@ def test_exec_command_enforces_session_limit_on_session_creation(tmp_path):
 
 def test_create_session_evicts_oldest_without_holding_sessions_lock(tmp_path):
     """Verifica que Test create session evicts oldest without holding sessions lock."""
-    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     first_process = MagicMock()
     first_process.poll.return_value = None
     original_cleanup_resources = tool._cleanup_session_resources
