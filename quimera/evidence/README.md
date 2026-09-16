@@ -195,7 +195,7 @@ O `PromptBuilder` em `quimera/prompt.py`调用 `_build_evidence_section()`:
 
 4. **Se a tag NÃO aparece**:
    - Verifique se `session_id` está presente no `shared_state`
-   - Confirme que `.quimera/` existe no `workspace_tmp_root`
+   - Confirme que o diretório temporário de evidências da sessão está disponível
    - Valide que há ao menos uma evidência no JSONL
 
 ### Debugging rápido

@@ -63,7 +63,7 @@ O pacote `runtime/mcp` contém:
 
 ## Persistência
 
-`Workspace` separa dados persistentes por hash do cwd. `SessionStorage` gerencia histórico/snapshots. `TaskRepository` encapsula SQLite e eventos de domínio. `ConfigManager` e `EnvConfig` tratam preferências globais e `.env` simples.
+`Workspace` separa dados persistentes por hash do cwd. `SessionStorage` gerencia histórico/snapshots. `TaskRepository` encapsula SQLite e eventos de domínio. `ConfigManager` trata preferências globais; `RuntimeSecrets` separa segredos privados do runtime (`secrets.env`, com fallback para o `.env` legado) do ambiente operacional do projeto (`<workspace>/.quimera/.env`). O hash do workspace continua restrito ao armazenamento interno e não é usado para configuração humana do projeto. A fronteira de execução é aplicada pelo consumidor: cada caller monta o ambiente tratado antes de usar `process_factory`, que permanece um adapter neutro sobre `subprocess`. Para processos de agentes, `bwrap` mascara apenas arquivos persistentes sensíveis (`.env`, `secrets.env`, conexões, OAuth e configs MCP), preservando o acesso ao histórico/memória do storage.
 
 ## UI
 
