@@ -80,10 +80,9 @@ def _read_clipboard_for_input(temp_image_dir: str | Path | None = None) -> str |
 
 
 def _clipboard_dir_for_app(quimera_app) -> Path | None:
-    """Resolve o diretório de anexos a partir do Workspace da aplicação."""
-    workspace = getattr(quimera_app, "workspace", None)
-    workspace_tmp = getattr(workspace, "tmp", None)
-    clipboard_dir = getattr(workspace_tmp, "clipboard_dir", None)
+    """Resolve o diretório temporário de anexos da sessão atual."""
+    session_paths = getattr(quimera_app, "session_paths", None)
+    clipboard_dir = getattr(session_paths, "clipboard_dir", None)
     return Path(clipboard_dir) if clipboard_dir is not None else None
 
 

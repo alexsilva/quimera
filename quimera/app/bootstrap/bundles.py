@@ -24,6 +24,7 @@ class PlatformBundle:
     auto_approve_mutations: bool
     profile_registry: Any
     workspace: Any
+    session_paths: Any
     config: Any
     workspace_policy_name: str
     workspace_policy: Any
@@ -81,7 +82,6 @@ class SessionBundle:
 class RuntimeBundle:
     """Cliente de agente, protocolo e estado de runtime da rodada de chat."""
 
-    workspace_tmp_root: Any
     idle_timeout_seconds: int
     process_supervisor: Any
     agent_client: Any
@@ -98,7 +98,6 @@ class RuntimeBundle:
     max_deferred_system_messages: int
     turn_manager: Any
     is_new_session: bool
-    tasks_db_path: str
     current_job_id: int
     previous_current_job_id_env: str | None
     prompt_builder: Any

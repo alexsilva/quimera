@@ -13,6 +13,7 @@ from .chat_processor import run_chat_loop
 from .. import profiles  # noqa: F401
 from ..constants import Visibility
 from ..profiles.base import ProfileRegistry
+from ..session_paths import SessionPaths
 from ..workspace import Workspace
 
 
@@ -36,8 +37,11 @@ class QuimeraApp(CoreFacadeMixin):
                  input_gate_factory=None,
                  ):
         """Inicializa uma instância de QuimeraApp montando os bundles via `AppAssembler`."""
+        workspace = workspace or Workspace(cwd)
+        session_paths = SessionPaths(workspace)
         opts = AppOptions(
-            cwd=cwd,
+            workspace=workspace,
+            session_paths=session_paths,
             debug=debug,
             history_window=history_window,
             agents=agents,
@@ -45,7 +49,6 @@ class QuimeraApp(CoreFacadeMixin):
             idle_timeout_seconds=idle_timeout_seconds,
             visibility=visibility,
             theme=theme,
-            workspace=workspace,
             auto_approve_mutations=auto_approve_mutations,
             profile_registry=profile_registry,
             renderer_override=renderer_override,

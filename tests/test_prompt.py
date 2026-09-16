@@ -430,7 +430,7 @@ def test_prompt_renders_evidence_context_when_session_has_entries(tmp_path):
         session_state={
             "session_id": "sessao-1",
             "workspace_root": "/tmp/test",
-            "workspace_tmp_root": str(tmp_path),
+            "evidence_base_dir": str(tmp_path),
             "current_job_id": 123,
             "current_dir": ".",
         },
@@ -478,7 +478,7 @@ def test_prompt_evidence_pipeline_is_identical_across_compact_and_wide_tool_rend
 
         builder = PromptBuilder(
             context_manager=_make_context_manager(""),
-            session_state={"workspace_tmp_root": str(tmp_path)},
+            session_state={"evidence_base_dir": str(tmp_path)},
         )
         evidence_section = builder._build_evidence_section({"session_id": session_id}, session_id)
         rendered_summary = renderer._console.export_text()

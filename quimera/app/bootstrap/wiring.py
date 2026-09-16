@@ -39,12 +39,6 @@ from ..interfaces import ProfileResolverAdapter
 from ..lifecycle import AppLifecycle
 from ..protocol import AppProtocol
 from ..session import AppSessionServices, compute_history_hard_limit, trim_history_messages
-from ..session_bootstrap import (
-    resolve_app_log_path,
-    resolve_workspace_metrics_path,
-    resolve_workspace_render_ansi_path,
-    resolve_workspace_render_log_path,
-)
 from ..session_metrics import SessionMetricsService
 from ..session_state import SessionStateManager
 from ..staging import merge_staging_to_workspace
@@ -64,9 +58,9 @@ from ...bugs import (
 from ...config import ConfigManager
 from ...constants import MSG_MIGRATION, Visibility
 from ...debate import DebateRepository, DebateService
+from ...environment import RuntimeSecrets
 from ...modes import DEBATE_MODE
 from ...context import ContextManager
-from ...env_config import EnvConfig
 from ...metrics import BehaviorMetricsTracker
 from ...prompt import PromptBuilder
 from ...runtime.input_broker import InputBroker
@@ -81,7 +75,6 @@ from ...tasks.executor import create_executor
 from ...tasks.services import AppTaskServices
 from ...tasks.repository import TaskRepository
 from ...ui import RenderAuditLogger, TerminalRenderer
-from ...workspace import Workspace
 
 
 def normalize_agent_name(agent):
@@ -142,10 +135,10 @@ def _make_get_session_id(storage):
     return _fn
 
 
-def _release_tasks_fn(tasks_db_path):
+def _release_tasks_fn(workspace):
     def _fn(name):
         from ...tasks import api as _runtime_tasks
-        _runtime_tasks.release_agent_tasks(name, db_path=tasks_db_path)
+        _runtime_tasks.release_agent_tasks(name, db_path=str(workspace.tasks_db))
     return _fn
 
 
@@ -183,8 +176,9 @@ class AppAssembler:
         toolbar = ToolbarManager(threads=threads)
         auto_approve_mutations = opts.auto_approve_mutations
         profile_registry = opts.profile_registry
-        workspace = opts.workspace if opts.workspace is not None else Workspace(opts.cwd)
-        EnvConfig(workspace.env_file).apply_to_environ()
+        workspace = opts.workspace
+        session_paths = opts.session_paths
+        RuntimeSecrets(workspace).apply_to_environ()
         config = ConfigManager(workspace.config_file)
         self._restore_agent_routing(agent_pool, config, selected_agents)
         routing_setter = getattr(config, "set_agent_routing", None)
@@ -197,15 +191,15 @@ class AppAssembler:
         active_theme = opts.theme if opts.theme is not None else config.theme
         storage = SessionStorage(workspace.logs_dir)
         session_started_at = time.monotonic()
-        bug_store = BugStore(workspace.tmp.logs_dir)
+        bug_store = BugStore(session_paths.logs_dir)
         bug_detector = RenderBugDetector(repeat_threshold=2)
         agent_bug_detector = AgentRuntimeBugDetector()
         bug_correlator = BugCorrelator(window_seconds=60.0)
         session_id = storage.session_id
-        render_log_path = resolve_workspace_render_log_path(workspace, session_id)
-        render_ansi_path = resolve_workspace_render_ansi_path(workspace, session_id)
-        metrics_file = resolve_workspace_metrics_path(workspace, session_id) if opts.debug else None
-        app_log_path = resolve_app_log_path(workspace, session_id)
+        render_log_path = session_paths.render_log_path_for(session_id)
+        render_ansi_path = session_paths.render_ansi_path_for(session_id)
+        metrics_file = session_paths.metrics_path_for(session_id) if opts.debug else None
+        app_log_path = session_paths.app_log_path_for(session_id)
         if app_log_path:
             set_app_log_file(app_log_path)
         return PlatformBundle(
@@ -219,6 +213,7 @@ class AppAssembler:
             auto_approve_mutations=auto_approve_mutations,
             profile_registry=profile_registry,
             workspace=workspace,
+            session_paths=session_paths,
             config=config,
             workspace_policy_name=workspace_policy_name,
             workspace_policy=workspace_policy,
@@ -247,6 +242,7 @@ class AppAssembler:
         app.auto_approve_mutations = plat.auto_approve_mutations
         app._profile_registry = plat.profile_registry
         app.workspace = plat.workspace
+        app.session_paths = plat.session_paths
         app.config = plat.config
         app.workspace_policy_name = plat.workspace_policy_name
         app.workspace_policy = plat.workspace_policy
@@ -354,10 +350,8 @@ class AppAssembler:
 
     def _build_session(self, opts: AppOptions, app, plat: PlatformBundle, ui: UiBundle) -> SessionBundle:
         context_manager = ContextManager(
-            plat.workspace.context_persistent,
-            plat.workspace.context_session,
+            plat.workspace,
             ui.renderer,
-            workspace=plat.workspace,
         )
         configured_history_window = opts.history_window or plat.config.history_window
         configured_auto_summarize_threshold = plat.config.auto_summarize_threshold
@@ -446,7 +440,7 @@ class AppAssembler:
             is_active_fn=ui.input_gate.is_active,
             run_above_fn=ui.input_gate.run_in_terminal_message,
         )
-        migrated = plat.workspace.migrate_from_legacy(opts.cwd)
+        migrated = plat.workspace.migrate_from_legacy(plat.workspace.cwd)
         for item in migrated:
             ui.renderer.show_system(MSG_MIGRATION.format(item))
         return SessionBundle(
@@ -488,8 +482,8 @@ class AppAssembler:
     def _build_runtime(
         self, opts: AppOptions, app, plat: PlatformBundle, ui: UiBundle, sess: SessionBundle
     ) -> RuntimeBundle:
-        workspace_tmp = getattr(plat.workspace, "tmp", None)
-        workspace_tmp_root = getattr(workspace_tmp, "root", None)
+        session_paths = plat.session_paths
+        evidence_base_dir = session_paths.root
         idle_timeout_seconds = (
             opts.idle_timeout_seconds
             if opts.idle_timeout_seconds is not None
@@ -501,13 +495,13 @@ class AppAssembler:
             metrics_file=plat.metrics_file,
             idle_timeout=idle_timeout_seconds,
             visibility=ui.visibility,
-            working_dir=str(plat.workspace.cwd),
             error_reporter=sess.system_layer.show_error_message,
             muted_reporter=sess.system_layer.show_muted_message,
             session_id=plat.session_id,
-            workspace_tmp_root=workspace_tmp_root,
+            evidence_base_dir=evidence_base_dir,
             process_supervisor=process_supervisor,
             pause_idle_if=app._has_mcp_pending,
+            workspace=plat.workspace,
         )
         task_executor_factory = create_executor
         session_summarizer = SessionSummarizer(
@@ -548,7 +542,6 @@ class AppAssembler:
             lock=sess.shared_state_lock,
             shared_state=sess.shared_state,
             workspace=plat.workspace,
-            decisions_log_path=plat.workspace.decisions_log,
             turn_stamps=sess.turn_stamps,
         )
         runtime_state = app.runtime_state
@@ -583,9 +576,8 @@ class AppAssembler:
             "history_restored": app._format_yes_no(sess.history_restored),
             "summary_loaded": app._format_yes_no(summary_loaded),
             "current_job_id": current_job_id,
-            "workspace_root": str(plat.workspace.cwd),
-            "workspace_data_root": str(plat.workspace.root / "data"),
-            "workspace_tmp_root": str(workspace_tmp_root) if workspace_tmp_root is not None else "",
+            "evidence_base_dir": str(evidence_base_dir),
+            "bug_logs_dir": str(session_paths.logs_dir),
             "current_dir": ".",
             "os_info": f"{platform_info.system()} {platform_info.release()}",
             "render_debug_active": opts.debug,
@@ -608,11 +600,11 @@ class AppAssembler:
             active_agents=plat.agent_pool.agents,
             active_agents_provider=plat.agent_pool.list_agents,
             orchestrator_provider=plat.agent_pool.get_orchestrator,
+            workspace=plat.workspace,
         )
         sess.system_layer._prompt_builder = prompt_builder
         auto_summarize_threshold = sess.configured_auto_summarize_threshold
         return RuntimeBundle(
-            workspace_tmp_root=workspace_tmp_root,
             idle_timeout_seconds=idle_timeout_seconds,
             process_supervisor=process_supervisor,
             agent_client=agent_client,
@@ -629,7 +621,6 @@ class AppAssembler:
             max_deferred_system_messages=max_deferred_system_messages,
             turn_manager=turn_manager,
             is_new_session=is_new_session,
-            tasks_db_path=tasks_db_path,
             current_job_id=current_job_id,
             previous_current_job_id_env=previous_current_job_id_env,
             prompt_builder=prompt_builder,
@@ -651,7 +642,6 @@ class AppAssembler:
         app._deferred_system_messages = rt.deferred_system_messages
         app._MAX_DEFERRED_SYSTEM_MESSAGES = rt.max_deferred_system_messages
         app.turn_manager = rt.turn_manager
-        app.tasks_db_path = rt.tasks_db_path
         app.current_job_id = rt.current_job_id
         app._previous_current_job_id_env = rt.previous_current_job_id_env
         app.prompt_builder = rt.prompt_builder
@@ -676,6 +666,7 @@ class AppAssembler:
             agent_run_sink=ui.agent_run_sink,
             agent_client=rt.agent_client,
             workspace=plat.workspace,
+            session_paths=plat.session_paths,
             get_dispatch_tool_executor=app.get_dispatch_tool_executor,
             get_dispatch_services=app.get_dispatch_services,
             auto_approve_mutations=plat.auto_approve_mutations,
@@ -756,10 +747,11 @@ class AppAssembler:
         tool_executor = task_services.build_tool_executor(
             require_approval_for_mutations=not plat.auto_approve_mutations
         )
-        debate_repository = DebateRepository(rt.tasks_db_path)
+        tasks_db_path = str(plat.workspace.tasks_db)
+        debate_repository = DebateRepository(tasks_db_path)
         debate_service = DebateService(
             repository=debate_repository,
-            task_repository=TaskRepository(rt.tasks_db_path, event_sink=ui.event_sink),
+            task_repository=TaskRepository(tasks_db_path, event_sink=ui.event_sink),
             dispatch_factory=lambda cancel_event: task_services.create_isolated_dispatch(
                 cancel_event,
                 execution_mode=DEBATE_MODE,
@@ -768,8 +760,7 @@ class AppAssembler:
             renderer=ui.renderer,
             session_id=plat.session_id,
             current_job_id=rt.current_job_id,
-            staging_root=rt.workspace_tmp_root / "debates",
-            workspace_root=plat.workspace.cwd,
+            staging_root=plat.session_paths.root / "debates",
             persist_message=session_services.persist_message,
             history_provider=session_services.history_snapshot,
             notify_tasks_changed=task_services.notify_tasks_changed,
@@ -872,7 +863,7 @@ class AppAssembler:
             bug_detector=plat.bug_detector,
             agent_bug_detector=plat.agent_bug_detector,
             bug_correlator=plat.bug_correlator,
-            workspace=plat.workspace,
+            session_paths=plat.session_paths,
             storage=plat.storage,
             renderer=ui.renderer,
             event_sink=ui.event_sink,
@@ -883,7 +874,7 @@ class AppAssembler:
         failure_tracker = AgentFailureTracker(
             normalize_agent_name=normalize_agent_name,
             agent_pool=plat.agent_pool,
-            release_agent_tasks=_release_tasks_fn(rt.tasks_db_path),
+            release_agent_tasks=_release_tasks_fn(plat.workspace),
             record_metric=_make_record_metric(ui.session_metrics, app),
             file_bug=app._file_bug,
             get_session_id=_make_get_session_id(plat.storage),

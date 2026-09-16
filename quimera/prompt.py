@@ -25,9 +25,11 @@ class PromptBuilder:
             active_agents=None,
             active_agents_provider=None,
             orchestrator_provider=None,
+            workspace=None,
     ):
         self.context_manager = context_manager
         self.session_state = session_state or {}
+        self.workspace = workspace
         self.active_agents = list(active_agents) if active_agents is not None else profiles.all_names()
         self.active_agents_provider = active_agents_provider
         self.orchestrator_provider = orchestrator_provider
@@ -135,7 +137,11 @@ class PromptBuilder:
         if self.session_state and primary:
             session_id = self.session_state.get("session_id", "desconhecida")
             current_job_id = self.session_state.get("current_job_id", "desconhecido")
-            workspace_root = self.session_state.get("workspace_root", "desconhecido")
+            workspace_root = (
+                str(self.workspace.cwd)
+                if self.workspace is not None
+                else self.session_state.get("workspace_root", "desconhecido")
+            )
             current_dir = self.session_state.get("current_dir", ".")
             os_info = self.session_state.get("os_info", "")
             render_debug_active = bool(self.session_state.get("render_debug_active", False))
@@ -271,7 +277,7 @@ class PromptBuilder:
         if not isinstance(shared_state, dict):
             return ""
         evidence_session_id = shared_state.get("session_id") or session_id
-        base_dir = self.session_state.get("workspace_tmp_root") if isinstance(self.session_state, dict) else None
+        base_dir = self.session_state.get("evidence_base_dir") if isinstance(self.session_state, dict) else None
         if not evidence_session_id or not base_dir:
             return ""
         try:
@@ -292,11 +298,11 @@ class PromptBuilder:
         bug_session_id = shared_state.get("session_id") or session_id
         if not bug_session_id:
             return ""
-        tmp_root = self.session_state.get("workspace_tmp_root") if isinstance(self.session_state, dict) else None
-        if not tmp_root:
+        bug_logs_dir = self.session_state.get("bug_logs_dir") if isinstance(self.session_state, dict) else None
+        if not bug_logs_dir:
             return ""
         try:
-            store = BugStore(Path(tmp_root) / "data" / "logs")
+            store = BugStore(Path(bug_logs_dir))
         except Exception:
             return ""
         try:

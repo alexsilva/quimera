@@ -15,7 +15,7 @@ class EvidenceStore:
         self.base_dir = Path(base_dir)
         self.session_id = session_id
         self.evidence_dir = self.base_dir / "evidence"
-        self.evidence_dir.mkdir(parents=True, exist_ok=True)
+        self.evidence_dir.mkdir(exist_ok=True)
         self.path = self.evidence_dir / f"{session_id}.jsonl"
         self._lock = threading.RLock()
         self._closed = False

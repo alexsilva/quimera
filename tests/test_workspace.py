@@ -7,7 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from quimera.config import ConfigManager
-from quimera.workspace import Workspace, WorkspaceTmp, find_base_writable
+from quimera.session_paths import SessionPaths
+from quimera.workspace import Workspace, find_base_writable
 
 
 class TestWorkspace(unittest.TestCase):
@@ -15,7 +16,7 @@ class TestWorkspace(unittest.TestCase):
         """Redireciona TMP_BASE_DIR para um diretório descartável, evitando poluir /tmp/quimera real."""
         self._tmp_base_dir = tempfile.TemporaryDirectory()
         self.tmp_base = Path(self._tmp_base_dir.name)
-        self._tmp_base_patcher = patch("quimera.workspace.TMP_BASE_DIR", self.tmp_base)
+        self._tmp_base_patcher = patch("quimera.session_paths.TMP_BASE_DIR", self.tmp_base)
         self._tmp_base_patcher.start()
         self.addCleanup(self._tmp_base_patcher.stop)
         self.addCleanup(self._tmp_base_dir.cleanup)
@@ -125,8 +126,8 @@ class TestWorkspace(unittest.TestCase):
                 self.assertEqual(ws2._branch, "feature_my-feature")
                 self.assertEqual(ws2.context_persistent, ws1.context_persistent)
 
-    def test_tmp_render_debug_paths_live_under_workspace_tmp(self):
-        """Verifica que os caminhos de debug de render estão sob workspace tmp."""
+    def test_session_render_debug_paths_are_separate_from_workspace_storage(self):
+        """Caminhos temporários de render pertencem a SessionPaths, não ao Workspace."""
         with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:
             base = Path(base_dir)
             proj = Path(proj_tmp) / "renderproj"
@@ -134,9 +135,8 @@ class TestWorkspace(unittest.TestCase):
 
             with patch("quimera.workspace.find_base_writable", lambda dirs: base):
                 ws = Workspace(proj)
-                tmp = ws.tmp
+                tmp = SessionPaths(ws)
 
-                self.assertEqual(tmp.root, ws.tmp.root)
                 self.assertEqual(
                     tmp.render_logs_dir,
                     self.tmp_base / ws.cwd_hash / "data" / "logs" / "render",
@@ -149,7 +149,6 @@ class TestWorkspace(unittest.TestCase):
                     tmp.artifacts_dir,
                     self.tmp_base / ws.cwd_hash / "data" / "artifacts",
                 )
-                self.assertEqual(ws.artifacts_dir, tmp.artifacts_dir)
                 self.assertEqual(
                     tmp.render_log_path_for("sessao-2026-05-14-225819"),
                     tmp.render_logs_dir / "render-sessao-2026-05-14-225819.jsonl",
@@ -158,12 +157,12 @@ class TestWorkspace(unittest.TestCase):
                     tmp.render_ansi_path_for("sessao-2026-05-14-225819"),
                     tmp.render_logs_dir / "render-sessao-2026-05-14-225819.ansi",
                 )
-                self.assertTrue(ws.tmp.render_logs_dir.exists())
-                self.assertTrue(ws.tmp.clipboard_dir.exists())
-                self.assertTrue(ws.tmp.artifacts_dir.exists())
+                self.assertTrue(tmp.render_logs_dir.exists())
+                self.assertTrue(tmp.clipboard_dir.exists())
+                self.assertTrue(tmp.artifacts_dir.exists())
 
-    def test_tmp_metrics_paths_live_under_workspace_tmp(self):
-        """Verifica que os caminhos de métricas estão sob workspace tmp."""
+    def test_session_metrics_paths_are_separate_from_workspace_storage(self):
+        """Caminhos temporários de métricas pertencem a SessionPaths."""
         with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:
             base = Path(base_dir)
             proj = Path(proj_tmp) / "renderproj"
@@ -171,7 +170,7 @@ class TestWorkspace(unittest.TestCase):
 
             with patch("quimera.workspace.find_base_writable", lambda dirs: base):
                 ws = Workspace(proj)
-                tmp = ws.tmp
+                tmp = SessionPaths(ws)
 
                 self.assertEqual(
                     tmp.metrics_dir,
@@ -181,41 +180,9 @@ class TestWorkspace(unittest.TestCase):
                     tmp.metrics_path_for("sessao-2026-05-14-225819"),
                     tmp.metrics_dir / "sessao-2026-05-14-225819.jsonl",
                 )
-                self.assertTrue(ws.tmp.metrics_dir.exists())
+                self.assertTrue(tmp.metrics_dir.exists())
 
-    def test_debug_render_and_metrics_paths_are_persistent_under_workspace_root(self):
-        """Verifica que os caminhos de render e métricas estão sob workspace root."""
-        with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:
-            base = Path(base_dir)
-            proj = Path(proj_tmp) / "renderproj"
-            proj.mkdir()
-
-            with patch("quimera.workspace.find_base_writable", lambda dirs: base):
-                ws = Workspace(proj)
-                self.assertEqual(
-                    ws.render_logs_dir,
-                    ws.root / "data" / "logs" / "render",
-                )
-                self.assertEqual(
-                    ws.metrics_dir,
-                    ws.root / "data" / "logs" / "metrics",
-                )
-                self.assertEqual(
-                    ws.render_log_path_for("sessao-2026-05-14-225819"),
-                    ws.root / "data" / "logs" / "render" / "render-sessao-2026-05-14-225819.jsonl",
-                )
-                self.assertEqual(
-                    ws.render_ansi_path_for("sessao-2026-05-14-225819"),
-                    ws.root / "data" / "logs" / "render" / "render-sessao-2026-05-14-225819.ansi",
-                )
-                self.assertEqual(
-                    ws.metrics_path_for("sessao-2026-05-14-225819"),
-                    ws.root / "data" / "logs" / "metrics" / "sessao-2026-05-14-225819.jsonl",
-                )
-                self.assertTrue(ws.render_logs_dir.exists())
-                self.assertTrue(ws.metrics_dir.exists())
-
-    def test_tmp_ensure_dirs_logs_only_the_failing_directory(self):
+    def test_session_paths_ensure_dirs_logs_only_the_failing_directory(self):
         """Verifica que apenas o diretório com falha é registrado no log."""
         render_dir = self.tmp_base / "hash123" / "data" / "logs" / "render"
 
@@ -225,8 +192,10 @@ class TestWorkspace(unittest.TestCase):
             return None
 
         with patch.object(Path, "mkdir", autospec=True, side_effect=fake_mkdir):
-            with patch("quimera.workspace.logger.warning") as warning:
-                WorkspaceTmp("hash123")
+            workspace = unittest.mock.MagicMock()
+            workspace.cwd_hash = "hash123"
+            with patch("quimera.session_paths.logger.warning") as warning:
+                SessionPaths(workspace)
 
         warning.assert_called_once()
         self.assertEqual(

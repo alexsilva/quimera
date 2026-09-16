@@ -17,6 +17,7 @@ import quimera.paths as _quimera_paths  # noqa: E402
 _quimera_paths.CANDIDATE_DIRS[:] = [_quimera_paths.TMP_BASE_DIR]
 
 from quimera.runtime.config import ToolRuntimeConfig  # noqa: E402
+from quimera.workspace import Workspace  # noqa: E402
 from quimera.runtime.tools.shell import ShellToolValidator  # noqa: E402
 from quimera.tasks.executor import TaskExecutor  # noqa: E402
 from quimera.runtime.executor import ToolExecutor  # noqa: E402
@@ -50,20 +51,20 @@ def mock_handler():
 @pytest.fixture
 def config():
     """ToolRuntimeConfig padrão com workspace_root em /tmp."""
-    return ToolRuntimeConfig(workspace_root=Path("/tmp"))
+    return ToolRuntimeConfig(workspace=Workspace(Path("/tmp")))
 
 
 @pytest.fixture
 def config_with_workspace(tmp_path):
     """ToolRuntimeConfig com workspace_root em tmp_path isolado."""
-    return ToolRuntimeConfig(workspace_root=tmp_path)
+    return ToolRuntimeConfig(workspace=Workspace(tmp_path))
 
 
 @pytest.fixture
 def config_with_approval(tmp_path):
     """ToolRuntimeConfig com aprovação para mutações habilitada."""
     return ToolRuntimeConfig(
-        workspace_root=tmp_path,
+        workspace=Workspace(tmp_path),
         require_approval_for_mutations=True,
     )
 
@@ -72,7 +73,7 @@ def config_with_approval(tmp_path):
 def config_no_approval(tmp_path):
     """ToolRuntimeConfig sem aprovação para mutações."""
     return ToolRuntimeConfig(
-        workspace_root=tmp_path,
+        workspace=Workspace(tmp_path),
         require_approval_for_mutations=False,
     )
 
@@ -250,14 +251,13 @@ def redirect_workspace_base_to_tmp(monkeypatch, tmp_path):
     um diretório próprio e curto (fora da árvore pytest-of-*) porque caminhos de
     socket AF_UNIX derivados dele têm limite de ~108 bytes.
     """
-    tmp_base = tmp_path / "quimera_base"
-    tmp_base.mkdir(exist_ok=True)
-
+    tmp_base = Path(tempfile.mkdtemp(prefix="qbase-"))
     tmp_workspace_tmp = Path(tempfile.mkdtemp(prefix="qtmp-"))
 
     import quimera.workspace as _ws
     monkeypatch.setattr(_ws, "find_base_writable", lambda _candidates: tmp_base)
-    monkeypatch.setattr(_ws, "TMP_BASE_DIR", tmp_workspace_tmp)
+    import quimera.session_paths as _session_paths
+    monkeypatch.setattr(_session_paths, "TMP_BASE_DIR", tmp_workspace_tmp)
 
     try:
         import quimera.profiles.base as _pb
@@ -272,4 +272,5 @@ def redirect_workspace_base_to_tmp(monkeypatch, tmp_path):
         pass
 
     yield
+    shutil.rmtree(tmp_base, ignore_errors=True)
     shutil.rmtree(tmp_workspace_tmp, ignore_errors=True)

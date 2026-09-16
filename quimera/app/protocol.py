@@ -21,15 +21,12 @@ class AppProtocol:
         lock,
         shared_state,
         workspace=None,
-        decisions_log_path=None,
         turn_stamps=None,
     ) -> None:
         """Inicializa uma instância de AppProtocol."""
         self._lock = lock
         self._shared_state = shared_state
         self._workspace = workspace
-        self._decisions_log_path = decisions_log_path
-        self._decisions_logger = None
         self._turn_stamps = turn_stamps if turn_stamps is not None else {}
 
     def set_shared_state(self, shared_state) -> None:
@@ -37,15 +34,12 @@ class AppProtocol:
         self._shared_state = shared_state
 
     def _get_decisions_logger(self):
-        """Executa lazy load do DecisionsLogger."""
-        if self._decisions_logger is not None:
-            return self._decisions_logger
-        if self._decisions_log_path is None:
+        """Resolve o logger para o Workspace atual sem cachear path derivado."""
+        if self._workspace is None:
             return None
         from ..workspace import DecisionsLogger
 
-        self._decisions_logger = DecisionsLogger(self._decisions_log_path)
-        return self._decisions_logger
+        return DecisionsLogger(self._workspace.decisions_log)
 
     _MAX_LIST_LENGTH = 50
 

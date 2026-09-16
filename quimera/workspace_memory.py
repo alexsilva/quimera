@@ -51,8 +51,6 @@ class WorkspaceMemoryStore:
     def __init__(self, memory_file: Path) -> None:
         self._memory_file = memory_file.expanduser().resolve()
         self._lock_file = self._memory_file.with_suffix(".lock")
-        self._memory_file.parent.mkdir(parents=True, exist_ok=True)
-        self._lock_file.parent.mkdir(parents=True, exist_ok=True)
 
     def save(
         self,
@@ -227,7 +225,6 @@ class WorkspaceMemoryStore:
         return data
 
     def _write_data(self, data: dict[str, Any]) -> None:
-        self._memory_file.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(
             prefix="memory-",
             suffix=".json.tmp",

@@ -244,7 +244,6 @@ class BehaviorMetricsTracker:
         self._last_save_time = now
 
         try:
-            self._storage_path.parent.mkdir(parents=True, exist_ok=True)
             data = {name: metrics.to_dict() for name, metrics in self._metrics.items()}
             self._storage_path.write_text(
                 json.dumps(data, indent=2, ensure_ascii=False) + "\n",

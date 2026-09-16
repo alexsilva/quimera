@@ -59,21 +59,21 @@ class TestAppHistory(unittest.TestCase):
         input_gate_factory = self._make_input_gate_factory(captured)
 
         tmp_root = Path("/tmp/quimera_test_workspace_tmp")
-        with patch("quimera.app.bootstrap.wiring.Workspace") as mock_ws:
-            mock_ws_instance = MagicMock()
-            mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
-            mock_ws_instance.history_file_for.return_value = self.history_file
-            mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
-            mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
-            mock_ws_instance.tmp = MagicMock()
-            mock_ws_instance.tmp.root = tmp_root
-            mock_ws_instance.tmp.logs_dir = tmp_root / "data" / "logs"
-            mock_ws.return_value = mock_ws_instance
+        mock_ws_instance = MagicMock()
+        mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
+        mock_ws_instance.cwd_hash = "test-workspace"
+        mock_ws_instance.history_file_for.return_value = self.history_file
+        mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
+        mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
 
-            with patch("quimera.app.bootstrap.wiring.create_executor"):
-                from quimera.app import QuimeraApp
+        with patch("quimera.app.bootstrap.wiring.create_executor"):
+            from quimera.app import QuimeraApp
 
-                app = QuimeraApp(self.tmp_cwd, input_gate_factory=input_gate_factory)
+            app = QuimeraApp(
+                self.tmp_cwd,
+                workspace=mock_ws_instance,
+                input_gate_factory=input_gate_factory,
+            )
 
         self.assertEqual(captured["history_file"], self.history_file)
         self.assertTrue(callable(captured["command_resolver"]))
@@ -109,27 +109,27 @@ class TestAppHistory(unittest.TestCase):
         gate_mock.return_value = "test input"
 
         tmp_root = Path("/tmp/quimera_test_workspace_tmp")
-        with patch("quimera.app.bootstrap.wiring.Workspace") as mock_ws:
-            mock_ws_instance = MagicMock()
-            mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
-            mock_ws_instance.history_file_for.return_value = self.history_file
-            mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
-            mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
-            mock_ws_instance.render_logs_dir = Path("/tmp/quimera_test_workspace/data/logs/render")
-            mock_ws_instance.tmp = MagicMock()
-            mock_ws_instance.tmp.root = tmp_root
-            mock_ws_instance.tmp.logs_dir = tmp_root / "data" / "logs"
-            mock_ws.return_value = mock_ws_instance
+        mock_ws_instance = MagicMock()
+        mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
+        mock_ws_instance.cwd_hash = "test-workspace"
+        mock_ws_instance.history_file_for.return_value = self.history_file
+        mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
+        mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
+        mock_ws_instance.render_logs_dir = Path("/tmp/quimera_test_workspace/data/logs/render")
 
-            with patch("quimera.app.bootstrap.wiring.create_executor"):
-                from quimera.app import QuimeraApp
+        with patch("quimera.app.bootstrap.wiring.create_executor"):
+            from quimera.app import QuimeraApp
 
-                app = QuimeraApp(self.tmp_cwd, input_gate_factory=lambda **kw: gate_mock)
+            app = QuimeraApp(
+                self.tmp_cwd,
+                workspace=mock_ws_instance,
+                input_gate_factory=lambda **kw: gate_mock,
+            )
 
-            result = app.input_services.read_user_input(prompt="user: ", timeout=-1)
+        result = app.input_services.read_user_input(prompt="user: ", timeout=-1)
 
-            self.assertEqual(result, "test input")
-            gate_mock.assert_called_once_with("user: ")
+        self.assertEqual(result, "test input")
+        gate_mock.assert_called_once_with("user: ")
 
     @patch("quimera.tasks.api.init_db")
     @patch("quimera.tasks.api.add_job")
@@ -156,36 +156,29 @@ class TestAppHistory(unittest.TestCase):
         mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
 
-        tmp_render_logs_dir = Path("/tmp/quimera_test_workspace/data/logs/render")
         audit_instance = MagicMock()
         mock_audit_logger.return_value = audit_instance
 
-        with patch("quimera.app.bootstrap.wiring.Workspace") as mock_ws:
-            mock_ws_instance = MagicMock()
-            mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
-            mock_ws_instance.history_file_for.return_value = self.history_file
-            mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
-            mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
-            mock_tmp = MagicMock()
-            mock_tmp.root = Path("/tmp/quimera_test_workspace_tmp")
-            mock_tmp.logs_dir = mock_tmp.root / "data" / "logs"
-            mock_tmp.render_log_path_for.side_effect = (
-                lambda session_id: tmp_render_logs_dir / f"render-{session_id}.jsonl"
-            )
-            mock_tmp.render_ansi_path_for.side_effect = (
-                lambda session_id: tmp_render_logs_dir / f"render-{session_id}.ansi"
-            )
-            mock_ws_instance.tmp = mock_tmp
-            mock_ws.return_value = mock_ws_instance
+        mock_ws_instance = MagicMock()
+        mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
+        mock_ws_instance.cwd_hash = "test-workspace"
+        mock_ws_instance.history_file_for.return_value = self.history_file
+        mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
+        mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
 
-            with patch("quimera.app.bootstrap.wiring.create_executor"):
-                from quimera.app import QuimeraApp
+        with patch("quimera.app.bootstrap.wiring.create_executor"):
+            from quimera.app import QuimeraApp
 
-                QuimeraApp(self.tmp_cwd, debug=True, input_gate_factory=lambda **kw: MagicMock())
+            app = QuimeraApp(
+                self.tmp_cwd,
+                workspace=mock_ws_instance,
+                debug=True,
+                input_gate_factory=lambda **kw: MagicMock(),
+            )
 
         mock_audit_logger.assert_called_once_with(
-            tmp_render_logs_dir / "render-test.jsonl",
-            tmp_render_logs_dir / "render-test.ansi",
+            app.session_paths.render_log_path_for("test"),
+            app.session_paths.render_ansi_path_for("test"),
         )
         _, kwargs = mock_term.call_args
         self.assertIs(kwargs["audit_logger"], audit_instance)

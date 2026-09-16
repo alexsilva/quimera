@@ -51,7 +51,7 @@ def make_mcp_executor(tool_names=None, call_result=None):
     executor = MagicMock()
     names = tool_names or ["read_file", "run_shell"]
     executor.registry.names.return_value = names
-    executor.config.db_path = None
+    executor.config.workspace = None
     executor.policy.blocked_tools = set()
     if call_result is None:
         call_result = ToolResult(ok=True, tool_name="read_file", content="ok")

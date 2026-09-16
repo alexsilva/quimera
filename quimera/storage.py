@@ -20,7 +20,9 @@ class SessionStorage:
         date_str = now.strftime("%Y-%m-%d")
         self.session_id = f"sessao-{now.strftime('%Y-%m-%d-%H%M%S')}"
         self.session_dir = logs_dir / date_str
-        self.session_dir.mkdir(parents=True, exist_ok=True)
+        # ``logs_dir`` é infraestrutura do Workspace e já deve existir.
+        # O storage cria apenas o subdiretório que pertence ao seu domínio.
+        self.session_dir.mkdir(exist_ok=True)
         self.log_file = self.session_dir / f"sessao-{date_str}.txt"
         self.history_file = self.session_dir / f"{self.session_id}.json"
         self._logs_dir = logs_dir
@@ -48,7 +50,6 @@ class SessionStorage:
         payload = {
             "session_id": self.history_file.stem,
             "saved_at": datetime.now().isoformat(timespec="seconds"),
-            "cwd": str(Path.cwd()),
             "messages": history,
             "shared_state": shared_state or {},
         }
@@ -92,7 +93,6 @@ class SessionStorage:
         if not json_files:
             return {"messages": [], "shared_state": {}}
 
-        current_cwd = str(Path.cwd())
         for json_file in json_files:
             try:
                 with json_file.open(encoding="utf-8") as file:
@@ -102,14 +102,11 @@ class SessionStorage:
 
             # Process this session
             if isinstance(data, list):
-                # Formato legado (lista pura): sem cwd, sem saved_at — descartado.
+                # Formato legado (lista pura): sem saved_at — descartado.
                 continue
             elif isinstance(data, dict):
-                # New format (dict) - check cwd for workspace isolation.
-                saved_cwd = data.get("cwd")
-                if saved_cwd is not None and saved_cwd != current_cwd:
-                    # Session from different workspace, skip.
-                    continue
+                # O diretório recebido já pertence ao Workspace atual; o
+                # storage não precisa inferir identidade pelo cwd do processo.
                 messages = data.get("messages", [])
                 shared_state = data.get("shared_state", {})
                 saved_at_raw = data.get("saved_at")

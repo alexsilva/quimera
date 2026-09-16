@@ -46,7 +46,7 @@ def test_prompt_builder_includes_bug_context_when_open_bugs_exist(tmp_path):
     builder = PromptBuilder(
         context_manager=_DummyContextManager(),
         session_state={
-            "workspace_tmp_root": str(tmp_path),
+            "bug_logs_dir": str(logs_dir),
         },
     )
     section = builder._build_evidence_section({"session_id": session_id}, session_id)
@@ -56,9 +56,10 @@ def test_prompt_builder_includes_bug_context_when_open_bugs_exist(tmp_path):
 def test_prompt_builder_ignores_bug_store_failures(tmp_path):
     """Verifica que o PromptBuilder ignora falhas do BugStore sem quebrar."""
     """Verifica que falhas no BugStore não quebram o PromptBuilder."""
+    logs_dir = tmp_path / "data" / "logs"
     builder = PromptBuilder(
         context_manager=_DummyContextManager(),
-        session_state={"workspace_tmp_root": str(tmp_path)},
+        session_state={"bug_logs_dir": str(logs_dir)},
     )
     with patch("quimera.prompt.BugStore", side_effect=OSError("perm denied")):
         section = builder._build_evidence_section({"session_id": "sessao-bugs"}, "sessao-bugs")

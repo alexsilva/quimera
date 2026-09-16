@@ -1,44 +1,33 @@
-"""Centralização de resolução de paths/sessão para startup e debug.
-
-Módulo público de entrada para resolução de caminhos de sessão,
-auditoria de render e métricas. Delega para implementação interna
-em session_paths.
-"""
+"""Helpers mínimos para paths já pertencentes a serviços da sessão."""
 
 from pathlib import Path
 from typing import Any
 
-from .session_paths import (
-    resolve_session_log_path as _resolve_session_log_path,
-    resolve_render_debug_log_path as _resolve_render_debug_log_path,
-    resolve_workspace_render_log_path as _resolve_workspace_render_log_path,
-    resolve_workspace_render_ansi_path as _resolve_workspace_render_ansi_path,
-    resolve_workspace_metrics_path as _resolve_workspace_metrics_path,
-    resolve_app_log_path as _resolve_app_log_path,
-)
 
-
-def resolve_session_log_path(storage: Any, workspace: Any) -> str | Path:
-    return _resolve_session_log_path(storage, workspace)
+def resolve_session_log_path(storage: Any) -> str | Path:
+    """Retorna o log persistente fornecido pelo próprio storage."""
+    get_log_file = getattr(storage, "get_log_file", None)
+    if not callable(get_log_file):
+        return ""
+    return get_log_file() or ""
 
 
 def resolve_render_debug_log_path(
-    storage: Any, workspace: Any, debug_prompt_metrics: bool
+    storage: Any,
+    session_paths: Any,
+    debug_prompt_metrics: bool,
 ) -> str | Path:
-    return _resolve_render_debug_log_path(storage, workspace, debug_prompt_metrics)
-
-
-def resolve_workspace_render_log_path(workspace: Any, session_id: str) -> Path | None:
-    return _resolve_workspace_render_log_path(workspace, session_id)
-
-
-def resolve_workspace_render_ansi_path(workspace: Any, session_id: str) -> Path | None:
-    return _resolve_workspace_render_ansi_path(workspace, session_id)
-
-
-def resolve_workspace_metrics_path(workspace: Any, session_id: str) -> Path | None:
-    return _resolve_workspace_metrics_path(workspace, session_id)
-
-
-def resolve_app_log_path(workspace: Any, session_id: str) -> Path | None:
-    return _resolve_app_log_path(workspace, session_id)
+    """Retorna o audit temporário de render somente quando debug está ativo."""
+    if not debug_prompt_metrics:
+        return ""
+    session_id = getattr(storage, "session_id", "")
+    getter = getattr(session_paths, "render_log_path_for", None)
+    if not session_id or not callable(getter):
+        return ""
+    path = getter(session_id)
+    if path is None:
+        return ""
+    normalized = str(path).strip()
+    if not normalized or normalized == ".":
+        return ""
+    return Path(normalized)

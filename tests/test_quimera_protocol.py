@@ -56,6 +56,7 @@ from quimera.shared_state import AGENT_STATE_KEYS
 from quimera.prompt_templates import prompt_template
 from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.executor import ToolExecutor
 from quimera.tasks.planning import TaskClassification
 from quimera.tasks.api import add_job, complete_task, create_task, init_db, list_tasks
@@ -174,45 +175,13 @@ def _make_summary_fakes(existing_summary, merged_summary):
 
 
 def _build_fake_app_bootstrap(temp_root, *, load_session="", session_payload=None, history_window=None):
-    """Constrói QuimeraApp com bootstrapping falso (Workspace/Context/SessionStorage).
+    """Constrói QuimeraApp com Context/SessionStorage falsos.
 
-    Substitui ConfigManager, Workspace, ContextManager e SessionStorage por fakes
-    durante a construção, evitando acesso ao sistema de arquivos do ambiente.
+    Usa uma instância real de Workspace para manter o mesmo contrato de paths da
+    aplicação; apenas os serviços irrelevantes para estes testes são falsificados.
     """
     ROOT = Path(temp_root)
-
-    class FakeTmp:
-        root = ROOT
-        logs_dir = ROOT / "logs"
-
-        def render_log_path_for(self, session_id):
-            return ROOT / f"render-{session_id}.jsonl"
-
-        def render_ansi_path_for(self, session_id):
-            return ROOT / f"render-{session_id}.ansi"
-
-        def metrics_path_for(self, session_id):
-            return ROOT / f"metrics-{session_id}.jsonl"
-
-    class FakeWorkspace:
-        def __init__(self, cwd):
-            self.root = ROOT
-            self.cwd = cwd
-            self.config_file = ROOT / "config.json"
-            self.context_persistent = ROOT / "quimera_context.md"
-            self.context_session = ROOT / "quimera_session_context.md"
-            self.logs_dir = ROOT / "quimera_logs"
-            self.state_dir = ROOT / "quimera_state"
-            self.tasks_db = ROOT / "quimera_tasks.db"
-            self.decisions_log = ROOT / "decisions.jsonl"
-            self.env_file = ROOT / ".env"
-            self.tmp = FakeTmp()
-
-        def history_file_for(self, session_id):
-            return ROOT / f"quimera_history-{session_id}.jsonl"
-
-        def migrate_from_legacy(self, cwd):
-            return []
+    workspace = Workspace(ROOT / "project")
 
     class FakeContextManager:
         SUMMARY_MARKER = "## Resumo da última sessão"
@@ -239,7 +208,6 @@ def _build_fake_app_bootstrap(temp_root, *, load_session="", session_payload=Non
 
     patchers = [
         patch("quimera.app.bootstrap.wiring.ConfigManager", DummyConfigManager),
-        patch("quimera.app.bootstrap.wiring.Workspace", FakeWorkspace),
         patch("quimera.app.bootstrap.wiring.ContextManager", FakeContextManager),
         patch("quimera.app.bootstrap.wiring.SessionStorage", FakeSessionStorage),
     ]
@@ -247,7 +215,12 @@ def _build_fake_app_bootstrap(temp_root, *, load_session="", session_payload=Non
         for p in patchers:
             stack.enter_context(p)
         kwargs = {} if history_window is None else {"history_window": history_window}
-        return QuimeraApp(Path("/tmp/projeto"), input_gate_factory=lambda **kw: MagicMock(), **kwargs)
+        return QuimeraApp(
+            workspace.cwd,
+            workspace=workspace,
+            input_gate_factory=lambda **kw: MagicMock(),
+            **kwargs,
+        )
 
 
 class DummyStorage:
@@ -727,7 +700,7 @@ class ProtocolTests(unittest.TestCase):
         calls = []
 
         class FakeAgentClient:
-            def __init__(self, renderer, metrics_file=None):
+            def __init__(self, renderer, metrics_file=None, workspace=None):
                 self.renderer = renderer
 
             def call(self, agent, prompt):
@@ -771,7 +744,7 @@ class ProtocolTests(unittest.TestCase):
                 self.plain_messages.append(message)
 
         class FakeAgentClient:
-            def __init__(self, renderer, metrics_file=None):
+            def __init__(self, renderer, metrics_file=None, workspace=None):
                 self.renderer = renderer
 
             def call(self, agent, prompt):
@@ -801,6 +774,7 @@ class ProtocolTests(unittest.TestCase):
                 captured["cwd"] = cwd
                 captured.update(kwargs)
                 self.tool_executor = object()
+                self.session_paths = object()
 
             def run(self):
                 captured["ran"] = True
@@ -808,7 +782,9 @@ class ProtocolTests(unittest.TestCase):
             def configure_mcp_socket(self, socket_path: str | None, token: str | None = None) -> None:
                 pass
 
-        with patch("quimera.cli.QuimeraApp", FakeApp), patch("sys.argv", ["quimera", "--visibility", "full"]):
+        with patch("quimera.cli.QuimeraApp", FakeApp), patch(
+            "quimera.cli.start_embedded_mcp"
+        ), patch("sys.argv", ["quimera", "--visibility", "full"]):
             cli_main()
 
         self.assertEqual(captured["visibility"], Visibility.FULL)
@@ -2238,9 +2214,11 @@ class ProtocolTests(unittest.TestCase):
             pop_restore_notice=lambda: None,
         )
         app.workspace = SimpleNamespace(
-            tmp=SimpleNamespace(
-                render_log_path_for=lambda _session_id: Path("/tmp/quimera/render-sessao-2026-03-27-123456.jsonl")
-            )
+            cwd=Path("/tmp/projeto"),
+            logs_dir=Path("/home/alex/.local/share/quimera/workspaces/abc/data/logs/sessions"),
+        )
+        app.session_paths = SimpleNamespace(
+            render_log_path_for=lambda _session_id: Path("/tmp/quimera/render-sessao-2026-03-27-123456.jsonl")
         )
         app.session_state = {
             "session_id": "sessao-2026-03-27-123456",
@@ -2343,57 +2321,44 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("...", lines[1])
         self.assertLessEqual(len(lines[1].strip()), app._SESSION_LOG_DISPLAY_MAX_CHARS)
 
-    def test_resolve_session_log_path_does_not_fallback_to_render_tmp(self):
-        """Verifica que resolve session log path does not fallback to render tmp."""
+    def test_resolve_session_log_path_uses_storage_path_only(self):
+        """O log persistente pertence ao SessionStorage, sem reconstrução externa."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.storage = SimpleNamespace(get_log_file=lambda: "", session_id="sessao-2026-03-27-123456")
-        app.workspace = SimpleNamespace(
-            logs_dir=Path("/home/alex/.local/share/quimera/workspaces/abc/data/logs/sessions"),
-            tmp=SimpleNamespace(render_log_path_for=lambda _session_id: Path("/tmp/quimera/render.jsonl")),
-        )
+        expected = Path("/logs/2026-03-27/sessao-2026-03-27.txt")
+        app.storage = SimpleNamespace(get_log_file=lambda: expected)
 
-        log_path = resolve_session_log_path(app.storage, app.workspace)
+        log_path = resolve_session_log_path(app.storage)
 
-        self.assertEqual(
-            log_path,
-            Path("/home/alex/.local/share/quimera/workspaces/abc/data/logs/sessions/sessao-2026-03-27-123456.jsonl"),
-        )
+        self.assertEqual(log_path, expected)
 
     def test_resolve_render_debug_log_path_only_when_debug_active(self):
         """Verifica que resolve render debug log path only when debug active."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.storage = SimpleNamespace(session_id="sessao-2026-03-27-123456")
-        app.workspace = SimpleNamespace(
-            tmp=SimpleNamespace(
-                render_log_path_for=lambda session_id: Path(f"/tmp/quimera/render-{session_id}.jsonl")
-            )
+        app.session_paths = SimpleNamespace(
+            render_log_path_for=lambda session_id: Path(f"/tmp/quimera/render-{session_id}.jsonl")
         )
         app.debug_prompt_metrics = False
 
-        self.assertEqual(resolve_render_debug_log_path(app.storage, app.workspace, app.debug_prompt_metrics), "")
+        self.assertEqual(resolve_render_debug_log_path(app.storage, app.session_paths, app.debug_prompt_metrics), "")
 
         app.debug_prompt_metrics = True
         self.assertEqual(
-            resolve_render_debug_log_path(app.storage, app.workspace, app.debug_prompt_metrics),
+            resolve_render_debug_log_path(app.storage, app.session_paths, app.debug_prompt_metrics),
             Path("/tmp/quimera/render-sessao-2026-03-27-123456.jsonl"),
         )
 
-    def test_resolve_render_debug_log_path_prefers_workspace_tmp_path(self):
-        """Verifica que resolve render debug log path prefers workspace tmp path."""
+    def test_resolve_render_debug_log_path_uses_session_paths(self):
+        """Audit temporário é resolvido pela infraestrutura da sessão, não pelo Workspace."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.storage = SimpleNamespace(session_id="sessao-2026-03-27-123456")
-        app.workspace = SimpleNamespace(
-            render_log_path_for=lambda session_id: Path(
-                f"/home/alex/.local/share/quimera/workspaces/abc/data/logs/render/render-{session_id}.jsonl"
-            ),
-            tmp=SimpleNamespace(
-                render_log_path_for=lambda session_id: Path(f"/tmp/quimera/render-{session_id}.jsonl")
-            ),
+        app.session_paths = SimpleNamespace(
+            render_log_path_for=lambda session_id: Path(f"/tmp/quimera/render-{session_id}.jsonl")
         )
         app.debug_prompt_metrics = True
 
         self.assertEqual(
-            resolve_render_debug_log_path(app.storage, app.workspace, app.debug_prompt_metrics),
+            resolve_render_debug_log_path(app.storage, app.session_paths, app.debug_prompt_metrics),
             Path("/tmp/quimera/render-sessao-2026-03-27-123456.jsonl"),
         )
 
@@ -2401,29 +2366,19 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que resolve render debug log path returns empty when getters missing."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.storage = SimpleNamespace(session_id="sessao-2026-03-27-123456")
-        app.workspace = SimpleNamespace(
-            tmp=SimpleNamespace(),
-        )
+        app.session_paths = SimpleNamespace()
         app.debug_prompt_metrics = True
 
-        self.assertEqual(resolve_render_debug_log_path(app.storage, app.workspace, app.debug_prompt_metrics), "")
+        self.assertEqual(resolve_render_debug_log_path(app.storage, app.session_paths, app.debug_prompt_metrics), "")
 
     def test_resolve_render_debug_log_path_ignores_dot_path(self):
         """Verifica que resolve render debug log path ignores dot path."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.storage = SimpleNamespace(session_id="sessao-2026-03-27-123456")
-        app.workspace = SimpleNamespace(
-            render_log_path_for=lambda _session_id: Path("."),
-            tmp=SimpleNamespace(
-                render_log_path_for=lambda session_id: Path(f"/tmp/quimera/render-{session_id}.jsonl")
-            ),
-        )
+        app.session_paths = SimpleNamespace(render_log_path_for=lambda _session_id: Path("."))
         app.debug_prompt_metrics = True
 
-        self.assertEqual(
-            resolve_render_debug_log_path(app.storage, app.workspace, app.debug_prompt_metrics),
-            Path("/tmp/quimera/render-sessao-2026-03-27-123456.jsonl"),
-        )
+        self.assertEqual(resolve_render_debug_log_path(app.storage, app.session_paths, app.debug_prompt_metrics), "")
 
     def test_run_blocks_agent_task_creation_via_tool_in_normal_flow(self):
         """Verifica que run blocks agent task creation via tool in normal flow."""
@@ -2459,15 +2414,15 @@ class ProtocolTests(unittest.TestCase):
         }
 
         tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        db_path = tmp_dir / "tasks.db"
+        workspace = Workspace(tmp_dir)
+        db_path = workspace.tasks_db
         init_db(str(db_path))
         job_id = add_job("Session sessao-2026-04-02-183323", db_path=str(db_path))
         app.current_job_id = job_id
         app.tasks_db_path = str(db_path)
         app.tool_executor = ToolExecutor(
             config=ToolRuntimeConfig(
-                workspace_root=tmp_dir,
-                db_path=str(db_path),
+                workspace=workspace,
                 require_approval_for_mutations=False,
             ),
             approval_handler=AutoApprove(),
@@ -5646,21 +5601,26 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_get_decisions_logger_returns_none_when_no_path(self):
         """Verifica que get decisions logger returns none when no path."""
-        proto = AppProtocol(lock=threading.Lock(), shared_state={}, decisions_log_path=None)
+        proto = AppProtocol(lock=threading.Lock(), shared_state={})
         result = proto._get_decisions_logger()
         self.assertIsNone(result)
 
-    def test_get_decisions_logger_caches_instance(self):
-        """Verifica que get decisions logger caches instance."""
-        with patch("quimera.workspace.DecisionsLogger"):
+    def test_get_decisions_logger_does_not_cache_workspace_path(self):
+        """O logger é resolvido novamente para acompanhar o Workspace atual."""
+        first_logger = Mock()
+        second_logger = Mock()
+        with patch(
+            "quimera.workspace.DecisionsLogger",
+            side_effect=[first_logger, second_logger],
+        ) as logger_cls:
             import tempfile
             tmp = tempfile.mktemp(suffix=".json")
-            proto = AppProtocol(lock=threading.Lock(), shared_state={}, decisions_log_path=tmp)
-            # first call creates it
+            workspace = SimpleNamespace(decisions_log=tmp)
+            proto = AppProtocol(lock=threading.Lock(), shared_state={}, workspace=workspace)
             first = proto._get_decisions_logger()
-            # second call returns cached (line 34)
             second = proto._get_decisions_logger()
-            self.assertIs(first, second)
+            self.assertEqual(logger_cls.call_count, 2)
+            self.assertIsNot(first, second)
 
     def test_get_decisions_logger_creates_instance_with_path(self):
         """Verifica que get decisions logger creates instance with path."""
@@ -5673,8 +5633,8 @@ class AppProtocolDirectTests(unittest.TestCase):
             mock_logger = Mock()
             with patch("quimera.workspace.DecisionsLogger", return_value=mock_logger):
                 app = self._make_app()
-                app.workspace = SimpleNamespace(cwd="/tmp")
-                proto = AppProtocol(lock=app._lock, shared_state=app.shared_state, workspace=app.workspace, decisions_log_path=log_path)
+                app.workspace = SimpleNamespace(cwd="/tmp", decisions_log=log_path)
+                proto = AppProtocol(lock=app._lock, shared_state=app.shared_state, workspace=app.workspace)
                 payload = {"decisions": ["dec1", "dec2"]}
                 result = proto.apply_state_update(payload)
             self.assertTrue(result)
@@ -6245,17 +6205,17 @@ class TestToolCallGuardrails(unittest.TestCase):
 class TestToolRuntimeConfigGuardrails(unittest.TestCase):
     """Guardrails de contrato público para ToolRuntimeConfig."""
 
-    def test_config_rejects_non_path_workspace_root(self):
-        """ToolRuntimeConfig com workspace_root não-Path levanta TypeError."""
+    def test_config_requires_workspace(self):
+        """ToolRuntimeConfig exige a instância canônica de Workspace."""
         with self.assertRaises(TypeError) as ctx:
-            ToolRuntimeConfig(workspace_root="/tmp")
-        self.assertIn("workspace_root", str(ctx.exception))
+            ToolRuntimeConfig(workspace=None)
+        self.assertIn("Workspace", str(ctx.exception))
 
     def test_config_accepts_valid_path(self):
         """ToolRuntimeConfig com Path válido funciona."""
         from pathlib import Path
-        config = ToolRuntimeConfig(workspace_root=Path("/tmp"))
-        self.assertEqual(config.workspace_root, Path("/tmp").resolve())
+        config = ToolRuntimeConfig(workspace=Workspace(Path("/tmp")))
+        self.assertEqual(config.workspace.cwd, Path("/tmp").resolve())
 
 
 class TestPatchToolGuardrails(unittest.TestCase):
@@ -6271,7 +6231,7 @@ class TestPatchToolGuardrails(unittest.TestCase):
     def test_patch_tool_accepts_valid_config(self):
         """PatchTool com ToolRuntimeConfig válido é criado."""
         from quimera.runtime.tools.patch import PatchTool
-        config = ToolRuntimeConfig(workspace_root=Path("/tmp"))
+        config = ToolRuntimeConfig(workspace=Workspace(Path("/tmp")))
         tool = PatchTool(config)
         self.assertIs(tool.config, config)
 

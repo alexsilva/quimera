@@ -111,11 +111,11 @@ def run_chat_loop(
         else:
             _show_neutral("MCP client: conectado mas nenhuma tool exposta pelo servidor")
     if getattr(app, "debug_prompt_metrics", False):
-        session_log_path = resolve_session_log_path(app.storage, app.workspace)
+        session_log_path = resolve_session_log_path(app.storage)
         if session_log_path:
             _show_neutral(app._format_session_log_message(session_log_path))
         render_debug_log_path = resolve_render_debug_log_path(
-            app.storage, app.workspace, app.debug_prompt_metrics
+            app.storage, app.session_paths, app.debug_prompt_metrics
         )
         if render_debug_log_path:
             _show_neutral(f"Audit de render:\n  {render_debug_log_path}\n")

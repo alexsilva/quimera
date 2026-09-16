@@ -9,16 +9,11 @@ from ..bugs import (
     make_bug_fingerprint,
 )
 from ..tasks.events import BugFiled
-from .session_bootstrap import (
-    resolve_workspace_render_ansi_path,
-    resolve_workspace_render_log_path,
-    resolve_workspace_metrics_path,
-)
 
 if TYPE_CHECKING:
     from .interfaces import IRenderer, IEventSink
     from ..bugs import BugStore, RenderBugDetector, AgentRuntimeBugDetector, BugCorrelator
-    from ..workspace import Workspace
+    from ..session_paths import SessionPaths
     from ..storage import SessionStorage
 
 logger = logging.getLogger(__name__)
@@ -33,7 +28,7 @@ class BugServices:
         bug_detector: RenderBugDetector,
         agent_bug_detector: AgentRuntimeBugDetector,
         bug_correlator: BugCorrelator,
-        workspace: Workspace,
+        session_paths: SessionPaths,
         storage: SessionStorage,
         renderer: IRenderer,
         event_sink: IEventSink,
@@ -45,7 +40,7 @@ class BugServices:
         self.bug_detector = bug_detector
         self.agent_bug_detector = agent_bug_detector
         self.bug_correlator = bug_correlator
-        self.workspace = workspace
+        self.session_paths = session_paths
         self.storage = storage
         self.renderer = renderer
         self.event_sink = event_sink
@@ -104,14 +99,14 @@ class BugServices:
 
     def run_render_bug_detector(self, agent_metrics: dict | None = None) -> None:
         """Executa análise automática de bugs baseada em logs e métricas."""
-        if self.bug_store is None or self.workspace is None or self.storage is None:
+        if self.bug_store is None or self.storage is None:
             return
         session_id = getattr(self.storage, "session_id", "")
         if not session_id:
             return
-        events_path = resolve_workspace_render_log_path(self.workspace, session_id)
-        ansi_path = resolve_workspace_render_ansi_path(self.workspace, session_id)
-        metrics_path = resolve_workspace_metrics_path(self.workspace, session_id)
+        events_path = self.session_paths.render_log_path_for(session_id)
+        ansi_path = self.session_paths.render_ansi_path_for(session_id)
+        metrics_path = self.session_paths.metrics_path_for(session_id)
         try:
             all_reports: list[BugReport] = []
             if self.bug_detector is not None and (events_path is not None or ansi_path is not None):
@@ -228,11 +223,8 @@ class BugServices:
                     if self.bug_detector is None:
                         self.show_warning_message("[bugs] detector de render não disponível.")
                         return True
-                    events_path = resolve_workspace_render_log_path(self.workspace, session_id)
-                    ansi_path = resolve_workspace_render_ansi_path(self.workspace, session_id)
-                    if events_path is None and ansi_path is None:
-                        self.show_warning_message("[bugs] logs de render não encontrados para a sessão.")
-                        return True
+                    events_path = self.session_paths.render_log_path_for(session_id)
+                    ansi_path = self.session_paths.render_ansi_path_for(session_id)
                     reports.extend(
                         self.bug_detector.analyze_session(
                             session_id=session_id,
@@ -245,7 +237,7 @@ class BugServices:
                         self.show_warning_message("[bugs] detector de agentes não disponível.")
                         return True
                     agent_metrics = (app_session_state or {}).get("agent_metrics", {})
-                    metrics_path = resolve_workspace_metrics_path(self.workspace, session_id)
+                    metrics_path = self.session_paths.metrics_path_for(session_id)
                     reports.extend(
                         self.agent_bug_detector.analyze(
                             session_id=session_id,

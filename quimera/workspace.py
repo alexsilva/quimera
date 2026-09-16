@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from .paths import CANDIDATE_DIRS, TMP_BASE_DIR, find_base_writable
+from .paths import CANDIDATE_DIRS, find_base_writable
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,6 @@ class DecisionsLogger:
     def __init__(self, log_path: Path):
         """Inicializa uma instância de DecisionsLogger."""
         self._log_path = log_path
-        self._log_path.parent.mkdir(parents=True, exist_ok=True)
 
     def append(self, decision: str, context: Optional[dict] = None) -> None:
         """Adiciona uma decisão ao log."""
@@ -45,87 +44,16 @@ class DecisionsLogger:
         return entries[-limit:]
 
 
-class WorkspaceTmp:
-    """Subtree temporária do workspace em /tmp para dados descartáveis."""
-
-    def __init__(self, cwd_hash: str):
-        """Inicializa a subtree temporária para o workspace identificado por *cwd_hash*."""
-        self._root = TMP_BASE_DIR / cwd_hash
-        self._ensure_dirs()
-
-    def _ensure_dirs(self):
-        """Cria os subdiretórios temporários necessários, registrando warnings em caso de falha."""
-        self._ensure_dir(self.logs_dir, "logs dir")
-        self._ensure_dir(self.render_logs_dir, "render logs dir")
-        self._ensure_dir(self.metrics_dir, "metrics dir")
-        self._ensure_dir(self.clipboard_dir, "clipboard dir")
-        self._ensure_dir(self.artifacts_dir, "artifacts dir")
-
-    def _ensure_dir(self, path: Path, label: str) -> None:
-        """Cria *path* (incluindo pais) e registra warning se a criação falhar."""
-        try:
-            path.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            logger.warning("Failed to create %s %s: %s", label, path, e)
-
-    @property
-    def root(self) -> Path:
-        """Raiz da subtree temporária: ``/tmp/quimera/{cwd_hash}/``."""
-        return self._root
-
-    @property
-    def logs_dir(self) -> Path:
-        """Diretório temporário base de logs da sessão atual."""
-        return self._root / "data" / "logs"
-
-    @property
-    def render_logs_dir(self) -> Path:
-        """Diretório de logs de auditoria de render (JSONL + ANSI bruto)."""
-        return self.logs_dir / "render"
-
-    @property
-    def metrics_dir(self) -> Path:
-        """Diretório de métricas de sessão (latência, tokens, etc.)."""
-        return self.logs_dir / "metrics"
-
-    @property
-    def clipboard_dir(self) -> Path:
-        """Diretório temporário de anexos colados no input."""
-        return self._root / "clipboard"
-
-    @property
-    def artifacts_dir(self) -> Path:
-        """Diretório temporário para artefatos gerados por ferramentas."""
-        return self._root / "data" / "artifacts"
-
-    def render_log_path_for(self, session_id: str) -> Path:
-        """Caminho do arquivo JSONL de auditoria de render para *session_id*."""
-        return self.render_logs_dir / f"render-{session_id}.jsonl"
-
-    def render_ansi_path_for(self, session_id: str) -> Path:
-        """Caminho do arquivo ANSI bruto de render para *session_id*."""
-        return self.render_logs_dir / f"render-{session_id}.ansi"
-
-    def metrics_path_for(self, session_id: str) -> Path:
-        """Caminho do arquivo JSONL de métricas para *session_id*."""
-        return self.metrics_dir / f"{session_id}.jsonl"
-
-    def app_log_path_for(self, session_id: str) -> Path:
-        """Caminho do arquivo de log da aplicação para *session_id*."""
-        return self.logs_dir / f"app-{session_id}.log"
-
-
 class Workspace:
     """Resolve e gerencia o diretório de dados de um projeto no armazenamento global do quimera."""
 
     def __init__(self, cwd: Path):
         """Inicializa uma instância de Workspace."""
         self.base_dir = find_base_writable(CANDIDATE_DIRS)
-        self.cwd = cwd.expanduser().resolve()
+        self._branch: str | None = None
+        self.cwd = Path(cwd).expanduser().resolve()
         self.cwd_hash = hashlib.sha256(str(self.cwd).encode()).hexdigest()[:16]
         self._root = self.base_dir / "workspaces" / self.cwd_hash
-        self._branch: str | None = None
-        self._tmp = WorkspaceTmp(self.cwd_hash)
         self._ensure_dirs()
         self._write_metadata()
         self._update_index()
@@ -144,9 +72,9 @@ class Workspace:
         return self._root
 
     @property
-    def tmp(self) -> WorkspaceTmp:
-        """Subtree temporária em ``/tmp/quimera/{cwd_hash}/`` — logs de sessão, nunca dados persistentes."""
-        return self._tmp
+    def data_dir(self) -> Path:
+        """Raiz dos dados persistentes do workspace."""
+        return self._root / "data"
 
     @property
     def branch(self) -> str | None:
@@ -187,7 +115,7 @@ class Workspace:
     def context_persistent(self) -> Path:
         """Contexto persistente isolado por branch (definida manualmente via set_branch)."""
         branch = self._branch or "_default"
-        path = self._root / "data" / "context" / branch / "persistent.md"
+        path = self.data_dir / "context" / branch / "persistent.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -195,51 +123,29 @@ class Workspace:
     def prompt_persistent(self) -> Path:
         """Template de prompt isolado por branch."""
         branch = self._branch or "_default"
-        path = self._root / "data" / "prompts" / branch / "prompt.md"
+        path = self.data_dir / "prompts" / branch / "prompt.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
     @property
     def context_session(self) -> Path:
         """Arquivo de contexto de sessão (descartado ao final de cada chat)."""
-        return self._root / "data" / "context" / "session.md"
+        return self.data_dir / "context" / "session.md"
 
     @property
     def previous_session_file(self) -> Path:
         """Arquivo com o resumo da sessão anterior (warm-start)."""
-        return self._root / "data" / "context" / "previous_session.md"
-
-    @property
-    def render_logs_dir(self) -> Path:
-        """Diretório persistente de auditoria de render (JSONL + ANSI)."""
-        return self._root / "data" / "logs" / "render"
-
-    @property
-    def metrics_dir(self) -> Path:
-        """Diretório persistente de métricas de sessão."""
-        return self._root / "data" / "logs" / "metrics"
-
-    def render_log_path_for(self, session_id: str) -> Path:
-        """Caminho do arquivo JSONL de auditoria de render para *session_id*."""
-        return self.render_logs_dir / f"render-{session_id}.jsonl"
-
-    def render_ansi_path_for(self, session_id: str) -> Path:
-        """Caminho do arquivo ANSI bruto de render para *session_id*."""
-        return self.render_logs_dir / f"render-{session_id}.ansi"
-
-    def metrics_path_for(self, session_id: str) -> Path:
-        """Caminho do arquivo JSONL de métricas para *session_id*."""
-        return self.metrics_dir / f"{session_id}.jsonl"
+        return self.data_dir / "context" / "previous_session.md"
 
     @property
     def logs_dir(self) -> Path:
         """Diretório de logs de sessões persistentes (JSONL por sessão)."""
-        return self._root / "data" / "logs" / "sessions"
+        return self.data_dir / "logs" / "sessions"
 
     @property
     def tasks_db(self) -> Path:
         """Banco de dados SQLite de tasks do workspace."""
-        return self._root / "data" / "tasks.db"
+        return self.data_dir / "tasks.db"
 
     @property
     def state_dir(self) -> Path:
@@ -249,7 +155,7 @@ class Workspace:
     @property
     def history_dir(self) -> Path:
         """Diretório persistente de histórico de input do workspace."""
-        return self._root / "data" / "history"
+        return self.data_dir / "history"
 
     def history_file_for(self, session_id: str) -> Path:
         """Caminho do arquivo de histórico de input do workspace.
@@ -261,14 +167,9 @@ class Workspace:
         return self.history_dir / "prompt_history.jsonl"
 
     @property
-    def artifacts_dir(self) -> Path:
-        """Diretório temporário para artefatos gerados por ferramentas."""
-        return self._tmp.artifacts_dir
-
-    @property
     def decisions_log(self) -> Path:
         """Log JSONL de decisões registradas durante as sessões."""
-        return self._root / "data" / "decisions.jsonl"
+        return self.data_dir / "decisions.jsonl"
 
     @property
     def memory_file(self) -> Path:
@@ -281,14 +182,39 @@ class Workspace:
         return self.base_dir / "config.json"
 
     @property
+    def connections_file(self) -> Path:
+        """Configuração global de conexões/providers."""
+        return self.base_dir / "connections.json"
+
+    @property
     def mcp_config_file(self) -> Path:
         """Configuração de clientes MCP isolada para este workspace."""
         return self._root / "config.json"
 
     @property
     def env_file(self) -> Path:
-        """Caminho do arquivo de variáveis de ambiente de modelo."""
-        return self.base_dir / ".env"
+        """Arquivo global legado de ambiente, preservado por compatibilidade."""
+        return self.legacy_secrets_file
+
+    @property
+    def runtime_secret_files(self) -> tuple[Path, Path]:
+        """Arquivos privados globais do runtime, em ordem de carregamento."""
+        return self.base_dir / ".env", self.base_dir / "secrets.env"
+
+    @property
+    def project_env_file(self) -> Path:
+        """Ambiente operacional local do projeto, visível a agentes/tools."""
+        return self.cwd / ".quimera" / ".env"
+
+    @property
+    def secrets_file(self) -> Path:
+        """Arquivo global canônico de segredos privados do runtime."""
+        return self.runtime_secret_files[1]
+
+    @property
+    def legacy_secrets_file(self) -> Path:
+        """Arquivo global legado de segredos, preservado para compatibilidade."""
+        return self.runtime_secret_files[0]
 
     @property
     def oauth_store_file(self) -> Path:
@@ -300,17 +226,44 @@ class Workspace:
         """
         return self.base_dir / "state" / "mcp_oauth.json"
 
+    @property
+    def protected_files(self) -> tuple[Path, ...]:
+        """Arquivos privados do storage que não devem ser visíveis a agentes.
+
+        O ``Workspace`` é a fonte canônica dos caminhos persistentes. A camada
+        de sandbox apenas recebe esta lista pronta; ela não reconstrói layout de
+        storage nem conhece nomes de arquivos internos. O escopo inclui apenas
+        a configuração MCP deste workspace; workspaces irmãos não participam da
+        execução atual e não devem ser varridos nem mascarados.
+        """
+        candidates: list[Path] = [
+            self.legacy_secrets_file,
+            self.secrets_file,
+            self.mcp_config_file,
+        ]
+        candidates.extend(sorted(self.connections_file.parent.glob(f"{self.connections_file.name}*")))
+        candidates.extend(sorted(self.oauth_store_file.parent.glob(f"{self.oauth_store_file.name}*")))
+
+        unique: list[Path] = []
+        seen: set[Path] = set()
+        for path in candidates:
+            resolved = path.expanduser().resolve()
+            if resolved in seen or not resolved.is_file():
+                continue
+            seen.add(resolved)
+            unique.append(resolved)
+        return tuple(unique)
+
     def _ensure_dirs(self):
         """Cria os diretórios persistentes do workspace, registrando warnings em caso de falha."""
         dirs = [
-            self._root / "data",
-            self._root / "data" / "context",
-            self._root / "data" / "logs" / "render",
-            self._root / "data" / "logs" / "metrics",
-            self._root / "data" / "logs" / "sessions",
-            self._root / "state",
+            self.data_dir,
+            self.context_session.parent,
+            self.logs_dir,
+            self.history_dir,
+            self.state_dir,
             self.base_dir / "index",
-            self.base_dir / "state",
+            self.oauth_store_file.parent,
         ]
         for d in dirs:
             try:

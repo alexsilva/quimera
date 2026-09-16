@@ -17,22 +17,16 @@ class ContextManager:
     SUMMARY_MARKER = "## Resumo da última sessão"
     GENERATED_AT_PREFIX = "_Gerado em "
 
-    def __init__(self, base_context_file, session_context_file, renderer, previous_session_file=None,
-                 max_context_lines: int = 2000, workspace=None):
+    def __init__(self, workspace, renderer, max_context_lines: int = 2000):
         """Inicializa uma instância de ContextManager."""
-        self.base_context_file = base_context_file
-        self.session_context_file = session_context_file
+        self.workspace = workspace
         self.renderer = renderer
-        self.previous_session_file = previous_session_file
         # Limita o tamanho do contexto para evitar consumo de memória excessivo
         self.max_context_lines = int(max_context_lines) if max_context_lines is not None else 2000
-        self.workspace = workspace
 
     def _base_context_path(self):
         """Resolve o arquivo de contexto persistente atual."""
-        if self.workspace is not None:
-            return self.workspace.context_persistent
-        return self.base_context_file
+        return self.workspace.context_persistent
     
     def handle_context_branch(self, command: str) -> bool:
         """Processa o comando /context branch [branch]."""
@@ -41,9 +35,6 @@ class ContextManager:
         if parts and parts[0] == "branch":
             parts = parts[1:]
         workspace = self.workspace
-        if workspace is None:
-            self.renderer.show_warning("Workspace não disponível.")
-            return True
         if parts:
             branch = parts[0]
         else:
@@ -76,19 +67,15 @@ class ContextManager:
 
     def load_session(self):
         """Carrega session."""
-        return self._read(self.session_context_file)
+        return self._read(self.workspace.context_session)
 
     def load_previous_session(self):
         """Carrega o resumo da sessão anterior (previous_session.md)."""
-        if self.previous_session_file is None:
-            return ""
-        return self._read(self.previous_session_file)
+        return self._read(self.workspace.previous_session_file)
 
     def save_previous_session(self, summary):
         """Salva o resumo da sessão como ponto de warm-start para a próxima sessão."""
-        if self.previous_session_file is None:
-            return
-        self.previous_session_file.write_text(summary.strip() + "\n", encoding="utf-8")
+        self.workspace.previous_session_file.write_text(summary.strip() + "\n", encoding="utf-8")
 
     def load_session_summary(self):
         """Extrai apenas o corpo do resumo curado salvo em session.md."""
@@ -174,7 +161,8 @@ class ContextManager:
         """Substitui ou cria a seção de resumo curado da última sessão em arquivo local."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         new_section = f"{self.SUMMARY_MARKER}\n\n_Gerado em {timestamp}_\n{summary}"
-        self.session_context_file.write_text(new_section.strip() + "\n", encoding="utf-8")
-        message = f"Resumo salvo em {self.session_context_file.name}"
+        session_context_file = self.workspace.context_session
+        session_context_file.write_text(new_section.strip() + "\n", encoding="utf-8")
+        message = f"Resumo salvo em {session_context_file.name}"
         logger.info("[memória] %s", message)
         self.renderer.show_notification(message)
