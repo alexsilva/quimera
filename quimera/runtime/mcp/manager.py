@@ -52,9 +52,9 @@ def describe_mcp_client_spec(spec: str, *, connected: bool = False) -> MCPConnec
 class MCPConnectionManager:
     """Fonte única para persistência e estado vivo dos MCP clients externos."""
 
-    def __init__(self, *, config: ConfigManager, executor: Any) -> None:
-        self.config = config
+    def __init__(self, *, executor: Any, workspace) -> None:
         self.executor = executor
+        self.workspace = workspace
         bridge = get_bridge()
         if bridge is None:
             bridge = MCPClientBridge()
@@ -69,11 +69,16 @@ class MCPConnectionManager:
             return existing
         workspace = getattr(app, "workspace")
         manager = cls(
-            config=ConfigManager(workspace.mcp_config_file),
             executor=getattr(app, "tool_executor"),
+            workspace=workspace,
         )
         setattr(app, "mcp_connection_manager", manager)
         return manager
+
+    @property
+    def config(self) -> ConfigManager:
+        """Configuração MCP resolvida a partir do Workspace atual."""
+        return ConfigManager(self.workspace.mcp_config_file)
 
     def list_connections(self) -> list[MCPConnectionInfo]:
         """Lista configurações persistidas com o estado vivo da sessão."""
@@ -106,7 +111,11 @@ class MCPConnectionManager:
                 env_specs = [item for item in existing_env_specs if _spec_name(item) != name]
 
         env_overrides = parse_mcp_client_env_specs(env_specs)
-        parsed_name, transport = parse_mcp_client_spec(spec, env_overrides)
+        parsed_name, transport = parse_mcp_client_spec(
+            spec,
+            env_overrides,
+            workspace=self.workspace,
+        )
         self.bridge.replace_connection(parsed_name, transport)
         refresh_registration(self.executor, self.bridge)
 
@@ -117,7 +126,11 @@ class MCPConnectionManager:
         """Refaz o handshake da conexão persistida sem alterar configuração."""
         spec = self._find_spec(name)
         env_overrides = parse_mcp_client_env_specs(self.config.mcp_client_env)
-        parsed_name, transport = parse_mcp_client_spec(spec, env_overrides)
+        parsed_name, transport = parse_mcp_client_spec(
+            spec,
+            env_overrides,
+            workspace=self.workspace,
+        )
         self.bridge.replace_connection(parsed_name, transport)
         refresh_registration(self.executor, self.bridge)
         return describe_mcp_client_spec(spec, connected=True)

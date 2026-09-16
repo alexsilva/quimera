@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from quimera.config import ConfigManager
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.drivers.tool_schemas import (
     get_bridge_schemas,
@@ -26,6 +27,7 @@ from quimera.runtime.mcp.client import (
 from quimera.runtime.mcp.manager import MCPConnectionManager, describe_mcp_client_spec
 from quimera.runtime.models import ToolCall, ToolResult
 from quimera.runtime.tools.mcp_clients import set_bridge
+from quimera.workspace import Workspace
 
 
 def test_http_mcp_session_sends_initialized_notification_after_handshake(monkeypatch):
@@ -126,7 +128,7 @@ def test_mcp_client_bridge_registers_external_tools_in_executor_registry(tmp_pat
 
     executor = ToolExecutor(
         config=ToolRuntimeConfig(
-            workspace_root=tmp_path,
+            workspace=Workspace(tmp_path),
             require_approval_for_mutations=False,
         ),
         approval_handler=None,
@@ -166,7 +168,7 @@ def test_mcp_client_bridge_schemas_are_resolved_when_registered(tmp_path):
 
     executor = ToolExecutor(
         config=ToolRuntimeConfig(
-            workspace_root=tmp_path,
+            workspace=Workspace(tmp_path),
             require_approval_for_mutations=False,
         ),
         approval_handler=None,
@@ -308,9 +310,10 @@ def test_start_mcp_clients_connects_and_persists_merged_specs(monkeypatch):
     class FakeBridge:
         started = False
 
-    def fake_build_bridge(specs, env_overrides=None):
+    def fake_build_bridge(specs, env_overrides=None, workspace=None):
         captured["connected_specs"] = specs
         captured["env_overrides"] = env_overrides
+        captured["workspace"] = workspace
         return FakeBridge()
 
     monkeypatch.setattr(
@@ -354,21 +357,11 @@ def test_describe_mcp_client_spec_separa_transporte_e_endpoint():
     assert info.connected is True
 
 
-def test_manager_disconnect_remove_tools_vivas_e_preserva_config(monkeypatch):
-    captured = {"clients": ["jira=stdio:jira-cmd"], "env": []}
-
-    class FakeConfig:
-        @property
-        def mcp_clients(self):
-            return list(captured["clients"])
-
-        @property
-        def mcp_client_env(self):
-            return list(captured["env"])
-
-        def set_mcp_configuration(self, specs, env_specs):
-            captured["clients"] = list(specs or [])
-            captured["env"] = list(env_specs or [])
+def test_manager_disconnect_remove_tools_vivas_e_preserva_config(monkeypatch, tmp_path):
+    captured = {}
+    workspace = Workspace(tmp_path)
+    config = ConfigManager(workspace.mcp_config_file)
+    config.set_mcp_configuration(["jira=stdio:jira-cmd"], [])
 
     class FakeSession:
         def disconnect(self):
@@ -390,33 +383,25 @@ def test_manager_disconnect_remove_tools_vivas_e_preserva_config(monkeypatch):
         lambda current_executor, current_bridge: captured.update(refreshed=True),
     )
 
-    manager = MCPConnectionManager(config=FakeConfig(), executor=executor)
+    manager = MCPConnectionManager(
+        executor=executor,
+        workspace=workspace,
+    )
     assert manager.disconnect("jira") is True
 
     assert captured["disconnected"] is True
     assert captured["refreshed"] is True
-    assert captured["clients"] == ["jira=stdio:jira-cmd"]
+    assert config.mcp_clients == ["jira=stdio:jira-cmd"]
     assert manager.list_connections()[0].connected is False
 
 
-def test_manager_remove_desconecta_e_apaga_specs(monkeypatch):
-    captured = {
-        "clients": ["jira=stdio:jira-cmd", "github=stdio:github-cmd"],
-        "env": ["jira=TOKEN=abc", "github=TOKEN=def"],
-    }
-
-    class FakeConfig:
-        @property
-        def mcp_clients(self):
-            return list(captured["clients"])
-
-        @property
-        def mcp_client_env(self):
-            return list(captured["env"])
-
-        def set_mcp_configuration(self, specs, env_specs):
-            captured["clients"] = list(specs or [])
-            captured["env"] = list(env_specs or [])
+def test_manager_remove_desconecta_e_apaga_specs(monkeypatch, tmp_path):
+    workspace = Workspace(tmp_path)
+    config = ConfigManager(workspace.mcp_config_file)
+    config.set_mcp_configuration(
+        ["jira=stdio:jira-cmd", "github=stdio:github-cmd"],
+        ["jira=TOKEN=abc", "github=TOKEN=def"],
+    )
 
     bridge = MCPClientBridge()
     bridge._sessions["jira"] = MagicMock()
@@ -427,11 +412,14 @@ def test_manager_remove_desconecta_e_apaga_specs(monkeypatch):
         lambda current_executor, current_bridge: [],
     )
 
-    manager = MCPConnectionManager(config=FakeConfig(), executor=MagicMock())
+    manager = MCPConnectionManager(
+        executor=MagicMock(),
+        workspace=workspace,
+    )
     manager.remove("jira")
 
-    assert captured["clients"] == ["github=stdio:github-cmd"]
-    assert captured["env"] == ["github=TOKEN=def"]
+    assert config.mcp_clients == ["github=stdio:github-cmd"]
+    assert config.mcp_client_env == ["github=TOKEN=def"]
     assert "jira" not in bridge.sessions
 
 
@@ -531,7 +519,7 @@ def test_mcp_client_bridge_registers_all_external_tools_for_native_approval(tmp_
 
     executor = ToolExecutor(
         config=ToolRuntimeConfig(
-            workspace_root=tmp_path,
+            workspace=Workspace(tmp_path),
             require_approval_for_mutations=True,
         ),
         approval_handler=None,

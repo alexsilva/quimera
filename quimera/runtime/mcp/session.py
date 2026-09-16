@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from quimera.environment import RuntimeSecrets
 from quimera.runtime.mcp.http_server import (
     DEFAULT_HTTP_READ_ONLY_TOOLS,
     DEFAULT_HTTP_TOOL_PROFILE,
@@ -80,9 +81,9 @@ def parse_http_allowed_tools(value: str | Iterable[str] | None) -> frozenset[str
     return tools or DEFAULT_HTTP_READ_ONLY_TOOLS
 
 
-def _default_socket_path(workspace: Any) -> str:
+def _default_socket_path(session_paths: Any) -> str:
     rand_suffix = secrets.token_hex(8)
-    return str(workspace.tmp.root / f"mcp-{rand_suffix}.sock")
+    return str(session_paths.mcp_socket_path(rand_suffix))
 
 
 def _default_oauth_store_path(workspace: Any) -> Path | None:
@@ -122,12 +123,14 @@ def build_oauth_provider(
         auto_approve=auto_approve,
         allow_dynamic_registration=allow_dynamic_registration,
         store_path=store_path or _default_oauth_store_path(workspace),
+        runtime_secrets=RuntimeSecrets(workspace),
     )
 
 
 def start_embedded_mcp(
     app: Any,
     workspace: Any,
+    session_paths: Any,
     *,
     enabled: bool = True,
     transport: MCPTransport = "socket",
@@ -180,7 +183,7 @@ def start_embedded_mcp(
         auth_token=internal_mcp_token,
         agent_run_sink=agent_run_sink,
     )
-    resolved_socket_path = socket_path or _default_socket_path(workspace)
+    resolved_socket_path = socket_path or _default_socket_path(session_paths)
     internal_mcp_server.start_background(resolved_socket_path)
     app.configure_mcp_socket(resolved_socket_path, internal_mcp_token)
     setattr(app, "mcp_socket_path", resolved_socket_path)

@@ -26,6 +26,7 @@ from quimera.runtime.mcp.http_server import (
 from quimera.runtime.mcp.session import parse_http_allowed_tools
 from quimera.runtime.mcp.oauth import IssuedToken, OAuthClient, OAuthConfig, OAuthProvider
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolResult
 from quimera.runtime.workspace_policy import WorkspacePolicy
@@ -854,7 +855,7 @@ class TestToolsCallHTTP:
         """POST /message deve acionar o mesmo preview operacional do executor."""
         (tmp_path / "foo.py").write_text("print('ok')\n", encoding="utf-8")
         previews = []
-        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+        executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
         executor.set_tool_preview_callback(lambda name, args: previews.append((name, args)))
         httpd = _start_http_server(_make_mcp_server(executor))
         try:
@@ -881,7 +882,7 @@ class TestToolsCallHTTP:
         approval_handler = MagicMock()
         executor = ToolExecutor(
             ToolRuntimeConfig(
-                workspace_root=tmp_path,
+                workspace=Workspace(tmp_path),
                 workspace_policy=WorkspacePolicy.autonomous(),
             ),
             approval_handler,
@@ -922,7 +923,7 @@ class TestToolsCallHTTP:
     def test_tools_call_http_propagates_quimera_run_headers_to_metadata(self, tmp_path):
         (tmp_path / "foo.py").write_text("print('ok')\n", encoding="utf-8")
         previews = []
-        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+        executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
         executor.set_tool_preview_callback(
             lambda name, args, metadata=None: previews.append((name, args, metadata))
         )
@@ -1082,7 +1083,7 @@ class TestToolsCallHTTP:
         approval = MagicMock()
         approval.approve.return_value = False
         executor = ToolExecutor(
-            ToolRuntimeConfig(workspace_root=tmp_path),
+            ToolRuntimeConfig(workspace=Workspace(tmp_path)),
             approval_handler=approval,
         )
         server = _make_mcp_server(executor)
@@ -1295,7 +1296,7 @@ class TestStreamableHTTP:
         """POST /mcp deve acionar preview operacional como /message."""
         (tmp_path / "foo.py").write_text("print('ok')\n", encoding="utf-8")
         previews = []
-        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+        executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
         executor.set_tool_preview_callback(
             lambda name, args, metadata=None: previews.append((name, args, metadata))
         )

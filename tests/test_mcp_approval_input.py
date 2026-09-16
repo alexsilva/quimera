@@ -29,13 +29,14 @@ from unittest.mock import MagicMock, patch
 
 from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.input_broker import InputBroker
 from quimera.ui.textual.input_gate import TextualInputGate
 from quimera.ui.textual.bridge import TextualUiBridge
 from quimera.ui.base import RendererBase
 
 
-_cfg = ToolRuntimeConfig(workspace_root=Path("/tmp"))
+_cfg = ToolRuntimeConfig(workspace=Workspace(Path("/tmp")))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

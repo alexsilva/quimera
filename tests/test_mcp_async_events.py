@@ -11,6 +11,7 @@ import time
 from unittest.mock import patch
 
 
+from quimera.workspace import Workspace
 from quimera.runtime.mcp import MCPServer, MCP_HTTPServer
 from quimera.runtime.models import ToolResult
 
@@ -656,7 +657,7 @@ class TestDelegateTimeoutContract:
             ToolRuntimeConfig,
         )
 
-        config = ToolRuntimeConfig(workspace_root=Path("/tmp"))
+        config = ToolRuntimeConfig(workspace=Workspace(Path("/tmp")))
         assert config.delegate_parallel_timeout_seconds == DEFAULT_DELEGATE_TIMEOUT_SECONDS
         assert DEFAULT_DELEGATE_TIMEOUT_SECONDS == 3600
         # Cliente MCP expira sempre depois do teto do servidor (3600 + folga).

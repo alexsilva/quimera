@@ -44,6 +44,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlencode, urlparse, urlunparse
 
+from quimera.environment import RuntimeSecrets
+
 _logger = logging.getLogger(__name__)
 
 ENV_OAUTH_ENABLED = "QUIMERA_MCP_OAUTH"
@@ -79,17 +81,35 @@ SUPPORTED_SCOPES: tuple[str, ...] = tuple(SCOPE_TOOL_PROFILES)
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
-def _env_flag(name: str, default: bool = False) -> bool:
+def _runtime_setting(
+    name: str,
+    runtime_secrets: RuntimeSecrets | None = None,
+) -> str | None:
+    """Resolve configuração global privada sem expô-la ao ambiente de agentes."""
+    if runtime_secrets is not None:
+        return runtime_secrets.get(name)
+    return os.environ.get(name)
+
+
+def _env_flag(
+    name: str,
+    default: bool = False,
+    runtime_secrets: RuntimeSecrets | None = None,
+) -> bool:
     """Lê uma variável de ambiente booleana tolerante a formatos comuns."""
-    raw = (os.environ.get(name) or "").strip().lower()
+    raw = (_runtime_setting(name, runtime_secrets) or "").strip().lower()
     if not raw:
         return default
     return raw in _TRUE_VALUES
 
 
-def _env_int(name: str, default: int) -> int:
+def _env_int(
+    name: str,
+    default: int,
+    runtime_secrets: RuntimeSecrets | None = None,
+) -> int:
     """Lê uma variável de ambiente inteira, ignorando valores inválidos."""
-    raw = (os.environ.get(name) or "").strip()
+    raw = (_runtime_setting(name, runtime_secrets) or "").strip()
     if not raw:
         return default
     try:
@@ -395,29 +415,45 @@ class OAuthConfig:
     store_key: str = ""
 
     @classmethod
-    def from_env(cls, **overrides) -> OAuthConfig:
+    def from_env(
+        cls,
+        *,
+        runtime_secrets: RuntimeSecrets | None = None,
+        **overrides,
+    ) -> OAuthConfig:
         """Monta a configuração a partir das variáveis ``QUIMERA_MCP_OAUTH*``.
 
         Argumentos em *overrides* têm precedência sobre o ambiente, permitindo
         que flags de CLI sobreponham o ambiente sem código extra.
         """
-        redirect_uris = _split_csv(os.environ.get(ENV_OAUTH_REDIRECT_URIS))
+        redirect_uris = _split_csv(_runtime_setting(ENV_OAUTH_REDIRECT_URIS, runtime_secrets))
         resolved: dict = {
-            "enabled": _env_flag(ENV_OAUTH_ENABLED),
-            "issuer": (os.environ.get(ENV_OAUTH_ISSUER) or "").strip(),
+            "enabled": _env_flag(ENV_OAUTH_ENABLED, runtime_secrets=runtime_secrets),
+            "issuer": (_runtime_setting(ENV_OAUTH_ISSUER, runtime_secrets) or "").strip(),
             "clients": parse_client_specs(
-                os.environ.get(ENV_OAUTH_CLIENTS), redirect_uris=redirect_uris
+                _runtime_setting(ENV_OAUTH_CLIENTS, runtime_secrets), redirect_uris=redirect_uris
             ),
-            "allow_dynamic_registration": _env_flag(ENV_OAUTH_ALLOW_REGISTER, True),
-            "auto_approve": _env_flag(ENV_OAUTH_AUTO_APPROVE),
-            "passcode": (os.environ.get(ENV_OAUTH_PASSCODE) or "").strip(),
-            "access_token_ttl": _env_int(ENV_OAUTH_ACCESS_TTL, 3600),
-            "refresh_token_ttl": _env_int(ENV_OAUTH_REFRESH_TTL, 30 * 24 * 3600),
+            "allow_dynamic_registration": _env_flag(
+                ENV_OAUTH_ALLOW_REGISTER,
+                True,
+                runtime_secrets,
+            ),
+            "auto_approve": _env_flag(
+                ENV_OAUTH_AUTO_APPROVE,
+                runtime_secrets=runtime_secrets,
+            ),
+            "passcode": (_runtime_setting(ENV_OAUTH_PASSCODE, runtime_secrets) or "").strip(),
+            "access_token_ttl": _env_int(ENV_OAUTH_ACCESS_TTL, 3600, runtime_secrets),
+            "refresh_token_ttl": _env_int(
+                ENV_OAUTH_REFRESH_TTL,
+                30 * 24 * 3600,
+                runtime_secrets,
+            ),
         }
-        store_raw = (os.environ.get(ENV_OAUTH_STORE) or "").strip()
+        store_raw = (_runtime_setting(ENV_OAUTH_STORE, runtime_secrets) or "").strip()
         if store_raw:
             resolved["store_path"] = Path(store_raw).expanduser()
-        store_key = (os.environ.get(ENV_OAUTH_STORE_KEY) or "").strip()
+        store_key = (_runtime_setting(ENV_OAUTH_STORE_KEY, runtime_secrets) or "").strip()
         if store_key:
             resolved["store_key"] = store_key
         resolved.update({key: value for key, value in overrides.items() if value is not None})
@@ -1561,6 +1597,7 @@ def build_provider_from_cli(
     auto_approve: bool | None = None,
     allow_dynamic_registration: bool | None = None,
     store_path: Path | str | None = None,
+    runtime_secrets: RuntimeSecrets | None = None,
 ) -> OAuthProvider:
     """Constrói o provider a partir de flags de CLI, com fallback no ambiente.
 
@@ -1587,7 +1624,7 @@ def build_provider_from_cli(
     if static_clients:
         overrides["clients"] = static_clients
     if passcode_env:
-        passcode = (os.environ.get(passcode_env) or "").strip()
+        passcode = (_runtime_setting(passcode_env, runtime_secrets) or "").strip()
         if passcode:
             overrides["passcode"] = passcode
     if auto_approve is not None:
@@ -1596,4 +1633,6 @@ def build_provider_from_cli(
         overrides["allow_dynamic_registration"] = allow_dynamic_registration
     if store_path:
         overrides["store_path"] = Path(store_path).expanduser()
-    return OAuthProvider(OAuthConfig.from_env(**overrides))
+    return OAuthProvider(
+        OAuthConfig.from_env(runtime_secrets=runtime_secrets, **overrides)
+    )

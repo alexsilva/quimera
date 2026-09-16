@@ -640,6 +640,7 @@ def main():
             cli_specs=args.mcp_clients,
             cli_env_specs=args.mcp_client_env,
             config=mcp_config,
+            workspace=workspace,
         )
 
         isatty = _is_tty()
@@ -676,7 +677,7 @@ def main():
                 prompt = PromptText(default_prompt, strict=False)
 
             renderer = TerminalRenderer()
-            client = AgentClient(renderer)
+            client = AgentClient(renderer, workspace=workspace)
             try:
                 result = client.call(agent_name, prompt)
             finally:
@@ -690,6 +691,7 @@ def main():
         start_embedded_mcp(
             app,
             workspace,
+            app.session_paths,
             enabled=not args.no_mcp,
             transport="socket",
             socket_path=args.mcp_socket,

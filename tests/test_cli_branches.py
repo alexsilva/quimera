@@ -23,7 +23,15 @@ class _FakeWorkspace:
         self.cwd = cwd
         self.config_file = Path("/tmp/quimera-test-config.json")
         self.mcp_config_file = Path("/tmp/quimera-test-workspace-mcp-config.json")
-        self.tmp = SimpleNamespace(root=Path("/tmp/quimera-test-tmp"))
+        self.runtime_secret_files = ()
+
+
+class _FakeSessionPaths:
+    def __init__(self, root=Path("/tmp/quimera-test-tmp")):
+        self.root = Path(root)
+
+    def mcp_socket_path(self, suffix):
+        return self.root / f"mcp-{suffix}.sock"
 
 
 class _FakeConfig:
@@ -76,6 +84,7 @@ class _FakeApp:
         self.ran = False
         self.tool_executor = object()
         self.workspace = kwargs.get("workspace")
+        self.session_paths = _FakeSessionPaths()
         self.mcp_socket_calls: list[str | None] = []
         self.mcp_socket_tokens: list[str | None] = []
         self.mcp_http_calls: list[str | None] = []
@@ -963,8 +972,8 @@ def test_main_ignores_stdin_reconfigure_errors_and_still_runs(monkeypatch):
     assert called_path.endswith(".sock")
 
 
-def test_main_mcp_uses_workspace_tmp_and_configures_profiles(monkeypatch):
-    """Verifica que main mcp uses workspace tmp and configures profiles."""
+def test_main_mcp_uses_session_paths_and_configures_profiles(monkeypatch):
+    """Verifica que o socket MCP usa os paths temporários da sessão."""
     _patch_main_basics(monkeypatch)
     monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-socket"])
     monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
@@ -1124,7 +1133,6 @@ def test_main_mcp_http_ignora_token_estatico_loaded_from_app_env_file(monkeypatc
             super().__init__(cwd)
             self.env_file = tmp_path / ".env"
             self.env_file.write_text("QUIMERA_MCP_TOKEN=env-file-token\n", encoding="utf-8")
-            self.tmp = SimpleNamespace(root=tmp_path / "tmp")
 
     class _FakeAppLoadsEnv(_FakeApp):
         def __init__(self, cwd, **kwargs):
@@ -1133,6 +1141,7 @@ def test_main_mcp_http_ignora_token_estatico_loaded_from_app_env_file(monkeypatc
                 from quimera.env_config import EnvConfig
                 EnvConfig(workspace.env_file).apply_to_environ()
             super().__init__(cwd, **kwargs)
+            self.session_paths = _FakeSessionPaths(tmp_path / "tmp")
 
     monkeypatch.delenv("QUIMERA_MCP_TOKEN", raising=False)
     monkeypatch.setattr(cli, "Workspace", _FakeWorkspaceWithEnv)

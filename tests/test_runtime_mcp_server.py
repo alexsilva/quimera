@@ -16,6 +16,7 @@ import pytest
 from quimera.runtime.mcp import MCPServer
 from quimera.runtime.mcp.server import _openai_schema_to_mcp, _proxy_stdio_to_socket
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall, ToolResult
 from quimera.runtime.workspace_policy import WorkspacePolicy
@@ -171,8 +172,7 @@ class TestToolsCall:
         """tools/call deve aplicar os mesmos capability gates de tools/list."""
         executor = ToolExecutor(
             ToolRuntimeConfig(
-                workspace_root=tmp_path,
-                db_path=tmp_path / "tasks.db",
+                workspace=Workspace(tmp_path),
             ),
             approval_handler=None,
         )
@@ -358,7 +358,7 @@ class TestToolsCall:
         file_path = tmp_path / "foo.py"
         file_path.write_text("print('ok')\n", encoding="utf-8")
         previews = []
-        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+        executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
         executor.set_tool_preview_callback(lambda name, args: previews.append((name, args)))
         server = _make_server(executor)
 
@@ -375,7 +375,7 @@ class TestToolsCall:
         file_path = tmp_path / "foo.py"
         file_path.write_text("print('ok')\n", encoding="utf-8")
         previews = []
-        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+        executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
         executor.set_tool_preview_callback(
             lambda name, args, metadata=None: previews.append((name, args, metadata))
         )
@@ -409,7 +409,7 @@ class TestToolsCall:
         previews = []
         approval_handler = MagicMock()
         approval_handler.approve.return_value = False
-        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval_handler)
+        executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), approval_handler)
         executor.set_tool_preview_callback(lambda name, args: previews.append((name, args)))
         server = _make_server(executor)
 
@@ -435,7 +435,7 @@ class TestToolsCall:
         previews = []
         approval_handler = MagicMock()
         approval_handler.approve.return_value = True
-        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval_handler)
+        executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), approval_handler)
         executor.set_tool_preview_callback(lambda name, args: previews.append((name, args)))
         server = _make_server(executor)
 
@@ -463,7 +463,7 @@ class TestToolsCall:
         approval_handler = MagicMock()
         executor = ToolExecutor(
             ToolRuntimeConfig(
-                workspace_root=tmp_path,
+                workspace=Workspace(tmp_path),
                 workspace_policy=WorkspacePolicy.autonomous(),
             ),
             approval_handler,
@@ -1358,7 +1358,7 @@ class TestLatestMCPFeatures:
         """Verifica que Test resources list read templates e subscribe."""
         (tmp_path / "README.md").write_text("# hello", encoding="utf-8")
         executor = _make_executor()
-        executor.config.workspace_root = tmp_path
+        executor.config.workspace = Workspace(tmp_path)
         server = _make_server(executor)
 
         [listed] = _exchange(server, {"jsonrpc": "2.0", "id": 51, "method": "resources/list"})

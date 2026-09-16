@@ -43,7 +43,7 @@ def _make_executor(tool_names=None):
     """Cria um executor mínimo com registry previsível."""
     executor = MagicMock()
     executor.registry.names.return_value = tool_names or sorted(HTTP_READ_LOCAL_TOOLS)
-    executor.config.db_path = None
+    executor.config.workspace = None
     executor.policy.blocked_tools = set()
     executor.execute.return_value = ToolResult(ok=True, tool_name="read_file", content="ok")
     return executor
@@ -1557,6 +1557,21 @@ class TestProviderUnit:
         assert config.clients[0].client_id == "robo"
         assert config.passcode == "pin"
         assert config.access_token_ttl == 120
+
+    def test_config_from_env_uses_injected_runtime_secrets(self, monkeypatch):
+        """Config privada persistida é lida pelo contexto explícito do runtime."""
+        monkeypatch.delenv("QUIMERA_MCP_OAUTH_ISSUER", raising=False)
+
+        class _Secrets:
+            @staticmethod
+            def get(key, default=None):
+                if key == "QUIMERA_MCP_OAUTH_ISSUER":
+                    return "https://runtime.example"
+                return default
+
+        config = OAuthConfig.from_env(runtime_secrets=_Secrets())
+
+        assert config.issuer == "https://runtime.example"
 
 
 class TestOAuthStoreEncryption:

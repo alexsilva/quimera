@@ -3,6 +3,8 @@ from unittest.mock import ANY, patch
 
 from quimera.runtime.mcp import EmbeddedMCPRuntime, start_embedded_mcp
 from quimera.runtime.mcp.http_server import DEFAULT_HTTP_READ_ONLY_TOOLS
+from quimera.session_paths import SessionPaths
+from quimera.workspace import Workspace
 
 
 class _FakeApp:
@@ -20,9 +22,7 @@ class _FakeApp:
 
 
 def _workspace(tmp_path):
-    tmp_root = tmp_path / "tmp"
-    tmp_root.mkdir()
-    return SimpleNamespace(tmp=SimpleNamespace(root=tmp_root))
+    return Workspace(tmp_path)
 
 
 def test_start_embedded_mcp_socket_default_centraliza_startup(tmp_path, monkeypatch):
@@ -30,9 +30,10 @@ def test_start_embedded_mcp_socket_default_centraliza_startup(tmp_path, monkeypa
     monkeypatch.setenv("QUIMERA_MCP_TOKEN", "external-token-not-used")
     app = _FakeApp()
     workspace = _workspace(tmp_path)
+    session_paths = SessionPaths(workspace)
 
     with patch("quimera.runtime.mcp.session.secrets.token_urlsafe", return_value="internal-token"), patch("quimera.runtime.mcp.session.MCPServer") as mcp_cls:
-        runtime = start_embedded_mcp(app, workspace)
+        runtime = start_embedded_mcp(app, workspace, session_paths)
 
     assert isinstance(runtime, EmbeddedMCPRuntime)
     assert runtime.enabled is True
@@ -41,7 +42,7 @@ def test_start_embedded_mcp_socket_default_centraliza_startup(tmp_path, monkeypa
     assert runtime.internal_mcp_token == "internal-token"
     assert runtime.external_mcp_server is None
     assert runtime.socket_path is not None
-    assert runtime.socket_path.startswith(str(tmp_path / "tmp" / "mcp-"))
+    assert runtime.socket_path.startswith(str(session_paths.root / "mcp-"))
     assert runtime.socket_path.endswith(".sock")
     mcp_cls.assert_called_once_with(app.tool_executor, auth_token="internal-token", agent_run_sink=None)
     mcp_cls.return_value.start_background.assert_called_once_with(runtime.socket_path)
@@ -59,9 +60,11 @@ def test_start_embedded_mcp_socket_usa_path_explicito(tmp_path):
     app = _FakeApp()
 
     with patch("quimera.runtime.mcp.session.secrets.token_urlsafe", return_value="internal-token"), patch("quimera.runtime.mcp.session.MCPServer") as mcp_cls:
+        workspace = _workspace(tmp_path)
         runtime = start_embedded_mcp(
             app,
-            _workspace(tmp_path),
+            workspace,
+            SessionPaths(workspace),
             socket_path="/tmp/custom.sock",
         )
 
@@ -77,9 +80,11 @@ def test_start_embedded_mcp_http_centraliza_startup_sem_substituir_socket(tmp_pa
     with patch("quimera.runtime.mcp.session.secrets.token_urlsafe", return_value="internal-token"), patch("quimera.runtime.mcp.session.MCPServer") as mcp_cls, patch(
         "quimera.runtime.mcp.session.MCP_HTTPServer"
     ) as http_cls:
+        workspace = _workspace(tmp_path)
         runtime = start_embedded_mcp(
             app,
-            _workspace(tmp_path),
+            workspace,
+            SessionPaths(workspace),
             external_http_enabled=True,
             http_host="0.0.0.0",
             http_port=9090,
@@ -113,9 +118,10 @@ def test_start_embedded_mcp_http_centraliza_startup_sem_substituir_socket(tmp_pa
 def test_start_embedded_mcp_desabilitado_nao_cria_servidor(tmp_path):
     """Verifica que start embedded mcp desabilitado nao cria servidor."""
     app = _FakeApp()
+    workspace = _workspace(tmp_path)
 
     with patch("quimera.runtime.mcp.session.MCPServer") as mcp_cls:
-        runtime = start_embedded_mcp(app, _workspace(tmp_path), enabled=False)
+        runtime = start_embedded_mcp(app, workspace, SessionPaths(workspace), enabled=False)
 
     mcp_cls.assert_not_called()
     assert runtime == EmbeddedMCPRuntime(enabled=False)
@@ -129,10 +135,16 @@ def test_start_embedded_mcp_desabilitado_nao_cria_servidor(tmp_path):
 def test_start_embedded_mcp_rejeita_transporte_invalido(tmp_path):
     """Verifica que start embedded mcp rejeita transporte invalido."""
     app = _FakeApp()
+    workspace = _workspace(tmp_path)
 
     with patch("quimera.runtime.mcp.session.MCPServer") as mcp_cls:
         try:
-            start_embedded_mcp(app, _workspace(tmp_path), transport="stdio")  # type: ignore[arg-type]
+            start_embedded_mcp(
+                app,
+                workspace,
+                SessionPaths(workspace),
+                transport="stdio",  # type: ignore[arg-type]
+            )
         except ValueError as exc:
             assert "Transporte MCP inválido" in str(exc)
         else:

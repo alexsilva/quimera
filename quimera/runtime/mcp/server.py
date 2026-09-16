@@ -41,6 +41,7 @@ from quimera.runtime.models import ToolCall
 from quimera.runtime.drivers.tool_schemas import resolve_tool_schemas
 from quimera.version import __version__
 from quimera.workspace import Workspace
+from quimera.session_paths import SessionPaths
 
 _logger = logging.getLogger(__name__)
 
@@ -462,8 +463,11 @@ class MCPServer:
         return self._ok(msg_id, {})
 
     def _workspace_root(self) -> Path:
-        root = getattr(getattr(self._executor, "config", None), "workspace_root", None)
-        return Path(root or os.getcwd()).resolve()
+        config = getattr(self._executor, "config", None)
+        workspace = getattr(config, "workspace", None)
+        if workspace is None:
+            raise RuntimeError("MCP server sem Workspace configurado")
+        return workspace.cwd
 
     def _resource_entries(self) -> list[dict]:
         root = self._workspace_root()
@@ -1466,11 +1470,10 @@ def _build_standalone_executor():
     """Constrói um ToolExecutor mínimo para uso standalone."""
     workspace_root = Path(os.environ.get("QUIMERA_WORKSPACE", os.getcwd()))
     workspace = Workspace(workspace_root)
+    session_paths = SessionPaths(workspace)
     config = ToolRuntimeConfig(
-        workspace_root=workspace.cwd,
-        db_path=workspace.tasks_db,
-        memory_file=workspace.memory_file,
-        artifacts_root=workspace.artifacts_dir,
+        workspace=workspace,
+        session_paths=session_paths,
     )
     approval = ApprovalManager(config)
     return ToolExecutor(config, approval)

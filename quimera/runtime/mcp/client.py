@@ -21,7 +21,6 @@ import logging
 import os
 import shlex
 import socket
-import subprocess
 import sys
 import threading
 import time
@@ -31,6 +30,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import IO, Any
 
+from quimera import process_factory as subprocess
+from quimera.environment import build_env_vars
+from quimera.sandbox.bwrap import build_secret_mask_cmd
 from quimera.runtime.mcp.remote_credentials import migrate_legacy_remote_credentials
 from quimera.runtime.models import ToolCall, ToolResult
 
@@ -147,10 +149,12 @@ class StdioMCPTransport(MCPTransport):
         command: list[str],
         env: dict[str, str] | None = None,
         name: str | None = None,
+        workspace=None,
     ) -> None:
         self._command = command
         self._env = env
         self._name = name
+        self.workspace = workspace
         self._process: subprocess.Popen | None = None
         self._stderr_lines: list[str] = []
         self._stderr_lock = threading.Lock()
@@ -163,11 +167,21 @@ class StdioMCPTransport(MCPTransport):
         self._stderr_printed: set[str] = set()
 
     def connect(self) -> tuple[IO[str], IO[str]]:
-        proc_env = None
-        if self._env:
-            proc_env = {**os.environ, **self._env}
+        proc_env = build_env_vars(
+            os.environ,
+            workspace=self.workspace,
+            extra_env=self._env,
+        )
+        command = list(self._command)
+        if self.workspace is not None:
+            command = build_secret_mask_cmd(
+                str(self.workspace.cwd),
+                command,
+                [str(path) for path in self.workspace.protected_files],
+                die_with_parent=True,
+            )
         self._process = subprocess.Popen(
-            self._command,
+            command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -327,8 +341,9 @@ class RemoteMCPTransport(StdioMCPTransport):
         command: list[str],
         env: dict[str, str] | None = None,
         name: str | None = None,
+        workspace=None,
     ) -> None:
-        super().__init__(command, env=env, name=name)
+        super().__init__(command, env=env, name=name, workspace=workspace)
         self._remote_endpoint = endpoint
 
     def connect(self) -> tuple[IO[str], IO[str]]:
@@ -874,6 +889,7 @@ def build_mcp_remote_command(endpoint: str) -> list[str]:
 def parse_mcp_client_spec(
     spec: str,
     env_overrides: dict[str, dict[str, str]] | None = None,
+    workspace=None,
 ) -> tuple[str, MCPTransport]:
     """Interpreta uma especificação ``--mcp-client``.
 
@@ -920,7 +936,12 @@ def parse_mcp_client_spec(
 
     if transport_type == "stdio":
         args = shlex.split(endpoint)
-        return name, StdioMCPTransport(args, env=env_override or None, name=name)
+        return name, StdioMCPTransport(
+            args,
+            env=env_override or None,
+            name=name,
+            workspace=workspace,
+        )
     if transport_type == "remote":
         command = build_mcp_remote_command(endpoint)
         if not command:
@@ -933,6 +954,7 @@ def parse_mcp_client_spec(
             command,
             env=env_override or None,
             name=name,
+            workspace=workspace,
         )
     if transport_type == "socket":
         return name, SocketMCPTransport(endpoint)
@@ -946,13 +968,14 @@ def parse_mcp_client_spec(
 def build_bridge_from_cli(
     specs: list[str],
     env_overrides: dict[str, dict[str, str]] | None = None,
+    workspace=None,
 ) -> MCPClientBridge:
     """Constrói e conecta um MCPClientBridge a partir de especificações CLI."""
     bridge = MCPClientBridge()
     for spec in specs:
         display_name = spec
         try:
-            name, transport = parse_mcp_client_spec(spec, env_overrides)
+            name, transport = parse_mcp_client_spec(spec, env_overrides, workspace=workspace)
             display_name = name
             print(
                 f"  MCP client '{name}': conectando via {transport.transport_type}...",
@@ -1037,6 +1060,7 @@ def start_mcp_clients(
     cli_specs: list[str] | None,
     cli_env_specs: list[str] | None,
     config: Any,
+    workspace=None,
 ) -> MCPClientRuntime:
     """Inicializa MCP clients externos e publica o bridge global.
 
@@ -1061,7 +1085,11 @@ def start_mcp_clients(
         return MCPClientRuntime(enabled=False)
 
     env_overrides = parse_mcp_client_env_specs(env_specs)
-    bridge = build_bridge_from_cli(specs, env_overrides=env_overrides)
+    bridge = build_bridge_from_cli(
+        specs,
+        env_overrides=env_overrides,
+        workspace=workspace,
+    )
     if bridge and bridge.started:
         from quimera.runtime.drivers.tool_schemas import set_bridge_schemas
         from quimera.runtime.tools.mcp_clients import (
