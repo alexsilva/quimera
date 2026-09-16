@@ -15,7 +15,6 @@ e preserva a API externa existente.
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 from typing import Any, Callable
 
 from ..agents.capabilities import is_user_cancelled
@@ -67,6 +66,7 @@ class AppTaskServices:
         get_agent_client: Callable[[], Any] | None = None,
         workspace: Any = None,
         get_workspace: Callable[[], Any] | None = None,
+        session_paths: Any = None,
         dispatch_tool_executor: ToolExecutor | None = None,
         get_dispatch_tool_executor: Callable[[], ToolExecutor | None] | None = None,
         dispatch_services: AppDispatchServices | None = None,
@@ -149,6 +149,7 @@ class AppTaskServices:
         self._agent_client_getter = get_agent_client
         self._workspace = workspace
         self._workspace_getter = get_workspace
+        self._session_paths = session_paths
         self._dispatch_tool_executor = dispatch_tool_executor
         self._dispatch_tool_executor_getter = get_dispatch_tool_executor
         self._dispatch_services = dispatch_services
@@ -239,6 +240,7 @@ class AppTaskServices:
             get_active_agents=self._agent_pool_agents,
             workspace=workspace,
             get_workspace=self._get_workspace,
+            session_paths=self._session_paths,
             renderer=renderer,
             get_renderer=self._get_renderer,
             input_services=input_services,

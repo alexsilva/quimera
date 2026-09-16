@@ -22,6 +22,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.tools.delegate import DelegateTools
 from quimera.runtime.approval_broker import TrustedToolExecutionContext
@@ -38,17 +39,20 @@ def _make_call(args: dict | None = None, metadata: dict | None = None) -> ToolCa
 
 @pytest.fixture
 def tools_com_db(tmp_path):
-    db_path = tmp_path / "tasks.db"
+    workspace = Workspace(tmp_path)
+    db_path = workspace.tasks_db
     task_api.init_db(str(db_path))
-    config = ToolRuntimeConfig(workspace_root=tmp_path, db_path=db_path)
+    config = ToolRuntimeConfig(workspace=workspace)
     tools = DelegateTools(config)
     return tools, str(db_path)
 
 
 @pytest.fixture
 def tools_sem_db(tmp_path):
-    config = ToolRuntimeConfig(workspace_root=tmp_path)
-    return DelegateTools(config)
+    config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
+    tools = DelegateTools(config)
+    tools._get_db_path = lambda: None
+    return tools
 
 
 def _wait_task_status(db_path: str, task_id: int, status: str, timeout: float = 5.0) -> dict:
@@ -132,8 +136,9 @@ class TestSyncTracking:
     def test_sync_falha_no_banco_nao_impede_delegacao(self, tmp_path):
         # db_path aponta para um diretório (sqlite não consegue abrir): o
         # rastreio falha em best-effort e a delegação síncrona segue normal.
-        config = ToolRuntimeConfig(workspace_root=tmp_path, db_path=tmp_path)
+        config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
         tools = DelegateTools(config)
+        tools._get_db_path = lambda: str(tmp_path)
         tools.set_delegate_fn(MagicMock(return_value="ok mesmo sem tracking"))
 
         result = tools.delegate(_make_call())

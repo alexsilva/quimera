@@ -105,13 +105,13 @@ class FileTools(ToolBase):
         staging = get_staging_root()
         if staging and path.is_relative_to(staging):
             return True
-        return any(path.is_relative_to(allowed) for allowed in self.config.allowed_read_roots)
+        return any(path.is_relative_to(allowed) for allowed in self.config.read_roots())
 
     def _resolve(self, raw_path: str) -> Path:
         """Resolve resolve."""
         normalized = raw_path.lstrip("/") or "."
         staging = get_staging_root()
-        base = staging if staging else self.config.workspace_root
+        base = staging if staging else self.workspace.cwd
         path = (base / normalized).resolve()
 
         if self._is_allowed_path(path):
@@ -128,12 +128,12 @@ class FileTools(ToolBase):
         """
         normalized = raw_path.lstrip("/") or "."
         staging = get_staging_root()
-        base = staging if staging else self.config.workspace_root
+        base = staging if staging else self.workspace.cwd
         path = (base / normalized).resolve()
 
         if staging and is_path_inside(path, staging):
             return path
-        if is_path_inside(path, self.config.workspace_root):
+        if is_path_inside(path, self.workspace.cwd):
             return path
 
         raise ValueError(f"Path fora da workspace: {raw_path}")
@@ -141,7 +141,7 @@ class FileTools(ToolBase):
     def list_files(self, call: ToolCall) -> ToolResult:
         """Lista arquivos e diretórios em um caminho dentro do workspace."""
         staging = get_staging_root()
-        workspace = self.config.workspace_root
+        workspace = self.workspace.cwd
         raw_path = call.arguments.get("path", ".")
 
         path = self._resolve(raw_path)
@@ -181,8 +181,8 @@ class FileTools(ToolBase):
             else:
                 # Fall back to the real workspace when staging is active but does
                 # not contain the requested file.
-                workspace_path = (self.config.workspace_root / (raw_path.lstrip("/") or ".")).resolve()
-                if not workspace_path.is_relative_to(self.config.workspace_root):
+                workspace_path = (self.workspace.cwd / (raw_path.lstrip("/") or ".")).resolve()
+                if not workspace_path.is_relative_to(self.workspace.cwd):
                     raise ValueError(f"Path fora da workspace: {raw_path}")
                 path = workspace_path
         else:
@@ -327,7 +327,7 @@ class FileTools(ToolBase):
     def grep_search(self, call: ToolCall) -> ToolResult:
         """Busca padrão textual em arquivos com suporte a glob, contexto e exclusão de diretórios."""
         staging = get_staging_root()
-        workspace = self.config.workspace_root
+        workspace = self.workspace.cwd
         raw_path = call.arguments.get("path", ".")
         base = self._resolve(raw_path)
         pattern = str(call.arguments["pattern"])

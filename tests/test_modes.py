@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from quimera.app.toolbar import ToolbarManager
 from quimera.modes import DEBATE_MODE, MODES, ExecutionMode, get_mode
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
 
@@ -103,7 +104,7 @@ class TestExecutionMode(unittest.TestCase):
 
 class TestToolPolicyBlockedTools(unittest.TestCase):
     def _make_policy(self, blocked=None):
-        config = ToolRuntimeConfig(workspace_root=Path("/tmp"))
+        config = ToolRuntimeConfig(workspace=Workspace(Path("/tmp")))
         policy = ToolPolicy(config)
         if blocked:
             policy.blocked_tools = blocked
@@ -205,7 +206,7 @@ class TestParseRoutingWithModes(unittest.TestCase):
         from quimera.runtime.policy import ToolPolicy
         from quimera.runtime.config import ToolRuntimeConfig
 
-        policy = ToolPolicy(ToolRuntimeConfig(workspace_root=Path("/tmp")))
+        policy = ToolPolicy(ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))))
         mock_executor = MagicMock()
         mock_executor.policy = policy
         app.tool_executor = mock_executor

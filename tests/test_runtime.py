@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import quimera.profiles as profiles
 from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicyError
@@ -23,7 +24,7 @@ from tests.helpers import make_policy as _make_policy
 # ---------------------------------------------------------------------------
 
 def _make_config(tmp_path: Path) -> ToolRuntimeConfig:
-    return ToolRuntimeConfig(workspace_root=tmp_path)
+    return ToolRuntimeConfig(workspace=Workspace(tmp_path))
 
 
 def _auto_approve() -> ApprovalHandler:
@@ -112,7 +113,7 @@ class InteractionToolTests(unittest.TestCase):
 
     def test_ask_user_disabled_returns_error_without_reading_terminal(self):
         tmp = Path(tempfile.mkdtemp())
-        config = ToolRuntimeConfig(workspace_root=tmp, allow_ask_user=False)
+        config = ToolRuntimeConfig(workspace=Workspace(tmp), allow_ask_user=False)
         executor = ToolExecutor(config, approval_handler=_auto_approve())
         executor.set_ask_user_fn(lambda _question, _options: (_ for _ in ()).throw(AssertionError("should not ask")))
 
@@ -127,13 +128,13 @@ class InteractionToolTests(unittest.TestCase):
     def test_ask_user_available_requires_config_and_callback(self):
         tmp = Path(tempfile.mkdtemp())
         disabled = ToolExecutor(
-            ToolRuntimeConfig(workspace_root=tmp, allow_ask_user=False),
+            ToolRuntimeConfig(workspace=Workspace(tmp), allow_ask_user=False),
             approval_handler=_auto_approve(),
         )
         disabled.set_ask_user_fn(lambda _question, _options: (0, "sim"))
 
         enabled = ToolExecutor(
-            ToolRuntimeConfig(workspace_root=tmp, allow_ask_user=True),
+            ToolRuntimeConfig(workspace=Workspace(tmp), allow_ask_user=True),
             approval_handler=_auto_approve(),
         )
         enabled.set_ask_user_fn(lambda _question, _options: (0, "sim"))
@@ -262,11 +263,11 @@ class InteractionToolTests(unittest.TestCase):
 class ExecutorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        self.db_path = self.tmp / "tasks.db"
+        self.workspace = Workspace(self.tmp)
+        self.db_path = self.workspace.tasks_db
         init_db(str(self.db_path))
         self.config = ToolRuntimeConfig(
-            workspace_root=self.tmp,
-            db_path=self.db_path,
+            workspace=self.workspace,
             require_approval_for_mutations=True,
         )
 

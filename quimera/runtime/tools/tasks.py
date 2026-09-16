@@ -124,9 +124,9 @@ class TaskTools(ToolBase):
             job_id = resolve_current_job_id()
         if job_id is None and allow_recent_fallback:
             try:
-                recent_jobs = _list_jobs({"status": "planning"}, db_path=self.config.db_path)
+                recent_jobs = _list_jobs({"status": "planning"}, db_path=self.workspace.tasks_db)
                 if not recent_jobs:
-                    recent_jobs = _list_jobs({"status": "active"}, db_path=self.config.db_path)
+                    recent_jobs = _list_jobs({"status": "active"}, db_path=self.workspace.tasks_db)
                 if recent_jobs:
                     job_id = recent_jobs[-1]["id"]
             except Exception:
@@ -154,7 +154,7 @@ class TaskTools(ToolBase):
             return None
         open_statuses = ("proposed", "approved", "in_progress")
         for status in open_statuses:
-            tasks = _list_tasks({"job_id": job_id, "status": status}, db_path=self.config.db_path)
+            tasks = _list_tasks({"job_id": job_id, "status": status}, db_path=self.workspace.tasks_db)
             for task in tasks:
                 if self._normalize_text(task["description"]) == normalized_description:
                     return task
@@ -214,7 +214,7 @@ class TaskTools(ToolBase):
         """Lista tasks."""
         filt = self._build_filters(call.arguments)
         try:
-            tasks = _list_tasks(filt, db_path=self.config.db_path)
+            tasks = _list_tasks(filt, db_path=self.workspace.tasks_db)
             max_results = int(call.arguments.get("max_results", self.config.max_task_results))
             truncated = len(tasks) > max_results
             tasks = [self._attach_live_delegation(task) for task in tasks[:max_results]]
@@ -235,7 +235,7 @@ class TaskTools(ToolBase):
             if value is not None:
                 filt[key] = value
         try:
-            jobs = _list_jobs(filt, db_path=self.config.db_path)
+            jobs = _list_jobs(filt, db_path=self.workspace.tasks_db)
             return ToolResult(ok=True, tool_name=call.name, content=json.dumps(jobs))
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
@@ -250,7 +250,7 @@ class TaskTools(ToolBase):
                 error="job_id is required (set QUIMERA_CURRENT_JOB_ID or create a job first)",
             )
         try:
-            job = _get_job(job_id, db_path=self.config.db_path)
+            job = _get_job(job_id, db_path=self.workspace.tasks_db)
             return ToolResult(
                 ok=True,
                 tool_name=call.name,

@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall, ToolResult
 from quimera.runtime.tools.delegate import DelegateTools
 from quimera.runtime.approval_broker import TrustedToolExecutionContext
@@ -26,7 +27,7 @@ from quimera.runtime.approval_broker import TrustedToolExecutionContext
 
 @pytest.fixture
 def delegation_tools(tmp_path):
-    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
     return DelegateTools(config)
 
 
@@ -106,7 +107,8 @@ class TestSSEPath:
         })
         result = delegation_tools._delegate_http_async(call, STEPS)
         assert result.ok is True
-        assert result.content == "resultado do agente"
+        assert result.content.startswith("resultado do agente")
+        assert "delegação registrada como task" in result.content
         dispatch_fn.assert_called_once()
 
     def test_sse_path_passa_delegate_fn_correta(self, delegation_tools, dispatch_fn):
@@ -133,7 +135,6 @@ class TestSSEPath:
 
     def test_sse_path_com_chamada_sem_sse_queue(self, delegation_tools, dispatch_fn, tmp_path):
         """sse_queue=None + db_path configurado → cai no non-SSE path (background thread)."""
-        delegation_tools.config.db_path = tmp_path / "tasks.db"
         delegation_tools.set_delegate_fn(dispatch_fn)
         call = _make_call(metadata={
             "_mcp_state": {"sse_queue": None},
@@ -143,7 +144,6 @@ class TestSSEPath:
 
     def test_sse_path_com_metadata_vazio(self, delegation_tools, dispatch_fn, tmp_path):
         """Metadata sem _mcp_state + db_path configurado → cai no non-SSE path."""
-        delegation_tools.config.db_path = tmp_path / "tasks.db"
         delegation_tools.set_delegate_fn(dispatch_fn)
         call = _make_call()
         result = delegation_tools._delegate_http_async(call, STEPS)
@@ -166,7 +166,8 @@ class TestSSEPath:
         result = delegation_tools._delegate_http_async(call, STEPS)
 
         assert result.ok is True
-        assert result.content == "resposta do background"
+        assert result.content.startswith("resposta do background")
+        assert "delegação registrada como task" in result.content
         bg_fn.assert_called_once()
         main_fn.assert_not_called()
 
@@ -181,7 +182,8 @@ class TestSSEPath:
         result = delegation_tools._delegate_http_async(call, STEPS)
 
         assert result.ok is True
-        assert result.content == "resposta do main"
+        assert result.content.startswith("resposta do main")
+        assert "delegação registrada como task" in result.content
         main_fn.assert_called_once()
 
     def test_sse_path_com_steps_multiplos(self, delegation_tools):
@@ -224,7 +226,6 @@ class TestNonSSEPath:
         self, mock_create, mock_add, mock_update_job, mock_get_job, delegation_tools, dispatch_fn, tmp_path,
     ):
         """Retorna status/timestamp inicial sem depender de polling posterior."""
-        delegation_tools.config.db_path = tmp_path / "tasks.db"
         delegation_tools.set_delegate_fn(dispatch_fn)
         call = _make_call(metadata={
             "_mcp_state": {"sse_queue": None},
@@ -240,12 +241,13 @@ class TestNonSSEPath:
         assert data["started_at"] == "2026-06-11 20:23:11"
         mock_add.assert_called_once()
         mock_create.assert_called_once()
-        mock_update_job.assert_any_call(42, "active", db_path=str(tmp_path / "tasks.db"))
-        mock_get_job.assert_called_once_with(42, db_path=str(tmp_path / "tasks.db"))
+        expected_db = str(delegation_tools.workspace.tasks_db)
+        mock_update_job.assert_any_call(42, "active", db_path=expected_db)
+        mock_get_job.assert_called_once_with(42, db_path=expected_db)
 
     def test_non_sse_path_sem_db_path_retorna_erro(self, delegation_tools, dispatch_fn):
         """Sem db_path configurado → erro: 'db_path not configured'."""
-        delegation_tools.config.db_path = None
+        delegation_tools.config.workspace = None
         delegation_tools.set_delegate_fn(dispatch_fn)
         call = _make_call()
         result = delegation_tools._delegate_http_async(call, STEPS)
@@ -257,7 +259,6 @@ class TestNonSSEPath:
         self, mock_add, delegation_tools, dispatch_fn, tmp_path,
     ):
         """add_job lança exceção → 'Failed to create job'."""
-        delegation_tools.config.db_path = tmp_path / "tasks.db"
         delegation_tools.set_delegate_fn(dispatch_fn)
         call = _make_call()
         result = delegation_tools._delegate_http_async(call, STEPS)
@@ -270,7 +271,6 @@ class TestNonSSEPath:
         self, mock_create, mock_add, delegation_tools, dispatch_fn, tmp_path,
     ):
         """create_task lança exceção → 'Failed to create task'."""
-        delegation_tools.config.db_path = tmp_path / "tasks.db"
         delegation_tools.set_delegate_fn(dispatch_fn)
         call = _make_call()
         result = delegation_tools._delegate_http_async(call, STEPS)
@@ -283,7 +283,6 @@ class TestNonSSEPath:
         self, mock_create, mock_add, delegation_tools, dispatch_fn, tmp_path,
     ):
         """A descrição do job contém agent_name e task do primeiro step."""
-        delegation_tools.config.db_path = tmp_path / "tasks.db"
         delegation_tools.set_delegate_fn(dispatch_fn)
         call = _make_call()
         delegation_tools._delegate_http_async(call, STEPS)
@@ -293,7 +292,7 @@ class TestNonSSEPath:
 
     def test_non_sse_background_thread_completa_task(self, delegation_tools, tmp_path):
         """Background thread completa com sucesso: complete_task e update_job_status chamados."""
-        db_path = tmp_path / "tasks.db"
+        db_path = delegation_tools.workspace.tasks_db
         from quimera.tasks import api as task_mod
         import time
         task_mod.init_db(str(db_path))
@@ -304,7 +303,6 @@ class TestNonSSEPath:
             db_path=str(db_path),
         )
 
-        delegation_tools.config.db_path = db_path
         dispatch = MagicMock(return_value="sucesso")
         delegation_tools.set_delegate_fn(dispatch)
         call = _make_call(metadata={
@@ -330,7 +328,7 @@ class TestNonSSEPath:
 
     def test_non_sse_background_thread_falha_task(self, delegation_tools, tmp_path):
         """Dispatch retorna None (falha silenciosa) → fail_task e update_job_status(failed) chamados."""
-        db_path = tmp_path / "tasks.db"
+        db_path = delegation_tools.workspace.tasks_db
         from quimera.tasks import api as task_mod
         import time
         task_mod.init_db(str(db_path))
@@ -341,7 +339,6 @@ class TestNonSSEPath:
             db_path=str(db_path),
         )
 
-        delegation_tools.config.db_path = db_path
         dispatch = MagicMock(return_value=None)
         delegation_tools.set_delegate_fn(dispatch)
         call = _make_call(metadata={
@@ -381,8 +378,6 @@ class TestNonSSEPath:
         principal não interrompe a thread de background.
         """
         import time
-
-        delegation_tools.config.db_path = tmp_path / "tasks.db"
 
         main_fn = MagicMock(return_value="resposta do main")
         bg_fn = MagicMock(return_value="resposta do background")
@@ -427,8 +422,6 @@ class TestNonSSEPath:
         """
         import time
 
-        delegation_tools.config.db_path = tmp_path / "tasks.db"
-
         # cancel_checker já retorna True desde o início — simula Ctrl+C
         delegation_tools.set_cancel_checker(lambda: True)
         delegation_tools.set_delegate_fn(MagicMock(return_value="resultado"))
@@ -451,8 +444,7 @@ class TestNonSSEPath:
     def test_non_sse_background_thread_exception_nao_propaga(self, delegation_tools, tmp_path):
         """Exceção no complete_task (pós-agente) não quebra o retorno inicial."""
         import time
-        db_path = tmp_path / "tasks.db"
-        delegation_tools.config.db_path = db_path
+        db_path = delegation_tools.workspace.tasks_db
         dispatch = MagicMock(return_value="ok")
         delegation_tools.set_delegate_fn(dispatch)
         call = _make_call(metadata={
@@ -474,16 +466,15 @@ class TestNonSSEPath:
 # ── get_db_path ────────────────────────────────────────────
 
 class TestGetDbPath:
-    """DelegateTools._get_db_path(): converte Path opcional para str."""
+    """DelegateTools._get_db_path(): usa o banco canônico do Workspace."""
 
-    def test_db_path_configurado_retorna_string(self, delegation_tools, tmp_path):
-        """Path configurado → retorna str do path."""
-        delegation_tools.config.db_path = tmp_path / "tasks.db"
-        assert delegation_tools._get_db_path() == str(tmp_path / "tasks.db")
+    def test_db_path_configurado_retorna_string(self, delegation_tools):
+        """O path vem diretamente do Workspace atual."""
+        assert delegation_tools._get_db_path() == str(delegation_tools.workspace.tasks_db)
 
     def test_db_path_none_retorna_none(self, delegation_tools):
-        """db_path = None → retorna None."""
-        delegation_tools.config.db_path = None
+        """Sem Workspace, o fallback defensivo retorna None."""
+        delegation_tools.config.workspace = None
         assert delegation_tools._get_db_path() is None
 
 
@@ -792,7 +783,7 @@ class TestCallAgentAutoReferencia:
     """
 
     def _make_tools(self, tmp_path) -> DelegateTools:
-        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
         tools = DelegateTools(config)
         tools.set_delegate_fn(MagicMock(return_value="ok"))
         tools.set_active_agents_provider(lambda: ["codex", "claude", "deepseek"])
@@ -812,7 +803,7 @@ class TestCallAgentAutoReferencia:
 
     def test_delegate_passes_source_agent_chain_and_id(self, tmp_path):
         """Delegações carregam origem, cadeia e id para renderização no feed."""
-        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
         tools = DelegateTools(config)
         captured: list[tuple[str, dict]] = []
 
@@ -840,7 +831,7 @@ class TestCallAgentAutoReferencia:
 
     def test_delegate_stops_on_user_cancel_without_trying_fallbacks(self, tmp_path):
         """Cancelamento do usuário não deve virar fallback silencioso."""
-        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
         tools = DelegateTools(config)
         dispatched = []
         cancel_state = {"cancelled": False}
@@ -871,7 +862,7 @@ class TestCallAgentAutoReferencia:
 
     def test_mcp_request_cancel_stops_sequential_delegate_and_fallbacks(self, tmp_path):
         """Cancelamento da request MCP alcança o AgentClient isolado do delegate."""
-        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
         tools = DelegateTools(config)
         request_cancel = threading.Event()
         dispatch_started = threading.Event()
@@ -919,7 +910,7 @@ class TestCallAgentAutoReferencia:
     ):
         """Timeout encerra o step pendente sem perder respostas já concluídas."""
         config = ToolRuntimeConfig(
-            workspace_root=tmp_path,
+            workspace=Workspace(tmp_path),
             delegate_parallel_timeout_seconds=1,
         )
         tools = DelegateTools(config)
@@ -971,7 +962,7 @@ class TestCallAgentAutoReferencia:
     def test_parallel_delegate_timeout_rejects_late_success(self, tmp_path):
         """Resultado posterior ao deadline não pode sobrescrever o timeout."""
         config = ToolRuntimeConfig(
-            workspace_root=tmp_path,
+            workspace=Workspace(tmp_path),
             delegate_parallel_timeout_seconds=1,
         )
         tools = DelegateTools(config)
@@ -1021,7 +1012,7 @@ class TestCallAgentAutoReferencia:
     ):
         """Timeout cancela a execução real do step bloqueado e ignora retorno tardio."""
         config = ToolRuntimeConfig(
-            workspace_root=tmp_path,
+            workspace=Workspace(tmp_path),
             delegate_parallel_timeout_seconds=1,
         )
         tools = DelegateTools(config)
@@ -1107,7 +1098,7 @@ class TestCallAgentAutoReferencia:
             dispatched.append(agent)
             return "ok"
 
-        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
         tools = DelegateTools(config)
         tools.set_delegate_fn(dispatch)
         tools.set_active_agents_provider(lambda: ["codex", "claude", "deepseek"])
@@ -1150,7 +1141,7 @@ class TestCallAgentAutoReferencia:
             dispatched.append(agent)
             return "ok"
 
-        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
         tools = DelegateTools(config)
         tools.set_delegate_fn(dispatch)
         tools.set_active_agents_provider(lambda: ["codex", "claude", "deepseek"])
@@ -1187,7 +1178,7 @@ class TestCallAgentAutoReferencia:
 
     def test_bloqueia_via_trusted_context(self, tmp_path):
         """Self-reference funciona com calling_agent vindo de TrustedToolExecutionContext."""
-        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
         tools = DelegateTools(config)
         tools.set_delegate_fn(MagicMock(return_value="ok"))
         tools.set_active_agents_provider(lambda: ["codex", "deepseek"])
@@ -1212,7 +1203,7 @@ class TestCallAgentAutoReferencia:
             dispatched.append(agent)
             return "ok"
 
-        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
         tools = DelegateTools(config)
         tools.set_delegate_fn(dispatch)
         tools.set_active_agents_provider(lambda: ["codex", "deepseek"])
@@ -1237,7 +1228,7 @@ class TestCallAgentAutoReferencia:
             dispatched.append(agent)
             return "ok"
 
-        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
         tools = DelegateTools(config)
         tools.set_delegate_fn(dispatch)
         tools.set_active_agents_provider(lambda: ["codex", "claude", "deepseek"])
@@ -1278,7 +1269,7 @@ class TestOrchestratorRedelegationGuard:
 
     def _make_tools(self, tmp_path, orchestrator="claude"):
         from quimera.runtime.tools.delegate import DelegateTools, ToolRuntimeConfig
-        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
         tools = DelegateTools(config)
         tools.set_delegate_fn(lambda agent, **kw: "ok")
         tools.set_active_agents_provider(lambda: ["claude", "codex", "opencode"])
@@ -1468,7 +1459,7 @@ def test_delegate_deduplicates_target_and_fallback_aliases(tmp_path):
         dispatched.append(agent)
         return None
 
-    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
     tools = DelegateTools(config)
     tools.set_delegate_fn(dispatch)
     tools.set_active_agents_provider(lambda: ["codex", "claude"])
@@ -1483,7 +1474,7 @@ def test_delegate_deduplicates_target_and_fallback_aliases(tmp_path):
 
 
 def test_delegate_rejects_non_boolean_parallel(tmp_path):
-    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
     tools = DelegateTools(config)
     tools.set_delegate_fn(MagicMock(return_value="ok"))
     tools.set_active_agents_provider(lambda: ["codex", "claude"])

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import PathPermissionError, ToolPolicyError, is_path_inside
 from quimera.runtime.tools.web import WebToolValidator
@@ -56,7 +57,7 @@ def test_policy_path_prefix_sibling_outside_workspace(tmp_path):
     sibling.mkdir()
     (sibling / "secret.txt").write_text("TOPSECRET", encoding="utf-8")
 
-    policy = _make_policy(ToolRuntimeConfig(workspace_root=workspace))
+    policy = _make_policy(ToolRuntimeConfig(workspace=Workspace(workspace)))
     call = ToolCall(name="read_file", arguments={"path": "../workspace2/secret.txt"})
     with pytest.raises(ToolPolicyError, match="Path fora da workspace"):
         policy.validate(call)
@@ -78,7 +79,7 @@ def test_policy_run_shell_command_alias_removed(policy):
 def test_tasks_uses_dedicated_creation_approval_flag(tmp_path):
     """A governança de tasks não depende da flag genérica de mutações."""
     config = ToolRuntimeConfig(
-        workspace_root=tmp_path,
+        workspace=Workspace(tmp_path),
         require_approval_for_mutations=True,
         require_approval_for_task_creation=False,
     )
@@ -572,7 +573,7 @@ def test_policy_check_path_permission_rejects_prefix_sibling(tmp_path):
     sibling = tmp_path / "workspace2"
     sibling.mkdir()
 
-    policy = _make_policy(ToolRuntimeConfig(workspace_root=workspace))
+    policy = _make_policy(ToolRuntimeConfig(workspace=Workspace(workspace)))
     call = ToolCall(name="list_files", arguments={"path": "../workspace2"})
     result = policy.check_path_permission(call)
     assert result is not None

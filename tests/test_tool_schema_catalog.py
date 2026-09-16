@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.drivers.tool_catalog import TOOL_SPECS, materialize_tool_schemas
 from quimera.runtime.drivers.tool_schemas import TOOL_SCHEMAS
 from quimera.runtime.executor import ToolExecutor
@@ -68,7 +69,7 @@ def test_shell_tool_descriptions_distinguish_sync_and_persistent_execution():
 def test_schema_and_registry_are_one_to_one():
     """Cada schema publicado deve ter handler no registry e vice-versa."""
     root = Path(tempfile.mkdtemp())
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=root), approval_handler=None)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(root)), approval_handler=None)
     registry_names = set(executor.registry.names())
     schema_names = {item["function"]["name"] for item in TOOL_SCHEMAS}
 
@@ -79,7 +80,7 @@ def test_schema_and_registry_are_one_to_one():
 def test_explicit_tool_name_lists_match_registered_handlers():
     """Listas explícitas dos módulos não podem divergir do que o register expõe."""
     root = Path(tempfile.mkdtemp())
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=root), approval_handler=None)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(root)), approval_handler=None)
     registered = set(executor.registry.names())
 
     for names in (
@@ -93,7 +94,7 @@ def test_explicit_tool_name_lists_match_registered_handlers():
 
 def test_memory_todo_state_contracts_are_available_on_registry(tmp_path: Path):
     """Contratos mínimos de memory/todo/state devem existir e responder."""
-    config = ToolRuntimeConfig(workspace_root=tmp_path, memory_file=tmp_path / "memory.json")
+    config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
     executor = ToolExecutor(config, approval_handler=None)
 
     for name in ("memory_save", "memory_retrieve", "todo_write", "todo_list", "update_shared_state"):

@@ -3,6 +3,7 @@ from unittest.mock import patch
 import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.tools.files import FileTools, set_staging_root
 
@@ -11,7 +12,7 @@ from quimera.runtime.tools.files import FileTools, set_staging_root
 def config(tmp_path):
     root = tmp_path / "workspace"
     root.mkdir()
-    return ToolRuntimeConfig(workspace_root=root)
+    return ToolRuntimeConfig(workspace=Workspace(root))
 
 
 @pytest.fixture
@@ -28,7 +29,7 @@ def test_file_tools_resolve_outside(tools):
 
 def test_file_tools_read_file_rejects_prefix_sibling_path(tools, config):
     """Bloqueia bypass por prefixo de path (workspace vs workspace2)."""
-    sibling = config.workspace_root.parent / f"{config.workspace_root.name}2"
+    sibling = config.workspace.cwd.parent / f"{config.workspace.cwd.name}2"
     sibling.mkdir()
     (sibling / "secret.txt").write_text("TOPSECRET", encoding="utf-8")
 
@@ -44,7 +45,7 @@ def test_file_tools_read_file_rejects_prefix_sibling_path(tools, config):
 def test_file_tools_list_files_staging(tools, config):
     """Verifica que list_files inclui arquivos do staging."""
     # Line 47, 58-61 coverage
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "a.txt").write_text("a")
     (workspace / "subdir").mkdir()
     (workspace / "subdir/b.txt").write_text("b")
@@ -72,7 +73,7 @@ def test_file_tools_list_files_staging(tools, config):
 
 def test_file_tools_read_file_staging(tools, config):
     """Verifica que read_file prioriza arquivo do staging sobre workspace."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "a.txt").write_text("original")
 
     staging = workspace.parent / "staging"
@@ -91,7 +92,7 @@ def test_file_tools_read_file_staging(tools, config):
 def test_file_tools_write_file_modes(tools, config):
     """Verifica que write_file suporta modos overwrite, create e append."""
     # Line 97, 99-100 coverage
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     path = workspace / "test.txt"
 
     # overwrite
@@ -111,7 +112,7 @@ def test_file_tools_write_file_modes(tools, config):
 
 def test_file_tools_write_file_overwrite_requires_replace_existing(tools, config):
     """Verifica que sobrescrita de arquivo existente exige replace_existing=true."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     path = workspace / "test.txt"
     path.write_text("hello")
 
@@ -128,7 +129,7 @@ def test_file_tools_write_file_overwrite_requires_replace_existing(tools, config
 
 def test_replace_text_replaces_single_exact_occurrence(tools, config):
     """replace_text faz edição literal quando a ocorrência esperada é única."""
-    path = config.workspace_root / "test.txt"
+    path = config.workspace.cwd / "test.txt"
     path.write_text("hello world\n", encoding="utf-8")
 
     result = tools.replace_text(
@@ -145,7 +146,7 @@ def test_replace_text_replaces_single_exact_occurrence(tools, config):
 
 def test_replace_text_rejects_ambiguous_occurrences(tools, config):
     """replace_text não altera arquivo quando count não bate exatamente."""
-    path = config.workspace_root / "test.txt"
+    path = config.workspace.cwd / "test.txt"
     path.write_text("x x\n", encoding="utf-8")
 
     result = tools.replace_text(
@@ -162,7 +163,7 @@ def test_replace_text_rejects_ambiguous_occurrences(tools, config):
 
 def test_replace_text_supports_explicit_count(tools, config):
     """count permite substituição literal de múltiplas ocorrências intencional."""
-    path = config.workspace_root / "test.txt"
+    path = config.workspace.cwd / "test.txt"
     path.write_text("x x\n", encoding="utf-8")
 
     result = tools.replace_text(
@@ -183,7 +184,7 @@ def test_write_file_does_not_mutate_allowed_read_root(tmp_path):
     read_root = tmp_path / "read-root"
     read_root.mkdir()
     config = ToolRuntimeConfig(
-        workspace_root=workspace,
+        workspace=Workspace(workspace),
         allowed_read_roots=[workspace, read_root],
     )
     tools = FileTools(config)
@@ -200,7 +201,7 @@ def test_write_file_does_not_mutate_allowed_read_root(tmp_path):
 def test_file_tools_grep_search_staging(tools, config):
     """Verifica que grep_search busca também no staging."""
     # Line 114-116 coverage
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "a.txt").write_text("foo")
 
     staging = workspace.parent / "staging"
@@ -220,7 +221,7 @@ def test_file_tools_grep_search_staging(tools, config):
 def test_file_tools_grep_search_error(tools, config):
     """Verifica que grep_search trata erro de leitura silenciosamente."""
     # Line 126 coverage
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "a.txt").write_text("foo")
 
     with patch("pathlib.Path.read_text") as mock_read:
@@ -235,7 +236,7 @@ def test_file_tools_grep_search_error(tools, config):
 
 def test_remove_file_dry_run_default(tools, config):
     """dry_run=True por padrão: não remove, apenas reporta."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "to_delete.txt").write_text("bye")
 
     call = ToolCall(name="remove_file", arguments={"path": "to_delete.txt"})
@@ -248,7 +249,7 @@ def test_remove_file_dry_run_default(tools, config):
 
 def test_remove_file_actual_deletion(tools, config):
     """Com dry_run=False, o arquivo é removido de fato."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "to_delete.txt").write_text("bye")
 
     call = ToolCall(name="remove_file", arguments={"path": "to_delete.txt", "dry_run": False})
@@ -270,7 +271,7 @@ def test_remove_file_not_found(tools, config):
 
 def test_remove_file_refuses_directory(tools, config):
     """remove_file não remove diretórios."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "subdir").mkdir()
 
     call = ToolCall(name="remove_file", arguments={"path": "subdir", "dry_run": False})
@@ -282,7 +283,7 @@ def test_remove_file_refuses_directory(tools, config):
 
 def test_remove_file_refuses_non_regular(tools, config):
     """remove_file recusa algo que não é arquivo regular."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "fifo").touch()
 
     call = ToolCall(name="remove_file", arguments={"path": "fifo", "dry_run": False})
@@ -295,7 +296,7 @@ def test_remove_file_refuses_non_regular(tools, config):
 
 def test_remove_file_os_error(tools, config):
     """Erro de sistema (ex: permissão) retorna erro."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "protected.txt").write_text("x")
 
     call = ToolCall(name="remove_file", arguments={"path": "protected.txt", "dry_run": False})
@@ -322,7 +323,7 @@ def test_remove_file_does_not_mutate_allowed_read_root(tmp_path):
     protected = read_root / "protected.txt"
     protected.write_text("keep", encoding="utf-8")
     config = ToolRuntimeConfig(
-        workspace_root=workspace,
+        workspace=Workspace(workspace),
         allowed_read_roots=[workspace, read_root],
     )
     tools = FileTools(config)
@@ -348,7 +349,7 @@ _RANGE_FILE_CASES = [
 @pytest.mark.parametrize(("range_kwargs", "expected"), _RANGE_FILE_CASES)
 def test_read_file_range_variants(tools, config, range_kwargs, expected):
     """read_file respeita start_line/end_line (clamps e limites)."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     lines = ["a", "b", "c", "d", "e"]
     (workspace / "test.txt").write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
 
@@ -361,7 +362,7 @@ def test_read_file_range_variants(tools, config, range_kwargs, expected):
 
 def test_read_file_range_start_end_metadata(tools, config):
     """read_file com start_line e end_line (inclusivo) lê intervalo e expõe metadados."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     lines = ["a", "b", "c", "d", "e"]
     (workspace / "test.txt").write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
 
@@ -378,7 +379,7 @@ def test_read_file_range_start_end_metadata(tools, config):
 
 def test_read_file_returns_line_metadata_without_range(tools, config):
     """read_file retorna metadados de linhas para navegação incremental segura."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "test.txt").write_text("a\nb\nc\n", encoding="utf-8")
 
     call = ToolCall(name="read_file", arguments={"path": "test.txt"})
@@ -400,7 +401,7 @@ _INVALID_RANGE_CASES = [
 @pytest.mark.parametrize("range_kwargs", _INVALID_RANGE_CASES)
 def test_read_file_range_invalid_interval(tools, config, range_kwargs):
     """read_file com intervalo inválido (start >= end ou end=0) retorna erro."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "test.txt").write_text("a\nb\nc\n", encoding="utf-8")
 
     call = ToolCall(name="read_file", arguments={"path": "test.txt", **range_kwargs})
@@ -411,7 +412,7 @@ def test_read_file_range_invalid_interval(tools, config, range_kwargs):
 
 def test_read_file_range_invalid_start_type(tools, config):
     """read_file com start_line não-inteiro lança ValueError."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "test.txt").write_text("a\nb\nc\n", encoding="utf-8")
 
     call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": "abc"})
@@ -434,7 +435,7 @@ def test_read_file_staging_with_range(tools, config, tmp_path):
 
 def test_file_tools_grep_search_skips_noisy_dirs_by_default(tools, config):
     """grep_search ignora diretorios que poluem a edicao do workspace."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "app.py").write_text("marker_token\n", encoding="utf-8")
     cache_dir = workspace / ".venv" / "lib"
     cache_dir.mkdir(parents=True)
@@ -450,7 +451,7 @@ def test_file_tools_grep_search_skips_noisy_dirs_by_default(tools, config):
 
 def test_file_tools_grep_search_supports_include_glob(tools, config):
     """include_glob restringe resultados ao tipo de arquivo desejado."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "app.py").write_text("marker_token\n", encoding="utf-8")
     (workspace / "notes.md").write_text("marker_token\n", encoding="utf-8")
 
@@ -467,7 +468,7 @@ def test_file_tools_grep_search_supports_include_glob(tools, config):
 
 def test_file_tools_grep_search_supports_max_results(tools, config):
     """max_results permite respostas menores para inspecao incremental."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "a.txt").write_text("marker_token\n", encoding="utf-8")
     (workspace / "b.txt").write_text("marker_token\n", encoding="utf-8")
 
@@ -484,7 +485,7 @@ def test_file_tools_grep_search_supports_max_results(tools, config):
 
 def test_file_tools_grep_search_supports_context_lines(tools, config):
     """context_lines inclui linhas vizinhas sem alterar o formato path:line:content."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "app.py").write_text("antes\nmarker_token\ndepois\n", encoding="utf-8")
 
     result = tools.grep_search(
@@ -503,7 +504,7 @@ def test_file_tools_grep_search_supports_context_lines(tools, config):
 
 def test_file_tools_grep_search_context_lines_is_clamped(tools, config):
     """context_lines é limitado para evitar respostas enormes acidentais."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     lines = [f"linha {idx}" for idx in range(1, 31)]
     lines[15] = "marker_token"
     (workspace / "app.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -523,7 +524,7 @@ def test_file_tools_grep_search_context_lines_is_clamped(tools, config):
 
 def test_inspect_symbols_lists_python_defs_without_execution(tools, config):
     """inspect_symbols lista símbolos via AST sem importar/executar o arquivo."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "module.py").write_text(
         "def top():\n"
         "    pass\n"
@@ -551,7 +552,7 @@ def test_inspect_symbols_lists_python_defs_without_execution(tools, config):
 
 def test_inspect_symbols_rejects_non_python_file(tools, config):
     """inspect_symbols recusa arquivos que não são .py."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "notes.txt").write_text("def fake(): pass\n", encoding="utf-8")
 
     result = tools.inspect_symbols(ToolCall(name="inspect_symbols", arguments={"path": "notes.txt"}))
@@ -562,7 +563,7 @@ def test_inspect_symbols_rejects_non_python_file(tools, config):
 
 def test_file_tools_grep_search_supports_regex(tools, config):
     """regex=true interpreta o padrão como expressão regular Python."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "app.py").write_text(
         "def alpha():\n    pass\n\ndef beta():\n    pass\n\nalpha = 1\n",
         encoding="utf-8",
@@ -584,7 +585,7 @@ def test_file_tools_grep_search_supports_regex(tools, config):
 
 def test_file_tools_grep_search_regex_invalid_returns_error(tools, config):
     """Regex inválida retorna erro explícito em vez de busca vazia."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "app.py").write_text("qualquer coisa\n", encoding="utf-8")
 
     result = tools.grep_search(
@@ -600,7 +601,7 @@ def test_file_tools_grep_search_regex_invalid_returns_error(tools, config):
 
 def test_file_tools_grep_search_supports_ignore_case_substring(tools, config):
     """ignore_case=true faz match de substring sem diferenciar maiúsculas."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "app.py").write_text("Marker_Token aqui\noutra linha\n", encoding="utf-8")
 
     exact = tools.grep_search(
@@ -619,7 +620,7 @@ def test_file_tools_grep_search_supports_ignore_case_substring(tools, config):
 
 def test_file_tools_grep_search_supports_ignore_case_with_regex(tools, config):
     """ignore_case combina com regex via re.IGNORECASE."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "app.py").write_text("TODO: revisar\nnada aqui\n", encoding="utf-8")
 
     result = tools.grep_search(
@@ -634,7 +635,7 @@ def test_file_tools_grep_search_supports_ignore_case_with_regex(tools, config):
 
 def test_inspect_symbols_lists_nested_symbols(tools, config):
     """inspect_symbols enxerga funções aninhadas, classes internas e defs sob blocos."""
-    workspace = config.workspace_root
+    workspace = config.workspace.cwd
     (workspace / "module.py").write_text(
         "def outer():\n"
         "    def inner():\n"

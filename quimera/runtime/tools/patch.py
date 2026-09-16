@@ -124,7 +124,7 @@ class PatchTool(ToolBase):
         """Resolve um path relativo dentro do workspace ou staging."""
         normalized = raw_path.lstrip("/") or "."
         staging = get_staging_root()
-        base = staging if staging else self.config.workspace_root
+        base = staging if staging else self.workspace.cwd
         path = (base / normalized).resolve()
         if not str(path).startswith(str(base)):
             raise PatchApplyError(f"Path fora da workspace: {raw_path}")
@@ -133,7 +133,7 @@ class PatchTool(ToolBase):
     def _display_path(self, path: Path) -> str:
         """Retorna o path relativo à base ativa (staging ou workspace)."""
         staging = get_staging_root()
-        base = staging if staging else self.config.workspace_root
+        base = staging if staging else self.workspace.cwd
         return str(path.relative_to(base))
 
     @staticmethod

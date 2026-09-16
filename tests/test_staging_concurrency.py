@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.tools.files import FileTools, set_staging_root
 
@@ -45,7 +46,7 @@ class TestStagingConcurrency:
     @pytest.fixture
     def config(self, workspace):
         return ToolRuntimeConfig(
-            workspace_root=workspace,
+            workspace=Workspace(workspace),
             max_file_read_chars=50000,
         )
 

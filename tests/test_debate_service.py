@@ -210,7 +210,6 @@ def _make_service(tmp_path, *, blocking=False, history_provider=None, **dispatch
         session_id="session-test",
         current_job_id=job_id,
         staging_root=tmp_path / "staging",
-        workspace_root=tmp_path,
         persist_message=lambda agent, content: persisted.append((agent, content)),
         notify_tasks_changed=lambda: notices.append("tasks"),
         history_provider=history_provider,

@@ -16,6 +16,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.tools.delegate import DelegateTools
 
@@ -30,7 +31,7 @@ def dispatch_fn():
 
 @pytest.fixture
 def delegation_tools(tmp_path, dispatch_fn):
-    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
     tools = DelegateTools(config)
     tools.set_delegate_fn(dispatch_fn)
     return tools
@@ -113,7 +114,8 @@ class TestDelegateRequestTruncation:
         })
         result = delegation_tools.delegate(call)
         assert result.ok
-        assert result.content == "resultado do agente"
+        assert result.content.startswith("resultado do agente")
+        assert "truncado" not in result.content
         assert "truncation_warnings" not in result.data
 
 

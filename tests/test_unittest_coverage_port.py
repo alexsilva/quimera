@@ -14,6 +14,7 @@ from quimera.profiles import get
 from quimera.profiles.base import ExecutionProfile
 from quimera.runtime.approval import ApprovalHandler, ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import TaskRecord, ToolCall, ToolResult
 from quimera.runtime.policy import ToolPolicyError
@@ -214,8 +215,9 @@ class ContextCoverageTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         tmp = Path(self.tmpdir.name)
-        self.base = tmp / "base.md"
-        self.session = tmp / "session.md"
+        self.workspace = Workspace(tmp)
+        self.base = self.workspace.context_persistent
+        self.session = self.workspace.context_session
         self.base.write_text("Base", encoding="utf-8")
         self.session.write_text(
             "## Resumo da última sessão\n\n_Gerado em 2026-01-01 10:00_\n\nResumo",
@@ -228,32 +230,33 @@ class ContextCoverageTests(unittest.TestCase):
 
     def test_load_methods(self):
         """Verifica que Test load methods."""
-        manager = ContextManager(self.base, self.session, self.renderer)
+        manager = ContextManager(self.workspace, self.renderer)
         self.assertEqual(manager.load_base(), "Base")
         self.assertIn("Resumo", manager.load_session())
         self.assertEqual(manager.load_session_summary(), "Resumo")
         self.assertIn("Base", manager.load())
-        invalid = ContextManager(self.base, self.session.with_name("invalid.md"), self.renderer)
-        invalid.session_context_file.write_text("sem marcador", encoding="utf-8")
-        self.assertEqual(invalid.load_session_summary(), "")
-        only_base = ContextManager(self.base, self.session.with_name("missing.md"), self.renderer)
-        self.assertEqual(only_base.load(), "Base")
-        only_session = ContextManager(self.base.with_name("missing-base.md"), self.session, self.renderer)
-        self.assertIn("Resumo", only_session.load())
+        self.session.write_text("sem marcador", encoding="utf-8")
+        self.assertEqual(manager.load_session_summary(), "")
+        self.session.unlink()
+        self.assertEqual(manager.load(), "Base")
+        self.session.write_text("Session only", encoding="utf-8")
+        self.base.unlink()
+        self.assertEqual(manager.load(), "Session only")
 
     def test_show_empty_and_non_empty(self):
         """Verifica que Test show empty and non empty."""
-        manager = ContextManager(self.base, self.session, self.renderer)
+        manager = ContextManager(self.workspace, self.renderer)
         manager.show()
         self.renderer.show_text_window.assert_called_once()
         self.assertEqual(self.renderer.show_text_window.call_args.args[0], "Contexto")
-        empty = ContextManager(self.base.with_name("missing.md"), self.session.with_name("other.md"), self.renderer)
-        empty.show()
+        self.base.unlink()
+        self.session.unlink()
+        manager.show()
         self.renderer.show_system.assert_called_with("\n[contexto vazio]\n")
 
     def test_edit_uses_editor_fallback_and_errors(self):
         """Verifica que Test edit uses editor fallback and errors."""
-        manager = ContextManager(self.base, self.session, self.renderer)
+        manager = ContextManager(self.workspace, self.renderer)
         with patch("os.environ.get", return_value="code --wait"), patch("subprocess.run") as run:
             manager.edit()
         run.assert_called_once_with(["code", "--wait", str(self.base)], check=True)
@@ -276,7 +279,7 @@ class ContextCoverageTests(unittest.TestCase):
 
     def test_update_with_summary(self):
         """Verifica que Test update with summary."""
-        manager = ContextManager(self.base, self.session, self.renderer)
+        manager = ContextManager(self.workspace, self.renderer)
         manager.update_with_summary("Novo resumo")
         content = self.session.read_text(encoding="utf-8")
         self.assertIn("## Resumo da última sessão", content)
@@ -295,7 +298,7 @@ class ApprovalCoverageTests(unittest.TestCase):
 
     def test_console_approval_handler_variants(self):
         """Verifica que Test console approval handler variants."""
-        cfg = ToolRuntimeConfig(workspace_root=Path("/tmp"))
+        cfg = ToolRuntimeConfig(workspace=Workspace(Path("/tmp")))
         handler = ApprovalManager(cfg, input_fn=None)
         with patch("builtins.print"), patch("builtins.input", return_value="y"):
             self.assertTrue(handler.approve(tool_name="shell", summary="ls"))
@@ -309,9 +312,11 @@ class RuntimeConfigAndModelsCoverageTests(unittest.TestCase):
     def test_runtime_config_resolves_defaults(self):
         """Verifica que Test runtime config resolves defaults."""
         root = Path("/tmp").resolve()
-        self.assertEqual(ToolRuntimeConfig(workspace_root=root).allowed_read_roots, [root])
+        default_config = ToolRuntimeConfig(workspace=Workspace(root))
+        self.assertEqual(default_config.allowed_read_roots, [])
+        self.assertEqual(default_config.read_roots(), (root,))
         other = Path("/").resolve()
-        config = ToolRuntimeConfig(workspace_root=root, allowed_read_roots=[other])
+        config = ToolRuntimeConfig(workspace=Workspace(root), allowed_read_roots=[other])
         self.assertEqual(config.allowed_read_roots, [other])
 
     def test_models_payload_and_defaults(self):
@@ -324,7 +329,7 @@ class RuntimeConfigAndModelsCoverageTests(unittest.TestCase):
 
 class RegistryAndExecutorCoverageTests(unittest.TestCase):
     def setUp(self):
-        self.config = ToolRuntimeConfig(workspace_root=Path("/tmp"))
+        self.config = ToolRuntimeConfig(workspace=Workspace(Path("/tmp")))
         self.approval = MagicMock()
 
     def test_registry_register_get_and_names(self):
@@ -360,7 +365,7 @@ class PolicyCoverageTests(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tmpdir.name)
         (self.root / "file.txt").write_text("x", encoding="utf-8")
-        self.policy = _make_policy(ToolRuntimeConfig(workspace_root=self.root))
+        self.policy = _make_policy(ToolRuntimeConfig(workspace=Workspace(self.root)))
 
     def tearDown(self):
         self.tmpdir.cleanup()
@@ -558,7 +563,7 @@ class FileToolsCoverageTests(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tmpdir.name) / "workspace"
         self.root.mkdir()
-        self.config = ToolRuntimeConfig(workspace_root=self.root, max_file_read_chars=4, max_search_results=2)
+        self.config = ToolRuntimeConfig(workspace=Workspace(self.root), max_file_read_chars=4, max_search_results=2)
         self.tools = FileTools(self.config)
 
     def tearDown(self):
@@ -624,7 +629,7 @@ class FileToolsCoverageTests(unittest.TestCase):
 class ShellToolCoverageTests(unittest.TestCase):
     def test_shell_tool_success_and_warning(self):
         """Verifica que Test shell tool success and warning."""
-        config = ToolRuntimeConfig(workspace_root=Path("/tmp"))
+        config = ToolRuntimeConfig(workspace=Workspace(Path("/tmp")))
         tool = ShellTool(config)
         proc = MagicMock(stdout="hello\n", stderr="", returncode=0)
         with patch("subprocess.run", return_value=proc):
@@ -640,7 +645,7 @@ class ShellToolCoverageTests(unittest.TestCase):
 
 class TaskToolsCoverageTests(unittest.TestCase):
     def setUp(self):
-        self.config = ToolRuntimeConfig(workspace_root=Path("/tmp"), db_path=Path("/tmp/tasks.db"))
+        self.config = ToolRuntimeConfig(workspace=Workspace(Path("/tmp")))
         self.tools = TaskTools(self.config)
 
     def test_resolve_job_id_and_duplicates(self):

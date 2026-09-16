@@ -253,11 +253,11 @@ class DelegateTools(ToolBase):
         return None
 
     def _get_db_path(self) -> str | None:
-        """Retorna db_path como string ou None se não configurado."""
-        raw = getattr(self.config, "db_path", None)
-        if raw is None:
+        """Retorna o banco de tasks definido pelo Workspace atual."""
+        workspace = getattr(self.config, "workspace", None)
+        if workspace is None:
             return None
-        return str(raw)
+        return str(workspace.tasks_db)
 
     # ── tracking unificado (job/task no banco) ───────────────────────────
 

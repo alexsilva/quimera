@@ -49,6 +49,7 @@ class ToolBase:
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de ToolBase."""
         self.config = config
+        self.workspace = config.workspace
 
 
 class ValidatableTool(ToolBase):
@@ -68,7 +69,7 @@ class ValidatableTool(ToolBase):
     def _resolve_workspace_path(self, raw_path: str) -> Path:
         """Resolve e valida que o path está dentro do workspace."""
         normalized = raw_path.lstrip("/") or "."
-        path = (self.config.workspace_root / normalized).resolve()
-        if not is_path_inside(path, self.config.workspace_root):
+        path = (self.workspace.cwd / normalized).resolve()
+        if not is_path_inside(path, self.workspace.cwd):
             raise ToolPolicyError(f"Path fora da workspace: {raw_path}")
         return path

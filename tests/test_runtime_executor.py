@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import PathPermissionError
@@ -77,8 +78,7 @@ def memory_executor(tmp_path):
     """Executor configurado com memory_file para testes de memória."""
     return ToolExecutor(
         ToolRuntimeConfig(
-            workspace_root=tmp_path,
-            memory_file=tmp_path / "state" / "memory.json",
+            workspace=Workspace(tmp_path),
         ),
         MagicMock(),
     )
@@ -157,8 +157,7 @@ def test_executor_memory_list_namespaces_and_delete_roundtrip(tmp_path):
     approval.approve.return_value = True
     executor = ToolExecutor(
         ToolRuntimeConfig(
-            workspace_root=tmp_path,
-            memory_file=tmp_path / "state" / "memory.json",
+            workspace=Workspace(tmp_path),
         ),
         approval,
     )
@@ -243,7 +242,7 @@ def test_executor_remove_file_no_approval_config_skips_handler(executor_no_appro
 def test_executor_allows_mcp_tool_with_propagated_task_scope(tmp_path):
     """Escopo de task propagado pelo MCP autoriza tool mutante sem aprovação."""
     approval = MagicMock()
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), approval)
     executor.approval_manager.set_thread_approve_all(
         True, scope_key="task:cli-agent:1", silent=True
     )
@@ -263,7 +262,7 @@ def test_executor_allows_mcp_tool_with_propagated_task_scope(tmp_path):
 
 def test_executor_remove_file_policy_blocks_missing_dry_run(executor_with_workspace):
     """Política bloqueia remove_file sem dry_run=False explícito."""
-    (executor_with_workspace.config.workspace_root / "x.txt").write_text("x")
+    (executor_with_workspace.config.workspace.cwd / "x.txt").write_text("x")
     call = ToolCall(name="remove_file", arguments={"path": "x.txt"})
     result = executor_with_workspace.execute(call)
     assert result.ok is False
@@ -276,8 +275,8 @@ def test_executor_remove_file_policy_blocks_missing_dry_run(executor_with_worksp
 
 def test_set_spinner_callbacks_injects_into_approval_manager():
     """set_spinner_callbacks injeta no ApprovalManager diretamente."""
-    handler = ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y")
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
+    handler = ApprovalManager(ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))), input_fn=lambda _: "y")
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))), handler)
 
     suspend = MagicMock()
     resume = MagicMock()
@@ -289,9 +288,9 @@ def test_set_spinner_callbacks_injects_into_approval_manager():
 
 def test_set_spinner_callbacks_ignores_non_console_handler():
     """set_spinner_callbacks não quebra com handler sem _console_handler."""
-    handler = ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y")
+    handler = ApprovalManager(ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))), input_fn=lambda _: "y")
     handler.set_approve_all(True)
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))), handler)
 
     suspend = MagicMock()
     resume = MagicMock()
@@ -301,8 +300,8 @@ def test_set_spinner_callbacks_ignores_non_console_handler():
 
 def test_set_approval_cancel_event_injects_into_approval_manager():
     """set_approval_cancel_event injeta cancel_event no ApprovalManager."""
-    handler = ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y")
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
+    handler = ApprovalManager(ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))), input_fn=lambda _: "y")
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))), handler)
     cancel_event = threading.Event()
 
     executor.set_approval_cancel_event(cancel_event)
@@ -313,8 +312,8 @@ def test_set_approval_cancel_event_injects_into_approval_manager():
 def test_bind_approval_cancel_event_is_thread_isolated_with_restore():
     """Binding de cancel_event é por thread e restaura o valor anterior."""
     executor = ToolExecutor(
-        ToolRuntimeConfig(workspace_root=Path("/tmp")),
-        ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y"),
+        ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))),
+        ApprovalManager(ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))), input_fn=lambda _: "y"),
     )
     event_a = threading.Event()
     event_b = threading.Event()
@@ -356,7 +355,7 @@ def test_shared_approval_manager_cancel_event_is_thread_scoped_during_prompt():
         return "y"
 
     manager = ApprovalManager(None, input_fn=blocking_input)
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), manager)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))), manager)
     event_a = threading.Event()
     event_b = threading.Event()
     results = {}
@@ -421,7 +420,7 @@ def test_executor_permission_error_approval(config, approval_handler, approved):
 def test_executor_needs_approval_and_permission_error_unified(tmp_path):
     """Quando ferramenta tem needs_approval e permission_error, approve chamado uma vez."""
     config = ToolRuntimeConfig(
-        workspace_root=tmp_path,
+        workspace=Workspace(tmp_path),
         require_approval_for_mutations=True,
     )
     approval_handler = MagicMock()
@@ -452,7 +451,7 @@ def test_executor_needs_approval_and_permission_error_unified(tmp_path):
 def test_executor_write_stdin_approval(require_approval, expected_approve_called):
     """write_stdin requer aprovação conforme configuração."""
     config = ToolRuntimeConfig(
-        workspace_root=Path("/tmp"),
+        workspace=Workspace(Path("/tmp")),
         require_approval_for_mutations=require_approval,
     )
     approval_handler = MagicMock()
@@ -476,16 +475,16 @@ def test_executor_write_stdin_approval(require_approval, expected_approve_called
 
 def test_executor_approval_handler_property():
     """A property approval_handler retorna o handler configurado."""
-    handler = ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y")
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
+    handler = ApprovalManager(ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))), input_fn=lambda _: "y")
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))), handler)
     assert executor.approval_handler is handler
 
 
 def test_set_spinner_callbacks_no_op_when_handler_is_none_like():
     """set_spinner_callbacks não quebra com handler sem atributo _base."""
-    handler = ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y")
+    handler = ApprovalManager(ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))), input_fn=lambda _: "y")
     handler.set_approve_all(True)
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(Path("/tmp"))), handler)
 
     executor.set_spinner_callbacks(MagicMock(), MagicMock())
     # Não deve lançar exceção
@@ -497,7 +496,7 @@ def test_set_spinner_callbacks_no_op_when_handler_is_none_like():
 
 def test_executor_delegate_dispatches_with_delegation_mode(tmp_path):
     """delegate delega com contrato alinhado ao fluxo de delegation interno."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
     dispatch = MagicMock(return_value="delegated ok")
     executor.set_delegate_fn(dispatch)
 
@@ -513,7 +512,8 @@ def test_executor_delegate_dispatches_with_delegation_mode(tmp_path):
     )
 
     assert result.ok is True
-    assert result.content == "delegated ok"
+    assert result.content.startswith("delegated ok")
+    assert "delegação registrada como task" in result.content
     dispatch.assert_called_once()
     args, kwargs = dispatch.call_args
     assert args == ("codex",)
@@ -538,7 +538,7 @@ def test_executor_delegate_dispatches_with_delegation_mode(tmp_path):
 
 def test_executor_delegate_fails_when_dispatch_not_injected(tmp_path):
     """delegate retorna erro explícito quando não há callback de dispatch."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
 
     result = executor.execute(
         ToolCall(name="delegate", arguments={"target_agent": "codex", "request": "x"})
@@ -550,7 +550,7 @@ def test_executor_delegate_fails_when_dispatch_not_injected(tmp_path):
 
 def test_executor_delegate_internal_would_not_require_human_approval(tmp_path):
     """delegate interno passa por policy/broker, mas é auto-aprovado dentro do budget."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
     call = ToolCall(name="delegate", arguments={"target_agent": "codex", "request": "x"})
 
     assert executor.would_require_approval(call) is False
@@ -558,7 +558,7 @@ def test_executor_delegate_internal_would_not_require_human_approval(tmp_path):
 
 def test_policy_phase_methods_for_delegate(tmp_path):
     """delegate agora passa por policy/approval broker como risco de delegação."""
-    policy = ToolPolicy(ToolRuntimeConfig(workspace_root=tmp_path))
+    policy = ToolPolicy(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     delegate = ToolCall(name="delegate", arguments={"target_agent": "codex", "request": "x"})
     read_file = ToolCall(name="read_file", arguments={"path": "x.txt"})
 
@@ -572,7 +572,7 @@ def test_policy_phase_methods_for_delegate(tmp_path):
 
 def test_executor_delegate_goes_through_broker_without_human_prompt_when_internal(tmp_path):
     """delegate não bypassa policy, mas delegação interna é auto-aprovada no broker."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
     dispatch = MagicMock(return_value="ok")
     executor.set_delegate_fn(dispatch)
 
@@ -584,7 +584,8 @@ def test_executor_delegate_goes_through_broker_without_human_prompt_when_interna
     )
 
     assert result.ok is True
-    assert result.content == "ok"
+    assert result.content.startswith("ok")
+    assert "delegação registrada como task" in result.content
     executor.approval_handler.approve.assert_not_called()
     assert executor.approval_broker.audit_log[-1]["event"] == "auto_approved"
     dispatch.assert_called_once()
@@ -592,7 +593,7 @@ def test_executor_delegate_goes_through_broker_without_human_prompt_when_interna
 
 def test_executor_delegate_rejects_non_string_context(tmp_path):
     """delegate valida `context` localmente mesmo com bypass de policy."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
     dispatch = MagicMock(return_value="ok")
     executor.set_delegate_fn(dispatch)
 
@@ -611,7 +612,7 @@ def test_executor_delegate_rejects_non_string_context(tmp_path):
 
 def test_executor_delegate_uses_fallback_agents_sequentially(tmp_path):
     """delegate tenta fallback em sequência quando alvo principal falha."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
 
     def dispatch(agent_name, **_kwargs):
         if agent_name == "codex":
@@ -635,13 +636,14 @@ def test_executor_delegate_uses_fallback_agents_sequentially(tmp_path):
     )
 
     assert result.ok is True
-    assert result.content == "ok from claude"
+    assert result.content.startswith("ok from claude")
+    assert "delegação registrada como task" in result.content
     assert [c.args[0] for c in spy.call_args_list] == ["codex", "claude"]
 
 
 def test_executor_delegate_supports_multiple_sequential_delegations(tmp_path):
     """delegate suporta delegations múltiplos em sequência no mesmo payload."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
 
     def dispatch(agent_name, **kwargs):
         delegation = kwargs.get("delegation") or {}
@@ -677,7 +679,7 @@ def test_executor_delegate_supports_multiple_sequential_delegations(tmp_path):
 
 def test_executor_delegate_propagates_role_and_access_list(tmp_path):
     """delegate propaga role/access_list para step principal e steps adicionais."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
     dispatch = MagicMock(return_value="ok")
     executor.set_delegate_fn(dispatch)
 
@@ -711,7 +713,7 @@ def test_executor_delegate_propagates_role_and_access_list(tmp_path):
 
 def test_executor_delegate_fallback_inherits_role_and_access_list(tmp_path):
     """fallback_agents herdam role/access_list do step correspondente."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
 
     def dispatch(agent_name, **kwargs):
         if agent_name == "codex":
@@ -736,12 +738,13 @@ def test_executor_delegate_fallback_inherits_role_and_access_list(tmp_path):
     )
 
     assert result.ok is True
-    assert result.content == "claude:executor:diff,tests"
+    assert result.content.startswith("claude:executor:diff,tests")
+    assert "delegação registrada como task" in result.content
 
 
 def test_executor_delegate_rejects_agents_outside_active_pool(tmp_path):
     """delegate deve rejeitar alvos que não estão no pool ativo da sessão."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
     dispatch = MagicMock(return_value="ok")
     executor.set_delegate_fn(dispatch)
     executor.set_active_agents_provider(lambda: ["codex", "claude"])
@@ -764,7 +767,7 @@ def test_executor_delegate_rejects_agents_outside_active_pool(tmp_path):
 
 def test_executor_delegate_rejects_inactive_agent_between_delegation_steps(tmp_path):
     """delegate rejeita step intermediário quando agente não está mais no pool ativo."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
 
     def dispatch(agent_name, **kwargs):
         delegation = kwargs.get("delegation") or {}
@@ -803,7 +806,7 @@ def test_executor_delegate_rejects_inactive_agent_between_delegation_steps(tmp_p
 
 def test_executor_delegate_truncates_long_context_and_task(tmp_path):
     """delegate deve limitar tamanho de task/context para reduzir payload."""
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
     dispatch = MagicMock(return_value="ok")
     executor.set_delegate_fn(dispatch)
 

@@ -113,7 +113,6 @@ class DebateService:
         session_id: str,
         current_job_id: int,
         staging_root: Path,
-        workspace_root: Path,
         persist_message: Callable[[str, str], Any] | None = None,
         notify_tasks_changed: Callable[[], None] | None = None,
         show_system: Callable[[str], None] | None = None,
@@ -129,7 +128,6 @@ class DebateService:
         self._session_id = str(session_id)
         self._current_job_id = int(current_job_id)
         self._staging_root = Path(staging_root)
-        self._workspace_root = Path(workspace_root).resolve()
         self._persist_message = persist_message
         self._notify_tasks_changed = notify_tasks_changed or (lambda: None)
         self._show_system = show_system or (lambda _message: None)

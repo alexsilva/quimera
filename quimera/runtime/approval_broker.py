@@ -557,10 +557,11 @@ class ApprovalBroker:
         ]
 
     def _serialization_keys(self, call: ToolCall) -> list[str]:
+        workspace_root = self.config.workspace.cwd
         metadata = get_tool_metadata(call.name)
         serialization = metadata.serialization if metadata is not None else None
         if serialization == "workspace":
-            return [f"workspace:{self.config.workspace_root}"]
+            return [f"workspace:{workspace_root}"]
         if serialization == "command_session":
             session_id = call.arguments.get("session_id")
             return [
@@ -573,7 +574,7 @@ class ApprovalBroker:
             return [
                 f"path:{path}"
                 if path
-                else f"workspace:{self.config.workspace_root}"
+                else f"workspace:{workspace_root}"
             ]
         if serialization == "patch_paths":
             paths = self._extract_patch_paths(
@@ -581,7 +582,7 @@ class ApprovalBroker:
             )
             if paths:
                 return [f"path:{path}" for path in sorted(set(paths))]
-            return [f"workspace:{self.config.workspace_root}"]
+            return [f"workspace:{workspace_root}"]
         return []
 
     def _serialization_key(self, call: ToolCall) -> str | None:
@@ -616,13 +617,14 @@ class ApprovalBroker:
         raw = call.arguments.get(path_arg, ".")
         try:
             normalized = str(raw).lstrip("/") or "."
-            path = (self.config.workspace_root / normalized).resolve()
+            path = (self.config.workspace.cwd / normalized).resolve()
         except Exception:
             return str(raw)
         return str(path)
 
     def _extract_patch_paths(self, patch: str) -> list[str]:
         paths: list[str] = []
+        workspace_root = self.config.workspace.cwd
 
         def add(raw_path: str) -> None:
             raw = raw_path.strip()
@@ -631,10 +633,10 @@ class ApprovalBroker:
             if raw.startswith("a/") or raw.startswith("b/"):
                 raw = raw[2:]
             try:
-                path = (self.config.workspace_root / raw.lstrip("/")).resolve()
+                path = (workspace_root / raw.lstrip("/")).resolve()
             except Exception:
                 return
-            if is_path_inside(path, self.config.workspace_root):
+            if is_path_inside(path, workspace_root):
                 text = str(path)
                 if text not in paths:
                     paths.append(text)

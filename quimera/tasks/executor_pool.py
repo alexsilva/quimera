@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import threading
 import weakref
-from pathlib import Path
 from typing import Any, Callable
 
 from ..agents import AgentClient
@@ -94,6 +93,7 @@ class TaskExecutorPool:
         get_active_agents: Callable[[], list[Any]] | None = None,
         workspace: Any = None,
         get_workspace: Callable[[], Any] | None = None,
+        session_paths: Any = None,
         renderer: Any = None,
         get_renderer: Callable[[], Any] | None = None,
         input_services: Any = None,
@@ -158,6 +158,7 @@ class TaskExecutorPool:
         self._get_active_agents = get_active_agents
         self._workspace = workspace
         self._get_workspace = get_workspace
+        self._session_paths = session_paths
         self._renderer = renderer
         self._get_renderer = get_renderer
         self._input_services = input_services
@@ -305,10 +306,8 @@ class TaskExecutorPool:
         input_gate = self.get_input_gate()
         workspace = self.get_workspace()
         rt_config = ToolRuntimeConfig(
-            workspace_root=workspace.cwd,
-            db_path=workspace.tasks_db,
-            memory_file=getattr(workspace, "memory_file", None),
-            artifacts_root=getattr(workspace, "artifacts_dir", None),
+            workspace=workspace,
+            session_paths=self._session_paths,
             require_approval_for_mutations=require_approval_for_mutations,
             allow_ask_user=allow_ask_user,
             workspace_policy=self._get_workspace_policy() if self._get_workspace_policy else None,
@@ -606,23 +605,21 @@ class TaskExecutorPool:
             background_timeout = _BACKGROUND_AGENT_TIMEOUT_SECONDS
         _muted = self.get_show_muted_message()
         session_state = self.get_session_state()
-        workspace_tmp = getattr(workspace, "tmp", None)
-        workspace_tmp_root = getattr(workspace_tmp, "root", None)
         background_agent_client = AgentClient(
             renderer,
             idle_timeout=background_timeout,
             visibility=self.get_visibility(),
-            working_dir=str(workspace.cwd),
             error_reporter=_muted,
             muted_reporter=_muted,
             session_id=session_state.get("session_id") if isinstance(session_state, dict) else None,
-            workspace_tmp_root=workspace_tmp_root,
+            evidence_base_dir=getattr(chat_agent_client, "evidence_base_dir", None),
             # Herdados do client do chat: sem pause_idle_if, um delegado em
             # silêncio aguardando tool longa morre por idle timeout; sem
             # supervisor, seus subprocessos escapam do shutdown global. Cada
             # AgentClient usa um scope próprio para cancelamento isolado.
             process_supervisor=getattr(chat_agent_client, "process_supervisor", None),
             pause_idle_if=get_pause_idle_if(chat_agent_client),
+            workspace=workspace,
         )
         effective_execution_mode = (
             execution_mode_override

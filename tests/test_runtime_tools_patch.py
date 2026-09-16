@@ -1,4 +1,5 @@
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.tools.patch import PatchTool
 
@@ -10,7 +11,7 @@ def test_apply_patch_updates_existing_file(tmp_path):
     target = workspace / "demo.txt"
     target.write_text("linha 1\nlinha 2\n", encoding="utf-8")
 
-    tool = PatchTool(ToolRuntimeConfig(workspace_root=workspace))
+    tool = PatchTool(ToolRuntimeConfig(workspace=Workspace(workspace)))
     patch = "\n".join([
         "*** Begin Patch",
         "*** Update File: demo.txt",
@@ -32,7 +33,7 @@ def test_apply_patch_add_file(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    tool = PatchTool(ToolRuntimeConfig(workspace_root=workspace))
+    tool = PatchTool(ToolRuntimeConfig(workspace=Workspace(workspace)))
     patch = "\n".join([
         "*** Begin Patch",
         "*** Add File: novo.txt",
@@ -53,7 +54,7 @@ def test_apply_patch_dry_run_validates_without_writing(tmp_path):
     target = workspace / "demo.txt"
     target.write_text("linha 1\nlinha 2\n", encoding="utf-8")
 
-    tool = PatchTool(ToolRuntimeConfig(workspace_root=workspace))
+    tool = PatchTool(ToolRuntimeConfig(workspace=Workspace(workspace)))
     patch = "\n".join([
         "*** Begin Patch",
         "*** Update File: demo.txt",
@@ -80,7 +81,7 @@ def test_apply_patch_dry_run_add_file_does_not_create_file(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    tool = PatchTool(ToolRuntimeConfig(workspace_root=workspace))
+    tool = PatchTool(ToolRuntimeConfig(workspace=Workspace(workspace)))
     patch = "\n".join([
         "*** Begin Patch",
         "*** Add File: novo.txt",
@@ -103,7 +104,7 @@ def test_apply_patch_rejects_missing_hunk(tmp_path):
     workspace.mkdir()
     (workspace / "demo.txt").write_text("linha 1\nlinha 2\n", encoding="utf-8")
 
-    tool = PatchTool(ToolRuntimeConfig(workspace_root=workspace))
+    tool = PatchTool(ToolRuntimeConfig(workspace=Workspace(workspace)))
     patch = "\n".join([
         "*** Begin Patch",
         "*** Update File: demo.txt",
@@ -129,7 +130,7 @@ def test_apply_patch_missing_hunk_reports_nearest_context(tmp_path):
         encoding="utf-8",
     )
 
-    tool = PatchTool(ToolRuntimeConfig(workspace_root=workspace))
+    tool = PatchTool(ToolRuntimeConfig(workspace=Workspace(workspace)))
     patch = "\n".join([
         "*** Begin Patch",
         "*** Update File: demo.txt",

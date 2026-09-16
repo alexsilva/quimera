@@ -137,9 +137,9 @@ class ToolPolicy:
 
         raw = call.arguments.get("path", ".")
         normalized = raw.lstrip("/") or "."
-        path = (self.config.workspace_root / normalized).resolve()
+        path = (self.config.workspace.cwd / normalized).resolve()
 
-        for allowed_root in self.config.allowed_read_roots:
+        for allowed_root in self.config.read_roots():
             if is_path_inside(path, allowed_root):
                 return None
 

@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from quimera.session_paths import SessionPaths
+    from quimera.workspace import Workspace
     from .workspace_policy import WorkspacePolicy
 
 
@@ -20,11 +22,9 @@ DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS = 2 * DEFAULT_DELEGATE_TIMEOUT_SECONDS
 
 @dataclass(slots=True)
 class ToolRuntimeConfig:
-    """Implementa `ToolRuntimeConfig`."""
-    workspace_root: Path
-    db_path: Path | None = None
-    memory_file: Path | None = None
-    artifacts_root: Path | None = None
+    """Configuração do runtime associada ao único ``Workspace`` da aplicação."""
+    workspace: Workspace
+    session_paths: SessionPaths | None = None
     command_timeout_seconds: int = 20
     command_max_timeout_seconds: int = 300
     mcp_tool_timeout_seconds: int = DEFAULT_MCP_TOOL_TIMEOUT_SECONDS
@@ -121,23 +121,14 @@ class ToolRuntimeConfig:
 
     def __post_init__(self) -> None:
         """Executa post init."""
-        if not isinstance(self.workspace_root, Path):
-            raise TypeError(f"workspace_root deve ser Path, não {type(self.workspace_root).__name__}")
-        self.workspace_root = self.workspace_root.resolve()
-        if self.db_path is not None:
-            self.db_path = Path(self.db_path).resolve()
-        if self.memory_file is not None:
-            self.memory_file = Path(self.memory_file).resolve()
-        if self.artifacts_root is not None:
-            self.artifacts_root = Path(self.artifacts_root).resolve()
-        else:
-            self.artifacts_root = self.workspace_root / "artifacts"
-        if not self.allowed_read_roots:
-            self.allowed_read_roots = [self.workspace_root]
-        else:
-            self.allowed_read_roots = [p.resolve() for p in self.allowed_read_roots]
-        already_covered = any(
-            self.artifacts_root.is_relative_to(root) for root in self.allowed_read_roots
-        )
-        if not already_covered:
-            self.allowed_read_roots.append(self.artifacts_root)
+        if self.workspace is None:
+            raise TypeError("ToolRuntimeConfig exige Workspace")
+        self.allowed_read_roots = [Path(path).resolve() for path in self.allowed_read_roots]
+
+    def read_roots(self) -> tuple[Path, ...]:
+        """Roots de leitura efetivos, sempre derivados do Workspace atual."""
+        roots = [self.workspace.cwd, *self.allowed_read_roots]
+        artifacts_root = self.session_paths.artifacts_dir if self.session_paths is not None else None
+        if artifacts_root is not None and not any(artifacts_root.is_relative_to(root) for root in roots):
+            roots.append(artifacts_root)
+        return tuple(dict.fromkeys(path.resolve() for path in roots))

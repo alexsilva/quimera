@@ -5,6 +5,7 @@ from pathlib import Path
 
 from quimera.modes import MODES
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.drivers.tool_catalog import TOOL_SPECS
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicy
@@ -59,7 +60,7 @@ def test_http_profiles_are_derived_from_metadata():
 def test_unknown_tool_requires_approval_fail_closed(tmp_path: Path):
     policy = ToolPolicy(
         ToolRuntimeConfig(
-            workspace_root=tmp_path,
+            workspace=Workspace(tmp_path),
             require_approval_for_mutations=True,
         )
     )

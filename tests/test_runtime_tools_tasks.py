@@ -7,6 +7,7 @@ import pytest
 
 from quimera.runtime.approval import TrustedToolExecutionContext
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicyError
 from quimera.runtime.tools.tasks import TaskTools, TaskToolsValidator
@@ -15,7 +16,7 @@ from quimera.tasks.protocol import TaskCreationResult
 
 @pytest.fixture
 def config():
-    return ToolRuntimeConfig(workspace_root=Path("/tmp"), db_path=Path("/tmp/tasks.db"))
+    return ToolRuntimeConfig(workspace=Workspace(Path("/tmp")))
 
 
 @pytest.fixture

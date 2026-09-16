@@ -90,7 +90,7 @@ class MemoryTools(ToolBase, tool_prefix="memory"):
 
     def _get_store(self) -> WorkspaceMemoryStore:
         """Retorna (criando se necessário) o store de memória do workspace."""
-        memory_file = self.config.memory_file
+        memory_file = self.workspace.memory_file
         if memory_file is None:
             raise RuntimeError("memory storage não configurado para este workspace")
         if self._store is None:

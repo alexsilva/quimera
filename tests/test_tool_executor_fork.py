@@ -11,6 +11,7 @@ from quimera.runtime.approval import (
     ConsoleApprovalHandler,
 )
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.executor import ToolExecutor, ToolExecutorWiring
 from quimera.runtime.models import ToolCall
 
@@ -37,7 +38,7 @@ def workspace(tmp_path):
 def _build_executor(workspace_root, *, handler=None) -> ToolExecutor:
     """Cria um ToolExecutor auto-aprovado apontando para o workspace do teste."""
     config = ToolRuntimeConfig(
-        workspace_root=Path(workspace_root),
+        workspace=Workspace(Path(workspace_root)),
         require_approval_for_mutations=False,
     )
     return ToolExecutor(config, handler if handler is not None else AutoApprovalHandler())
@@ -129,7 +130,7 @@ def test_fork_does_not_clear_primary_approval_cancel_event(workspace):
     """Fim de um fork não desliga o cancelamento de aprovação do chat."""
     console = ConsoleApprovalHandler()
     primary = _build_executor(workspace, handler=ApprovalManager(
-        ToolRuntimeConfig(workspace_root=Path(workspace)),
+        ToolRuntimeConfig(workspace=Workspace(Path(workspace))),
         base_handler=console,
     ))
     primary_cancel = threading.Event()
@@ -222,7 +223,7 @@ def test_concurrent_agent_client_forks_get_distinct_executors(workspace, tmp_pat
         def show_system_neutral(self, message):
             pass
 
-    client = AgentClient(_NullRenderer(), working_dir=str(workspace))
+    client = AgentClient(_NullRenderer(), workspace=Workspace(workspace))
     client.tool_executor = _build_executor(workspace)
     forks: list[AgentClient] = []
     lock = threading.Lock()
@@ -258,7 +259,7 @@ def test_client_refuses_fork_when_executor_cannot_isolate(workspace):
     class _OpaqueExecutor:
         """Integração customizada sem suporte a isolamento por fork."""
 
-    client = AgentClient(_NullRenderer(), working_dir=str(workspace))
+    client = AgentClient(_NullRenderer(), workspace=Workspace(workspace))
     client.tool_executor = _OpaqueExecutor()
 
     assert client.fork_for_concurrent_run() is None
@@ -270,7 +271,7 @@ def test_client_without_executor_still_forks(workspace):
     class _NullRenderer:
         supports_agent_feed = False
 
-    client = AgentClient(_NullRenderer(), working_dir=str(workspace))
+    client = AgentClient(_NullRenderer(), workspace=Workspace(workspace))
 
     forked = client.fork_for_concurrent_run()
 

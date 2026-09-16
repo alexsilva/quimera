@@ -42,7 +42,7 @@ _CAPABILITY_METHODS = {
 def _capability_available(tool_executor, capability: str) -> bool:
     if capability == "task_db":
         config = getattr(tool_executor, "config", None)
-        return config is not None and getattr(config, "db_path", None) is not None
+        return config is not None and getattr(config, "workspace", None) is not None
     method_name = _CAPABILITY_METHODS.get(capability)
     if method_name is None:
         return False

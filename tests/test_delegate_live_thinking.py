@@ -17,6 +17,7 @@ from quimera.app.agent_run_events import (
 )
 from quimera.agents import AgentClient
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.tools.tasks import TaskTools
 
@@ -297,7 +298,7 @@ def test_cli_delegate_updates_live_thinking_before_process_finishes():
 
 @pytest.fixture
 def task_tools():
-    config = ToolRuntimeConfig(workspace_root=Path("/tmp"), db_path=Path("/tmp/tasks.db"))
+    config = ToolRuntimeConfig(workspace=Workspace(Path("/tmp")))
     return TaskTools(config)
 
 

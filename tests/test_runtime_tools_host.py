@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicyError
 from quimera.runtime.tools.host import HostTools, HostToolsValidator
@@ -157,7 +158,7 @@ def test_host_processes_filters_same_user_sorts_and_redacts_secrets(tmp_path: Pa
     _write_process(proc_root, 11, uid=1000, rss_kb=500, name="vite")
     _write_process(proc_root, 12, uid=2000, rss_kb=900, name="foreign")
 
-    tools = HostTools(ToolRuntimeConfig(workspace_root=tmp_path), proc_root=proc_root, owner_uid=1000)
+    tools = HostTools(ToolRuntimeConfig(workspace=Workspace(tmp_path)), proc_root=proc_root, owner_uid=1000)
     result = tools.host_processes(ToolCall("host_processes", {"sort": "rss"}))
 
     assert result.ok is True
@@ -182,7 +183,7 @@ def test_host_process_inspect_counts_inotify_watches_and_fds(tmp_path: Path):
     os.symlink("socket:[123]", root / "fd" / "8")
     os.symlink("pipe:[456]", root / "fd" / "9")
 
-    tools = HostTools(ToolRuntimeConfig(workspace_root=tmp_path), proc_root=proc_root, owner_uid=1000)
+    tools = HostTools(ToolRuntimeConfig(workspace=Workspace(tmp_path)), proc_root=proc_root, owner_uid=1000)
     result = tools.host_process_inspect(ToolCall("host_process_inspect", {"pid": 22}))
 
     assert result.ok is True
@@ -198,7 +199,7 @@ def test_host_process_inspect_rejects_other_users(tmp_path: Path):
     proc_root.mkdir()
     _write_process(proc_root, 33, uid=2000)
 
-    tools = HostTools(ToolRuntimeConfig(workspace_root=tmp_path), proc_root=proc_root, owner_uid=1000)
+    tools = HostTools(ToolRuntimeConfig(workspace=Workspace(tmp_path)), proc_root=proc_root, owner_uid=1000)
     result = tools.host_process_inspect(ToolCall("host_process_inspect", {"pid": 33}))
 
     assert result.ok is False
@@ -222,7 +223,7 @@ def test_host_process_sample_reports_deltas_slopes_cpu_and_inotify(tmp_path: Pat
 
     clock = _FakeClock()
     tools = HostTools(
-        ToolRuntimeConfig(workspace_root=tmp_path),
+        ToolRuntimeConfig(workspace=Workspace(tmp_path)),
         proc_root=proc_root,
         owner_uid=1000,
         monotonic_fn=clock.monotonic,
@@ -289,7 +290,7 @@ def test_host_process_sample_cancels_cooperatively_between_samples(tmp_path: Pat
     _write_process(proc_root, 45, uid=1000)
     clock = _FakeClock()
     tools = HostTools(
-        ToolRuntimeConfig(workspace_root=tmp_path),
+        ToolRuntimeConfig(workspace=Workspace(tmp_path)),
         proc_root=proc_root,
         owner_uid=1000,
         monotonic_fn=clock.monotonic,
@@ -317,7 +318,7 @@ def test_host_process_sample_includes_final_partial_interval(tmp_path: Path):
     _write_process(proc_root, 47, uid=1000)
     clock = _FakeClock()
     tools = HostTools(
-        ToolRuntimeConfig(workspace_root=tmp_path),
+        ToolRuntimeConfig(workspace=Workspace(tmp_path)),
         proc_root=proc_root,
         owner_uid=1000,
         monotonic_fn=clock.monotonic,
@@ -348,7 +349,7 @@ def test_host_process_sample_detects_pid_reuse(tmp_path: Path):
     root = _write_process(proc_root, 46, uid=1000, start_ticks=1000)
     clock = _FakeClock()
     tools = HostTools(
-        ToolRuntimeConfig(workspace_root=tmp_path),
+        ToolRuntimeConfig(workspace=Workspace(tmp_path)),
         proc_root=proc_root,
         owner_uid=1000,
         monotonic_fn=clock.monotonic,
@@ -392,7 +393,7 @@ def test_host_memory_parses_meminfo_load_and_pressure(tmp_path: Path):
         encoding="utf-8",
     )
 
-    tools = HostTools(ToolRuntimeConfig(workspace_root=tmp_path), proc_root=proc_root, owner_uid=1000)
+    tools = HostTools(ToolRuntimeConfig(workspace=Workspace(tmp_path)), proc_root=proc_root, owner_uid=1000)
     result = tools.host_memory(ToolCall("host_memory", {}))
 
     assert result.ok is True
@@ -402,7 +403,7 @@ def test_host_memory_parses_meminfo_load_and_pressure(tmp_path: Path):
 
 
 def test_host_validator_rejects_invalid_arguments(tmp_path: Path):
-    validator = HostToolsValidator(ToolRuntimeConfig(workspace_root=tmp_path))
+    validator = HostToolsValidator(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
 
     validator.validate(ToolCall("host_processes", {"limit": 10, "sort": "rss"}))
     validator.validate(ToolCall("host_process_inspect", {"pid": 1}))
