@@ -1561,6 +1561,8 @@ def _find_markdown(node):
 
     if isinstance(node, Markdown):
         return node
+    if isinstance(node, renderables._GutterRow):
+        return _find_markdown(node.content)
     if isinstance(node, Table):
         for column in node.columns:
             for cell in column._cells:
@@ -2329,9 +2331,6 @@ def test_textual_submission_marker_blinks_only_while_active():
 
 
 def test_textual_user_turn_sphere_uses_submission_color():
-    from rich.table import Table
-    from rich.text import Text
-
     renderables.reset_thinking_pulse()
     renderable = renderables._render_event(
         TextualUiEvent(
@@ -2346,14 +2345,10 @@ def test_textual_user_turn_sphere_uses_submission_color():
     )
 
     def _find_sphere(node):
-        if isinstance(node, Table):
-            for column in node.columns:
-                for cell in column._cells:
-                    if isinstance(cell, Text) and cell.plain == "●":
-                        return cell
-                    found = _find_sphere(cell)
-                    if found is not None:
-                        return found
+        if isinstance(node, renderables._GutterRow):
+            if node.marker == "●":
+                return node
+            return _find_sphere(node.content)
         if isinstance(node, Group):
             for child in node.renderables:
                 found = _find_sphere(child)
@@ -2363,7 +2358,7 @@ def test_textual_user_turn_sphere_uses_submission_color():
 
     sphere = _find_sphere(renderable)
     assert sphere is not None
-    assert str(sphere.style) == "bold cyan"  # esfera cyan enquanto executa
+    assert sphere.marker_style == "bold cyan"  # esfera cyan enquanto executa
 
 
 def test_textual_feed_lists_active_submission_turns():
@@ -3225,15 +3220,55 @@ def test_textual_render_event_aligns_gutter_and_draws_vertical_guide():
     header, body = lines[0], lines[1:]
     assert header.startswith("●")
     assert body, "bloco transitório deveria ter linhas de corpo"
-    # Guia vertical alinhada sob o ● do header em todas as linhas do bloco.
-    assert all(line.startswith("│") for line in body)
+    # Guia vertical alinhada sob o ● do header; na fronteira entre pensamento
+    # e tools o separador brota da própria guia como um nó ├.
+    assert all(line.startswith(("│", "├")) for line in body)
     # Ícones de pensamento e tools caem na mesma coluna do label do header.
     label_col = header.index("Codex")
     assert lines[1].index("✻") == label_col
-    assert lines[2].index("✓") == label_col
-    assert lines[3].index("⚒") == label_col
+    # Ramo de seção nasce na coluna da guia, contínuo com o │ das demais linhas.
+    assert lines[2].startswith(renderables._LIVE_SECTION_BRANCH)
+    assert lines[3].index("✓") == label_col
+    assert lines[4].index("⚒") == label_col
     # Continuações de preview ficam indentadas dentro da coluna de conteúdo.
-    assert lines[4].index("quimera/app.py") == label_col + 2
+    assert lines[5].index("quimera/app.py") == label_col + 2
+
+
+def test_textual_live_guide_covers_wrapped_and_blank_continuation_lines():
+    # O vazio na coluna do gutter: conteúdo que ocupa várias linhas visuais
+    # (thinking multi-parágrafo, wrap, corpo de tool) deve manter a guia │
+    # em toda continuação — inclusive na linha em branco entre parágrafos.
+    event = TextualUiEvent(
+        "agent_update",
+        {
+            "content": (
+                "**Plano** de diagnóstico do loader com detalhe suficiente "
+                "para dobrar a linha no terminal estreito.\n\n"
+                "Segundo parágrafo após a linha em branco."
+            ),
+            "tools": [
+                "⚒ write_file loader.mjs\nimport { register } from 'node:module';\n\nregister(hooks);"
+            ],
+            "label": "Codex",
+            "style": "blue",
+            "theme": "chat",
+        },
+        agent="codex",
+    )
+    console = Console(record=True, width=60)
+
+    console.print(_render_event(event))
+    rendered = [line.rstrip() for line in console.export_text().splitlines()]
+    while rendered and not rendered[-1]:
+        rendered.pop()
+
+    header, body = rendered[0], rendered[1:]
+    assert header.startswith("●")
+    assert len(body) > 4, "cenário deveria produzir corpo multi-linha"
+    # Nenhuma linha do corpo fica órfã: toda continuação carrega a guia.
+    assert all(line.startswith(("│", "├")) for line in body), body
+    # A linha em branco entre parágrafos exibe apenas a guia (era o vazio).
+    assert "│" in body, body
 
 
 def test_textual_render_event_routes_rotation_notice_as_status_line():

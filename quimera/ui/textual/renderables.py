@@ -6,11 +6,13 @@ import re
 import time
 from typing import Any
 
+from rich.cells import cell_len
 from rich.console import Group
 from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.panel import Panel
 from rich.rule import Rule
+from rich.segment import Segment
 from rich.table import Table
 from rich.text import Text
 from quimera.domain.execution import ExecutionControlSource, ExecutionControlStatus
@@ -32,6 +34,15 @@ _clipboard_manager = ClipboardManager()
 _RICH_MARKUP_TAG_RE = re.compile(r"\[/?[a-zA-Z][a-zA-Z0-9_#= .:-]*\]")
 _TOOL_PREVIEW_LINE_LIMIT = 8
 _GUTTER_GUIDE = "│"
+# Largura da coluna do gutter: glifo + espaçamento até a coluna de conteúdo.
+_GUTTER_WIDTH = 3
+# Separador entre o pensamento vivo e as tools do turno: um nó que brota da
+# própria guia vertical do gutter (├──────╴), na mesma família de glifos das
+# linhas │/└ do feed — em vez de uma régua solta no meio do card. Nos temas
+# com moldura própria (sem guia) o nó perde sentido e o ramo vira ╶──────╴,
+# alinhado à coluna de conteúdo.
+_LIVE_SECTION_BRANCH = "├──────╴"
+_LIVE_SECTION_BRANCH_BARE = "╶──────╴"
 _THINKING_PULSE_FRAMES = ("✻", "✽", "✳", "✢", "·", "✢", "✳", "✽")
 _MCP_HTTP_TRANSPORT = "mcp_http"
 _TRANSPORT_MARKERS = {
@@ -159,18 +170,61 @@ def _live_markdown(text: str, style: str) -> Markdown | None:
     return rendered
 
 
-def _gutter_row(marker: str, marker_style: str, content):
+class _GutterRow:
     """Linha com coluna de gutter fixa: glifo/guia à esquerda, conteúdo alinhado.
 
-    Todas as linhas do feed passam por aqui para caírem na mesma vertical; o
-    ``Table.grid`` garante hanging indent — texto dobrado permanece na coluna
-    do conteúdo em vez de voltar para debaixo do glifo.
+    Todas as linhas do feed passam por aqui para caírem na mesma vertical, com
+    hanging indent — texto dobrado permanece na coluna do conteúdo em vez de
+    voltar para debaixo do glifo. Quando o conteúdo ocupa mais de uma linha
+    visual (wrap ou multi-parágrafo), a coluna do gutter exibe ``continuation``
+    nas linhas seguintes — a guia ``│`` nos temas com guia — em vez de ficar
+    vazia, mantendo a vertical do bloco contínua.
     """
-    grid = Table.grid(expand=True, padding=(0, 1))
-    grid.add_column(width=2)
-    grid.add_column(ratio=1)
-    grid.add_row(Text(str(marker or ""), style=str(marker_style or "")), content)
-    return grid
+
+    def __init__(
+        self,
+        marker: str,
+        marker_style: str,
+        content,
+        continuation: str = "",
+        continuation_style: str = "",
+    ):
+        self.marker = str(marker or "")
+        self.marker_style = str(marker_style or "")
+        self.content = content
+        self.continuation = str(continuation or "")
+        self.continuation_style = str(continuation_style or "") or self.marker_style
+
+    def __rich_console__(self, console, options):
+        content_width = max(options.max_width - _GUTTER_WIDTH, 1)
+        lines = console.render_lines(
+            self.content, options.update_width(content_width), pad=True
+        )
+        if not lines:
+            lines = [[]]
+        for index, line in enumerate(lines):
+            glyph = self.marker if index == 0 else self.continuation
+            style_name = self.marker_style if index == 0 else self.continuation_style
+            if glyph:
+                style = console.get_style(style_name) if style_name else None
+                yield Segment(glyph, style)
+            padding = _GUTTER_WIDTH - cell_len(glyph)
+            if padding > 0:
+                yield Segment(" " * padding)
+            yield from line
+            yield Segment.line()
+
+
+def _gutter_row(
+    marker: str,
+    marker_style: str,
+    content,
+    *,
+    continuation: str = "",
+    continuation_style: str = "",
+):
+    """Linha do feed com gutter fixo; ver :class:`_GutterRow`."""
+    return _GutterRow(marker, marker_style, content, continuation, continuation_style)
 
 
 def _approval_options() -> list[str]:
@@ -237,14 +291,21 @@ def _build_tools_renderable(tools, style: str, *, guide: bool = True):
     for entry in entries:
         lines = entry.strip().splitlines()
         head, extra = lines[0], lines[1:]
-        parts.append(_gutter_row(marker, marker_style, _styled_tool_line(head, style)))
+        parts.append(
+            _gutter_row(
+                marker,
+                marker_style,
+                _styled_tool_line(head, style),
+                continuation=marker,
+            )
+        )
         omitted = len(extra) - _TOOL_PREVIEW_LINE_LIMIT
         for continuation in extra[:_TOOL_PREVIEW_LINE_LIMIT]:
             body = Padding(Text(continuation, style="dim", no_wrap=False, overflow="fold"), pad=(0, 0, 0, 2))
-            parts.append(_gutter_row(marker, marker_style, body))
+            parts.append(_gutter_row(marker, marker_style, body, continuation=marker))
         if omitted > 0:
             hint = Padding(Text(f"⋮ +{omitted} linhas", style=f"dim {style}"), pad=(0, 0, 0, 2))
-            parts.append(_gutter_row(marker, marker_style, hint))
+            parts.append(_gutter_row(marker, marker_style, hint, continuation=marker))
     return Group(*parts)
 
 
@@ -275,6 +336,8 @@ def _build_agent_live_body(
         # começar no meio de um bloco e renderizar artefatos.
         markdown_body = _live_markdown(text, "italic") if thinking and not hidden_label else None
         if markdown_body is not None:
+            # Gutter interno sem continuação: a guia contínua das linhas de
+            # continuação vem do gutter externo, na coluna da guia do bloco.
             head = _gutter_row(_thinking_pulse_marker(), f"bold {style}", markdown_body)
         else:
             head = Text(no_wrap=False, overflow="fold")
@@ -286,11 +349,28 @@ def _build_agent_live_body(
                 head.append(text, style="dim")
         if hidden_label:
             parts.append(
-                _gutter_row(marker, marker_style, Text(hidden_label, style="dim"))
+                _gutter_row(
+                    marker,
+                    marker_style,
+                    Text(hidden_label, style="dim"),
+                    continuation=marker,
+                )
             )
-        parts.append(_gutter_row(marker, marker_style, head))
+        parts.append(_gutter_row(marker, marker_style, head, continuation=marker))
     tools_renderable = _build_tools_renderable(tools, style, guide=guide)
     if tools_renderable is not None:
+        if parts:
+            if guide:
+                # Fora do gutter de propósito: o ├ ocupa a coluna da guia │.
+                parts.append(Text(_LIVE_SECTION_BRANCH, style=marker_style))
+            else:
+                parts.append(
+                    _gutter_row(
+                        marker,
+                        marker_style,
+                        Text(_LIVE_SECTION_BRANCH_BARE, style=marker_style),
+                    )
+                )
         parts.append(tools_renderable)
     summary_text = str(summary or "").strip()
     if summary_text:
@@ -299,6 +379,7 @@ def _build_agent_live_body(
                 marker,
                 marker_style,
                 Text(summary_text, style="dim", no_wrap=False, overflow="fold"),
+                continuation=marker,
             )
         )
     if not parts:
