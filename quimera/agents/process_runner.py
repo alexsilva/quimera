@@ -2,15 +2,16 @@
 import itertools
 import logging
 import queue
-import time
 import threading
+import time
 
 from quimera.agents.signal_guard import terminate_process_group
-from quimera.agents.text_filters import _is_rate_limit_signal, _RATE_LIMIT_YIELD_SECONDS
+from quimera.agents.text_filters import _RATE_LIMIT_YIELD_SECONDS, _is_rate_limit_signal
+from quimera.config import DEFAULT_MAX_AGENT_EXECUTION_SECONDS
 
 _logger = logging.getLogger(__name__)
 
-MAX_WALL_CLOCK_SECONDS = 3600
+MAX_WALL_CLOCK_SECONDS = DEFAULT_MAX_AGENT_EXECUTION_SECONDS
 
 
 class ProcessRunner:
@@ -75,7 +76,7 @@ class ProcessRunner:
         """Retorna a razão de término por timeout, ou None se ainda dentro do limite.
 
         O timeout é baseado em **silêncio** (sem stdout), não em tempo de parede:
-        só dispara se o agente ficar sem produzir stdout por mais de ``timeout * 5``.
+        dispara se o agente ficar sem produzir stdout além do limite configurado.
         """
         if self._idle_timeout is None or self._idle_timeout <= 0:
             return None

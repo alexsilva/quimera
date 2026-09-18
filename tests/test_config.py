@@ -14,12 +14,14 @@ class TestConfigManagerBasics:
             DEFAULT_HISTORY_WINDOW,
             DEFAULT_AUTO_SUMMARIZE_THRESHOLD,
             DEFAULT_IDLE_TIMEOUT_SECONDS,
+            DEFAULT_MAX_AGENT_EXECUTION_SECONDS,
         )
 
         assert DEFAULT_USER_NAME == ">>>"
         assert DEFAULT_HISTORY_WINDOW == 12
         assert DEFAULT_AUTO_SUMMARIZE_THRESHOLD == 30
         assert DEFAULT_IDLE_TIMEOUT_SECONDS == 360
+        assert DEFAULT_MAX_AGENT_EXECUTION_SECONDS == 3600
 
 
 class TestConfigManagerWithTempDir:
@@ -67,6 +69,7 @@ class TestConfigManagerWithTempDir:
     ("user_name", "Bob", ">>>"),
     ("history_window", 20, 12),
     ("idle_timeout_seconds", 120, 360),
+    ("max_agent_execution_seconds", 900, 3600),
     ("auto_summarize_threshold", 48, 24),  # default is history_window * 2 = 24
 ])
 def test_property_reads_from_config(tmp_path, prop, value, default):
@@ -88,6 +91,8 @@ def test_property_reads_from_config(tmp_path, prop, value, default):
     ("history_window", 0, 12),
     ("idle_timeout_seconds", "bad", 360),
     ("idle_timeout_seconds", 0, 360),
+    ("max_agent_execution_seconds", "bad", 3600),
+    ("max_agent_execution_seconds", 0, 3600),
     ("auto_summarize_threshold", "bad", 24),  # falls back to history_window * 2
     ("auto_summarize_threshold", 0, 24),      # falls back to history_window * 2
 ])
@@ -108,6 +113,18 @@ def test_property_invalid_type_falls_back(tmp_path, prop, invalid_value, expecte
     ("history_window", "set_history_window", None, False),
     ("idle_timeout_seconds", "set_idle_timeout_seconds", 90, True),
     ("idle_timeout_seconds", "set_idle_timeout_seconds", None, False),
+    (
+        "max_agent_execution_seconds",
+        "set_max_agent_execution_seconds",
+        1800,
+        True,
+    ),
+    (
+        "max_agent_execution_seconds",
+        "set_max_agent_execution_seconds",
+        None,
+        False,
+    ),
     ("auto_summarize_threshold", "set_auto_summarize_threshold", 20, True),
     ("auto_summarize_threshold", "set_auto_summarize_threshold", None, False),
 ])
@@ -120,6 +137,7 @@ def test_setter_writes_config(tmp_path, prop, setter, value, expected_key_presen
         "user_name": "Old",
         "history_window": 10,
         "idle_timeout_seconds": 111,
+        "max_agent_execution_seconds": 2222,
         "auto_summarize_threshold": 22,
     }))
     cm = ConfigManager(config_file)
@@ -152,7 +170,11 @@ def test_preserves_existing_keys(tmp_path):
     from quimera.config import ConfigManager
 
     config_file = tmp_path / "config.json"
-    config_file.write_text(json.dumps({"user_name": "Alice", "history_window": 5}))
+    config_file.write_text(json.dumps({
+        "user_name": "Alice",
+        "history_window": 5,
+        "max_agent_execution_seconds": 2222,
+    }))
 
     cm = ConfigManager(config_file)
     cm.set_idle_timeout_seconds(90)
@@ -160,6 +182,7 @@ def test_preserves_existing_keys(tmp_path):
     assert data["user_name"] == "Alice"
     assert data["history_window"] == 5
     assert data["idle_timeout_seconds"] == 90
+    assert data["max_agent_execution_seconds"] == 2222
 
 
 def test_visibility_property_and_setter(tmp_path):

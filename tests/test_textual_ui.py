@@ -1,5 +1,8 @@
 """Tests for the Textual UI bridge/feed model."""
 
+import asyncio
+import json
+import threading
 from unittest.mock import Mock, patch
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -22,8 +25,10 @@ from quimera.ui.textual.prompt_preview_screen import (
     PromptPreviewScreen,
 )
 from quimera.ui.textual.connection_screen import ConnectionScreen
+from quimera.ui.textual.config_screen import ConfigScreen
 from quimera.ui.textual.mcp_screen import MCPConnectionsScreen
 from quimera.ui.textual.renderer import TextualRenderer, _TextualStatus
+from quimera.ui.textual.theme_store import TuiThemeStore
 import quimera.ui.textual.renderables as renderables
 from quimera.ui.textual.renderables import (
     _build_question_overlay,
@@ -4865,3 +4870,235 @@ def test_textual_app_routes_notification_events_to_notify():
     assert 'event.kind == "notification"' in source
     assert "self.notify(" in source
     assert 'event.kind == "summarizing"' in source
+
+
+def test_tui_theme_store_round_trips_and_recovers_corrupt_file(tmp_path):
+    path = tmp_path / "state" / "ui.json"
+    store = TuiThemeStore(path)
+
+    assert store.theme is None
+
+    store.set_theme("nord")
+    assert store.theme == "nord"
+    assert TuiThemeStore(path).theme == "nord"
+
+    path.write_text("{corrompido", encoding="utf-8")
+    store.set_theme("gruvbox")
+    assert TuiThemeStore(path).theme == "gruvbox"
+
+
+def _capture_quimera_textual_app(quimera_app, bridge):
+    """Constrói o QuimeraTextualApp real sem entrar no loop do terminal."""
+    captured = []
+    with patch("textual.app.App.run", lambda self, *args, **kwargs: captured.append(self)):
+        run_textual_quimera_app(quimera_app, bridge)
+    return captured[0]
+
+
+def _fake_quimera_app(**attributes) -> SimpleNamespace:
+    """Fake mínimo cujo loop principal bloqueia até o fim do teste.
+
+    O worker do Textual encerra a UI quando `quimera_app.run()` retorna, então
+    um `run` que retorna de imediato mataria o message pump do App no meio do
+    teste (push_screen nunca montaria as telas).
+    """
+    return SimpleNamespace(
+        renderer=None,
+        input_gate=None,
+        run=threading.Event().wait,
+        **attributes,
+    )
+
+
+def test_textual_app_restores_and_persists_tui_theme_per_workspace(tmp_path):
+    ui_state = tmp_path / "state" / "ui.json"
+    ui_state.parent.mkdir(parents=True)
+    ui_state.write_text('{"theme": "nord"}\n', encoding="utf-8")
+    quimera_app = _fake_quimera_app(workspace=SimpleNamespace(ui_state_file=ui_state))
+    app = _capture_quimera_textual_app(quimera_app, TextualUiBridge())
+
+    async def run_test() -> None:
+        async with app.run_test(size=(90, 24)) as pilot:
+            await pilot.pause()
+            assert app.theme == "nord"
+
+            app.theme = "gruvbox"
+            await pilot.pause()
+
+            data = json.loads(ui_state.read_text(encoding="utf-8"))
+            assert data["theme"] == "gruvbox"
+
+    asyncio.run(run_test())
+
+
+def test_textual_app_ignores_stale_persisted_theme_and_runs_without_workspace(tmp_path):
+    ui_state = tmp_path / "ui.json"
+    ui_state.write_text('{"theme": "tema-removido"}\n', encoding="utf-8")
+    quimera_app = _fake_quimera_app(workspace=SimpleNamespace(ui_state_file=ui_state))
+    app = _capture_quimera_textual_app(quimera_app, TextualUiBridge())
+
+    minimal_app = _capture_quimera_textual_app(_fake_quimera_app(), TextualUiBridge())
+
+    async def run_test() -> None:
+        async with app.run_test(size=(90, 24)) as pilot:
+            await pilot.pause()
+            assert app.theme == "textual-dark"
+
+        async with minimal_app.run_test(size=(90, 24)) as pilot:
+            await pilot.pause()
+            minimal_app.theme = "nord"
+            await pilot.pause()
+            assert minimal_app.theme == "nord"
+
+    asyncio.run(run_test())
+
+
+def test_command_palette_renders_framed_search_and_list(tmp_path):
+    quimera_app = _fake_quimera_app(
+        workspace=SimpleNamespace(ui_state_file=tmp_path / "ui.json"),
+    )
+    app = _capture_quimera_textual_app(quimera_app, TextualUiBridge())
+
+    async def run_test() -> None:
+        async with app.run_test(size=(120, 30)) as pilot:
+            app.action_command_palette()
+            await pilot.pause()
+
+            palette = app.screen
+            assert type(palette).__name__ == "CommandPalette"
+            widgets: dict[str, object] = {}
+            for _ in range(40):
+                widgets = {
+                    (widget.id or type(widget).__name__): widget
+                    for widget in palette.walk_children()
+                }
+                command_list = widgets.get("CommandList")
+                if command_list is not None and command_list.region.width > 0:
+                    break
+                await pilot.pause(0.05)
+            search = widgets["--input"]
+            command_list = widgets["CommandList"]
+            assert 0 < search.region.width <= 80
+            assert search.region.x > 0
+            assert search.styles.border_top[0] == "round"
+            assert command_list.styles.border_top[0] == "round"
+            assert command_list.region.x == search.region.x
+            assert command_list.region.width == search.region.width
+
+    asyncio.run(run_test())
+
+
+def test_config_screen_applies_agent_timeouts_to_config_and_live_client(tmp_path):
+    """O modal persiste e aplica os limites de idle e execução total."""
+    from quimera.config import ConfigManager
+
+    config = ConfigManager(tmp_path / "config.json")
+    live_client = SimpleNamespace(idle_timeout=1, max_execution_seconds=2)
+    quimera_app = SimpleNamespace(
+        config=config,
+        threads=1,
+        agent_client=live_client,
+        idle_timeout_seconds=1,
+        prompt_builder=None,
+        renderer=None,
+    )
+    parent_app = Mock()
+    parent_app.query_one.return_value = Mock()
+    screen = ConfigScreen(quimera_app, parent_app)
+    values = {
+        "#cfg_user_name": "Alex",
+        "#cfg_history_window": "12",
+        "#cfg_auto_summarize": "30",
+        "#cfg_idle_timeout": "180",
+        "#cfg_max_agent_execution": "7200",
+        "#cfg_workspace_policy": "developer",
+        "#cfg_visibility": "full",
+        "#cfg_threads": "2",
+        "#cfg_theme": config.theme,
+        "#cfg_density": config.density,
+    }
+
+    def query_field(selector, _widget_type=None):
+        return SimpleNamespace(value=values[selector])
+
+    with (
+        patch.object(screen, "query_one", side_effect=query_field),
+        patch.object(screen, "dismiss") as dismiss,
+    ):
+        screen.action_save()
+
+    assert config.idle_timeout_seconds == 180
+    assert config.max_agent_execution_seconds == 7200
+    assert live_client.idle_timeout == 180
+    assert live_client.max_execution_seconds == 7200
+    assert quimera_app.idle_timeout_seconds == 180
+    dismiss.assert_called_once_with()
+
+
+def test_config_screen_shows_total_agent_timeout_field(tmp_path):
+    """O limite total aparece no modal com o valor persistido."""
+    from textual.app import App
+    from textual.widgets import Input
+
+    from quimera.config import ConfigManager
+
+    config = ConfigManager(tmp_path / "config.json")
+    config.set_max_agent_execution_seconds(5400)
+    quimera_app = SimpleNamespace(config=config)
+    app = App()
+
+    async def run_test() -> None:
+        async with app.run_test(size=(80, 30)) as pilot:
+            app.push_screen(ConfigScreen(quimera_app, app))
+            await pilot.pause()
+
+            field = app.screen.query_one("#cfg_max_agent_execution", Input)
+            assert field.value == "5400"
+
+    asyncio.run(run_test())
+
+
+def test_config_screen_keeps_close_and_actions_outside_scrollable_fields(tmp_path):
+    """Cabeçalho e rodapé ficam fixos enquanto só os campos usam rolagem."""
+    from textual.app import App
+    from textual.widgets import Button
+
+    from quimera.config import ConfigManager
+
+    config = ConfigManager(tmp_path / "config.json")
+    quimera_app = SimpleNamespace(config=config)
+    app = App()
+
+    async def run_test() -> None:
+        async with app.run_test(size=(80, 30)) as pilot:
+            app.push_screen(ConfigScreen(quimera_app, app))
+            await pilot.pause()
+
+            screen = app.screen
+            dialog = screen.query_one("#config_dialog")
+            fields = screen.query_one("#config_fields")
+            footer = screen.query_one("#config_footer")
+            close_button = screen.query_one("#config_close", Button)
+
+            assert str(close_button.label) == "×"
+            assert fields.region.bottom < footer.region.y
+            assert footer.region.bottom == dialog.content_region.bottom
+            assert fields.virtual_size.height > fields.container_size.height
+
+            footer_region = footer.region
+            fields.scroll_end(animate=False)
+            await pilot.pause()
+            assert footer.region == footer_region
+
+            await pilot.resize_terminal(70, 18)
+            await pilot.pause()
+            assert fields.region.height >= 3
+            assert fields.region.bottom < footer.region.y
+            assert footer.region.bottom == dialog.content_region.bottom
+            assert footer.region.bottom <= app.size.height
+
+            await pilot.click("#config_close")
+            await pilot.pause()
+            assert not isinstance(app.screen, ConfigScreen)
+
+    asyncio.run(run_test())

@@ -9,6 +9,7 @@ DEFAULT_USER_NAME = ">>>"
 DEFAULT_HISTORY_WINDOW = 12
 DEFAULT_AUTO_SUMMARIZE_THRESHOLD = 30
 DEFAULT_IDLE_TIMEOUT_SECONDS = 360
+DEFAULT_MAX_AGENT_EXECUTION_SECONDS = 3600
 DEFAULT_MAX_CONVERSATION_ENTRY_CHARS = 8000
 DEFAULT_MAX_PROMPT_CHARS = 128000
 DEFAULT_WORKSPACE_POLICY = "strict"
@@ -79,6 +80,22 @@ class ConfigManager:
     def set_idle_timeout_seconds(self, value: int | None):
         """Define idle timeout seconds."""
         self._update(idle_timeout_seconds=value if type(value) is int and value > 0 else None)
+
+    @property
+    def max_agent_execution_seconds(self) -> int:
+        """Retorna o tempo máximo total permitido para uma execução de agente."""
+        value = self._load().get("max_agent_execution_seconds")
+        if type(value) is int and value > 0:
+            return value
+        return DEFAULT_MAX_AGENT_EXECUTION_SECONDS
+
+    def set_max_agent_execution_seconds(self, value: int | None) -> None:
+        """Persiste o tempo máximo total permitido para uma execução de agente."""
+        self._update(
+            max_agent_execution_seconds=(
+                value if type(value) is int and value > 0 else None
+            )
+        )
 
     @property
     def workspace_policy(self) -> str:

@@ -733,7 +733,11 @@ def test_background_dispatch_uses_chat_timeout_when_present(tmp_path):
 
     app = AppStub()
     app.renderer = object()
-    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
+    app.agent_client = type(
+        "ChatClient",
+        (),
+        {"idle_timeout": 45, "max_execution_seconds": 1500},
+    )()
     app.workspace = type(
         "WorkspaceStub",
         (),
@@ -747,6 +751,7 @@ def test_background_dispatch_uses_chat_timeout_when_present(tmp_path):
     dispatch = services._get_background_dispatch_services()
 
     assert dispatch._get_agent_client().idle_timeout == 45
+    assert dispatch._get_agent_client().max_execution_seconds == 1500
 
 
 def test_background_dispatch_uses_fallback_timeout_when_chat_timeout_is_missing(tmp_path):

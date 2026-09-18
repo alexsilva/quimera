@@ -139,7 +139,8 @@ class AgentClient:
     def __init__(self, renderer, metrics_file=None, idle_timeout=None, visibility=Visibility.SUMMARY,
                  tool_executor=None, error_reporter=None,
                  muted_reporter=None, session_id=None, evidence_base_dir=None,
-                 process_supervisor=None, pause_idle_if=None, workspace=None):
+                 process_supervisor=None, pause_idle_if=None, workspace=None,
+                 max_execution_seconds=None):
         """Inicializa uma instância de AgentClient."""
         self.renderer = renderer
         self.error_reporter = error_reporter
@@ -147,6 +148,7 @@ class AgentClient:
         self.metrics_file = metrics_file
         self._metrics_lock = threading.Lock()
         self.idle_timeout = idle_timeout
+        self.max_execution_seconds = max_execution_seconds
         self._pause_idle_if = pause_idle_if
         self.visibility = Visibility(visibility)
         self.workspace = workspace
@@ -194,6 +196,17 @@ class AgentClient:
     def working_dir(self) -> str | None:
         """Diretório do projeto resolvido pela instância de Workspace."""
         return str(self.workspace.cwd) if self.workspace is not None else None
+
+    def _effective_max_execution_seconds(self) -> float:
+        """Resolve o limite total da execução preservando o default legado."""
+        configured = self.max_execution_seconds
+        if (
+            isinstance(configured, (int, float))
+            and not isinstance(configured, bool)
+            and configured > 0
+        ):
+            return float(configured)
+        return float(MAX_WALL_CLOCK_SECONDS)
 
     def _show_error(
         self,
@@ -472,6 +485,7 @@ class AgentClient:
             self.renderer,
             metrics_file=self.metrics_file,
             idle_timeout=self.idle_timeout,
+            max_execution_seconds=self.max_execution_seconds,
             visibility=self.visibility,
             tool_executor=forked_tool_executor,
             error_reporter=self.error_reporter,
@@ -860,6 +874,7 @@ class AgentClient:
         runner = ProcessRunner(
             proc, stdout_thread, stderr_thread, result_holder,
             self._cancel_event, self.idle_timeout,
+            max_wall_clock=self._effective_max_execution_seconds(),
             pause_idle_if=self._pause_idle_if,
         )
 
@@ -1630,6 +1645,7 @@ class AgentClient:
                 self._register_api_run(api_run_token, api_cancel_event)
                 t.start()
 
+                max_execution_seconds = self._effective_max_execution_seconds()
                 _api_start = time.time()
                 cancellation_announced = False
                 timed_out = False
@@ -1670,11 +1686,13 @@ class AgentClient:
                     if progress_callback:
                         progress_callback(f"aguardando resposta da API ({connection.model})... {int(_api_elapsed)}s")
 
-                    if _api_elapsed > MAX_WALL_CLOCK_SECONDS and not timed_out:
+                    if _api_elapsed > max_execution_seconds and not timed_out:
                         timed_out = True
                         api_cancel_event.set()
                         self._show_error(
-                            f"[erro] wall-clock timeout after {MAX_WALL_CLOCK_SECONDS}s em driver API")
+                            "[erro] wall-clock timeout after "
+                            f"{max_execution_seconds:g}s em driver API"
+                        )
                         # Não libere o client enquanto o driver ainda usa executor,
                         # approval callbacks e semáforo do backend. O timeout do
                         # transporte limita a espera pelo encerramento cooperativo.

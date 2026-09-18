@@ -86,6 +86,23 @@ class TestWorkspace(unittest.TestCase):
             )
             self.assertIsNone(ConfigManager(second.mcp_config_file).mcp_clients)
 
+    def test_ui_state_file_is_isolated_per_workspace(self):
+        """Cada projeto guarda o estado visual da TUI (tema) em arquivo próprio."""
+        with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as projects_dir:
+            base = Path(base_dir)
+            projects = Path(projects_dir)
+            first_project = projects / "first"
+            second_project = projects / "second"
+            first_project.mkdir()
+            second_project.mkdir()
+
+            with patch("quimera.workspace.find_base_writable", lambda dirs: base):
+                first = Workspace(first_project)
+                second = Workspace(second_project)
+
+            self.assertEqual(first.ui_state_file, first.root / "state" / "ui.json")
+            self.assertNotEqual(first.ui_state_file, second.ui_state_file)
+
     def test_migrate_from_legacy_copies_context_and_logs(self):
         """Verifica que a migração legado copia contexto e logs."""
         with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as project_dir:

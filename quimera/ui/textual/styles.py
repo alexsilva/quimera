@@ -86,4 +86,26 @@ TEXTUAL_APP_CSS = """
             width: 10;
             padding: 0 1;
         }
+        /* Palette de comandos: molduras coesas no lugar do layout solto
+           do Textual (busca flutuante e lista colada na borda). */
+        CommandPalette #--container {
+            max-width: 80;
+        }
+        CommandPalette #--results {
+            overlay: none;
+        }
+        CommandPalette #--input {
+            border: round $primary;
+            padding: 0 1;
+        }
+        CommandPalette #--input Label {
+            margin-top: 0;
+        }
+        CommandPalette CommandInput {
+            border: none;
+            height: 1;
+        }
+        CommandPalette CommandList {
+            border: round $primary;
+        }
         """

@@ -88,8 +88,12 @@ def test_mcp_configuration_commits_both_fields_together(tmp_path, monkeypatch):
     assert read_json_object(path) == {"user_name": "preserved"}
 
 
-@pytest.mark.parametrize("key,default", [("history_window", 12), ("idle_timeout_seconds", 360),
-                                        ("auto_summarize_threshold", 24)])
+@pytest.mark.parametrize("key,default", [
+    ("history_window", 12),
+    ("idle_timeout_seconds", 360),
+    ("max_agent_execution_seconds", 3600),
+    ("auto_summarize_threshold", 24),
+])
 def test_boolean_is_not_accepted_as_numeric_setting(tmp_path, key, default):
     path = tmp_path / "config.json"
     write_json_object(path, {key: True})

@@ -24,29 +24,44 @@ class ConfigScreen(ModalScreen[None]):
     }
     #config_dialog {
         width: 64;
-        height: auto;
-        max-height: 90%;
+        height: 90%;
+        max-height: 34;
         background: $surface;
         border: round $primary;
         padding: 1 2;
     }
+    #config_header {
+        height: 1;
+        margin-bottom: 1;
+    }
     #config_title {
+        width: 1fr;
+        content-align: center middle;
         text-align: center;
         text-style: bold;
         color: $accent;
-        margin-bottom: 1;
+    }
+    #config_close {
+        width: 3;
+        min-width: 3;
+        height: 1;
+        border: none;
+        padding: 0;
     }
     #config_fields {
-        height: auto;
-        max-height: 45vh;
+        height: 1fr;
+        min-height: 3;
         overflow-y: auto;
     }
     #config_fields Label {
         margin-top: 1;
         color: $text-muted;
     }
-    #config_buttons {
+    #config_footer {
+        height: 3;
         margin-top: 1;
+    }
+    #config_buttons {
         height: 1;
         align-horizontal: right;
     }
@@ -82,7 +97,9 @@ class ConfigScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         """Monta o layout da janela de configuração."""
         with Container(id="config_dialog"):
-            yield Label("Configurações do Quimera", id="config_title")
+            with Horizontal(id="config_header"):
+                yield Label("Configurações do Quimera", id="config_title")
+                yield Button("×", id="config_close")
 
             with Vertical(id="config_fields"):
                 yield Label("Nome do Usuário:")
@@ -96,6 +113,12 @@ class ConfigScreen(ModalScreen[None]):
 
                 yield Label("Timeout Inativo (segundos):")
                 yield Input(value=str(self.config.idle_timeout_seconds), id="cfg_idle_timeout")
+
+                yield Label("Tempo Máximo do Agente (segundos):")
+                yield Input(
+                    value=str(self.config.max_agent_execution_seconds),
+                    id="cfg_max_agent_execution",
+                )
 
                 yield Label("Política do Workspace:")
                 yield Select(
@@ -129,15 +152,16 @@ class ConfigScreen(ModalScreen[None]):
                 density_options = [(d, d) for d in DENSITY_OPTIONS]
                 yield Select(density_options, value=self.config.density, id="cfg_density")
 
-            with Horizontal(id="config_buttons"):
-                yield Button("Cancelar", id="cfg_cancel")
-                yield Button("Aplicar", variant="primary", id="cfg_save")
+            with Vertical(id="config_footer"):
+                with Horizontal(id="config_buttons"):
+                    yield Button("Cancelar", id="cfg_cancel")
+                    yield Button("Aplicar", variant="primary", id="cfg_save")
 
-            yield Label("Enter/Ctrl+S aplica · Esc cancela", id="config_hint")
+                yield Label("Enter/Ctrl+S aplica · Esc cancela", id="config_hint")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Trata o clique dos botões."""
-        if event.button.id == "cfg_cancel":
+        if event.button.id in {"config_close", "cfg_cancel"}:
             self.action_cancel()
         elif event.button.id == "cfg_save":
             self.action_save()
@@ -181,6 +205,19 @@ class ConfigScreen(ModalScreen[None]):
             return
 
         try:
+            max_agent_execution = int(
+                self.query_one("#cfg_max_agent_execution", Input).value
+            )
+            if max_agent_execution <= 0:
+                raise ValueError
+        except ValueError:
+            self.parent_app.notify(
+                "Tempo máximo do agente deve ser um número inteiro positivo.",
+                severity="error",
+            )
+            return
+
+        try:
             threads = int(self.query_one("#cfg_threads", Input).value)
             if threads <= 0:
                 raise ValueError
@@ -207,6 +244,7 @@ class ConfigScreen(ModalScreen[None]):
         self.config.set_history_window(history_window)
         self.config.set_auto_summarize_threshold(auto_summarize)
         self.config.set_idle_timeout_seconds(idle_timeout)
+        self.config.set_max_agent_execution_seconds(max_agent_execution)
         self.config.set_theme(str(theme))
         self.config.set_density(str(density))
         threads_changed = threads != getattr(self.quimera_app, "threads", threads)
@@ -231,6 +269,12 @@ class ConfigScreen(ModalScreen[None]):
         effective_user_name = user_name or self.config.user_name
         if hasattr(self.quimera_app, "user_name"):
             self.quimera_app.user_name = effective_user_name
+        if hasattr(self.quimera_app, "idle_timeout_seconds"):
+            self.quimera_app.idle_timeout_seconds = idle_timeout
+        agent_client = getattr(self.quimera_app, "agent_client", None)
+        if agent_client is not None:
+            agent_client.idle_timeout = idle_timeout
+            agent_client.max_execution_seconds = max_agent_execution
         memory_selector = getattr(
             getattr(self.quimera_app, "prompt_builder", None), "memory_selector", None
         )

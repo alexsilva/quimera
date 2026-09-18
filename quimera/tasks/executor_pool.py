@@ -603,11 +603,15 @@ class TaskExecutorPool:
         background_timeout = getattr(chat_agent_client, "idle_timeout", None)
         if background_timeout is None or not isinstance(background_timeout, (int, float)) or background_timeout <= 0:
             background_timeout = _BACKGROUND_AGENT_TIMEOUT_SECONDS
+        max_execution_seconds = getattr(
+            chat_agent_client, "max_execution_seconds", None
+        )
         _muted = self.get_show_muted_message()
         session_state = self.get_session_state()
         background_agent_client = AgentClient(
             renderer,
             idle_timeout=background_timeout,
+            max_execution_seconds=max_execution_seconds,
             visibility=self.get_visibility(),
             error_reporter=_muted,
             muted_reporter=_muted,

@@ -6,7 +6,7 @@ O Quimera procura um diretório gravável entre locais candidatos do usuário e 
 
 | Arquivo | Conteúdo |
 |---|---|
-| `config.json` | Nome do usuário, janela de histórico, tema, densidade, idle timeout, visibilidade, threads, seleção de agentes e roteamento congelado/orquestrador. |
+| `config.json` | Nome do usuário, janela de histórico, tema, densidade, idle timeout, tempo máximo do agente, visibilidade, threads, seleção de agentes e roteamento congelado/orquestrador. |
 | `connections.json` | Overrides e agentes dinâmicos criados por `--connect`. |
 | `secrets.env` | Segredos globais do runtime, como chaves de providers/modelos. Não são propagados para agentes ou shell. |
 | `.env` | Fonte global legada de segredos, ainda lida pelo runtime para compatibilidade. |
@@ -64,8 +64,9 @@ Sem a flag, vale o valor salvo em `config.json` (ajustável pela janela
 
 - `--threads N` limita quantos agentes rodam em paralelo por rodada; sem a
   flag, vale o valor salvo em `config.json`.
-- `--timeout N` define timeout de execução de agentes.
-- `--idle-timeout N` define timeout de inatividade do input.
+- `--idle-timeout N` define o limite de silêncio do agente, sem stdout.
+- Na janela `/config`, **Tempo Máximo do Agente** limita a duração total de
+  cada execução, incluindo o tempo gasto em tools. O padrão é 3.600 segundos.
 
 ## Diretório de trabalho
 

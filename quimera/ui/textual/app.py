@@ -34,6 +34,7 @@ from quimera.ui.textual.constants import (
 )
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.feed_model import TextualFeedModel
+from quimera.ui.textual.theme_store import TuiThemeStore
 
 _logger = logging.getLogger(__name__)
 
@@ -84,6 +85,13 @@ def _clipboard_dir_for_app(quimera_app) -> Path | None:
     session_paths = getattr(quimera_app, "session_paths", None)
     clipboard_dir = getattr(session_paths, "clipboard_dir", None)
     return Path(clipboard_dir) if clipboard_dir is not None else None
+
+
+def _tui_theme_store_for_app(quimera_app) -> TuiThemeStore | None:
+    """Resolve o store do tema da TUI persistido no workspace da sessão."""
+    workspace = getattr(quimera_app, "workspace", None)
+    ui_state_file = getattr(workspace, "ui_state_file", None)
+    return TuiThemeStore(ui_state_file) if ui_state_file is not None else None
 
 
 def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
@@ -166,6 +174,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._breadcrumb_chain: list[str] = []
             self._feed_renderable_cache: dict[int, object] = {}
             self._scroll_feed_on_submit = False
+            self._tui_theme_store = _tui_theme_store_for_app(quimera_app)
+            self._tui_theme_persisted: str | None = None
 
         def compose(self) -> ComposeResult:
             yield _SummaryHeader(show_clock=True, id="header")
@@ -185,6 +195,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 )
 
         def on_mount(self) -> None:
+            self._restore_tui_theme()
             bridge.attach_textual_app(self)
             bridge.set_input_value("")
             gate = getattr(quimera_app, "input_gate", None)
@@ -213,6 +224,25 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._history_file_path = Path(history_file).expanduser() if history_file else None
             input_widget.load_history(self._history_file_path)
             input_widget.focus()
+
+        def _restore_tui_theme(self) -> None:
+            """Aplica o tema do Textual persistido para este workspace, se houver."""
+            store = self._tui_theme_store
+            stored = store.theme if store is not None else None
+            if stored and stored in self.available_themes:
+                self._tui_theme_persisted = stored
+                self.theme = stored
+
+        def watch_theme(self, theme_name: str) -> None:
+            """Persiste por workspace o tema escolhido na palette do Textual."""
+            store = self._tui_theme_store
+            if store is None or theme_name == self._tui_theme_persisted:
+                return
+            self._tui_theme_persisted = theme_name
+            try:
+                store.set_theme(theme_name)
+            except OSError:
+                _logger.warning("Falha ao persistir o tema da TUI", exc_info=True)
 
         def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
             """Comandos da command palette do Textual."""

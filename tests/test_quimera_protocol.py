@@ -41,7 +41,10 @@ from quimera.app.session_bootstrap import (
     resolve_session_log_path,
 )
 from quimera.cli import main as cli_main
-from quimera.config import DEFAULT_HISTORY_WINDOW
+from quimera.config import (
+    DEFAULT_HISTORY_WINDOW,
+    DEFAULT_MAX_AGENT_EXECUTION_SECONDS,
+)
 from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_CONTEXT, CMD_DISCONNECT, CMD_HELP, CMD_POLICY, CMD_PROMPT, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
 from quimera.constants import CMD_DEBATE
 from quimera.profiles import ExecutionProfile
@@ -141,6 +144,7 @@ class DummyConfigManager:
         self.history_window = DEFAULT_HISTORY_WINDOW
         self.auto_summarize_threshold = 30
         self.idle_timeout_seconds = 300
+        self.max_agent_execution_seconds = DEFAULT_MAX_AGENT_EXECUTION_SECONDS
         self.theme = None
         self.density = "normal"
         self.visibility = "summary"

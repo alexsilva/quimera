@@ -177,6 +177,11 @@ class Workspace:
         return self._root / "state" / "memory.json"
 
     @property
+    def ui_state_file(self) -> Path:
+        """Estado visual da TUI persistido por workspace (tema do Textual, etc.)."""
+        return self.state_dir / "ui.json"
+
+    @property
     def config_file(self) -> Path:
         """Caminho do arquivo de configuração global do usuário."""
         return self.base_dir / "config.json"

@@ -489,11 +489,13 @@ class AppAssembler:
             if opts.idle_timeout_seconds is not None
             else plat.config.idle_timeout_seconds
         )
+        max_execution_seconds = plat.config.max_agent_execution_seconds
         process_supervisor = ProcessSupervisor()
         agent_client = AgentClient(
             ui.renderer,
             metrics_file=plat.metrics_file,
             idle_timeout=idle_timeout_seconds,
+            max_execution_seconds=max_execution_seconds,
             visibility=ui.visibility,
             error_reporter=sess.system_layer.show_error_message,
             muted_reporter=sess.system_layer.show_muted_message,

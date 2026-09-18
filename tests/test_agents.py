@@ -552,6 +552,7 @@ def test_agent_client_fork_for_concurrent_run_isolates_process_state(renderer):
         renderer,
         metrics_file="metrics.jsonl",
         idle_timeout=17,
+        max_execution_seconds=1234,
         workspace=Workspace(Path("/workspace")),
         session_id="session-test",
     )
@@ -569,6 +570,7 @@ def test_agent_client_fork_for_concurrent_run_isolates_process_state(renderer):
     assert forked.renderer is client.renderer
     assert forked.metrics_file == client.metrics_file
     assert forked.idle_timeout == client.idle_timeout
+    assert forked.max_execution_seconds == client.max_execution_seconds
     assert forked.working_dir == client.working_dir
     assert forked.tool_executor is not tool_executor
     assert forked.tool_event_callback is callback
@@ -3927,6 +3929,36 @@ def test_process_runner_pause_idle_if_suppresses_idle_timeout():
     assert result == ProcessRunner.COMPLETED
 
 
+def test_process_runner_uses_configured_total_execution_timeout():
+    """O watchdog CLI encerra a execução ao atingir o limite total injetado."""
+    proc = MagicMock()
+    stdout_thread = MagicMock()
+    stderr_thread = MagicMock()
+    stdout_thread.is_alive.return_value = True
+    stderr_thread.is_alive.return_value = False
+    runner = ProcessRunner(
+        proc,
+        stdout_thread,
+        stderr_thread,
+        {"stderr": [], "stdout_total": 0},
+        threading.Event(),
+        idle_timeout=None,
+        max_wall_clock=1,
+    )
+
+    with (
+        patch("time.sleep"),
+        patch("time.monotonic", side_effect=[100.0, 102.0]),
+        patch(
+            "quimera.agents.process_runner.terminate_process_group"
+        ) as terminate,
+    ):
+        result = runner.watch()
+
+    assert result == ProcessRunner.WALL_TIMEOUT
+    terminate.assert_called_once_with(proc)
+
+
 def test_fork_call_does_not_clear_shared_cancel_event(renderer, monkeypatch):
     """Fork consumidor não pode apagar cancelamento emitido pelo client dono."""
     owner = AgentClient(renderer)
@@ -3962,7 +3994,7 @@ def test_call_api_wall_timeout_waits_for_driver_completion(renderer, monkeypatch
     from types import SimpleNamespace
     import time
 
-    client = AgentClient(renderer)
+    client = AgentClient(renderer, max_execution_seconds=0.01)
     profile = SimpleNamespace(
         driver="openai_compat",
         model="test-model",
@@ -3981,7 +4013,6 @@ def test_call_api_wall_timeout_waits_for_driver_completion(renderer, monkeypatch
             return "late"
 
     monkeypatch.setattr("quimera.agents.client.OpenAICompatDriver", lambda **kwargs: Driver())
-    monkeypatch.setattr("quimera.agents.client.MAX_WALL_CLOCK_SECONDS", 0)
     monkeypatch.setattr(client, "_start_esc_monitor", lambda: None)
     monkeypatch.setattr(client, "_stop_esc_monitor", lambda: None)
 
