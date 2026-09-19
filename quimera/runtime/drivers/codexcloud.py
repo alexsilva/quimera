@@ -532,23 +532,14 @@ class CodexCloudDriver(OpenAICompatDriver):
     # Overrides do transporte herdado
     # ------------------------------------------------------------------
 
-    def _chat_with_tools(
-        self,
-        messages: list[dict],
-        tools: list[dict],
-        cancel_event=None,
-        on_text_chunk=None,
-    ) -> tuple[str, list[dict]]:
-        return self._responses_turn(
-            messages, tools, cancel_event=cancel_event, on_text_chunk=on_text_chunk
-        )
-
     def _chat_streaming(
         self,
         messages: list[dict],
+        *,
+        tools: list[dict] | None = None,
         cancel_event=None,
         on_text_chunk=None,
     ) -> tuple[str, list[dict]]:
         return self._responses_turn(
-            messages, [], cancel_event=cancel_event, on_text_chunk=on_text_chunk
+            messages, tools or [], cancel_event=cancel_event, on_text_chunk=on_text_chunk
         )

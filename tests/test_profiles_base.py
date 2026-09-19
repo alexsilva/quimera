@@ -365,6 +365,12 @@ def test_format_connection_label_openai_no_extra_body():
     assert "extra_body" not in label
 
 
+def test_format_connection_label_none():
+    # Perfis template (ex.: claudecloud) retornam None em effective_connection();
+    # o label não pode explodir no fluxo de --connect/TUI.
+    assert format_connection_label(None) == "(sem conexão configurada)"
+
+
 # ---------------------------------------------------------------------------
 # load/save/remove connections (filesystem mocked)
 # ---------------------------------------------------------------------------

@@ -529,8 +529,10 @@ class ExecutionProfile:
         return self.api_key_env
 
 
-def format_connection_label(connection: Connection) -> str:
+def format_connection_label(connection: Optional[Connection]) -> str:
     """Retorna uma descrição curta para UI/CLI."""
+    if connection is None:
+        return "(sem conexão configurada)"
     if isinstance(connection, CliConnection):
         cmd = shlex.join(connection.cmd) if connection.cmd else "(sem comando)"
         return f"cli: {cmd}"

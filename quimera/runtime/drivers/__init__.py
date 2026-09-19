@@ -10,6 +10,10 @@ def __getattr__(name: str):
         from .codexcloud import CodexCloudDriver
 
         return CodexCloudDriver
+    if name == "ClaudeCloudDriver":
+        from .claudecloud import ClaudeCloudDriver
+
+        return ClaudeCloudDriver
     raise AttributeError(name)
 
-__all__ = ["CodexCloudDriver", "OpenAICompatDriver"]
+__all__ = ["ClaudeCloudDriver", "CodexCloudDriver", "OpenAICompatDriver"]

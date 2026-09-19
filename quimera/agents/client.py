@@ -1459,6 +1459,22 @@ class AgentClient:
                     runtime_secrets=self.runtime_secrets,
                 )
                 self._api_driver_signatures[agent] = signature
+            elif provider == "claudecloud":
+                # Autentica com os tokens OAuth do Claude Code
+                # (~/.claude/.credentials.json); não usa API key de ambiente.
+                from quimera.runtime.drivers.claudecloud import ClaudeCloudDriver
+
+                self._api_drivers[agent] = ClaudeCloudDriver(
+                    model=connection.model,
+                    base_url=connection.base_url,
+                    timeout=getattr(connection, "request_timeout", 300.0),
+                    tool_use_reliability=getattr(profile, "tool_use_reliability", "medium"),
+                    extra_body=connection.extra_body,
+                    max_connections=getattr(connection, "max_connections", 4),
+                    max_model_requests=getattr(connection, "max_model_requests", None),
+                    runtime_secrets=self.runtime_secrets,
+                )
+                self._api_driver_signatures[agent] = signature
             else:
                 global OpenAICompatDriver
                 if OpenAICompatDriver is None:

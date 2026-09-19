@@ -381,6 +381,29 @@ def test_responses_turn_streams_text_and_reasoning():
     driver.close()
 
 
+def test_chat_forwards_tools_keyword_to_responses_turn():
+    """Regressão: a base chama _chat_streaming(messages, tools=...) por keyword."""
+    events = [
+        {"type": "response.created"},
+        {"type": "response.output_text.delta", "delta": "ok"},
+        {"type": "response.completed", "response": {"usage": {"input_tokens": 1, "output_tokens": 1}}},
+    ]
+
+    def handler(request):
+        body = json.loads(request.content)
+        assert [tool["name"] for tool in body["tools"]] == ["ping"]
+        return httpx.Response(200, text=_sse(events), headers={"content-type": "text/event-stream"})
+
+    driver = _make_driver(handler)
+    tools = [{"type": "function", "function": {"name": "ping", "parameters": {}}}]
+
+    text, tool_calls = driver._chat([{"role": "user", "content": "oi"}], tools)
+
+    assert text == "ok"
+    assert tool_calls == []
+    driver.close()
+
+
 def test_responses_turn_streams_commentary_as_thinking():
     """Modelos gpt-5.6-* narram progresso via message phase=commentary.
 
