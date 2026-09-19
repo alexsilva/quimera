@@ -679,3 +679,15 @@ def test_inspect_symbols_lists_nested_symbols(tools, config):
     assert service["children"][1]["children"][0]["kind"] == "async def"
     assert symbols[2]["name"] == "conditional"
 
+
+
+def test_file_tools_list_files_missing_and_not_dir(tools, config):
+    """Diretório inexistente e path de arquivo retornam erro explícito."""
+    result = tools.list_files(ToolCall(name="list_files", arguments={"path": "nao/existe"}))
+    assert result.ok is False
+    assert "Diretório não encontrado" in result.error
+
+    (config.workspace.cwd / "arquivo.txt").write_text("x", encoding="utf-8")
+    result = tools.list_files(ToolCall(name="list_files", arguments={"path": "arquivo.txt"}))
+    assert result.ok is False
+    assert "Não é um diretório" in result.error

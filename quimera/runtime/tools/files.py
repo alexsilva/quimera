@@ -148,17 +148,32 @@ class FileTools(ToolBase):
 
         base = path
 
+        staging_check: Path | None = None
+        if staging and base != staging and path.is_relative_to(workspace):
+            staging_check = staging / (raw_path.lstrip("/") or ".")
+
+        if not base.exists() and not (staging_check is not None and staging_check.exists()):
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=f"Diretório não encontrado: {raw_path}",
+            )
+        if base.exists() and not base.is_dir():
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=f"Não é um diretório: {raw_path}",
+            )
+
         all_names: dict[str, tuple[Path, bool]] = {}
 
         if base.exists():
             for item in base.iterdir():
                 all_names[item.name] = (item, item.is_dir())
 
-        if staging and base != staging and path.is_relative_to(workspace):
-            staging_check = staging / (raw_path.lstrip("/") or ".")
-            if staging_check.exists():
-                for item in staging_check.iterdir():
-                    all_names[item.name] = (item, item.is_dir())
+        if staging_check is not None and staging_check.is_dir():
+            for item in staging_check.iterdir():
+                all_names[item.name] = (item, item.is_dir())
 
         entries = []
         for name, (item, is_dir) in sorted(all_names.items(), key=lambda x: (not x[1][1], x[0].lower())):

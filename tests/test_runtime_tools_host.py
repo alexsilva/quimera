@@ -9,7 +9,7 @@ from quimera.runtime.config import ToolRuntimeConfig
 from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicyError
-from quimera.runtime.tools.host import HostTools, HostToolsValidator
+from quimera.runtime.tools.host import HostTools, HostToolsValidator, _parse_pressure
 
 
 def _write_process(
@@ -400,6 +400,35 @@ def test_host_memory_parses_meminfo_load_and_pressure(tmp_path: Path):
     assert result.data["mem_used_kb"] == 600
     assert result.data["swap_used_kb"] == 50
     assert result.data["pressure"]["some"]["total"] == 42
+
+
+def test_parse_pressure_permission_denied_returns_empty():
+    """PSI bloqueado por EACCES (ex.: Android) não pode derrubar host_memory."""
+
+    class DeniedPath:
+        def is_file(self) -> bool:
+            raise PermissionError(13, "Permission denied", "/proc/pressure/memory")
+
+        def read_text(self, **kwargs):
+            raise PermissionError(13, "Permission denied", "/proc/pressure/memory")
+
+    assert _parse_pressure(DeniedPath()) == {}
+
+
+def test_host_memory_ok_without_pressure_dir(tmp_path: Path):
+    """host_memory degrada para pressure vazio quando PSI não existe."""
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    (proc_root / "meminfo").write_text(
+        "MemTotal: 1000 kB\nMemAvailable: 400 kB\nMemFree: 100 kB\n",
+        encoding="utf-8",
+    )
+
+    tools = HostTools(ToolRuntimeConfig(workspace=Workspace(tmp_path)), proc_root=proc_root, owner_uid=1000)
+    result = tools.host_memory(ToolCall("host_memory", {}))
+
+    assert result.ok is True
+    assert result.data["pressure"] == {}
 
 
 def test_host_validator_rejects_invalid_arguments(tmp_path: Path):

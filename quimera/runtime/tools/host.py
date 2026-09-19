@@ -120,13 +120,13 @@ def _format_command(arguments: list[str]) -> str:
 
 
 def _parse_pressure(path: Path) -> dict[str, dict[str, float | int]]:
-    if not path.is_file():
-        return {}
-    result: dict[str, dict[str, float | int]] = {}
     try:
+        if not path.is_file():
+            return {}
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return {}
+    result: dict[str, dict[str, float | int]] = {}
     for line in lines:
         parts = line.split()
         if not parts:
