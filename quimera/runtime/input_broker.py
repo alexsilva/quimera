@@ -40,6 +40,7 @@ class _InputRequest:
     timeout: float
     default: Any
     on_approve_all: Callable[[], None] | None = None
+    cancel_event: Any = None
     _result: list[Any] = field(default_factory=lambda: [_UNSET], init=False)
     _done: threading.Event = field(default_factory=threading.Event, init=False)
 
@@ -47,8 +48,26 @@ class _InputRequest:
         self._result[0] = value
         self._done.set()
 
+    def is_cancelled(self) -> bool:
+        """True quando a execução que originou o pedido já foi cancelada."""
+        event = self.cancel_event
+        if event is None:
+            return False
+        is_set = getattr(event, "is_set", None)
+        if not callable(is_set):
+            return False
+        try:
+            return bool(is_set())
+        except Exception:
+            return False
+
     def wait(self) -> Any:
-        self._done.wait(self.timeout)
+        deadline = time.monotonic() + self.timeout
+        while not self._done.wait(0.1):
+            if self.is_cancelled():
+                break
+            if time.monotonic() >= deadline:
+                break
         if not self._done.is_set():
             self.set_result(self.default)
         return self._result[0]
@@ -117,8 +136,17 @@ class InputBroker:
         source: str = "agente",
         timeout: float | None = None,
         on_approve_all: Callable[[], None] | None = None,
+        cancel_event: Any = None,
     ) -> bool:
-        """Enfileira pedido de aprovação e bloqueia até resposta ou timeout."""
+        """Enfileira pedido de aprovação e bloqueia até resposta ou timeout.
+
+        ``cancel_event`` (opcional) vincula o pedido ao ciclo de vida da
+        execução que o originou: se o evento for sinalizado antes da resposta,
+        o pedido é negado automaticamente sem ser exibido ao usuário. Isso
+        evita prompts órfãos de execuções canceladas/finalizadas (ex.: steps
+        de delegate paralelo cancelados por timeout) que apareceriam depois e,
+        mesmo aprovados, falhariam em sequência.
+        """
         if timeout is None:
             timeout = _DEFAULT_APPROVAL_TIMEOUT
         req = _InputRequest(
@@ -129,7 +157,10 @@ class InputBroker:
             timeout=timeout,
             default=False,
             on_approve_all=on_approve_all,
+            cancel_event=cancel_event,
         )
+        if req.is_cancelled():
+            return False
         self._queue.put(req)
         return bool(req.wait())
 
@@ -170,6 +201,9 @@ class InputBroker:
             req = self._queue.get()
             if req.is_done():
                 continue
+            if req.is_cancelled():
+                self._resolve_cancelled(req)
+                continue
             if not self._consumer_can_handle(req):
                 # Sem prompt_toolkit ativo, a thread do broker não deve negar nem
                 # chamar InputGate(prompt). Devolve para a fila para a main thread
@@ -199,10 +233,32 @@ class InputBroker:
             return False
         if req.is_done():
             return False
+        if req.is_cancelled():
+            self._resolve_cancelled(req)
+            return False
         self._process_request(req, allow_direct_gate=True)
         return True
 
+    def _resolve_cancelled(self, req: _InputRequest) -> None:
+        """Resolve um pedido cuja execução foi cancelada, sem exibir prompt.
+
+        Approval é negado (default False); ask_user segue a resposta segura
+        padrão. O usuário não é interrompido por prompts de execuções mortas.
+        """
+        req.set_result(req.default)
+        self._agent_run_sink.emit(
+            AgentRunEvent(
+                "human_action_cancelled",
+                req.source,
+                text=req.question,
+                metadata={"kind": req.kind, "reason": "run_cancelled"},
+            )
+        )
+
     def _process_request(self, req: _InputRequest, *, allow_direct_gate: bool) -> None:
+        if req.is_cancelled():
+            self._resolve_cancelled(req)
+            return
         pending = self._queue.qsize()
         if pending > 0:
             self._emit(f"\n  [{pending} pergunta(s) aguardando na fila]")

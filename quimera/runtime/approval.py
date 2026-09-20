@@ -251,14 +251,33 @@ class ConsoleApprovalHandler(ApprovalHandler):
         Com broker: serializa na fila centralizada com timeout e auto-resposta
         segura — garante que approval e ask_user nunca conflitem em raw mode.
         Sem broker: comportamento original via _approve_interactive.
+
+        Em ambos os caminhos, execuções já canceladas são negadas sem prompt:
+        o cancel_event efetivo (thread-bound ou legado) é verificado antes de
+        enfileirar e propagado ao broker, para que pedidos órfãos de runs
+        mortas (ex.: steps de delegate cancelados por timeout) não apareçam
+        para o usuário depois que a execução principal terminou.
         """
         if self._input_broker is not None:
-            return self._input_broker.request_approval(
-                tool_name,
-                summary,
-                source="aprovação",
-                on_approve_all=self._approve_all_callback,
-            )
+            if self._is_cancelled():
+                return False
+            cancel_event = self._get_effective_cancel_event()
+            try:
+                return self._input_broker.request_approval(
+                    tool_name,
+                    summary,
+                    source="aprovação",
+                    on_approve_all=self._approve_all_callback,
+                    cancel_event=cancel_event,
+                )
+            except TypeError:
+                # Brokers duck-typed antigos sem suporte a cancel_event.
+                return self._input_broker.request_approval(
+                    tool_name,
+                    summary,
+                    source="aprovação",
+                    on_approve_all=self._approve_all_callback,
+                )
         return self._approve_interactive(tool_name, summary)
 
     def approve_request(self, request) -> bool:
