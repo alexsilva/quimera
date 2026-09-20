@@ -1252,6 +1252,68 @@ def test_agent_client_run_summary_shows_formatted_codex_stdout(renderer):
     renderer.show_plain.assert_any_call("execução concluída", agent="codex", muted=True)
 
 
+def test_agent_client_run_quiet_shows_codex_tools_without_narrative(renderer):
+    """Quiet mantém tools do Codex visíveis sem raciocínio ou mensagens intermediárias."""
+    client = AgentClient(renderer, visibility=Visibility.QUIET)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([
+            '{"type":"item.started","item":{"type":"reasoning","summary":"Vou checar o repositório"}}\n',
+            '{"type":"item.started","item":{"type":"command_execution","command":"git status","id":"t_quiet"}}\n',
+            '{"type":"item.completed","item":{"type":"command_execution","command":"git status","exit_code":0,"id":"t_quiet"}}\n',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"Estado verificado."}}\n',
+        ])
+        mock_proc.stderr = iter([])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
+
+    renderer.show_plain.assert_any_call("$ git status", agent="codex", muted=True)
+    renderer.show_plain.assert_any_call("✓ git status", agent="codex", muted=True)
+    rendered = [str(call.args[0]) for call in renderer.show_plain.call_args_list if call.args]
+    assert "Vou checar o repositório" not in rendered
+    assert "Estado verificado." not in rendered
+    assert "iniciando execução" not in rendered
+    renderer.show_turn_summary.assert_not_called()
+    assert client.last_spy_turn_detail is not None
+    assert client.last_spy_turn_detail["tools"][0]["status"] == "ok"
+
+
+@pytest.mark.parametrize(
+    ("agent", "line", "expected"),
+    [
+        (
+            "codex",
+            '{"type":"item.started","item":{"type":"command_execution","command":"pwd"}}',
+            "$ pwd",
+        ),
+        (
+            "claude",
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"README.md"}}]}}',
+            "README.md",
+        ),
+        (
+            "opencode",
+            '{"type":"tool_call","part":{"type":"tool","tool":"grep","input":{"pattern":"quiet","path":"quimera"}}}',
+            'buscar "quiet" em quimera',
+        ),
+    ],
+)
+def test_spy_output_presenter_quiet_keeps_semantic_tools_for_cli_profiles(
+    renderer, agent, line, expected,
+):
+    """A política quiet é aplicada após os formatters de todos os CLIs."""
+    presenter = SpyOutputPresenter(renderer, Visibility.QUIET)
+
+    consumed = presenter.consume_stdout(agent, line)
+
+    assert consumed is True
+    renderer.show_plain.assert_called_once_with(expected, agent=agent, muted=True)
+
+
 def test_agent_client_run_summary_flushes_compacted_responses_before_context(renderer):
     """Verifica que agent client run summary flushes compacted responses before context."""
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
@@ -1823,6 +1885,97 @@ def test_agent_client_api_tools_emit_one_turn_summary(renderer):
     assert [tool["status"] for tool in detail["tools"]] == ["ok", "error"]
     assert all(isinstance(tool["duration_ms"], int) for tool in detail["tools"])
     assert client.tool_event_callback.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("agent", "provider", "transport"),
+    [
+        ("openai-compatible", "openai_compat", "openai_compat"),
+        ("codexcloud-gpt", "codexcloud", "cloud"),
+        ("claudecloud-sonnet", "claudecloud", "cloud"),
+    ],
+)
+def test_agent_client_api_profiles_quiet_show_tool_calls_and_results_once(
+    renderer, agent, provider, transport,
+):
+    """Quiet usa a mesma política para OpenAI-compatible e todos os cloud backends."""
+    connection = OpenAIConnection(
+        model="test-model",
+        base_url="http://localhost/v1",
+        api_key_env=None,
+        provider=provider,
+    )
+    profile = SimpleNamespace(
+        effective_connection=lambda: connection,
+        supports_tools=True,
+        tool_use_reliability="medium",
+        cmd=None,
+    )
+    client = AgentClient(renderer, idle_timeout=60, visibility=Visibility.QUIET)
+    client.tool_executor = MagicMock()
+    mock_driver = MagicMock()
+
+    def run_with_tool(**kwargs):
+        kwargs["on_tool_call"]("read_file", {"path": "README.md"})
+        preview = client.tool_executor.set_tool_preview_callback.call_args.args[0]
+        preview(
+            "read_file",
+            {"path": "README.md"},
+            {"trusted_context": SimpleNamespace(transport=transport, agent_name=agent)},
+        )
+        kwargs["on_tool_result"](
+            SimpleNamespace(ok=True, tool_name="read_file", error=None)
+        )
+        return "api response"
+
+    mock_driver.run.side_effect = run_with_tool
+    client._api_drivers[agent] = mock_driver
+
+    with patch("quimera.profiles.get", return_value=profile):
+        result = client.call(agent, "prompt", show_status=False)
+
+    assert result == "api response"
+    rendered = [call.args[0] for call in renderer.show_plain.call_args_list if call.args]
+    assert rendered.count("⚒ read_file README.md") == 1
+    assert rendered.count("✓ read_file") == 1
+    renderer.show_turn_summary.assert_not_called()
+    assert client.last_spy_turn_detail is not None
+    assert client.last_spy_turn_detail["runtime"] == "openai"
+    assert client.last_spy_turn_detail["tools"][0]["status"] == "ok"
+
+
+def test_agent_client_api_quiet_silent_records_tools_without_rendering(renderer):
+    """Silent continua soberano mesmo quando a política quiet preserva tools."""
+    client = AgentClient(renderer, idle_timeout=60, visibility=Visibility.QUIET)
+    client.tool_executor = MagicMock()
+    profile = _make_api_profile()
+    mock_driver = MagicMock()
+
+    def run_with_tool(**kwargs):
+        kwargs["on_tool_call"]("read_file", {"path": "README.md"})
+        preview = client.tool_executor.set_tool_preview_callback.call_args.args[0]
+        preview(
+            "read_file",
+            {"path": "README.md"},
+            {"trusted_context": SimpleNamespace(transport="openai_compat")},
+        )
+        kwargs["on_tool_result"](
+            SimpleNamespace(ok=True, tool_name="read_file", error=None)
+        )
+        return "api response"
+
+    mock_driver.run.side_effect = run_with_tool
+    client._api_drivers["test-agent"] = mock_driver
+
+    result = client._call_api(
+        "test-agent", profile, "prompt", silent=True, show_status=False,
+    )
+
+    assert result == "api response"
+    renderer.show_plain.assert_not_called()
+    renderer.show_feed.assert_not_called()
+    renderer.show_system_neutral.assert_not_called()
+    assert client.last_spy_turn_detail["tools"][0]["status"] == "ok"
 
 
 def _make_api_profile(agent="test-agent"):
@@ -2773,6 +2926,27 @@ def test_agent_client_bind_tool_preview_callback_uses_shared_preview(renderer):
     message = muted_reporter.call_args[0][0]
     assert "⚒ read_file" in message
     assert "README.md" in message
+
+
+def test_agent_client_quiet_keeps_internal_mcp_tool_preview(renderer):
+    """A deduplicação de drivers API não pode ocultar tools de agentes CLI via MCP."""
+    from types import SimpleNamespace
+
+    client = AgentClient(renderer, visibility=Visibility.QUIET)
+    tool_executor = SimpleNamespace(set_tool_preview_callback=MagicMock())
+    client.bind_tool_preview_callback(tool_executor, agent="opencode")
+
+    callback = tool_executor.set_tool_preview_callback.call_args.args[0]
+    callback(
+        "read_file",
+        {"path": "README.md"},
+        {"trusted_context": SimpleNamespace(
+            transport="internal_mcp",
+            agent_name="opencode",
+        )},
+    )
+
+    renderer.show_system_neutral.assert_called_once_with("⚒ read_file README.md")
 
 
 def test_agent_client_tool_preview_uses_agent_feed_when_supported():

@@ -9,6 +9,7 @@ from quimera.agent_events import SpyEvent
 from quimera.constants import Visibility
 from quimera.evidence import Evidence, EvidenceStore, PatternRegistry
 from quimera.domain.tool_activity import classify_tool_activity
+from quimera.runtime.tool_preview import ToolPreview
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
 
 
@@ -212,24 +213,26 @@ class SpyOutputPresenter:
             record["error"] = data.get("error")
         self._active_tool_calls.pop(key, None)
 
-    def record_tool_call(self, tool: str, arguments: dict | None = None) -> None:
-        """Registra início de tool executada por um driver sem stdout próprio."""
-        self._record_tool_event(
-            SpyEvent(
-                kind="tool",
-                text=f"usando {tool}",
-                transient=True,
-                data={
-                    "tool": str(tool or "ferramenta"),
-                    "operation": "start",
-                    "status": "running",
-                    "input": dict(arguments) if isinstance(arguments, dict) else None,
-                },
-            )
+    @staticmethod
+    def _tool_call_event(tool: str, arguments: dict | None = None) -> SpyEvent:
+        """Normaliza uma chamada de tool vinda de drivers sem stdout próprio."""
+        tool_name = str(tool or "ferramenta")
+        input_payload = dict(arguments) if isinstance(arguments, dict) else None
+        return SpyEvent(
+            kind="tool",
+            text=ToolPreview.build(tool_name, input_payload or {}),
+            transient=True,
+            data={
+                "tool": tool_name,
+                "operation": "start",
+                "status": "running",
+                "input": input_payload,
+            },
         )
 
-    def record_tool_result(self, result) -> None:
-        """Registra conclusão de ToolResult sem duplicar a preview visual."""
+    @staticmethod
+    def _tool_result_event(result) -> SpyEvent:
+        """Normaliza a conclusão de um ToolResult para o pipeline visual comum."""
         tool = str(getattr(result, "tool_name", None) or "ferramenta")
         ok = bool(getattr(result, "ok", False))
         error = str(getattr(result, "error", None) or "").strip()
@@ -240,14 +243,28 @@ class SpyOutputPresenter:
         }
         if error:
             data["error"] = {"type": "ToolError", "message": error}
-        self._record_tool_event(
-            SpyEvent(
-                kind="tool",
-                text=f"{'✓' if ok else '✗'} {tool}",
-                transient=True,
-                data=data,
-            )
+        return SpyEvent(
+            kind="tool",
+            text=f"{'✓' if ok else '✗'} {tool}",
+            transient=True,
+            data=data,
         )
+
+    def record_tool_call(self, tool: str, arguments: dict | None = None) -> None:
+        """Registra início de tool executada por um driver sem stdout próprio."""
+        self._record_tool_event(self._tool_call_event(tool, arguments))
+
+    def record_tool_result(self, result) -> None:
+        """Registra conclusão de ToolResult sem duplicar a preview visual."""
+        self._record_tool_event(self._tool_result_event(result))
+
+    def emit_tool_call(self, agent: str | None, tool: str, arguments: dict | None = None) -> None:
+        """Aplica a política visual ativa a uma chamada de tool estruturada."""
+        self.emit(agent, self._tool_call_event(tool, arguments))
+
+    def emit_tool_result(self, agent: str | None, result) -> None:
+        """Aplica a política visual ativa a uma conclusão de tool estruturada."""
+        self.emit(agent, self._tool_result_event(result))
 
     def _timeline_text(self, event: SpyEvent) -> str | None:
         data = self._normalize_tool_data(event)
@@ -502,6 +519,24 @@ class SpyOutputPresenter:
         self._audit_spy_event(agent, event)
         timeline = self._timeline_text(event) if self.visibility == Visibility.FULL else None
         self._record_tool_event(event)
+
+        if self.visibility == Visibility.QUIET:
+            # Quiet reduz narrativa e previews de conteúdo, mas não pode
+            # esconder atividade operacional. Tools são normalizadas para uma
+            # linha persistente para que chamadas e conclusões sobrevivam ao
+            # encerramento do transient do agente.
+            if event.kind == "tool" and event.text.strip():
+                self.flush(agent)
+                self._show(
+                    agent,
+                    SpyEvent(
+                        kind="tool",
+                        text=event.text.strip(),
+                        data=event.data,
+                    ),
+                )
+            self.current_status_label = ""
+            return
 
         if self.visibility != Visibility.SUMMARY:
             if timeline and event.kind == "tool":

@@ -276,7 +276,7 @@ def main():
     )
     parser.add_argument("--history-window", type=int, default=None)
     parser.add_argument("--visibility", choices=[v.value for v in Visibility], default=None,
-                        help="Nível de visibilidade da execução do agente: quiet (stderr truncado), "
+                        help="Nível de visibilidade da execução do agente: quiet (tools e erros), "
                              "summary (início+fim), full (stdout+stderr completos). "
                              "Padrão: valor salvo na config (summary).")
     parser.add_argument(

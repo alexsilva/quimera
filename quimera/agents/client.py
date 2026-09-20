@@ -290,6 +290,13 @@ class AgentClient:
 
     def _show_tool_preview(self, message: str, *, agent: str | None = None, metadata=None) -> None:
         """Exibe preview operacional de tool no feed quando possível."""
+        trusted_context = metadata.get("trusted_context") if isinstance(metadata, dict) else None
+        transport = str(getattr(trusted_context, "transport", "") or "").strip().lower()
+        if self.visibility == Visibility.QUIET and transport in {"openai_compat", "cloud"}:
+            # Drivers de API já emitem chamada e conclusão pelo presenter comum.
+            # Suprimir o preview do ToolExecutor evita duplicar a chamada em quiet;
+            # MCP interno/HTTP continua usando este canal normalmente.
+            return
         context = self._tool_preview_context(metadata)
         payload = {"content": message, **context} if context else message
         if self.renderer.supports_agent_feed is True:
@@ -865,7 +872,11 @@ class AgentClient:
                     for line in proc.stdout:
                         self._append_capped_stdout(result_holder, line)
                         _relay_text_chunks(line)
-                        if log_queue is not None and self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
+                        # Toda saída não silenciosa passa pelo presenter. Ele é
+                        # quem aplica a política de visibilidade por evento; em
+                        # quiet ainda precisamos interpretar stdout para manter
+                        # chamadas e conclusões de tools visíveis.
+                        if log_queue is not None:
                             self._enqueue_log_item(log_queue, ("stdout", line))
             except Exception as exc:
                 result_holder["error"] = exc
@@ -1005,8 +1016,7 @@ class AgentClient:
                             return
                         if stream_type == "stdout":
                             _first_stdout_seen[0] = True
-                            if self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
-                                self._show_formatted_stdout(agent, cleaned)
+                            self._show_formatted_stdout(agent, cleaned)
                             return
                         if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
                             return
@@ -1617,10 +1627,16 @@ class AgentClient:
                         return active_tool_executions > 0
 
                 def _record_api_tool_call(name, arguments) -> None:
-                    self._spy_output_presenter.record_tool_call(name, arguments)
+                    if not silent and self.visibility == Visibility.QUIET:
+                        self._spy_output_presenter.emit_tool_call(agent, name, arguments)
+                    else:
+                        self._spy_output_presenter.record_tool_call(name, arguments)
 
                 def _record_api_tool_result(tool_result) -> None:
-                    self._spy_output_presenter.record_tool_result(tool_result)
+                    if not silent and self.visibility == Visibility.QUIET:
+                        self._spy_output_presenter.emit_tool_result(agent, tool_result)
+                    else:
+                        self._spy_output_presenter.record_tool_result(tool_result)
                     if self.tool_event_callback is not None:
                         self.tool_event_callback(agent, result=tool_result)
 

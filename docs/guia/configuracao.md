@@ -53,7 +53,8 @@ Temas disponíveis na CLI incluem `panel`, `chat`, `rule`, `minimal`, `card` e `
 
 `--visibility` controla como stdout/stderr de agentes aparecem:
 
-- `quiet`: saída mais silenciosa e stderr truncado;
+- `quiet`: em todos os drivers e perfis, exibe chamadas/conclusões de ferramentas
+  e erros, ocultando raciocínio, mensagens intermediárias e previews extensos;
 - `summary`: início/fim e resumo operacional;
 - `full`: stdout e stderr completos.
 
