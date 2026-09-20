@@ -2597,6 +2597,7 @@ def test_connection_screen_provider_is_select_with_supported_providers():
             assert provider._options == [
                 ("OpenAI compatível", "openai_compat"),
                 ("Codex Cloud", "codexcloud"),
+                ("Claude Cloud", "claudecloud"),
             ]
 
     asyncio.run(run_test())

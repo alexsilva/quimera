@@ -224,15 +224,12 @@ class DriverRepl:
             "max_connections": getattr(connection, "max_connections", 4),
             "max_model_requests": getattr(connection, "max_model_requests", None),
         }
-        if str(getattr(connection, "provider", "") or "").strip().lower() == "codexcloud":
-            from .codexcloud import CodexCloudDriver
+        provider = str(getattr(connection, "provider", "") or "").strip().lower()
+        from .cloud import is_cloud_provider
+        from .factory import create_api_driver
 
-            new_driver = CodexCloudDriver(
-                **common_kwargs,
-                runtime_secrets=self._runtime_secrets,
-            )
-        else:
-            api_key = "ollama"
+        api_key = "ollama"
+        if not is_cloud_provider(provider):
             if connection.api_key_env:
                 api_key = self._runtime_secrets.get(connection.api_key_env, "")
                 if not api_key:
@@ -241,16 +238,19 @@ class DriverRepl:
                         "Usando string vazia como api_key.",
                         file=sys.stderr,
                     )
-            new_driver = OpenAICompatDriver(
-                api_key=api_key,
-                context_window=getattr(connection, "context_window", None),
-                context_reserve_tokens=getattr(
-                    connection,
-                    "context_reserve_tokens",
-                    None,
-                ),
-                **common_kwargs,
-            )
+        new_driver = create_api_driver(
+            provider,
+            api_key=api_key,
+            openai_driver_cls=OpenAICompatDriver,
+            context_window=getattr(connection, "context_window", None),
+            context_reserve_tokens=getattr(
+                connection,
+                "context_reserve_tokens",
+                None,
+            ),
+            runtime_secrets=self._runtime_secrets,
+            **common_kwargs,
+        )
 
         previous_driver = getattr(self, "driver", None)
         self.driver = new_driver
@@ -268,9 +268,11 @@ class DriverRepl:
 
     def ensure_backend_available(self, timeout: float = 2.0) -> None:
         """Executa ensure backend available."""
-        if str(getattr(self.connection, "provider", "") or "").strip().lower() == "codexcloud":
-            # O backend Codex não expõe /models sem auth; o driver valida
-            # credenciais na primeira requisição real.
+        from .cloud import is_cloud_provider
+
+        if is_cloud_provider(getattr(self.connection, "provider", "")):
+            # Backends cloud exigem OAuth até para probes de modelo; o driver
+            # valida credenciais na primeira requisição real.
             return
         probe_url = self._probe_url()
         request = urllib_request.Request(probe_url, method="GET")

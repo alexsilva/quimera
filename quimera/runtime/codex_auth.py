@@ -13,12 +13,11 @@ import binascii
 import json
 import logging
 import os
-import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from quimera.environment import RuntimeSecrets
+from quimera.runtime.oauth_session import FileOAuthSession
 
 import httpx
 
@@ -59,7 +58,7 @@ def _jwt_expiry(token: str) -> float | None:
     return None
 
 
-class CodexCloudAuth:
+class CodexCloudAuth(FileOAuthSession):
     """Fornece access token + account id do Codex CLI com refresh automático.
 
     Thread-safe: múltiplos agentes podem pedir credenciais concorrentemente e
@@ -75,11 +74,9 @@ class CodexCloudAuth:
         http_client: httpx.Client | None = None,
         runtime_secrets: RuntimeSecrets | None = None,
     ) -> None:
+        super().__init__(http_client=http_client, runtime_secrets=runtime_secrets)
         self._codex_home = Path(codex_home) if codex_home else default_codex_home()
         self._token_url = token_url
-        self._http_client = http_client
-        self._runtime_secrets = runtime_secrets
-        self._lock = threading.Lock()
         self._tokens: dict | None = None
 
     @property
@@ -109,15 +106,14 @@ class CodexCloudAuth:
     def _load_tokens(self) -> dict:
         """Lê os tokens do auth.json, exigindo login via ChatGPT."""
         path = self.auth_file
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError as exc:
-            raise CodexAuthError(
+        data = self._read_json(
+            path,
+            error_type=CodexAuthError,
+            missing_message=(
                 f"Arquivo de login do Codex CLI não encontrado: {path}. "
                 "Rode `codex login` para autenticar."
-            ) from exc
-        except (OSError, json.JSONDecodeError) as exc:
-            raise CodexAuthError(f"Falha ao ler {path}: {exc}") from exc
+            ),
+        )
         tokens = data.get("tokens")
         if not isinstance(tokens, dict) or not tokens.get("access_token"):
             raise CodexAuthError(
@@ -145,12 +141,7 @@ class CodexCloudAuth:
                 f"refresh_token ausente em {self.auth_file}; impossível renovar. "
                 "Rode `codex login` novamente."
             )
-        client_id = (
-            self._runtime_secrets.get("CODEX_OAUTH_CLIENT_ID")
-            if self._runtime_secrets is not None
-            else os.environ.get("CODEX_OAUTH_CLIENT_ID")
-        )
-        client_id = (client_id or "").strip()
+        client_id = self._secret("CODEX_OAUTH_CLIENT_ID")
         if not client_id:
             raise CodexAuthError(
                 "Variável de ambiente CODEX_OAUTH_CLIENT_ID ausente; "
@@ -163,10 +154,7 @@ class CodexCloudAuth:
             "scope": "openid profile email",
         }
         try:
-            if self._http_client is not None:
-                response = self._http_client.post(self._token_url, json=payload)
-            else:
-                response = httpx.post(self._token_url, json=payload, timeout=30.0)
+            response = self._post_json(self._token_url, payload)
         except httpx.HTTPError as exc:
             raise CodexAuthError(f"Falha de rede ao renovar token do Codex: {exc}") from exc
         if response.status_code != 200:
@@ -193,21 +181,10 @@ class CodexCloudAuth:
 
     def _persist(self, tokens: dict) -> None:
         """Grava os tokens renovados preservando o restante do auth.json."""
-        path = self.auth_file
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            data = {}
-        if not isinstance(data, dict):
-            data = {}
-        data["tokens"] = tokens
-        data["last_refresh"] = (
-            datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        self._persist_section(
+            self.auth_file,
+            "tokens",
+            tokens,
+            error_type=CodexAuthError,
+            error_label="tokens renovados",
         )
-        tmp_path = path.with_suffix(".json.tmp")
-        try:
-            tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            os.chmod(tmp_path, 0o600)
-            tmp_path.replace(path)
-        except OSError as exc:
-            raise CodexAuthError(f"Falha ao persistir tokens renovados em {path}: {exc}") from exc

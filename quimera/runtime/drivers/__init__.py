@@ -6,6 +6,18 @@ def __getattr__(name: str):
         from .openai_compat import OpenAICompatDriver
 
         return OpenAICompatDriver
+    if name == "ToolCallingDriver":
+        from .openai_compat import ToolCallingDriver
+
+        return ToolCallingDriver
+    if name == "CloudDriver":
+        from .cloud import CloudDriver
+
+        return CloudDriver
+    if name == "create_api_driver":
+        from .factory import create_api_driver
+
+        return create_api_driver
     if name == "CodexCloudDriver":
         from .codexcloud import CodexCloudDriver
 
@@ -16,4 +28,11 @@ def __getattr__(name: str):
         return ClaudeCloudDriver
     raise AttributeError(name)
 
-__all__ = ["ClaudeCloudDriver", "CodexCloudDriver", "OpenAICompatDriver"]
+__all__ = [
+    "ClaudeCloudDriver",
+    "CloudDriver",
+    "CodexCloudDriver",
+    "OpenAICompatDriver",
+    "ToolCallingDriver",
+    "create_api_driver",
+]

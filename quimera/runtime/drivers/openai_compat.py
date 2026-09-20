@@ -865,8 +865,13 @@ class _SecretStr:
         return self._value
 
 
-class OpenAICompatDriver:
-    """Driver para qualquer endpoint compatível com OpenAI.
+class ToolCallingDriver:
+    """Harness neutro de tool calling compartilhado pelos drivers de API.
+
+    Esta classe concentra histórico, pruning, limites de hops, cancelamento e
+    execução de tools. O transporte é fornecido por ``_chat_streaming``;
+    ``OpenAICompatDriver`` implementa o transporte Chat Completions e o driver
+    cloud fornece o seu próprio transporte HTTP/SSE.
 
     Uso com Ollama local:
         driver = OpenAICompatDriver(
@@ -900,7 +905,7 @@ class OpenAICompatDriver:
         context_window: int | None = None,
         context_reserve_tokens: int | None = None,
     ) -> None:
-        """Inicializa uma instância de OpenAICompatDriver.
+        """Inicializa o harness sem criar cliente de um provedor específico.
         extra_body: dicionário opcional mesclado no corpo da requisição (ex: {"thinking": {"type": "enabled"}}).
         max_connections: limite de chamadas concorrentes ao backend (padrão: 4).
         max_model_requests: orçamento de requests por execução; None preserva
@@ -909,18 +914,10 @@ class OpenAICompatDriver:
             usa os defaults de ToolLoopBudget. Drivers de modelos com janela
             grande devem passar valores proporcionais à janela real."""
         self._semaphore = _backend_semaphore(base_url, api_key, max_connections)
-        if OpenAI is None:
-            raise ImportError(
-                "O pacote 'openai' é dependência obrigatória da instalação. "
-                "Reinstale o projeto com: pip install -e ."
-            )
         self.model = model
         self._api_key = _SecretStr(api_key)
-        self._client = OpenAI(
-            base_url=base_url,
-            api_key=self._api_key.get_secret_value(),
-            timeout=float(timeout) if timeout else 300.0,
-        )
+        self._transport_name = "openai_compat"
+        self._server_origin = "openai_compat_driver"
         self._close_lock = threading.Lock()
         self._closed = False
         self.tool_use_reliability = str(tool_use_reliability or "medium").lower()
@@ -1260,12 +1257,12 @@ class OpenAICompatDriver:
             _logger.debug("OpenAICompatDriver: run finished model=%s", self.model)
 
     def close(self) -> None:
-        """Fecha recursos HTTP do SDK de forma idempotente."""
+        """Fecha o transporte, quando a implementação possui cliente próprio."""
         with self._close_lock:
             if self._closed:
                 return
             self._closed = True
-        close = getattr(self._client, "close", None)
+        close = getattr(getattr(self, "_client", None), "close", None)
         if callable(close):
             close()
 
@@ -1289,7 +1286,7 @@ class OpenAICompatDriver:
         finally:
             self._semaphore.release()
 
-    def _chat_streaming(
+    def _openai_chat_streaming(
         self,
         messages: list[dict],
         *,
@@ -1428,8 +1425,8 @@ class OpenAICompatDriver:
         trusted_context = TrustedToolExecutionContext(
             agent_name=agent_name,
             parent_agent=parent_agent,
-            transport="openai_compat",
-            server_origin="openai_compat_driver",
+            transport=self._transport_name,
+            server_origin=self._server_origin,
         )
         metadata["trusted_context"] = trusted_context
         tool_call = ToolCall(
@@ -1443,3 +1440,60 @@ class OpenAICompatDriver:
         except Exception as exc:
             _logger.error("OpenAICompatDriver: tool execution failed for '%s': %s", tc["name"], exc)
             return ToolResult(ok=False, tool_name=tc["name"], error=str(exc))
+
+
+class OpenAICompatDriver(ToolCallingDriver):
+    """Transporte OpenAI Chat Completions sobre o harness comum de tools."""
+
+    def __init__(
+        self,
+        model: str,
+        base_url: str,
+        api_key: str = "ollama",
+        timeout: Optional[int] = None,
+        tool_use_reliability: str = "medium",
+        extra_body: Optional[dict] = None,
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        max_model_requests: int | None = None,
+        loop_budget: ToolLoopBudget | None = None,
+        context_window: int | None = None,
+        context_reserve_tokens: int | None = None,
+    ) -> None:
+        super().__init__(
+            model=model,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            tool_use_reliability=tool_use_reliability,
+            extra_body=extra_body,
+            max_connections=max_connections,
+            max_model_requests=max_model_requests,
+            loop_budget=loop_budget,
+            context_window=context_window,
+            context_reserve_tokens=context_reserve_tokens,
+        )
+        if OpenAI is None:
+            raise ImportError(
+                "O pacote 'openai' é dependência obrigatória da instalação. "
+                "Reinstale o projeto com: pip install -e ."
+            )
+        self._client = OpenAI(
+            base_url=base_url,
+            api_key=self._api_key.get_secret_value(),
+            timeout=float(timeout) if timeout else 300.0,
+        )
+
+    def _chat_streaming(
+        self,
+        messages: list[dict],
+        *,
+        tools: list[dict] | None = None,
+        cancel_event=None,
+        on_text_chunk=None,
+    ) -> tuple[str, list[dict]]:
+        return self._openai_chat_streaming(
+            messages,
+            tools=tools,
+            cancel_event=cancel_event,
+            on_text_chunk=on_text_chunk,
+        )

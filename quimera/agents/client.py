@@ -1443,45 +1443,18 @@ class AgentClient:
         is_first_call = agent not in self._api_drivers
         if is_first_call:
             provider = str(getattr(connection, "provider", "") or "").strip().lower()
-            if provider == "codexcloud":
-                # Autentica com os tokens do Codex CLI (~/.codex/auth.json);
-                # não usa API key de ambiente.
-                from quimera.runtime.drivers.codexcloud import CodexCloudDriver
+            from quimera.runtime.drivers.cloud import is_cloud_provider
+            from quimera.runtime.drivers.factory import create_api_driver
 
-                self._api_drivers[agent] = CodexCloudDriver(
-                    model=connection.model,
-                    base_url=connection.base_url,
-                    timeout=getattr(connection, "request_timeout", 300.0),
-                    tool_use_reliability=getattr(profile, "tool_use_reliability", "medium"),
-                    extra_body=connection.extra_body,
-                    max_connections=getattr(connection, "max_connections", 4),
-                    max_model_requests=getattr(connection, "max_model_requests", None),
-                    runtime_secrets=self.runtime_secrets,
-                )
-                self._api_driver_signatures[agent] = signature
-            elif provider == "claudecloud":
-                # Autentica com os tokens OAuth do Claude Code
-                # (~/.claude/.credentials.json); não usa API key de ambiente.
-                from quimera.runtime.drivers.claudecloud import ClaudeCloudDriver
-
-                self._api_drivers[agent] = ClaudeCloudDriver(
-                    model=connection.model,
-                    base_url=connection.base_url,
-                    timeout=getattr(connection, "request_timeout", 300.0),
-                    tool_use_reliability=getattr(profile, "tool_use_reliability", "medium"),
-                    extra_body=connection.extra_body,
-                    max_connections=getattr(connection, "max_connections", 4),
-                    max_model_requests=getattr(connection, "max_model_requests", None),
-                    runtime_secrets=self.runtime_secrets,
-                )
-                self._api_driver_signatures[agent] = signature
-            else:
+            api_key = "ollama"
+            openai_driver_cls = None
+            if not is_cloud_provider(provider):
                 global OpenAICompatDriver
                 if OpenAICompatDriver is None:
                     from quimera.runtime.drivers.openai_compat import OpenAICompatDriver as _OpenAICompatDriver
 
                     OpenAICompatDriver = _OpenAICompatDriver
-
+                openai_driver_cls = OpenAICompatDriver
                 api_key_env = connection.api_key_env
                 if api_key_env:
                     api_key = self.runtime_secrets.get(api_key_env)
@@ -1490,21 +1463,26 @@ class AgentClient:
                             f"[erro] variável de ambiente '{api_key_env}' não definida para {agent}"
                         )
                         return None
-                else:
-                    api_key = "ollama"
-                self._api_drivers[agent] = OpenAICompatDriver(
-                    model=connection.model,
-                    base_url=connection.base_url,
-                    api_key=api_key,
-                    timeout=getattr(connection, "request_timeout", 300.0),
-                    tool_use_reliability=getattr(profile, "tool_use_reliability", "medium"),
-                    extra_body=connection.extra_body,
-                    max_connections=getattr(connection, "max_connections", 4),
-                    max_model_requests=getattr(connection, "max_model_requests", None),
-                    context_window=getattr(connection, "context_window", None),
-                    context_reserve_tokens=getattr(connection, "context_reserve_tokens", None),
-                )
-                self._api_driver_signatures[agent] = signature
+            self._api_drivers[agent] = create_api_driver(
+                provider,
+                model=connection.model,
+                base_url=connection.base_url,
+                api_key=api_key,
+                openai_driver_cls=openai_driver_cls,
+                timeout=getattr(connection, "request_timeout", 300.0),
+                tool_use_reliability=getattr(profile, "tool_use_reliability", "medium"),
+                extra_body=connection.extra_body,
+                max_connections=getattr(connection, "max_connections", 4),
+                max_model_requests=getattr(connection, "max_model_requests", None),
+                context_window=getattr(connection, "context_window", None),
+                context_reserve_tokens=getattr(
+                    connection,
+                    "context_reserve_tokens",
+                    None,
+                ),
+                runtime_secrets=self.runtime_secrets,
+            )
+            self._api_driver_signatures[agent] = signature
 
         driver_instance = self._api_drivers[agent]
         if self._cancel_event.is_set():

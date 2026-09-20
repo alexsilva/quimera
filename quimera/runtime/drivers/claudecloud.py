@@ -2,13 +2,12 @@
 
 Fala diretamente com ``https://api.anthropic.com/v1/messages`` usando os
 tokens OAuth da subscription (mesma conta do `claude login`), sem executar o
-binário ``claude``. O loop de tool calling é herdado de
-:class:`OpenAICompatDriver`, então o modelo enxerga exclusivamente as
-ferramentas do Quimera (ToolExecutor) — nenhuma ferramenta embutida do
-Claude Code é exposta.
+binário ``claude``. Este módulo contém somente o codec Messages API e suas
+particularidades; execução, HTTP, refresh/retry e loop de tools ficam no
+``CloudDriver`` compartilhado.
 
 O histórico interno permanece no formato chat (OpenAI) e é convertido para o
-formato Anthropic a cada request, como o CodexCloudDriver faz com Responses.
+formato Anthropic a cada request, como o backend Codex faz com Responses.
 """
 from __future__ import annotations
 
@@ -20,10 +19,10 @@ from typing import Optional
 import httpx
 
 from ..claude_auth import ClaudeAuthError, ClaudeCloudAuth
+from .cloud import CloudRequest, iter_sse_events, register_cloud_backend
 from .openai_compat import (
     DEFAULT_MAX_CONNECTIONS,
     FatalAPIError,
-    OpenAICompatDriver,
     ToolLoopBudget,
     TransientAPIError,
     _parse_retry_after,
@@ -164,40 +163,26 @@ def _chat_tools_to_anthropic_tools(tools: list[dict]) -> list[dict]:
     return converted
 
 
-class ClaudeCloudDriver(OpenAICompatDriver):
-    """Driver da Anthropic Messages API (conta do Claude Code) com tools do Quimera.
+class ClaudeCloudBackend:
+    """Codec e particularidades da Anthropic Messages API."""
 
-    Herda de :class:`OpenAICompatDriver` para reutilizar o loop de tool
-    calling, orçamentos de hops e integração com o AgentClient; substitui a
-    camada de transporte por chamadas SSE à Messages API com OAuth.
-    """
+    id = "claudecloud"
+    display_name = "Claude Cloud"
+    order = 20
+    default_base_url = DEFAULT_CLAUDE_CLOUD_BASE_URL
+    default_loop_budget = None
 
     def __init__(
         self,
         model: str,
         base_url: str = DEFAULT_CLAUDE_CLOUD_BASE_URL,
-        timeout: Optional[int] = None,
-        tool_use_reliability: str = "medium",
         extra_body: Optional[dict] = None,
-        max_connections: int = DEFAULT_MAX_CONNECTIONS,
-        max_model_requests: int | None = None,
         auth: ClaudeCloudAuth | None = None,
-        http_client: httpx.Client | None = None,
-        loop_budget: ToolLoopBudget | None = None,
         max_tokens: int = _DEFAULT_MAX_TOKENS,
         runtime_secrets=None,
     ) -> None:
-        super().__init__(
-            model=model,
-            base_url=base_url,
-            api_key="claudecloud",
-            timeout=timeout,
-            tool_use_reliability=tool_use_reliability,
-            extra_body=extra_body,
-            max_connections=max_connections,
-            max_model_requests=max_model_requests,
-            loop_budget=loop_budget,
-        )
+        self.model = model
+        self.extra_body = dict(extra_body) if extra_body else None
         self._messages_url = base_url.rstrip("/") + "/v1/messages"
         self._models_url = base_url.rstrip("/") + "/v1/models"
         self._auth = auth or ClaudeCloudAuth(runtime_secrets=runtime_secrets)
@@ -206,24 +191,10 @@ class ClaudeCloudDriver(OpenAICompatDriver):
         self._resolved_model: str | None = (
             self.model if str(self.model or "").startswith("claude-") else None
         )
-        read_timeout = float(timeout) if timeout else 300.0
-        self._http = http_client or httpx.Client(
-            timeout=httpx.Timeout(connect=15.0, read=read_timeout, write=30.0, pool=30.0),
-        )
-        self._owns_http = http_client is None
         self._max_tokens = int(max_tokens) if max_tokens else _DEFAULT_MAX_TOKENS
         # id do primeiro tool_use do turno -> blocos originais do assistant
         # (thinking/text/tool_use, na ordem do stream) para replay nos hops.
         self._turn_blocks: OrderedDict[str, tuple[dict, ...]] = OrderedDict()
-
-    def close(self) -> None:
-        """Fecha o cliente HTTP próprio além dos recursos herdados."""
-        super().close()
-        if self._owns_http:
-            try:
-                self._http.close()
-            except Exception:
-                _logger.exception("claudecloud: falha ao fechar cliente HTTP")
 
     # ------------------------------------------------------------------
     # Conversão chat -> Anthropic
@@ -395,11 +366,11 @@ class ClaudeCloudDriver(OpenAICompatDriver):
             "content-type": "application/json",
         }
 
-    def _resolve_model_alias(self, access_token: str) -> None:
+    def _resolve_model_alias(self, http_client: httpx.Client, access_token: str) -> None:
         """Resolve alias curto ("sonnet") para o model id mais novo da família."""
         alias = str(self.model or "").strip().lower()
         try:
-            response = self._http.get(
+            response = http_client.get(
                 self._models_url,
                 headers=self._request_headers(access_token),
                 params={"limit": 100},
@@ -435,61 +406,51 @@ class ClaudeCloudDriver(OpenAICompatDriver):
             ),
         )
 
-    def _messages_turn(
-        self,
-        messages: list[dict],
-        tools: list[dict],
-        cancel_event=None,
-        on_text_chunk=None,
-    ) -> tuple[str, list[dict]]:
-        """Executa um turno contra a Messages API, com retry único em 401."""
-        body: dict | None = None
-        for attempt in range(2):
-            try:
-                access_token = self._auth.credentials(force_refresh=attempt > 0)
-            except ClaudeAuthError as exc:
-                raise FatalAPIError(
-                    f"claudecloud: {exc}",
-                    cause=exc,
-                    user_message=(
-                        "Não foi possível autenticar o Claude Cloud. "
-                        "Refaça o login com `claude login`."
-                    ),
-                ) from exc
-            if self._resolved_model is None:
-                self._resolve_model_alias(access_token)
-            if body is None:
-                body = self._build_anthropic_payload(messages, tools)
-            headers = self._request_headers(access_token)
-            try:
-                with self._http.stream(
-                    "POST", self._messages_url, headers=headers, json=body
-                ) as response:
-                    if response.status_code == 401 and attempt == 0:
-                        response.read()
-                        continue
-                    if response.status_code != 200:
-                        try:
-                            detail = response.read().decode("utf-8", errors="replace")
-                        except httpx.HTTPError:
-                            detail = ""
-                        _raise_http_error(response.status_code, detail, response.headers)
-                    return self._consume_stream(
-                        response,
-                        cancel_event=cancel_event,
-                        on_text_chunk=on_text_chunk,
-                    )
-            except httpx.TimeoutException as exc:
-                raise TransientAPIError(
-                    f"claudecloud: timeout da Anthropic: {exc}",
-                    user_message="O Claude Cloud demorou além do limite e foi encerrado.",
-                ) from exc
-            except httpx.HTTPError as exc:
-                raise TransientAPIError(f"claudecloud: falha de rede: {exc}") from exc
-        raise FatalAPIError(
-            "claudecloud: Anthropic recusou o token mesmo após refresh. "
+    def credentials(self, *, force_refresh: bool = False):
+        try:
+            return self._auth.credentials(force_refresh=force_refresh)
+        except ClaudeAuthError as exc:
+            raise FatalAPIError(
+                f"claudecloud: {exc}",
+                cause=exc,
+                user_message=(
+                    "Não foi possível autenticar o Claude Cloud. "
+                    "Refaça o login com `claude login`."
+                ),
+            ) from exc
+
+    def prepare(self, http_client: httpx.Client, credentials) -> None:
+        if self._resolved_model is None:
+            self._resolve_model_alias(http_client, credentials)
+
+    def build_request(self, messages, tools, credentials) -> CloudRequest:
+        return CloudRequest(
+            url=self._messages_url,
+            headers=self._request_headers(credentials),
+            body=self._build_anthropic_payload(messages, tools),
+        )
+
+    @staticmethod
+    def raise_for_status(status: int, detail: str, headers: httpx.Headers) -> None:
+        _raise_http_error(status, detail, headers)
+
+    @staticmethod
+    def unauthorized_error() -> FatalAPIError:
+        return FatalAPIError(
+            "claudecloud: Anthropic recusou o token mesmo após refresh (HTTP 401). "
             "Rode `claude login` para reautenticar."
         )
+
+    @staticmethod
+    def timeout_error(exc: httpx.TimeoutException) -> TransientAPIError:
+        return TransientAPIError(
+            f"claudecloud: timeout da Anthropic: {exc}",
+            user_message="O Claude Cloud demorou além do limite e foi encerrado.",
+        )
+
+    @staticmethod
+    def network_error(exc: httpx.HTTPError) -> TransientAPIError:
+        return TransientAPIError(f"claudecloud: falha de rede: {exc}")
 
     def _consume_stream(
         self,
@@ -519,18 +480,7 @@ class ClaudeCloudDriver(OpenAICompatDriver):
                 _emit("</think>")
                 thinking_open = False
 
-        for line in response.iter_lines():
-            if cancel_event is not None and cancel_event.is_set():
-                break
-            if not line.startswith("data:"):
-                continue
-            payload = line[5:].strip()
-            if not payload or payload == "[DONE]":
-                continue
-            try:
-                event = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
+        for event in iter_sse_events(response, cancel_event):
             etype = event.get("type")
 
             if etype == "content_block_start":
@@ -702,18 +652,41 @@ class ClaudeCloudDriver(OpenAICompatDriver):
         )
         return text, tool_calls
 
-    # ------------------------------------------------------------------
-    # Overrides do transporte herdado
-    # ------------------------------------------------------------------
+    consume_stream = _consume_stream
 
-    def _chat_streaming(
-        self,
-        messages: list[dict],
-        *,
-        tools: list[dict] | None = None,
-        cancel_event=None,
-        on_text_chunk=None,
-    ) -> tuple[str, list[dict]]:
-        return self._messages_turn(
-            messages, tools or [], cancel_event=cancel_event, on_text_chunk=on_text_chunk
-        )
+
+register_cloud_backend(ClaudeCloudBackend.id, ClaudeCloudBackend)
+
+
+def ClaudeCloudDriver(
+    model: str,
+    base_url: str = DEFAULT_CLAUDE_CLOUD_BASE_URL,
+    timeout: Optional[int] = None,
+    tool_use_reliability: str = "medium",
+    extra_body: Optional[dict] = None,
+    max_connections: int = DEFAULT_MAX_CONNECTIONS,
+    max_model_requests: int | None = None,
+    auth: ClaudeCloudAuth | None = None,
+    http_client: httpx.Client | None = None,
+    loop_budget: ToolLoopBudget | None = None,
+    max_tokens: int = _DEFAULT_MAX_TOKENS,
+    runtime_secrets=None,
+):
+    """Alias construtor legado; retorna o ``CloudDriver`` unificado."""
+    from .cloud import create_cloud_driver
+
+    return create_cloud_driver(
+        "claudecloud",
+        model=model,
+        base_url=base_url,
+        timeout=timeout,
+        tool_use_reliability=tool_use_reliability,
+        extra_body=extra_body,
+        max_connections=max_connections,
+        max_model_requests=max_model_requests,
+        auth=auth,
+        http_client=http_client,
+        loop_budget=loop_budget,
+        max_tokens=max_tokens,
+        runtime_secrets=runtime_secrets,
+    )

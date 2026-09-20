@@ -10,6 +10,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Switch
 
 from quimera.profiles.base import CliConnection, OpenAIConnection
+from quimera.runtime.drivers.cloud import cloud_provider_options
 
 
 class ConnectionScreen(ModalScreen[None]):
@@ -17,7 +18,7 @@ class ConnectionScreen(ModalScreen[None]):
 
     PROVIDER_OPTIONS = (
         ("OpenAI compatível", "openai_compat"),
-        ("Codex Cloud", "codexcloud"),
+        *cloud_provider_options(),
     )
 
     CSS = """

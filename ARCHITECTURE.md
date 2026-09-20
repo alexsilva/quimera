@@ -95,7 +95,11 @@ quimera/
 │   │   └── __main__.py               # Entrypoint standalone do servidor MCP
 │   ├── drivers/                      # Drivers de execução de agentes
 │   │   ├── repl.py                   # Driver REPL (processo interativo persistente)
-│   │   ├── openai_compat.py          # Driver compatível com API OpenAI
+│   │   ├── openai_compat.py          # Harness de tools + transporte OpenAI compatível
+│   │   ├── cloud.py                  # Motor cloud único, registry e transporte HTTP/SSE
+│   │   ├── factory.py                # Factory única para todas as conexões API
+│   │   ├── codexcloud.py             # Codec Responses API do Codex
+│   │   ├── claudecloud.py            # Codec Messages API da Anthropic
 │   │   ├── prompt_adapter.py         # Adaptador de prompts para drivers
 │   │   └── tool_schemas.py           # Schemas JSON de tools para drivers de API
 │   └── tools/                        # Implementações de tools individuais
@@ -237,7 +241,7 @@ quimera/
 
 Executor de tools e agentes em ambiente potencialmente sandboxed.
 
-- **`drivers/`**: Drivers de execução de agentes. `repl.py` gerencia processos interativos persistentes; `openai_compat.py` suporta a API OpenAI; `tool_schemas.py` define schemas JSON para uso em API mode.
+- **`drivers/`**: Drivers de execução de agentes. `ToolCallingDriver` concentra o loop de tools; `OpenAICompatDriver` fornece Chat Completions; `CloudDriver` fornece lifecycle HTTP/SSE e retry OAuth para backends registrados. `codexcloud.py` e `claudecloud.py` contêm somente os codecs inevitavelmente específicos. `repl.py` e a UI consultam o mesmo registro cloud.
 - **`tools/`**: Implementações individuais de tools: shell, filesystem, web, patch, tasks.
 - **`task_planning.py`**: Decompõe goals em tasks individuais.
 - **`approval.py`**: Solicita aprovação interativa do usuário antes de ações potencialmente destrutivas.

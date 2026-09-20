@@ -8,15 +8,13 @@ arquivo, mantendo as duas ferramentas logadas com a mesma conta.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
-import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from quimera.environment import RuntimeSecrets
+from quimera.runtime.oauth_session import FileOAuthSession
 
 import httpx
 
@@ -42,7 +40,7 @@ def default_claude_home() -> Path:
     return Path.home() / ".claude"
 
 
-class ClaudeCloudAuth:
+class ClaudeCloudAuth(FileOAuthSession):
     """Fornece access token OAuth do Claude Code com refresh automático.
 
     Thread-safe: múltiplos agentes podem pedir credenciais concorrentemente e
@@ -58,11 +56,9 @@ class ClaudeCloudAuth:
         http_client: httpx.Client | None = None,
         runtime_secrets: RuntimeSecrets | None = None,
     ) -> None:
+        super().__init__(http_client=http_client, runtime_secrets=runtime_secrets)
         self._claude_home = Path(claude_home) if claude_home else default_claude_home()
         self._token_url = token_url
-        self._http_client = http_client
-        self._runtime_secrets = runtime_secrets
-        self._lock = threading.Lock()
         self._oauth: dict | None = None
 
     @property
@@ -88,15 +84,14 @@ class ClaudeCloudAuth:
     def _load_oauth(self) -> dict:
         """Lê o bloco claudeAiOauth do .credentials.json."""
         path = self.credentials_file
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError as exc:
-            raise ClaudeAuthError(
+        data = self._read_json(
+            path,
+            error_type=ClaudeAuthError,
+            missing_message=(
                 f"Arquivo de login do Claude Code não encontrado: {path}. "
                 "Rode `claude login` para autenticar."
-            ) from exc
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ClaudeAuthError(f"Falha ao ler {path}: {exc}") from exc
+            ),
+        )
         oauth = data.get("claudeAiOauth")
         if not isinstance(oauth, dict) or not oauth.get("accessToken"):
             raise ClaudeAuthError(
@@ -124,12 +119,7 @@ class ClaudeCloudAuth:
                 f"refreshToken ausente em {self.credentials_file}; impossível renovar. "
                 "Rode `claude login` novamente."
             )
-        client_id = (
-            self._runtime_secrets.get("CLAUDE_OAUTH_CLIENT_ID")
-            if self._runtime_secrets is not None
-            else os.environ.get("CLAUDE_OAUTH_CLIENT_ID")
-        )
-        client_id = (client_id or "").strip()
+        client_id = self._secret("CLAUDE_OAUTH_CLIENT_ID")
         if not client_id:
             raise ClaudeAuthError(
                 "Variável de ambiente CLAUDE_OAUTH_CLIENT_ID ausente; "
@@ -143,10 +133,7 @@ class ClaudeCloudAuth:
         last_error: Exception | None = None
         for url in (self._token_url, CLAUDE_OAUTH_TOKEN_URL_FALLBACK):
             try:
-                if self._http_client is not None:
-                    response = self._http_client.post(url, json=payload)
-                else:
-                    response = httpx.post(url, json=payload, timeout=30.0)
+                response = self._post_json(url, payload)
             except httpx.HTTPError as exc:
                 last_error = exc
                 continue
@@ -186,23 +173,10 @@ class ClaudeCloudAuth:
 
     def _persist(self, oauth: dict) -> None:
         """Grava os tokens renovados preservando o restante do arquivo."""
-        path = self.credentials_file
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            data = {}
-        if not isinstance(data, dict):
-            data = {}
-        data["claudeAiOauth"] = oauth
-        data["last_refresh"] = (
-            datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        self._persist_section(
+            self.credentials_file,
+            "claudeAiOauth",
+            oauth,
+            error_type=ClaudeAuthError,
+            error_label="tokens renovados",
         )
-        tmp_path = path.with_suffix(".json.tmp")
-        try:
-            tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            os.chmod(tmp_path, 0o600)
-            tmp_path.replace(path)
-        except OSError as exc:
-            raise ClaudeAuthError(
-                f"Falha ao persistir tokens renovados em {path}: {exc}"
-            ) from exc

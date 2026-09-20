@@ -2,13 +2,11 @@
 
 Fala diretamente com ``https://chatgpt.com/backend-api/codex`` usando os
 tokens OAuth do Codex CLI (mesma conta), sem executar o binário ``codex``.
-O loop de tool calling é herdado de :class:`OpenAICompatDriver`, então o
-modelo enxerga exclusivamente as ferramentas do Quimera (ToolExecutor) —
-nenhuma ferramenta embutida do Codex CLI é exposta.
+O codec contém apenas as diferenças da Responses API; execução, HTTP,
+refresh/retry e loop de tools pertencem ao :class:`CloudDriver` comum.
 """
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from collections import OrderedDict
@@ -17,10 +15,10 @@ from typing import Optional
 import httpx
 
 from ..codex_auth import CodexAuthError, CodexCloudAuth
+from .cloud import CloudRequest, iter_sse_events, register_cloud_backend
 from .openai_compat import (
     DEFAULT_MAX_CONNECTIONS,
     FatalAPIError,
-    OpenAICompatDriver,
     ToolLoopBudget,
     TransientAPIError,
     _parse_retry_after,
@@ -144,59 +142,31 @@ def _chat_tools_to_responses_tools(tools: list[dict]) -> list[dict]:
     return converted
 
 
-class CodexCloudDriver(OpenAICompatDriver):
-    """Driver do backend Codex (conta ChatGPT do Codex CLI) com tools do Quimera.
+class CodexCloudBackend:
+    """Codec e particularidades do backend Codex Responses API."""
 
-    Herda de :class:`OpenAICompatDriver` para reutilizar o loop de tool
-    calling, orçamentos de hops e integração com o AgentClient; substitui a
-    camada de transporte por chamadas SSE à API Responses do backend Codex.
-    """
+    id = "codexcloud"
+    display_name = "Codex Cloud"
+    order = 10
+    default_base_url = DEFAULT_CODEX_CLOUD_BASE_URL
+    default_loop_budget = CODEX_LOOP_BUDGET
 
     def __init__(
         self,
         model: str,
         base_url: str = DEFAULT_CODEX_CLOUD_BASE_URL,
-        timeout: Optional[int] = None,
-        tool_use_reliability: str = "medium",
         extra_body: Optional[dict] = None,
-        max_connections: int = DEFAULT_MAX_CONNECTIONS,
-        max_model_requests: int | None = None,
         auth: CodexCloudAuth | None = None,
-        http_client: httpx.Client | None = None,
-        loop_budget: ToolLoopBudget | None = None,
         runtime_secrets=None,
     ) -> None:
-        super().__init__(
-            model=model,
-            base_url=base_url,
-            api_key="codexcloud",
-            timeout=timeout,
-            tool_use_reliability=tool_use_reliability,
-            extra_body=extra_body,
-            max_connections=max_connections,
-            max_model_requests=max_model_requests,
-            loop_budget=loop_budget or CODEX_LOOP_BUDGET,
-        )
+        self.model = model
+        self.extra_body = dict(extra_body) if extra_body else None
         self._responses_url = base_url.rstrip("/") + "/responses"
         self._auth = auth or CodexCloudAuth(runtime_secrets=runtime_secrets)
         self._session_id = str(uuid.uuid4())
-        read_timeout = float(timeout) if timeout else 300.0
-        self._http = http_client or httpx.Client(
-            timeout=httpx.Timeout(connect=15.0, read=read_timeout, write=30.0, pool=30.0),
-        )
-        self._owns_http = http_client is None
         # call_id -> itens de reasoning que precedem o function_call no output,
         # na ordem original do stream.
         self._reasoning_items: OrderedDict[str, tuple[dict, ...]] = OrderedDict()
-
-    def close(self) -> None:
-        """Fecha o cliente HTTP próprio além dos recursos herdados."""
-        super().close()
-        if self._owns_http:
-            try:
-                self._http.close()
-            except Exception:
-                _logger.exception("codexcloud: falha ao fechar cliente HTTP")
 
     # ------------------------------------------------------------------
     # Conversão chat -> Responses
@@ -278,70 +248,40 @@ class CodexCloudDriver(OpenAICompatDriver):
             "session_id": self._session_id,
         }
 
-    def _responses_turn(
-        self,
-        messages: list[dict],
-        tools: list[dict],
-        cancel_event=None,
-        on_text_chunk=None,
-    ) -> tuple[str, list[dict]]:
-        """Executa um turno contra o backend Codex, com retry único em 401."""
-        body = self._build_responses_payload(messages, tools)
-        last_unauthorized: str | None = None
-        for attempt in range(2):
-            try:
-                access_token, account_id = self._auth.credentials(force_refresh=attempt > 0)
-            except CodexAuthError as exc:
-                raise FatalAPIError(
-                    f"codexcloud: {exc}",
-                    cause=exc,
-                    user_message=(
-                        "Não foi possível autenticar o Codex Cloud. "
-                        "Refaça o login do Codex CLI."
-                    ),
-                ) from exc
-            headers = self._request_headers(access_token, account_id)
-            try:
-                with self._http.stream(
-                    "POST", self._responses_url, headers=headers, json=body
-                ) as response:
-                    if response.status_code == 401 and attempt == 0:
-                        response.read()
-                        last_unauthorized = "HTTP 401 do backend Codex"
-                        continue
-                    self._raise_for_status(response)
-                    return self._consume_stream(
-                        response,
-                        cancel_event=cancel_event,
-                        on_text_chunk=on_text_chunk,
-                    )
-            except httpx.TimeoutException as exc:
-                raise TransientAPIError(
-                    f"codexcloud: timeout do backend Codex: {exc}",
-                    user_message="O Codex Cloud demorou além do limite e foi encerrado.",
-                ) from exc
-            except httpx.HTTPError as exc:
-                raise TransientAPIError(f"codexcloud: falha de rede: {exc}") from exc
-        raise FatalAPIError(
-            "codexcloud: backend Codex recusou o token mesmo após refresh "
-            f"({last_unauthorized}). Rode `codex login` para reautenticar."
+    def credentials(self, *, force_refresh: bool = False):
+        try:
+            return self._auth.credentials(force_refresh=force_refresh)
+        except CodexAuthError as exc:
+            raise FatalAPIError(
+                f"codexcloud: {exc}",
+                cause=exc,
+                user_message=(
+                    "Não foi possível autenticar o Codex Cloud. "
+                    "Refaça o login do Codex CLI."
+                ),
+            ) from exc
+
+    def prepare(self, http_client: httpx.Client, credentials) -> None:
+        return None
+
+    def build_request(self, messages, tools, credentials) -> CloudRequest:
+        access_token, account_id = credentials
+        return CloudRequest(
+            url=self._responses_url,
+            headers=self._request_headers(access_token, account_id),
+            body=self._build_responses_payload(messages, tools),
         )
 
     @staticmethod
-    def _raise_for_status(response: httpx.Response) -> None:
-        status = response.status_code
+    def raise_for_status(status: int, detail: str, headers: httpx.Headers) -> None:
         if status == 200:
             return
-        detail = ""
-        try:
-            detail = response.read().decode("utf-8", errors="replace")[:500]
-        except httpx.HTTPError:
-            pass
+        detail = detail[:500]
         if status == 429:
             raise TransientAPIError(
                 f"codexcloud: rate limit do backend Codex (HTTP 429): {detail}",
                 rate_limited=True,
-                retry_after=_parse_retry_after(response.headers.get("retry-after")),
+                retry_after=_parse_retry_after(headers.get("retry-after")),
             )
         if status >= 500:
             raise TransientAPIError(
@@ -356,6 +296,24 @@ class CodexCloudDriver(OpenAICompatDriver):
             f"codexcloud: requisição rejeitada pelo backend Codex (HTTP {status}): {detail}",
             user_message=f"O Codex Cloud rejeitou a requisição (HTTP {status}).",
         )
+
+    @staticmethod
+    def unauthorized_error() -> FatalAPIError:
+        return FatalAPIError(
+            "codexcloud: backend Codex recusou o token mesmo após refresh (HTTP 401). "
+            "Rode `codex login` para reautenticar."
+        )
+
+    @staticmethod
+    def timeout_error(exc: httpx.TimeoutException) -> TransientAPIError:
+        return TransientAPIError(
+            f"codexcloud: timeout do backend Codex: {exc}",
+            user_message="O Codex Cloud demorou além do limite e foi encerrado.",
+        )
+
+    @staticmethod
+    def network_error(exc: httpx.HTTPError) -> TransientAPIError:
+        return TransientAPIError(f"codexcloud: falha de rede: {exc}")
 
     def _remember_reasoning(self, call_id: str, items: list[dict]) -> None:
         self._reasoning_items[call_id] = tuple(items)
@@ -390,18 +348,7 @@ class CodexCloudDriver(OpenAICompatDriver):
                 _emit("</think>")
                 reasoning_open = False
 
-        for line in response.iter_lines():
-            if cancel_event is not None and cancel_event.is_set():
-                break
-            if not line.startswith("data:"):
-                continue
-            payload = line[5:].strip()
-            if not payload or payload == "[DONE]":
-                continue
-            try:
-                event = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
+        for event in iter_sse_events(response, cancel_event):
             etype = event.get("type")
 
             if etype == "response.output_item.added":
@@ -528,18 +475,39 @@ class CodexCloudDriver(OpenAICompatDriver):
             })
         return text, tool_calls
 
-    # ------------------------------------------------------------------
-    # Overrides do transporte herdado
-    # ------------------------------------------------------------------
+    consume_stream = _consume_stream
 
-    def _chat_streaming(
-        self,
-        messages: list[dict],
-        *,
-        tools: list[dict] | None = None,
-        cancel_event=None,
-        on_text_chunk=None,
-    ) -> tuple[str, list[dict]]:
-        return self._responses_turn(
-            messages, tools or [], cancel_event=cancel_event, on_text_chunk=on_text_chunk
-        )
+
+register_cloud_backend(CodexCloudBackend.id, CodexCloudBackend)
+
+
+def CodexCloudDriver(
+    model: str,
+    base_url: str = DEFAULT_CODEX_CLOUD_BASE_URL,
+    timeout: Optional[int] = None,
+    tool_use_reliability: str = "medium",
+    extra_body: Optional[dict] = None,
+    max_connections: int = DEFAULT_MAX_CONNECTIONS,
+    max_model_requests: int | None = None,
+    auth: CodexCloudAuth | None = None,
+    http_client: httpx.Client | None = None,
+    loop_budget: ToolLoopBudget | None = None,
+    runtime_secrets=None,
+):
+    """Alias construtor legado; retorna o ``CloudDriver`` unificado."""
+    from .cloud import create_cloud_driver
+
+    return create_cloud_driver(
+        "codexcloud",
+        model=model,
+        base_url=base_url,
+        timeout=timeout,
+        tool_use_reliability=tool_use_reliability,
+        extra_body=extra_body,
+        max_connections=max_connections,
+        max_model_requests=max_model_requests,
+        auth=auth,
+        http_client=http_client,
+        loop_budget=loop_budget,
+        runtime_secrets=runtime_secrets,
+    )
