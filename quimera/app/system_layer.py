@@ -21,6 +21,7 @@ from ..constants import (
     CMD_CONTEXT,
     CMD_HELP,
     CMD_POLICY,
+    CMD_SANDBOX,
     CMD_PROMPT,
     CMD_RELOAD,
     CMD_RESET,
@@ -82,6 +83,9 @@ class SystemLayerDependencies:
     max_deferred_messages_getter: Callable | None = None
     workspace_policy_getter: Callable | None = None
     workspace_policy_setter: Callable | None = None
+    sandbox_enabled_getter: Callable | None = None
+    sandbox_enabled_setter: Callable | None = None
+    sandbox_available_checker: Callable | None = None
     resumer_agent_getter: Callable | None = None
     resumer_agent_setter: Callable | None = None
     display_service: DisplayService | None = None
@@ -142,6 +146,9 @@ class AppSystemLayer:
         max_deferred_messages_getter=None,
         workspace_policy_getter=None,
         workspace_policy_setter=None,
+        sandbox_enabled_getter=None,
+        sandbox_enabled_setter=None,
+        sandbox_available_checker=None,
         resumer_agent_getter=None,
         resumer_agent_setter=None,
         display_service=None,
@@ -188,6 +195,9 @@ class AppSystemLayer:
         self._max_deferred_messages_getter = max_deferred_messages_getter
         self.workspace_policy_getter = workspace_policy_getter
         self.workspace_policy_setter = workspace_policy_setter
+        self.sandbox_enabled_getter = sandbox_enabled_getter
+        self.sandbox_enabled_setter = sandbox_enabled_setter
+        self.sandbox_available_checker = sandbox_available_checker
         self.resumer_agent_getter = resumer_agent_getter
         self.resumer_agent_setter = resumer_agent_setter
 
@@ -218,6 +228,24 @@ class AppSystemLayer:
             if name in {"strict", "developer", "autonomous"}:
                 return name
         return "strict"
+
+    def _current_sandbox_enabled(self) -> bool:
+        """Retorna o estado atual do sandbox para exibição."""
+        if callable(self.sandbox_enabled_getter):
+            try:
+                return bool(self.sandbox_enabled_getter())
+            except Exception:
+                pass
+        return False
+
+    def _sandbox_available(self) -> bool:
+        """Retorna se o mecanismo de isolamento passou no self-test."""
+        if callable(self.sandbox_available_checker):
+            try:
+                return bool(self.sandbox_available_checker())
+            except Exception:
+                pass
+        return False
 
     def _read_command_input(self, prompt: str) -> str | None:
         """Lê input síncrono para comandos interativos do chat."""
@@ -685,6 +713,35 @@ class AppSystemLayer:
                 self._display.show_system(f"[policy] workspace_policy={raw_target}")
             else:
                 self._display.show_warning_message("[policy] configuração indisponível.")
+            return True
+
+        if command == CMD_SANDBOX or command.startswith(f"{CMD_SANDBOX} "):
+            raw_target = command[len(CMD_SANDBOX):].strip().lower()
+            if raw_target in {"", "status", "show"}:
+                current = "on" if self._current_sandbox_enabled() else "off"
+                available = "disponível" if self._sandbox_available() else "indisponível"
+                self._display.show_system(
+                    f"[sandbox] atual: {current}; bubblewrap: {available}. "
+                    "Escrita permitida no workspace, /tmp e runtimes configurados dos agentes."
+                )
+                return True
+            if raw_target not in {"on", "off"}:
+                self._display.show_warning_message("Uso: /sandbox [status|on|off]")
+                return True
+            if not callable(self.sandbox_enabled_setter):
+                self._display.show_warning_message("[sandbox] configuração indisponível.")
+                return True
+            try:
+                enabled = raw_target == "on"
+                self.sandbox_enabled_setter(enabled)
+            except Exception as exc:
+                self._display.show_warning_message(
+                    f"[sandbox] não foi possível ativar: {exc}"
+                    if raw_target == "on"
+                    else f"[sandbox] não foi possível desativar: {exc}"
+                )
+                return True
+            self._display.show_system(f"[sandbox] workspace_sandbox={raw_target}")
             return True
 
         if command == CMD_CONTEXT_EDIT or command.startswith(f"{CMD_CONTEXT_EDIT} "):

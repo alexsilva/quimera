@@ -32,7 +32,7 @@ from typing import IO, Any
 
 from quimera import process_factory as subprocess
 from quimera.environment import build_env_vars
-from quimera.sandbox.bwrap import build_secret_mask_cmd
+from quimera.sandbox.state import wrap_subprocess_cmd
 from quimera.runtime.mcp.remote_credentials import migrate_legacy_remote_credentials
 from quimera.runtime.models import ToolCall, ToolResult
 
@@ -174,10 +174,10 @@ class StdioMCPTransport(MCPTransport):
         )
         command = list(self._command)
         if self.workspace is not None:
-            command = build_secret_mask_cmd(
+            command = wrap_subprocess_cmd(
+                self.workspace,
                 str(self.workspace.cwd),
                 command,
-                [str(path) for path in self.workspace.protected_files],
                 die_with_parent=True,
             )
         self._process = subprocess.Popen(

@@ -29,6 +29,7 @@ CMD_RESET = "/reset"
 CMD_APPROVE = "/approve"
 CMD_APPROVE_ALL = "/approve-all"
 CMD_POLICY = "/policy"
+CMD_SANDBOX = "/sandbox"
 CMD_CONFIG = "/config"
 CMD_ALIASES = {
     "/e": CMD_EDIT,
@@ -87,6 +88,7 @@ def build_help(agent_names: Sequence[str]) -> str:
             "- r/: desativa congelamento ou modo orquestrador, volta a rotacionar\n"
             "- /approve: pré-aprova a próxima chamada de ferramenta\n"
             "- /approve-all: aprova automaticamente todas as chamadas de ferramenta seguintes\n"
+            "- /sandbox [status|on|off]: controla o confinamento de comandos ao workspace\n"
             "- /help: mostra esta ajuda\n"
             "- /exit: encerra a sessão\n"
     )

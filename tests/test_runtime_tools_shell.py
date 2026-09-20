@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from quimera.config import ConfigManager
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
@@ -45,6 +46,23 @@ def test_run_shell_uses_default_timeout_when_omitted(tmp_path):
         tool.run_shell(ToolCall(name="run_shell", arguments={"command": "echo ok"}))
 
     assert mock_run.call_args.kwargs["timeout"] == 20
+
+
+def test_run_shell_fails_closed_when_workspace_sandbox_is_unavailable(tmp_path):
+    workspace = Workspace(tmp_path)
+    ConfigManager(workspace.workspace_config_file).set_sandbox_enabled(True)
+    tool = ShellTool(ToolRuntimeConfig(workspace=workspace))
+
+    with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value=None), patch(
+        "subprocess.run"
+    ) as run:
+        result = tool.run_shell(
+            ToolCall(name="run_shell", arguments={"command": "echo blocked"})
+        )
+
+    assert result.ok is False
+    assert "sandbox do workspace está ativo" in result.error
+    run.assert_not_called()
 
 
 def test_run_shell_allows_timeout_above_default_up_to_configured_max(tmp_path):

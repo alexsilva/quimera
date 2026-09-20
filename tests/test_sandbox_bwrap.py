@@ -8,6 +8,10 @@ from unittest.mock import Mock
 
 from quimera.modes import get_mode
 from quimera.sandbox.bwrap import (
+    SandboxPathError,
+    SandboxUnavailableError,
+    build_workspace_sandbox_cmd,
+    bwrap_self_test,
     build_bwrap_cmd,
     build_secret_mask_cmd,
     is_bwrap_available,
@@ -46,21 +50,21 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Verifica que retorna o comando original quando bwrap não está disponível."""
         from unittest.mock import patch
         cmd = ["echo", "hello"]
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=False):
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value=None):
             result = build_bwrap_cmd(EXECUTE, "/tmp", cmd)
         self.assertEqual(result, cmd)
 
     def test_starts_with_bwrap(self):
         """Verifica que o comando gerado inicia com bwrap."""
         from unittest.mock import patch
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
             result = build_bwrap_cmd(EXECUTE, "/tmp", ["echo", "hi"])
-        self.assertEqual(result[0], "bwrap")
+        self.assertEqual(result[0], "/usr/bin/bwrap")
 
     def test_includes_dev_and_proc(self):
         """Verifica que --dev /dev e --proc /proc estão presentes."""
         from unittest.mock import patch
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
             result = build_bwrap_cmd(EXECUTE, "/tmp", ["echo"])
         joined = " ".join(result)
         self.assertIn("--dev /dev", joined)
@@ -70,7 +74,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Verifica que o home do usuário é montado como --ro-bind."""
         from unittest.mock import patch
         home = str(Path.home())
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
             result = build_bwrap_cmd(EXECUTE, "/tmp", ["echo"])
         pairs = list(zip(result, result[1:], result[2:]))
         self.assertTrue(
@@ -82,7 +86,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Mascara apenas o segredo, preservando acesso ao restante do storage global."""
         from unittest.mock import patch
         secret = str(Path.home() / ".local" / "share" / "quimera" / "secrets.env")
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
             "quimera.sandbox.bwrap.os.path.isfile", return_value=True
         ):
             result = build_bwrap_cmd(EXECUTE, "/tmp", ["echo"], hidden_paths=[secret])
@@ -94,11 +98,11 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Wrapper mínimo mantém filesystem normal e sobrepõe somente o arquivo privado."""
         from unittest.mock import patch
         secret = "/tmp/runtime/secrets.env"
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
             "quimera.sandbox.bwrap.os.path.isfile", return_value=True
         ):
             result = build_secret_mask_cmd("/tmp", ["cat", secret], [secret])
-        self.assertEqual(result[0], "bwrap")
+        self.assertEqual(result[0], "/usr/bin/bwrap")
         self.assertIn("--die-with-parent", result)
         self.assertIn("--unshare-pid", result)
         self.assertIn("--dev-bind", result)
@@ -110,18 +114,18 @@ class TestBuildBwrapCmd(unittest.TestCase):
         from unittest.mock import patch
         secret = "/tmp/runtime/secrets.env"
         cmd = ["sh", "-c", "printf ok"]
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
             "quimera.sandbox.bwrap.os.path.isfile", return_value=True
         ), patch.dict("os.environ", {"QUIMERA_SECRET_MASK_ACTIVE": "1"}, clear=False):
             result = build_secret_mask_cmd("/tmp", cmd, [secret])
-        self.assertEqual(result[0], "bwrap")
+        self.assertEqual(result[0], "/usr/bin/bwrap")
         self.assertIn("--dev-bind", result)
 
     def test_secret_wrapper_can_outlive_creator_thread(self):
         """Callers persistentes podem desabilitar apenas o vínculo com a thread criadora."""
         from unittest.mock import patch
         secret = "/tmp/runtime/secrets.env"
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
             "quimera.sandbox.bwrap.os.path.isfile", return_value=True
         ):
             result = build_secret_mask_cmd(
@@ -137,7 +141,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """A máscara usa device isolado e não cria estado global/temporário."""
         from unittest.mock import patch
         secret = "/tmp/runtime/secrets.env"
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
             "quimera.sandbox.bwrap.os.path.isfile", return_value=True
         ):
             result = build_secret_mask_cmd("/tmp", ["cat", secret], [secret])
@@ -150,7 +154,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         private_dir = str(Path.home() / ".local" / "share" / "quimera")
         secret = f"{private_dir}/state/mcp_oauth.json"
         profile = self._profile_with_rw_paths(private_dir)
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
             "quimera.sandbox.bwrap.os.path.exists", return_value=True
         ), patch(
             "quimera.sandbox.bwrap.os.path.isfile", return_value=True
@@ -167,7 +171,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         from unittest.mock import patch
         opencode_dir = str(Path.home() / ".local" / "share" / "opencode")
         profile = self._profile_with_rw_paths(opencode_dir)
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
                 "quimera.sandbox.bwrap.os.path.exists", return_value=True
         ):
             result = build_bwrap_cmd(PLANNING, "/tmp", ["echo"], profile=profile)
@@ -182,7 +186,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         from unittest.mock import patch
         claude_dir = str(Path.home() / ".claude")
         profile = self._profile_with_rw_paths(claude_dir)
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
                 "quimera.sandbox.bwrap.os.path.exists", return_value=True
         ):
             result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"], profile=profile)
@@ -197,7 +201,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         from unittest.mock import patch
         claude_auth_file = str(Path.home() / ".claude.json")
         profile = self._profile_with_rw_paths(claude_auth_file)
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
                 "quimera.sandbox.bwrap.os.path.exists", return_value=True
         ):
             result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"], profile=profile)
@@ -212,7 +216,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         from unittest.mock import patch
         claude_share_dir = str(Path.home() / ".local" / "share" / "claude")
         profile = self._profile_with_rw_paths(claude_share_dir)
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
                 "quimera.sandbox.bwrap.os.path.exists", return_value=True
         ):
             result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"], profile=profile)
@@ -226,7 +230,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Verifica que modo execute usa --bind para o diretório de trabalho."""
         from unittest.mock import patch
         wd = "/home/user/project"
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
             result = build_bwrap_cmd(EXECUTE, wd, ["echo"])
         # deve conter --bind wd wd, não --ro-bind
         idx = result.index("--bind")
@@ -243,7 +247,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Verifica que modo analysis usa --ro-bind para o diretório de trabalho."""
         from unittest.mock import patch
         wd = "/home/user/project"
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
             result = build_bwrap_cmd(ANALYSIS, wd, ["echo"])
         # working_dir deve aparecer com --ro-bind
         pairs = list(zip(result, result[1:], result[2:]))
@@ -256,7 +260,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Verifica que working_dir não aparece em --bind e --ro-bind simultaneamente."""
         from unittest.mock import patch
         wd = "/home/user/project"
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
             result = build_bwrap_cmd(ANALYSIS, wd, ["echo"])
         rw_count = sum(
             1 for i, t in enumerate(result[:-2])
@@ -271,14 +275,14 @@ class TestBuildBwrapCmd(unittest.TestCase):
     def test_planning_mode_does_not_add_unshare_net(self):
         """Verifica que modo planning não adiciona --unshare-net."""
         from unittest.mock import patch
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
             result = build_bwrap_cmd(PLANNING, "/tmp", ["echo"])
         self.assertNotIn("--unshare-net", result)
 
     def test_analysis_mode_no_unshare_net(self):
         """Verifica que modo analysis não adiciona --unshare-net."""
         from unittest.mock import patch
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
             result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"])
         self.assertNotIn("--unshare-net", result)
 
@@ -286,7 +290,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Verifica que o comando original é inserido após o separador --."""
         from unittest.mock import patch
         cmd = ["python", "-c", "print('ok')"]
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
             result = build_bwrap_cmd(EXECUTE, "/tmp", cmd)
         sep = result.index("--")
         self.assertEqual(result[sep + 1:], cmd)
@@ -295,10 +299,76 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Verifica que --chdir usa o diretório de trabalho."""
         from unittest.mock import patch
         wd = "/my/project"
-        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
             result = build_bwrap_cmd(EXECUTE, wd, ["echo"])
         idx = result.index("--chdir")
         self.assertEqual(result[idx + 1], wd)
+
+    def test_workspace_builder_is_fail_closed_without_bwrap(self):
+        from unittest.mock import patch
+
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value=None):
+            with self.assertRaises(SandboxUnavailableError):
+                build_workspace_sandbox_cmd("/project", "/project", ["echo"])
+
+    def test_workspace_builder_mounts_only_declared_write_locations(self):
+        from unittest.mock import patch
+
+        workspace = "/home/user/project"
+        runtime = "/home/user/.codex"
+        secret = "/home/user/.codex/private.json"
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
+            "quimera.sandbox.bwrap.os.path.exists", return_value=True
+        ), patch("quimera.sandbox.bwrap.os.path.isfile", return_value=True):
+            result = build_workspace_sandbox_cmd(
+                workspace,
+                f"{workspace}/src",
+                ["echo", "ok"],
+                [secret],
+                rw_paths=[runtime],
+            )
+
+        triples = list(zip(result, result[1:], result[2:]))
+        self.assertIn(("--bind", workspace, workspace), triples)
+        self.assertIn(("--bind", "/tmp", "/tmp"), triples)
+        self.assertIn(("--bind", runtime, runtime), triples)
+        self.assertIn(("--ro-bind", str(Path.home()), str(Path.home())), triples)
+        self.assertGreater(result.index(secret), result.index(runtime))
+        self.assertEqual(result[-3:], ["--", "echo", "ok"])
+
+    def test_workspace_builder_combines_read_only_mode_and_network_isolation(self):
+        from unittest.mock import patch
+
+        workspace = "/home/user/project"
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
+            result = build_workspace_sandbox_cmd(
+                workspace,
+                workspace,
+                ["echo"],
+                read_only_workspace=True,
+                allow_network=False,
+            )
+
+        triples = list(zip(result, result[1:], result[2:]))
+        self.assertIn(("--ro-bind", workspace, workspace), triples)
+        self.assertNotIn(("--bind", workspace, workspace), triples)
+        self.assertIn("--unshare-net", result)
+
+    def test_workspace_builder_rejects_workdir_outside_workspace(self):
+        from unittest.mock import patch
+
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
+            with self.assertRaises(SandboxPathError):
+                build_workspace_sandbox_cmd("/project", "/outside", ["echo"])
+
+    def test_bwrap_self_test_checks_runtime_not_only_binary(self):
+        from unittest.mock import patch
+
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
+            "quimera.sandbox.bwrap.subprocess.run",
+            return_value=Mock(returncode=1),
+        ):
+            self.assertFalse(bwrap_self_test())
 
 
 @unittest.skipUnless(is_bwrap_usable(),

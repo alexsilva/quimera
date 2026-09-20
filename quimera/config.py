@@ -20,7 +20,7 @@ DEFAULT_THREADS = 1
 
 
 class ConfigManager:
-    """Lê e grava configurações globais do usuário em ~/.local/share/quimera/config.json."""
+    """Lê e grava um arquivo JSON de configuração global ou por workspace."""
 
     def __init__(self, path):
         """Inicializa uma instância de ConfigManager."""
@@ -109,6 +109,15 @@ class ConfigManager:
         """Persiste o preset de policy do workspace."""
         normalized = str(value or "").strip().lower()
         self._update(workspace_policy=normalized if normalized in WORKSPACE_POLICY_PRESETS else None)
+
+    @property
+    def sandbox_enabled(self) -> bool:
+        """Retorna se o sandbox de confinamento ao workspace está ativo."""
+        return self._load().get("sandbox_enabled") is True
+
+    def set_sandbox_enabled(self, value: bool | None):
+        """Persiste o flag do sandbox; False/None remove a chave."""
+        self._update(sandbox_enabled=True if value else None)
 
     def set_user_name(self, name: str):
         """Define user name."""

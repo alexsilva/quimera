@@ -49,6 +49,7 @@ from quimera.ui.commands import (  # noqa: F401
     CMD_APPROVE,
     CMD_APPROVE_ALL,
     CMD_POLICY,
+    CMD_SANDBOX,
     CMD_CONFIG,
     CMD_ALIASES,
     USER_ROLE,

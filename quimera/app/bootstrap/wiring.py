@@ -421,6 +421,9 @@ class AppAssembler:
                 profile_registry=plat.profile_registry,
                 workspace_policy_getter=app.get_workspace_policy_name,
                 workspace_policy_setter=app.set_workspace_policy_name,
+                sandbox_enabled_getter=app.get_sandbox_enabled,
+                sandbox_enabled_setter=app.set_sandbox_enabled,
+                sandbox_available_checker=app.is_sandbox_available,
                 resumer_agent_getter=app.get_resumer_agent,
                 resumer_agent_setter=app.set_resumer_agent,
             )

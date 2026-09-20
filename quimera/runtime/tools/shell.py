@@ -15,7 +15,7 @@ from pathlib import Path
 
 from quimera import process_factory as subprocess
 from quimera.environment import RuntimeSecrets, build_env_vars
-from quimera.sandbox.bwrap import build_secret_mask_cmd
+from quimera.sandbox.bwrap import SandboxError
 
 from . import files as file_tools
 from ..config import ToolRuntimeConfig
@@ -139,14 +139,14 @@ class ShellTool(ToolBase):
         workdir = self._resolve_workdir(call.arguments.get("workdir"))
         command = self._rewrite_command_for_local_venv(command, workdir)
         env = self._build_workspace_environment(workdir)
-        workspace = self.config.workspace
-        protected_files = workspace.protected_files if workspace is not None else ()
-        masked_command = build_secret_mask_cmd(
-            str(workdir),
-            ["/bin/sh", "-c", command],
-            [str(path) for path in protected_files],
-            die_with_parent=True,
-        )
+        try:
+            masked_command = self._wrap_subprocess_cmd(
+                workdir,
+                ["/bin/sh", "-c", command],
+                die_with_parent=True,
+            )
+        except SandboxError as exc:
+            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
         timeout_seconds = self._resolve_timeout_seconds(call.arguments.get("timeout"))
         started = time.perf_counter()
         try:
@@ -270,14 +270,17 @@ class ShellTool(ToolBase):
 
         command = self._rewrite_command_for_local_venv(command, workdir)
         env = self._build_workspace_environment(workdir)
-        process, tty_master_fd = self._spawn_process(
-            command,
-            workdir,
-            shell=shell,
-            login=login,
-            tty=tty_enabled,
-            env=env,
-        )
+        try:
+            process, tty_master_fd = self._spawn_process(
+                command,
+                workdir,
+                shell=shell,
+                login=login,
+                tty=tty_enabled,
+                env=env,
+            )
+        except SandboxError as exc:
+            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
         session = self._create_session(
             process,
             command=command,
@@ -547,14 +550,7 @@ class ShellTool(ToolBase):
     ) -> tuple[subprocess.ProcessHandle, int | None]:
         """Cria o subprocesso usado por exec_command."""
         shell_args = [shell, "-lc" if login else "-c", command]
-        workspace = self.config.workspace
-        protected_files = workspace.protected_files if workspace is not None else ()
-        shell_args = build_secret_mask_cmd(
-            str(workdir),
-            shell_args,
-            [str(path) for path in protected_files],
-            die_with_parent=False,
-        )
+        shell_args = self._wrap_subprocess_cmd(workdir, shell_args, die_with_parent=False)
         if tty:
             master_fd, slave_fd = pty.openpty()
             process = subprocess.Popen(

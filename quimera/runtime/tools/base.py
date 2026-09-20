@@ -51,6 +51,28 @@ class ToolBase:
         self.config = config
         self.workspace = config.workspace
 
+    def _wrap_subprocess_cmd(
+            self,
+            working_dir,
+            cmd: list[str],
+            *,
+            die_with_parent: bool = True,
+    ) -> list[str]:
+        """Envolve um subprocesso conforme o estado do sandbox do workspace.
+
+        Sandbox OFF preserva o mascaramento de segredos atual; sandbox ON
+        confina ao workspace + /tmp + runtime dos agentes e levanta
+        ``SandboxUnavailableError`` quando o bwrap não está disponível.
+        """
+        from quimera.sandbox.state import wrap_subprocess_cmd
+
+        return wrap_subprocess_cmd(
+            self.workspace,
+            str(working_dir),
+            list(cmd),
+            die_with_parent=die_with_parent,
+        )
+
 
 class ValidatableTool(ToolBase):
     """Base class para validadores de ferramentas.

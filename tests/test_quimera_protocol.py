@@ -45,7 +45,7 @@ from quimera.config import (
     DEFAULT_HISTORY_WINDOW,
     DEFAULT_MAX_AGENT_EXECUTION_SECONDS,
 )
-from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_CONTEXT, CMD_DISCONNECT, CMD_HELP, CMD_POLICY, CMD_PROMPT, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
+from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_CONTEXT, CMD_DISCONNECT, CMD_HELP, CMD_POLICY, CMD_SANDBOX, CMD_PROMPT, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
 from quimera.constants import CMD_DEBATE
 from quimera.profiles import ExecutionProfile
 from quimera.prompt_templates import PromptText
@@ -1146,6 +1146,9 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que available internal commands include policy."""
         self.assertIn(CMD_POLICY, QuimeraApp._available_internal_commands())
 
+    def test_available_internal_commands_include_sandbox(self):
+        self.assertIn(CMD_SANDBOX, QuimeraApp._available_internal_commands())
+
     def test_available_internal_commands_include_debate(self):
         self.assertIn(CMD_DEBATE, QuimeraApp._available_internal_commands())
 
@@ -1176,6 +1179,13 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(
             app._command_argument_resolver(CMD_POLICY, ""),
             ["status", "strict", "developer", "autonomous"],
+        )
+
+    def test_sandbox_command_argument_resolver_suggests_values(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        self.assertEqual(
+            app._command_argument_resolver(CMD_SANDBOX, ""),
+            ["status", "on", "off"],
         )
 
     def test_list_connected_agents_returns_sorted_names(self):

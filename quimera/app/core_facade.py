@@ -18,17 +18,20 @@ from .turn import TurnManager
 from .worker import ChatWorker
 from .. import profiles
 from ..bugs import BugEvidenceRef, BugReport
+from ..config import ConfigManager
 from ..constants import (
     CMD_AGENTS, CMD_ALIASES, CMD_BUGS, CMD_CLEAR, CMD_CONNECT, CMD_DEBATE,
     CMD_DISCONNECT, CMD_CONTEXT, CMD_EDIT, CMD_EXIT,
     CMD_APPROVE, CMD_APPROVE_ALL, CMD_FILE_PREFIX, CMD_HELP,
-    CMD_POLICY, CMD_PROMPT, CMD_RELOAD, CMD_RESET, CMD_STATS, CMD_TASK,
+    CMD_POLICY, CMD_SANDBOX, CMD_PROMPT, CMD_RELOAD, CMD_RESET, CMD_STATS, CMD_TASK,
     CMD_CONFIG,
     MSG_SESSION_LOG,
     Visibility,
 )
 from ..modes import MODES
 from ..runtime.workspace_policy import WorkspacePolicy
+from ..sandbox.bwrap import SandboxUnavailableError, bwrap_self_test
+from ..sandbox.state import is_sandbox_enabled
 from ..tasks.classifiers import classify_task_execution_result, parse_task_command
 
 
@@ -133,6 +136,7 @@ class CoreFacadeMixin:
             CMD_FILE_PREFIX,
             CMD_HELP,
             CMD_POLICY,
+            CMD_SANDBOX,
             CMD_PROMPT,
             CMD_RELOAD,
             CMD_RESET,
@@ -197,6 +201,8 @@ class CoreFacadeMixin:
             ]
         if command == CMD_POLICY:
             return ["status", "strict", "developer", "autonomous"]
+        if command == CMD_SANDBOX:
+            return ["status", "on", "off"]
         if command == CMD_RESET:
             return ["state", "history", "all"]
         if command in ("s", "o", "r"):
@@ -511,6 +517,31 @@ class CoreFacadeMixin:
             setter(normalized)
         self._apply_workspace_policy_to_tool_executor(self.__dict__.get("tool_executor"))
         return normalized
+
+    def get_sandbox_enabled(self) -> bool:
+        """Retorna o confinamento persistido para o workspace atual."""
+        return is_sandbox_enabled(self.__dict__.get("workspace"))
+
+    def is_sandbox_available(self) -> bool:
+        """Confirma que o bubblewrap consegue criar o sandbox nesta máquina."""
+        return bwrap_self_test()
+
+    def set_sandbox_enabled(self, enabled: bool) -> bool:
+        """Valida e persiste o confinamento do workspace, sem fallback inseguro."""
+        value = bool(enabled)
+        if value and not self.is_sandbox_available():
+            raise SandboxUnavailableError(
+                "bubblewrap (bwrap) ausente ou inoperante neste sistema; "
+                "instale 'bubblewrap' ou mantenha /sandbox off."
+            )
+        workspace = self.__dict__.get("workspace")
+        config_path = getattr(workspace, "workspace_config_file", None)
+        if config_path is None:
+            config_path = getattr(workspace, "mcp_config_file", None)
+        if config_path is None:
+            raise RuntimeError("configuração do workspace indisponível")
+        ConfigManager(config_path).set_sandbox_enabled(value)
+        return value
 
     def get_resumer_agent(self) -> str | None:
         """Retorna o agente configurado para resumir o contexto, se houver."""

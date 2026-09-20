@@ -19,7 +19,13 @@ from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.profiles.base import CliConnection, OpenAIConnection
 from quimera import process_factory as subprocess
 from quimera.environment import RuntimeSecrets, build_env_vars
-from quimera.sandbox.bwrap import build_bwrap_cmd, build_secret_mask_cmd
+from quimera.sandbox.bwrap import (
+    SandboxError,
+    build_bwrap_cmd,
+    build_secret_mask_cmd,
+    build_workspace_sandbox_cmd,
+)
+from quimera.sandbox.state import agent_runtime_rw_paths, is_sandbox_enabled
 from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.runtime.tool_preview import ToolPreview
 from quimera.prompt_templates import PromptText
@@ -703,6 +709,33 @@ class AgentClient:
             if self.workspace is not None
             else self.runtime_secrets.existing_files()
         )
+        sandbox_enabled = is_sandbox_enabled(self.workspace)
+        if sandbox_enabled and effective_cwd:
+            profile = profiles.get(agent) if agent else None
+            # Um agente conhecido recebe somente os próprios diretórios de
+            # runtime. Lista vazia é uma decisão explícita do profile e não
+            # pode abrir credenciais/estado de outros agentes por fallback.
+            rw_paths = (
+                list(getattr(profile, "runtime_rw_paths", []) or [])
+                if profile is not None
+                else agent_runtime_rw_paths()
+            )
+            workspace_root = (
+                str(self.workspace.cwd)
+                if self.workspace is not None
+                else effective_cwd
+            )
+            mode = self.execution_mode
+            return build_workspace_sandbox_cmd(
+                workspace_root,
+                effective_cwd,
+                list(cmd),
+                [str(path) for path in protected_files],
+                rw_paths=rw_paths,
+                die_with_parent=die_with_parent,
+                read_only_workspace=bool(mode and mode.read_only_fs),
+                allow_network=bool(mode.allow_network) if mode else True,
+            ), effective_cwd
         if self.execution_mode is not None and effective_cwd:
             effective_cmd = build_bwrap_cmd(
                 self.execution_mode,
@@ -765,7 +798,14 @@ class AgentClient:
         self._running_agent = agent or (cmd[0] if cmd else None)
         self._start_esc_monitor()
         env = self._build_run_env(extra_env)
-        effective_cmd, effective_cwd = self._build_effective_cmd(cmd, agent, cwd)
+        try:
+            effective_cmd, effective_cwd = self._build_effective_cmd(cmd, agent, cwd)
+        except SandboxError as exc:
+            self._agent_running = False
+            self._running_agent = None
+            self._stop_esc_monitor()
+            self._show_error(f"[sandbox] {exc}")
+            return None
         if _primed_proc is not None and _primed_proc.poll() is None:
             proc = _primed_proc
             _logger.debug("[warm-pool] reutilizando processo pré-aquecido: %s", cmd[0])
@@ -1395,19 +1435,23 @@ class AgentClient:
             raw = self.run([*cmd, prompt], input_text=None, **run_kwargs)
         else:
             _extra_env = run_kwargs.get("extra_env")
-            _effective_cmd, _effective_cwd = self._build_effective_cmd(
-                cmd,
-                agent,
-                run_kwargs.get("cwd"),
-                die_with_parent=False,
-            )
-            _use_warm_pool = self._should_use_warm_pool(
+            try:
+                _effective_cmd, _effective_cwd = self._build_effective_cmd(
+                    cmd,
+                    agent,
+                    run_kwargs.get("cwd"),
+                    die_with_parent=False,
+                )
+            except SandboxError:
+                # Sem warm pool; o self.run abaixo reporta o erro fail-closed.
+                _effective_cmd, _effective_cwd = None, None
+            _use_warm_pool = _effective_cmd is not None and self._should_use_warm_pool(
                 profile,
                 cmd,
                 has_mcp_context=has_mcp_context,
             )
             _slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env) if _use_warm_pool else None
-            if not _use_warm_pool and not has_mcp_context:
+            if not _use_warm_pool and not has_mcp_context and _effective_cmd is not None:
                 # Se houver um slot antigo para esse comando, descarta para evitar
                 # processos ociosos extras no gerenciador.
                 _stale_slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env)

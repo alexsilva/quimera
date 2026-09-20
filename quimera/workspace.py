@@ -194,6 +194,11 @@ class Workspace:
     @property
     def mcp_config_file(self) -> Path:
         """Configuração de clientes MCP isolada para este workspace."""
+        return self.workspace_config_file
+
+    @property
+    def workspace_config_file(self) -> Path:
+        """Configurações isoladas do workspace (MCP, sandbox e afins)."""
         return self._root / "config.json"
 
     @property

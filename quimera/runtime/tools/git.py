@@ -6,7 +6,8 @@ import re
 
 from quimera import process_factory as subprocess
 from quimera.environment import RuntimeSecrets, build_env_vars
-from quimera.sandbox.bwrap import build_secret_mask_cmd
+from quimera.sandbox.bwrap import SandboxError
+
 
 from ..models import ToolCall, ToolResult
 from ..policy import ToolPolicyError
@@ -320,12 +321,14 @@ class GitTool(ToolBase, tool_prefix="git"):
         )
         command = ["git"] + args
         if workspace is not None:
-            command = build_secret_mask_cmd(
-                str(workspace_root),
-                command,
-                [str(path) for path in workspace.protected_files],
-                die_with_parent=True,
-            )
+            try:
+                command = self._wrap_subprocess_cmd(
+                    workspace_root,
+                    command,
+                    die_with_parent=True,
+                )
+            except SandboxError as exc:
+                return 126, "", str(exc)
         proc = subprocess.run(
             command,
             cwd=str(workspace_root),

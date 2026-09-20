@@ -7,10 +7,10 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select
 from quimera.app.prompt_formatter import PromptFormatter
+from quimera.config import ConfigManager
 from quimera.themes import DENSITY_OPTIONS, names as theme_names
 
 if TYPE_CHECKING:
-    from quimera.config import ConfigManager
     from quimera.ui.textual.app import QuimeraTextualApp
 
 
@@ -94,8 +94,18 @@ class ConfigScreen(ModalScreen[None]):
         self.parent_app = parent_app
         self.config: ConfigManager = quimera_app.config
 
+    def _sandbox_enabled(self) -> bool:
+        """Lê o flag sempre do workspace, inclusive em adapters simplificados."""
+        sandbox_getter = getattr(self.quimera_app, "get_sandbox_enabled", None)
+        if callable(sandbox_getter):
+            return bool(sandbox_getter())
+        workspace = getattr(self.quimera_app, "workspace", None)
+        config_path = getattr(workspace, "workspace_config_file", None)
+        return ConfigManager(config_path).sandbox_enabled if config_path else False
+
     def compose(self) -> ComposeResult:
         """Monta o layout da janela de configuração."""
+        sandbox_enabled = self._sandbox_enabled()
         with Container(id="config_dialog"):
             with Horizontal(id="config_header"):
                 yield Label("Configurações do Quimera", id="config_title")
@@ -129,6 +139,13 @@ class ConfigScreen(ModalScreen[None]):
                     ],
                     value=self.config.workspace_policy,
                     id="cfg_workspace_policy",
+                )
+
+                yield Label("Sandbox do Workspace:")
+                yield Select(
+                    [("on", "on"), ("off", "off")],
+                    value="on" if sandbox_enabled else "off",
+                    id="cfg_sandbox",
                 )
 
                 yield Label("Visibilidade da Execução:")
@@ -226,6 +243,7 @@ class ConfigScreen(ModalScreen[None]):
             return
 
         workspace_policy = self.query_one("#cfg_workspace_policy", Select).value
+        sandbox_value = self.query_one("#cfg_sandbox", Select).value
         visibility = self.query_one("#cfg_visibility", Select).value
         theme = self.query_one("#cfg_theme", Select).value
         density = self.query_one("#cfg_density", Select).value
@@ -236,8 +254,31 @@ class ConfigScreen(ModalScreen[None]):
             density = self.config.density
         if workspace_policy is None or workspace_policy is Select.BLANK:
             workspace_policy = self.config.workspace_policy
+        if sandbox_value is None or sandbox_value is Select.BLANK:
+            sandbox_enabled = self._sandbox_enabled()
+            sandbox_value = "on" if sandbox_enabled else "off"
         if visibility is None or visibility is Select.BLANK:
             visibility = self.config.visibility
+
+        # Ativar é fail-closed: o setter da aplicação executa o self-test do
+        # bubblewrap antes de persistir. Se falhar, o modal permanece aberto.
+        sandbox_setter = getattr(self.quimera_app, "set_sandbox_enabled", None)
+        current_sandbox = self._sandbox_enabled()
+        requested_sandbox = str(sandbox_value) == "on"
+        try:
+            if requested_sandbox != current_sandbox:
+                if callable(sandbox_setter):
+                    sandbox_setter(requested_sandbox)
+                else:
+                    workspace = getattr(self.quimera_app, "workspace", None)
+                    config_path = getattr(workspace, "workspace_config_file", None)
+                    target_config = (
+                        ConfigManager(config_path) if config_path else self.config
+                    )
+                    target_config.set_sandbox_enabled(requested_sandbox)
+        except Exception as exc:
+            self.parent_app.notify(str(exc), severity="error")
+            return
 
         # Salvar no config manager
         self.config.set_user_name(user_name)

@@ -74,6 +74,8 @@ class TestWorkspace(unittest.TestCase):
             self.assertEqual(first.config_file, second.config_file)
             self.assertEqual(first.mcp_config_file, first.root / "config.json")
             self.assertEqual(second.mcp_config_file, second.root / "config.json")
+            self.assertEqual(first.workspace_config_file, first.mcp_config_file)
+            self.assertEqual(second.workspace_config_file, second.mcp_config_file)
             self.assertNotEqual(first.mcp_config_file, second.mcp_config_file)
 
             ConfigManager(first.mcp_config_file).set_mcp_clients(

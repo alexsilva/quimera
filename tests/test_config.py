@@ -165,6 +165,21 @@ def test_workspace_policy_property_and_setter(tmp_path):
     assert ConfigManager(config_file).workspace_policy == "strict"
 
 
+def test_sandbox_enabled_property_and_setter(tmp_path):
+    """Sandbox é opt-in e o setter remove a chave ao desativar."""
+    from quimera.config import ConfigManager
+
+    config_file = tmp_path / "config.json"
+    cm = ConfigManager(config_file)
+
+    assert cm.sandbox_enabled is False
+    cm.set_sandbox_enabled(True)
+    assert ConfigManager(config_file).sandbox_enabled is True
+    cm.set_sandbox_enabled(False)
+    assert ConfigManager(config_file).sandbox_enabled is False
+    assert "sandbox_enabled" not in json.loads(config_file.read_text())
+
+
 def test_preserves_existing_keys(tmp_path):
     """Test setting one value preserves others."""
     from quimera.config import ConfigManager

@@ -17,6 +17,7 @@ from quimera.constants import (
     CMD_CONTEXT_BRANCH,
     CMD_CONTEXT_EDIT,
     CMD_POLICY,
+    CMD_SANDBOX,
     CMD_PROMPT,
     CMD_RELOAD,
     CMD_RESET,
@@ -894,6 +895,52 @@ def test_handle_command_policy_rejects_unknown_preset():
     assert layer.handle_command("/policy unsafe") is True
     app.set_workspace_policy_name.assert_not_called()
     assert app.renderer.warning_messages[-1] == "Uso: /policy [status|strict|developer|autonomous]"
+
+
+def test_handle_command_sandbox_status_and_toggle():
+    """O comando exibe disponibilidade e persiste on/off pelo setter."""
+    app = make_app()
+    enabled = {"value": False}
+    app.get_sandbox_enabled = Mock(side_effect=lambda: enabled["value"])
+    app.is_sandbox_available = Mock(return_value=True)
+    app.set_sandbox_enabled = Mock(
+        side_effect=lambda value: enabled.update(value=value)
+    )
+    layer = system_layer_from_app(app)
+
+    assert layer.handle_command(CMD_SANDBOX) is True
+    assert "atual: off" in app.renderer.system_messages[-1]
+    assert "bubblewrap: disponível" in app.renderer.system_messages[-1]
+
+    assert layer.handle_command("/sandbox on") is True
+    app.set_sandbox_enabled.assert_called_once_with(True)
+    assert "workspace_sandbox=on" in app.renderer.system_messages[-1]
+
+    app.set_sandbox_enabled.reset_mock()
+    assert layer.handle_command("/sandbox off") is True
+    app.set_sandbox_enabled.assert_called_once_with(False)
+
+
+def test_handle_command_sandbox_fails_closed_when_activation_is_rejected():
+    app = make_app()
+    app.get_sandbox_enabled = Mock(return_value=False)
+    app.is_sandbox_available = Mock(return_value=False)
+    app.set_sandbox_enabled = Mock(side_effect=RuntimeError("bwrap inoperante"))
+    layer = system_layer_from_app(app)
+
+    assert layer.handle_command("/sandbox on") is True
+    assert "não foi possível ativar" in app.renderer.warning_messages[-1]
+    assert "bwrap inoperante" in app.renderer.warning_messages[-1]
+
+
+def test_handle_command_sandbox_rejects_unknown_value():
+    app = make_app()
+    app.set_sandbox_enabled = Mock()
+    layer = system_layer_from_app(app)
+
+    assert layer.handle_command("/sandbox maybe") is True
+    app.set_sandbox_enabled.assert_not_called()
+    assert app.renderer.warning_messages[-1] == "Uso: /sandbox [status|on|off]"
 
 
 def test_handle_command_context_variants():

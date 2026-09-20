@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -26,8 +26,23 @@ from quimera.runtime.mcp.client import (
 )
 from quimera.runtime.mcp.manager import MCPConnectionManager, describe_mcp_client_spec
 from quimera.runtime.models import ToolCall, ToolResult
+from quimera.sandbox.bwrap import SandboxUnavailableError
 from quimera.runtime.tools.mcp_clients import set_bridge
 from quimera.workspace import Workspace
+
+
+def test_stdio_mcp_fails_closed_when_workspace_sandbox_is_unavailable(tmp_path):
+    workspace = Workspace(tmp_path)
+    ConfigManager(workspace.workspace_config_file).set_sandbox_enabled(True)
+    transport = StdioMCPTransport(["mcp-server"], workspace=workspace)
+
+    with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value=None), patch(
+        "quimera.runtime.mcp.client.subprocess.Popen"
+    ) as popen:
+        with pytest.raises(SandboxUnavailableError):
+            transport.connect()
+
+    popen.assert_not_called()
 
 
 def test_http_mcp_session_sends_initialized_notification_after_handshake(monkeypatch):

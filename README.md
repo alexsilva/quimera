@@ -139,6 +139,7 @@ python quimera.py --help
 - `/approve` (ou `/y`/`/a`): pré-aprova a próxima tool mutation.
 - `/approve-all` (ou `/aa`): aprova automaticamente mutações subsequentes.
 - `/policy`: mostra/edita política de tools.
+- `/sandbox [status|on|off]`: confina comandos ao workspace, `/tmp` e runtimes configurados dos agentes; a ativação exige `bwrap` funcional.
 - `/bugs`: lista/reporta bugs.
 - `/stats [<agente>|json|reset]`: consulta ou zera as métricas de entrega coletadas dos agentes.
 - `/reload`: recarrega agentes/profiles.

@@ -4,8 +4,13 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from quimera.agents import AgentClient
 from quimera.agents.warm_pool import WarmPool, _WarmSlot
+from quimera.config import ConfigManager
+from quimera.modes import get_mode
+from quimera.sandbox.bwrap import SandboxPathError, SandboxUnavailableError
 from quimera.workspace import Workspace
 
 
@@ -485,3 +490,66 @@ class TestAgentClientWarmPool:
         client = AgentClient(renderer, workspace=Workspace(tmp_path))
         _, effective_cwd = client._build_effective_cmd(["codex"], "codex", override)
         assert effective_cwd == override
+
+    def test_build_effective_cmd_uses_workspace_sandbox_when_enabled(self, renderer, tmp_path):
+        workspace = Workspace(tmp_path)
+        ConfigManager(workspace.workspace_config_file).set_sandbox_enabled(True)
+        client = AgentClient(renderer, workspace=workspace)
+
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
+            cmd, cwd = client._build_effective_cmd(["codex"], "codex", None)
+
+        assert cmd[0] == "/usr/bin/bwrap"
+        assert ["--bind", str(tmp_path), str(tmp_path)] == cmd[
+            cmd.index(str(tmp_path)) - 1:cmd.index(str(tmp_path)) + 2
+        ]
+        assert cwd == str(tmp_path)
+
+    def test_workspace_sandbox_combines_execution_mode_restrictions(self, renderer, tmp_path):
+        workspace = Workspace(tmp_path)
+        ConfigManager(workspace.workspace_config_file).set_sandbox_enabled(True)
+        client = AgentClient(renderer, workspace=workspace)
+        client.execution_mode = get_mode("/analysis")
+
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
+            cmd, _ = client._build_effective_cmd(["codex"], "codex", None)
+
+        triples = list(zip(cmd, cmd[1:], cmd[2:]))
+        assert ("--ro-bind", str(tmp_path), str(tmp_path)) in triples
+
+    def test_workspace_sandbox_rejects_agent_cwd_outside_workspace(self, renderer, tmp_path):
+        workspace = Workspace(tmp_path)
+        ConfigManager(workspace.workspace_config_file).set_sandbox_enabled(True)
+        client = AgentClient(renderer, workspace=workspace)
+
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"):
+            with pytest.raises(SandboxPathError):
+                client._build_effective_cmd(["codex"], "codex", "/outside")
+
+    def test_workspace_sandbox_fails_closed_without_bwrap(self, renderer, tmp_path):
+        workspace = Workspace(tmp_path)
+        ConfigManager(workspace.workspace_config_file).set_sandbox_enabled(True)
+        client = AgentClient(renderer, workspace=workspace)
+
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value=None):
+            with pytest.raises(SandboxUnavailableError):
+                client._build_effective_cmd(["codex"], "codex", None)
+
+    def test_workspace_sandbox_does_not_share_other_agents_runtime_paths(
+        self, renderer, tmp_path
+    ):
+        workspace = Workspace(tmp_path)
+        ConfigManager(workspace.workspace_config_file).set_sandbox_enabled(True)
+        client = AgentClient(renderer, workspace=workspace)
+        profile = MagicMock(runtime_rw_paths=[])
+
+        with patch("quimera.agents.client.profiles.get", return_value=profile), patch(
+            "quimera.agents.client.agent_runtime_rw_paths"
+        ) as all_runtime_paths, patch(
+            "quimera.sandbox.bwrap._find_bwrap_executable",
+            return_value="/usr/bin/bwrap",
+        ):
+            cmd, _ = client._build_effective_cmd(["agent-cli"], "antigravity", None)
+
+        all_runtime_paths.assert_not_called()
+        assert str(tmp_path) in cmd

@@ -5013,6 +5013,7 @@ def test_config_screen_applies_agent_timeouts_to_config_and_live_client(tmp_path
         "#cfg_idle_timeout": "180",
         "#cfg_max_agent_execution": "7200",
         "#cfg_workspace_policy": "developer",
+        "#cfg_sandbox": "off",
         "#cfg_visibility": "full",
         "#cfg_threads": "2",
         "#cfg_theme": config.theme,
@@ -5034,6 +5035,90 @@ def test_config_screen_applies_agent_timeouts_to_config_and_live_client(tmp_path
     assert live_client.max_execution_seconds == 7200
     assert quimera_app.idle_timeout_seconds == 180
     dismiss.assert_called_once_with()
+
+
+def test_config_screen_applies_sandbox_through_live_facade(tmp_path):
+    """O modal usa o setter validado da sessão para ativar o sandbox."""
+    from quimera.config import ConfigManager
+
+    config = ConfigManager(tmp_path / "config.json")
+    sandbox_setter = Mock(return_value=True)
+    quimera_app = SimpleNamespace(
+        config=config,
+        threads=1,
+        agent_client=None,
+        idle_timeout_seconds=1,
+        prompt_builder=None,
+        renderer=None,
+        get_sandbox_enabled=Mock(return_value=False),
+        set_sandbox_enabled=sandbox_setter,
+    )
+    parent_app = Mock()
+    parent_app.query_one.return_value = Mock()
+    screen = ConfigScreen(quimera_app, parent_app)
+    values = {
+        "#cfg_user_name": "Alex",
+        "#cfg_history_window": "12",
+        "#cfg_auto_summarize": "30",
+        "#cfg_idle_timeout": "180",
+        "#cfg_max_agent_execution": "7200",
+        "#cfg_workspace_policy": "developer",
+        "#cfg_sandbox": "on",
+        "#cfg_visibility": "full",
+        "#cfg_threads": "1",
+        "#cfg_theme": config.theme,
+        "#cfg_density": config.density,
+    }
+
+    with patch.object(
+        screen,
+        "query_one",
+        side_effect=lambda selector, _widget_type=None: SimpleNamespace(
+            value=values[selector]
+        ),
+    ), patch.object(screen, "dismiss"):
+        screen.action_save()
+
+    sandbox_setter.assert_called_once_with(True)
+
+
+def test_config_screen_keeps_open_when_sandbox_activation_fails(tmp_path):
+    from quimera.config import ConfigManager
+
+    config = ConfigManager(tmp_path / "config.json")
+    quimera_app = SimpleNamespace(
+        config=config,
+        threads=1,
+        get_sandbox_enabled=Mock(return_value=False),
+        set_sandbox_enabled=Mock(side_effect=RuntimeError("bwrap inoperante")),
+    )
+    parent_app = Mock()
+    screen = ConfigScreen(quimera_app, parent_app)
+    values = {
+        "#cfg_user_name": "Alex",
+        "#cfg_history_window": "12",
+        "#cfg_auto_summarize": "30",
+        "#cfg_idle_timeout": "180",
+        "#cfg_max_agent_execution": "7200",
+        "#cfg_workspace_policy": "strict",
+        "#cfg_sandbox": "on",
+        "#cfg_visibility": "summary",
+        "#cfg_threads": "1",
+        "#cfg_theme": config.theme,
+        "#cfg_density": config.density,
+    }
+
+    with patch.object(
+        screen,
+        "query_one",
+        side_effect=lambda selector, _widget_type=None: SimpleNamespace(
+            value=values[selector]
+        ),
+    ), patch.object(screen, "dismiss") as dismiss:
+        screen.action_save()
+
+    dismiss.assert_not_called()
+    parent_app.notify.assert_called_once_with("bwrap inoperante", severity="error")
 
 
 def test_config_screen_shows_total_agent_timeout_field(tmp_path):

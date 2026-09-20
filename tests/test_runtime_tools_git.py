@@ -5,6 +5,7 @@ import subprocess
 
 import pytest
 
+from quimera.config import ConfigManager
 from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.workspace import Workspace
@@ -120,6 +121,20 @@ def test_git_status_not_a_repo(tmp_path):
     tool = GitTool(config)
     result = tool.git_status(_call("git_status"))
     assert not result.ok
+
+
+def test_git_fails_closed_when_workspace_sandbox_is_unavailable(git_repo):
+    workspace = Workspace(git_repo)
+    ConfigManager(workspace.workspace_config_file).set_sandbox_enabled(True)
+    tool = GitTool(ToolRuntimeConfig(workspace=workspace))
+
+    from unittest.mock import patch
+
+    with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value=None):
+        result = tool.git_status(_call("git_status"))
+
+    assert result.ok is False
+    assert "sandbox do workspace está ativo" in result.error
 
 
 # ---------------------------------------------------------------------------

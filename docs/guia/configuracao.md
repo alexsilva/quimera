@@ -60,6 +60,15 @@ Temas disponíveis na CLI incluem `panel`, `chat`, `rule`, `minimal`, `card` e `
 Sem a flag, vale o valor salvo em `config.json` (ajustável pela janela
 `/config`); a flag é um override apenas da sessão.
 
+## Sandbox do workspace
+
+O sandbox de workspace pode ser controlado pelo seletor **Sandbox do
+Workspace** ou por `/sandbox on|off`. A opção é persistida separadamente para
+cada workspace. Quando ativa, execuções de agentes, shell, Git e clientes MCP
+stdio ficam confinadas ao workspace, `/tmp` e aos diretórios de runtime já
+declarados pelos profiles. A ativação falha de forma segura quando o
+`bubblewrap` não está instalado ou não funciona no sistema.
+
 ## Paralelismo e timeouts
 
 - `--threads N` limita quantos agentes rodam em paralelo por rodada; sem a
