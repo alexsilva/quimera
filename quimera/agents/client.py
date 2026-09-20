@@ -5,6 +5,7 @@ import logging
 import os
 import queue
 import signal
+import sys
 import threading
 import time
 import uuid
@@ -1043,6 +1044,19 @@ class AgentClient:
             output = self._get_capped_stdout(result_holder).strip()
             error = "".join(_filter_stderr_lines(agent, list(result_holder["stderr"]))).strip()
         finally:
+            # Se estamos desenrolando por exceção (ex.: callback de progresso
+            # falhou), o subprocesso não pode ficar órfão nem o transient
+            # "processando" preso na tela.
+            if sys.exc_info()[0] is not None:
+                if proc.poll() is None:
+                    try:
+                        terminate_process_group(proc)
+                    except Exception:
+                        pass
+                try:
+                    self.renderer.clear_agent_transient(agent or cmd[0])
+                except Exception:
+                    pass
             if self.process_supervisor is not None:
                 self.process_supervisor.unregister(proc)
             should_render_turn_summary = not silent and self.visibility in {Visibility.SUMMARY, Visibility.FULL}

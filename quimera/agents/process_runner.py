@@ -114,7 +114,19 @@ class ProcessRunner:
         Retorna
         -------
         Uma das constantes: ``COMPLETED``, ``CANCELLED``, ``TIMEOUT``, ``RATE_LIMIT``.
+
+        Uma exceção vinda dos callbacks propaga para o chamador, mas nunca
+        deixa o subprocesso órfão: o grupo de processos é terminado antes.
         """
+        try:
+            return self._watch_loop(log_queue=log_queue, on_item=on_item, on_tick=on_tick)
+        except BaseException:
+            terminate_process_group(self.proc)
+            self.stdout_thread.join(2)
+            self.stderr_thread.join(2)
+            raise
+
+    def _watch_loop(self, log_queue=None, on_item=None, on_tick=None) -> str:
         start_time = time.monotonic()
         elapsed = 0
         last_tick_elapsed = None

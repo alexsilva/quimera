@@ -760,14 +760,21 @@ class MCPServer:
             arg_keys=arg_keys,
         )
 
+        # Progresso é fire-and-forget: se o socket do chamador morrer (ex.: o
+        # agente que delegou já encerrou), a falha não pode abortar a tool em
+        # execução — apenas silencia os envios seguintes deste call.
+        progress_dead = [False]
+
         def _progress_callback(msg: str) -> None:
             if self._shutdown_event.is_set():
                 return
             _logger.debug("MCP progress [%s]: %s", tool_name, msg)
-            if progress_token:
-                with self._progress_seq_lock:
-                    self._progress_seq += 1
-                    seq = self._progress_seq
+            if not progress_token or progress_dead[0]:
+                return
+            with self._progress_seq_lock:
+                self._progress_seq += 1
+                seq = self._progress_seq
+            try:
                 self._write({
                     "jsonrpc": "2.0",
                     "method": "notifications/progress",
@@ -777,6 +784,12 @@ class MCPServer:
                         "message": msg,
                     }
                 }, out)
+            except (OSError, ValueError) as exc:
+                progress_dead[0] = True
+                _logger.debug(
+                    "MCP progress descartado (socket do chamador indisponível) tool=%s: %s",
+                    tool_name, exc,
+                )
 
         request_key = self._request_key(out, msg_id)
         with self._cancel_lock:
@@ -1043,7 +1056,15 @@ class MCPServer:
             else:
                 response = self._resolve_tool_response(call)
             if response is not None:
-                self._write(response, call["out"])
+                try:
+                    self._write(response, call["out"])
+                except (OSError, ValueError):
+                    # Socket do chamador morreu antes da resposta; descarta o
+                    # call mesmo assim para não ficar preso em _pending_calls.
+                    _logger.debug(
+                        "MCP resposta descartada (socket indisponível) tool=%s",
+                        call.get("tool_name"), exc_info=True,
+                    )
             to_remove.append(call)
 
         if to_remove:
