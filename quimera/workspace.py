@@ -10,6 +10,80 @@ from .paths import CANDIDATE_DIRS, find_base_writable
 
 logger = logging.getLogger(__name__)
 
+_SSH_NON_SECRET_FILES = frozenset({
+    "authorized_keys",
+    "config",
+    "known_hosts",
+    "known_hosts.old",
+})
+
+_HOME_SENSITIVE_FILES = (
+    ".env",
+    ".netrc",
+    ".git-credentials",
+    ".npmrc",
+    ".pypirc",
+    ".aws/credentials",
+    ".cargo/credentials",
+    ".cargo/credentials.toml",
+    ".gem/credentials",
+    ".m2/settings.xml",
+    ".gradle/gradle.properties",
+    ".nuget/NuGet/NuGet.Config",
+    ".kube/config",
+    ".docker/config.json",
+    ".config/containers/auth.json",
+    ".config/gh/hosts.yml",
+    ".config/glab-cli/config.yml",
+    ".config/rclone/rclone.conf",
+    ".terraform.d/credentials.tfrc.json",
+    ".config/gcloud/application_default_credentials.json",
+    ".config/gcloud/credentials.db",
+    ".config/gcloud/access_tokens.db",
+    ".azure/accessTokens.json",
+    ".azure/msal_token_cache.json",
+    ".config/composer/auth.json",
+    ".config/helm/registry/config.json",
+    ".config/sops/age/keys.txt",
+    ".config/age/keys.txt",
+    ".gnupg/secring.gpg",
+    ".bash_history",
+    ".zsh_history",
+    ".python_history",
+    ".psql_history",
+    ".mysql_history",
+    ".rediscli_history",
+    ".config/fish/fish_history",
+)
+
+_HOME_SENSITIVE_GLOBS = (
+    ".aws/sso/cache/*",
+    ".aws/cli/cache/*",
+    ".local/share/keyrings/*",
+    ".password-store/**/*",
+    ".config/gopass/stores/**/*",
+    ".config/gcloud/legacy_credentials/**/*",
+    ".gnupg/private-keys-v1.d/*",
+)
+
+
+def _sensitive_home_files(home: Path) -> list[Path]:
+    """Retorna credenciais/segredos do usuário que agentes não devem ler."""
+    candidates = [home / relative for relative in _HOME_SENSITIVE_FILES]
+    for pattern in _HOME_SENSITIVE_GLOBS:
+        candidates.extend(sorted(home.glob(pattern)))
+
+    ssh_dir = home / ".ssh"
+    if ssh_dir.is_dir():
+        for path in sorted(ssh_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.name in _SSH_NON_SECRET_FILES or path.suffix == ".pub":
+                continue
+            candidates.append(path)
+
+    return candidates
+
 
 class DecisionsLogger:
     """Logger persistente para decisões por workspace."""
@@ -238,13 +312,14 @@ class Workspace:
 
     @property
     def protected_files(self) -> tuple[Path, ...]:
-        """Arquivos privados do storage que não devem ser visíveis a agentes.
+        """Arquivos privados do runtime/usuário que não devem ser visíveis a agentes.
 
         O ``Workspace`` é a fonte canônica dos caminhos persistentes. A camada
         de sandbox apenas recebe esta lista pronta; ela não reconstrói layout de
-        storage nem conhece nomes de arquivos internos. O escopo inclui apenas
-        a configuração MCP deste workspace; workspaces irmãos não participam da
-        execução atual e não devem ser varridos nem mascarados.
+        storage nem conhece nomes de arquivos internos. Além do storage privado
+        do Quimera, credenciais comuns do HOME são mascaradas quando existentes.
+        Estados próprios dos agentes (ex.: ~/.codex e ~/.claude) permanecem sob
+        responsabilidade dos respectivos profiles/runtime_rw_paths.
         """
         candidates: list[Path] = [
             self.legacy_secrets_file,
@@ -253,6 +328,7 @@ class Workspace:
         ]
         candidates.extend(sorted(self.connections_file.parent.glob(f"{self.connections_file.name}*")))
         candidates.extend(sorted(self.oauth_store_file.parent.glob(f"{self.oauth_store_file.name}*")))
+        candidates.extend(_sensitive_home_files(Path.home()))
 
         unique: list[Path] = []
         seen: set[Path] = set()

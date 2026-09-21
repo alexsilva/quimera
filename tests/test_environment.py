@@ -150,6 +150,42 @@ def test_workspace_protects_runtime_credentials_without_hiding_workspace_history
     assert history.resolve() not in protected
 
 
+def test_workspace_protects_common_home_credentials_without_hiding_ssh_metadata(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    sensitive = [
+        home / ".ssh" / "id_ed25519",
+        home / ".ssh" / "custom-github-key",
+        home / ".aws" / "credentials",
+        home / ".aws" / "sso" / "cache" / "token.json",
+        home / ".kube" / "config",
+        home / ".docker" / "config.json",
+        home / ".config" / "gh" / "hosts.yml",
+        home / ".netrc",
+        home / ".git-credentials",
+        home / ".bash_history",
+        home / ".gnupg" / "private-keys-v1.d" / "private.key",
+    ]
+    visible_ssh_metadata = [
+        home / ".ssh" / "config",
+        home / ".ssh" / "known_hosts",
+        home / ".ssh" / "id_ed25519.pub",
+    ]
+    for path in sensitive + visible_ssh_metadata:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("test\n", encoding="utf-8")
+
+    workspace = _workspace(monkeypatch, tmp_path / "project", tmp_path / "runtime")
+    protected = set(workspace.protected_files)
+
+    for path in sensitive:
+        assert path.resolve() in protected
+    for path in visible_ssh_metadata:
+        assert path.resolve() not in protected
+
+
 def test_configured_provider_key_is_private_even_when_only_exported_by_parent(tmp_path, monkeypatch):
     project = tmp_path / "project"
     project.mkdir()
