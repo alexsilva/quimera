@@ -71,12 +71,14 @@ def test_fork_preserves_injected_wiring(workspace):
     ask_user_fn = lambda question, options: (0, options[0])  # noqa: E731
     update_state_fn = lambda payload: True  # noqa: E731
     cancel_checker = lambda: False  # noqa: E731
+    agent_stats_provider = lambda agent: {"responses_total": 3}  # noqa: E731
     primary.set_delegate_fn(delegate_fn)
     primary.set_background_delegate_fn(delegate_fn)
     primary.set_ask_user_fn(ask_user_fn)
     primary.set_update_state_fn(update_state_fn)
     primary.set_cancel_checker(cancel_checker)
     primary.set_active_agents_provider(lambda: ["codex"])
+    primary.set_agent_stats_provider(agent_stats_provider)
     primary.set_orchestrator_provider(lambda: "claude")
 
     forked = primary.fork_for_concurrent_run()
@@ -87,6 +89,7 @@ def test_fork_preserves_injected_wiring(workspace):
     assert forked._wiring.delegate_fn is delegate_fn
     assert forked._wiring.cancel_checker is cancel_checker
     assert forked._wiring.ask_user_fn is ask_user_fn
+    assert forked._wiring.agent_stats_provider is agent_stats_provider
 
 
 def test_fork_preserves_blocked_tools_from_execution_mode(workspace):

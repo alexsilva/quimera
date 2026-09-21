@@ -42,6 +42,7 @@ class ToolExecutorWiring:
         ("task_create_fn", "set_task_create_fn"),
         ("delegation_run_lookup", "set_delegation_run_lookup"),
         ("active_agents_provider", "set_active_agents_provider"),
+        ("agent_stats_provider", "set_agent_stats_provider"),
         ("orchestrator_provider", "set_orchestrator_provider"),
         ("cancel_checker", "set_cancel_checker"),
         ("agent_cleanup_callback", "set_agent_cleanup_callback"),
@@ -56,6 +57,7 @@ class ToolExecutorWiring:
     task_create_fn: Callable | None = None
     delegation_run_lookup: Callable | None = None
     active_agents_provider: Callable | None = None
+    agent_stats_provider: Callable | None = None
     orchestrator_provider: Callable | None = None
     cancel_checker: Callable | None = None
     agent_cleanup_callback: Callable | None = None
@@ -294,6 +296,11 @@ class ToolExecutor:
         """Injeta provider que retorna agentes ativos no momento da delegação."""
         self._wiring.active_agents_provider = fn
         self._delegate_tools.set_active_agents_provider(fn)
+
+    def set_agent_stats_provider(self, fn) -> None:
+        """Injeta provider de métricas observadas usado por list_agents."""
+        self._wiring.agent_stats_provider = fn
+        self._delegate_tools.set_agent_stats_provider(fn)
 
     def set_orchestrator_provider(self, fn) -> None:
         """Injeta provider que retorna o agente orquestrador ativo (ou None)."""

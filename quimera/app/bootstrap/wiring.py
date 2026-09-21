@@ -963,6 +963,13 @@ class AppAssembler:
         rt.agent_client.add_cancel_listener(tasks.task_services.cancel_background_work)
         rt.agent_client.add_cancel_listener(tasks.debate_service.cancel_active)
         tasks.tool_executor.set_active_agents_provider(plat.agent_pool.list_agents)
+        tasks.tool_executor.set_agent_stats_provider(
+            lambda agent_name: (
+                app.behavior_metrics.get_agent_summary(agent_name)
+                if app.behavior_metrics.has_metrics(agent_name)
+                else None
+            )
+        )
         tasks.tool_executor.set_orchestrator_provider(plat.agent_pool.get_orchestrator)
         tasks.tool_executor.set_cancel_checker(rt.agent_client.is_cancelled)
         tasks.tool_executor.set_agent_cleanup_callback(app._cleanup_sub_agent_stream)

@@ -941,11 +941,11 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='list_agents',
-        description='Lista os agentes ativos na sessão atual do chat. A lista reflete o pool atual — agentes que falharam ou saíram não aparecem.',
+        description='Lista os agentes ativos com informações compactas para escolher um delegado: modelo/perfil, capacidades, tipos de tarefa preferidos, suporte operacional e métricas observadas quando disponíveis. Agentes que falharam ou saíram do pool não aparecem.',
         parameters={'type': 'object', 'properties': {}, 'required': []},
         output_schema={'type': 'object',
  'properties': {'ok': {'type': 'boolean'},
-                'content': {'type': 'string', 'description': 'JSON array of active agent names'},
+                'content': {'type': 'string', 'description': 'Compact JSON array of active agent descriptors'},
                 'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
  'required': ['ok', 'content']},
     ),

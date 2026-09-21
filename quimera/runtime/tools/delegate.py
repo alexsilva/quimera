@@ -127,6 +127,7 @@ class DelegateTools(ToolBase):
         self._delegate_fn: _DelegateFnProto | None = None
         self._background_delegate_fn: _DelegateFnProto | None = None
         self._active_agents_provider = None
+        self._agent_stats_provider = None
         self._orchestrator_provider = None
         self._progress_callback: Callable[[str], None] | None = None
         self._cleanup_callback: Callable[[str], None] | None = None
@@ -148,6 +149,10 @@ class DelegateTools(ToolBase):
     def set_active_agents_provider(self, fn) -> None:
         """Injeta provider que retorna agentes ativos no momento da delegação."""
         self._active_agents_provider = fn
+
+    def set_agent_stats_provider(self, fn) -> None:
+        """Injeta provider de métricas observadas por agente."""
+        self._agent_stats_provider = fn
 
     def set_orchestrator_provider(self, fn) -> None:
         """Injeta provider que retorna o agente orquestrador ativo (ou None)."""
@@ -210,11 +215,84 @@ class DelegateTools(ToolBase):
                 active.add(normalized)
         return active
 
+    def _build_agent_descriptor(self, agent_name: str) -> dict[str, object]:
+        """Monta catálogo compacto para orientar a escolha de um delegado."""
+        descriptor: dict[str, object] = {"name": agent_name}
+
+        # O registry de profiles já é a fonte de verdade para capacidades e
+        # conexão efetiva. Import local evita acoplar a carga das tools ao
+        # carregamento de todos os profiles.
+        from ... import profiles
+
+        profile = profiles.get(agent_name)
+        if profile is not None:
+            base_profile = getattr(profile, "_profile_name", None) or profile.name
+            descriptor["profile"] = base_profile
+
+            try:
+                model = profile.resolve_runtime_model(
+                    cwd=str(self.workspace.cwd) if self.workspace is not None else None,
+                )
+            except Exception:  # noqa: BLE001 - metadado opcional não pode quebrar list_agents
+                model = profile.effective_model()
+            if model:
+                descriptor["model"] = model
+
+            routing_aliases = {
+                "code_editing": "code_edit",
+                "general_coding": "general",
+                "tool_use": None,
+            }
+            best_for: list[str] = []
+            for item in [*profile.preferred_task_types, *profile.capabilities]:
+                normalized = routing_aliases.get(item, item)
+                if normalized and normalized not in best_for:
+                    best_for.append(normalized)
+            if best_for:
+                descriptor["best_for"] = best_for
+
+            descriptor["tier"] = profile.base_tier
+            descriptor["tools"] = (
+                profile.tool_use_reliability if profile.supports_tools else "none"
+            )
+            if profile.supports_long_context:
+                descriptor["long_context"] = True
+
+        stats_provider = self._agent_stats_provider
+        if callable(stats_provider):
+            try:
+                summary = stats_provider(agent_name)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("list_agents: falha ao consultar stats de %s: %s", agent_name, exc)
+                summary = None
+            if isinstance(summary, dict):
+                observed: dict[str, object] = {}
+                responses = int(summary.get("responses_total") or 0)
+                tool_calls = int(summary.get("tool_calls_total") or 0)
+                if responses:
+                    observed["responses"] = responses
+                    latency = float(summary.get("avg_latency_seconds") or 0.0)
+                    if latency:
+                        observed["latency_s"] = latency
+                if tool_calls:
+                    observed["tool_calls"] = tool_calls
+                    observed["tool_success"] = float(summary.get("tool_success_rate") or 0.0)
+                invalid_tools = int(summary.get("invalid_tool_calls") or 0)
+                if invalid_tools:
+                    observed["invalid_tools"] = invalid_tools
+                tool_aborts = int(summary.get("tool_loop_abortions") or 0)
+                if tool_aborts:
+                    observed["tool_aborts"] = tool_aborts
+                if observed:
+                    descriptor["observed"] = observed
+
+        return descriptor
+
     def list_agents(self, call: ToolCall) -> ToolResult:
-        """Retorna a lista de agentes ativos no pool da sessão atual."""
+        """Retorna catálogo compacto dos agentes ativos no pool da sessão."""
         agents = self._resolve_active_agents()
-        agent_list = sorted(agents) if agents else []
-        content = json.dumps(agent_list, ensure_ascii=False)
+        catalog = [self._build_agent_descriptor(agent) for agent in sorted(agents)]
+        content = json.dumps(catalog, ensure_ascii=False, separators=(",", ":"))
         return ToolResult(ok=True, tool_name=call.name, content=content)
 
     # ── transport detection ──────────────────────────────────────────────

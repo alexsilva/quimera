@@ -481,7 +481,7 @@ class TestGetDbPath:
 # ── list_agents ─────────────────────────────────────────────
 
 class TestListAgents:
-    """Tool list_agents: retorna agentes ativos na sessão como JSON array.
+    """Tool list_agents: retorna catálogo compacto dos agentes ativos.
 
     Usa o provider registrado via set_active_agents_provider().
     Sem provider, retorna lista vazia (não falha).
@@ -503,7 +503,15 @@ class TestListAgents:
         result = delegation_tools.list_agents(call)
         assert result.ok is True
         agents = json.loads(result.content)
-        assert agents == ["claude", "codex", "opencode-big-pickle"]
+        assert [agent["name"] for agent in agents] == [
+            "claude",
+            "codex",
+            "opencode-big-pickle",
+        ]
+        assert agents[0]["best_for"]
+        assert "planning" in agents[0]["best_for"]
+        assert "tier" in agents[0]
+        assert "tools" in agents[0]
 
     def test_list_agents_ignora_agentes_vazios(self, delegation_tools):
         """Strings vazias e None são filtrados da lista."""
@@ -513,7 +521,34 @@ class TestListAgents:
         call = _make_call(args={})
         result = delegation_tools.list_agents(call)
         agents = json.loads(result.content)
-        assert agents == ["claude", "codex"]
+        assert [agent["name"] for agent in agents] == ["claude", "codex"]
+
+    def test_list_agents_inclui_stats_compactos_quando_disponiveis(self, delegation_tools):
+        """Stats objetivos complementam o profile sem despejar o /stats inteiro."""
+        delegation_tools.set_active_agents_provider(lambda: ["codex"])
+        delegation_tools.set_agent_stats_provider(
+            lambda _agent: {
+                "responses_total": 12,
+                "avg_latency_seconds": 8.25,
+                "tool_calls_total": 40,
+                "tool_success_rate": 0.95,
+                "invalid_tool_calls": 2,
+                "tool_loop_abortions": 0,
+                "redundancias": 9,
+                "next_step_clarity_rate": 0.5,
+            }
+        )
+
+        result = delegation_tools.list_agents(_make_call(args={}))
+        observed = json.loads(result.content)[0]["observed"]
+
+        assert observed == {
+            "responses": 12,
+            "latency_s": 8.25,
+            "tool_calls": 40,
+            "tool_success": 0.95,
+            "invalid_tools": 2,
+        }
 
     def test_list_agents_provider_falha_retorna_vazio(self, delegation_tools):
         """Provider lança exceção → retorna [] (graceful degradation)."""
