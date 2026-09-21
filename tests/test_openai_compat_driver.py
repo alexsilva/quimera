@@ -896,9 +896,8 @@ def test_driver_loop_budget_defaults_and_override():
     assert custom_driver._loop_budget == custom
 
 
-def test_run_request_prefix_stable_and_guidance_ephemeral():
-    """A nota de orçamento nunca entra no histórico: o prefixo fica estável
-    entre hops (prompt caching) e só o request corrente carrega a nota."""
+def test_run_tool_budget_guidance_is_ephemeral_and_keeps_user_role_clean():
+    """O budget aparece no início, sem virar histórico nem mensagem user."""
     driver, mock_client = _make_driver()
     responses = iter([
         _make_streaming_response(
@@ -920,24 +919,31 @@ def test_run_request_prefix_stable_and_guidance_ephemeral():
 
     driver.run(_prompt("liste arquivos"), tool_executor=mock_executor)
 
-    first, second = observed
-    assert "max_tool_hops" in first[-1]["content"]
-    assert "max_tool_hops" in second[-1]["content"]
-    # O request seguinte reusa o prefixo anterior sem a nota efêmera.
-    assert second[: len(first) - 1] == first[:-1]
-    # Nenhuma cópia antiga da nota persiste no histórico.
-    stale_budgets = [m for m in second[:-1] if "max_tool_hops" in str(m.get("content"))]
-    assert stale_budgets == []
+    assert len(observed) == 2
+    assert "Orçamento de ferramentas:" in observed[0][0]["content"]
+    assert "256 rodadas" in observed[0][0]["content"]
+    assert "Orçamento de ferramentas:" not in json.dumps(
+        observed[1],
+        ensure_ascii=False,
+    )
+    for messages in observed:
+        assert [
+            message["content"]
+            for message in messages
+            if message.get("role") == "user"
+        ] == ["liste arquivos"]
+        serialized = json.dumps(messages, ensure_ascii=False)
+        assert "max_model_requests" not in serialized
+        assert "remaining_model_requests" not in serialized
 
-
-def test_run_checkpoint_prompt_injected_periodically():
-    """A cada _CHECKPOINT_EVERY_HOPS o request pede síntese antes de continuar."""
-    driver, mock_client = _make_driver()
+def test_run_tool_budget_guidance_appears_at_start_middle_and_final_stretch():
+    """O runtime apresenta o limite três vezes, sem repetir a cada request."""
+    driver, mock_client = _make_driver(max_model_requests=21)
     call_count = {"n": 0}
 
     def side_effect(*args, **kwargs):
         call_count["n"] += 1
-        if call_count["n"] <= 20:
+        if call_count["n"] <= 17:
             return _make_streaming_response(
                 content="",
                 tool_calls=[_make_tool_call(
@@ -957,15 +963,19 @@ def test_run_checkpoint_prompt_injected_periodically():
     result = driver.run(_prompt("investigue"), tool_executor=mock_executor)
 
     assert result == "Done."
-    guidance_texts = [
-        call.kwargs["messages"][-1]["content"]
-        for call in mock_client.chat.completions.create.call_args_list
-    ]
-    checkpoint_hops = [
-        index for index, text in enumerate(guidance_texts)
-        if "CHECKPOINT DE CONVERGÊNCIA" in text
-    ]
-    assert checkpoint_hops == [openai_compat_module._CHECKPOINT_EVERY_HOPS]
+    guidance_by_hop = {
+        index: call.kwargs["messages"][0]["content"]
+        for index, call in enumerate(mock_client.chat.completions.create.call_args_list)
+        if "orçamento de ferramentas" in call.kwargs["messages"][0]["content"].lower()
+    }
+    assert set(guidance_by_hop) == {0, 10, 16}
+    assert "até 20 rodadas" in guidance_by_hop[0]
+    assert "10 de 20 rodadas" in guidance_by_hop[10]
+    assert "restam 4 de 20 rodadas" in guidance_by_hop[16]
+    assert "max_model_requests" not in json.dumps(
+        mock_client.chat.completions.create.call_args_list,
+        default=str,
+    )
 
 
 def test_run_marks_repeated_identical_tool_call():
@@ -1298,8 +1308,8 @@ def test_run_preserves_function_like_text_in_final_response():
     assert result == "</function>Resposta final</tool_call>"
 
 
-def test_run_tools_system_prompt_guides_tool_usage():
-    """Driver injeta prompt curto de uso de ferramentas e orçamento separado."""
+def test_run_tools_system_prompt_keeps_user_role_for_real_request_only():
+    """Guidance interno é system; user permanece reservado ao pedido real."""
     driver, mock_client = _make_driver()
     mock_client.chat.completions.create.return_value = _make_streaming_response(
         content="ok", tool_calls=None
@@ -1311,18 +1321,19 @@ def test_run_tools_system_prompt_guides_tool_usage():
     driver.run(_prompt(), tool_executor=mock_executor)
 
     messages = mock_client.chat.completions.create.call_args[1]["messages"]
-    system_message = messages[0]
-    budget_message = messages[-1]
+    budget_message = messages[0]
+    system_message = messages[1]
+    user_messages = [message for message in messages if message["role"] == "user"]
+    assert budget_message["role"] == "system"
+    assert "Orçamento de ferramentas:" in budget_message["content"]
     assert system_message["role"] == "system"
     assert "não repita o mesmo payload inválido" in system_message["content"]
     assert "Use as ferramentas disponíveis" in system_message["content"]
     assert "Workspace raiz: /tmp/workspace." not in system_message["content"]
-    # O orçamento vai como nota efêmera no fim do request (não no head),
-    # mantendo o prefixo estável para prompt caching.
-    assert budget_message["role"] == "user"
-    assert f"max_tool_hops={MAX_TOOL_HOPS_BY_RELIABILITY['medium']}" in budget_message["content"]
-    assert f"remaining_tool_hops={MAX_TOOL_HOPS_BY_RELIABILITY['medium']}" in budget_message["content"]
-    assert messages[1]["role"] != "system" or "max_tool_hops" not in str(messages[1].get("content"))
+    assert user_messages == [{"role": "user", "content": "prompt"}]
+    assert messages[-1] == {"role": "user", "content": "prompt"}
+    serialized = json.dumps(messages, ensure_ascii=False)
+    assert "max_model_requests" not in serialized
     tool_names = {tool["function"]["name"] for tool in mock_client.chat.completions.create.call_args[1]["tools"]}
     assert tool_names == {
         "list_files",
@@ -1365,11 +1376,10 @@ def test_run_tools_system_prompt_guides_tool_usage():
         "browser_screenshot",
         "browser_console",
         "browser_network",
-            "host_processes",
-            "host_process_inspect",
-            "host_process_sample",
-            "host_memory",
-        # Git tools
+        "host_processes",
+        "host_process_inspect",
+        "host_process_sample",
+        "host_memory",
         "git_status",
         "git_log",
         "git_diff",
@@ -1582,23 +1592,20 @@ def test_run_invalid_json_preserves_valid_calls_from_same_turn():
     assert json.loads(tool_messages[1]["content"])["ok"] is True
 
 
-def test_run_tool_loop_updates_remaining_budget_each_hop():
-    """Verifica que Test run tool loop updates remaining budget each hop."""
+def test_run_tool_loop_does_not_repeat_budget_between_regular_hops():
     driver, mock_client = _make_driver()
 
-    tc_id = "call_budget"
-    tc = _make_tool_call(tc_id, "run_shell", '{"command":"ls"}')
+    tc = _make_tool_call("call_budget", "run_shell", '{"command":"ls"}')
     responses = iter(
         [
             _make_streaming_response(content="", tool_calls=[tc]),
             _make_streaming_response(content="Done.", tool_calls=None),
         ]
     )
-    observed_budget_prompts = []
+    observed = []
 
     def side_effect(*args, **kwargs):
-        messages = kwargs["messages"]
-        observed_budget_prompts.append(messages[-1]["content"])
+        observed.append(kwargs["messages"])
         return next(responses)
 
     mock_client.chat.completions.create.side_effect = side_effect
@@ -1610,13 +1617,21 @@ def test_run_tool_loop_updates_remaining_budget_each_hop():
 
     driver.run(_prompt("liste arquivos"), tool_executor=mock_executor)
 
-    max_hops = MAX_TOOL_HOPS_BY_RELIABILITY["medium"]
-
-    assert f"max_tool_hops={max_hops}" in observed_budget_prompts[0]
-    assert f"remaining_tool_hops={max_hops}" in observed_budget_prompts[0]
-    assert f"max_tool_hops={max_hops}" in observed_budget_prompts[1]
-    assert f"remaining_tool_hops={max_hops - 1}" in observed_budget_prompts[1]
-
+    assert len(observed) == 2
+    assert "Orçamento de ferramentas:" in observed[0][0]["content"]
+    assert "Orçamento de ferramentas:" not in json.dumps(
+        observed[1],
+        ensure_ascii=False,
+    )
+    for messages in observed:
+        assert [
+            message["content"]
+            for message in messages
+            if message.get("role") == "user"
+        ] == ["liste arquivos"]
+        serialized = json.dumps(messages, ensure_ascii=False)
+        assert "max_model_requests" not in serialized
+        assert "remaining_model_requests" not in serialized
 
 def test_run_tool_loop_uses_minimal_prompt_payload_and_valid_json():
     """Verifica que Test run tool loop uses minimal prompt payload and valid json."""
@@ -1684,12 +1699,14 @@ def test_run_tool_loop_prunes_messages_between_hops():
         call.kwargs["messages"]
         for call in mock_client.chat.completions.create.call_args_list
     ]
-    # +1: a nota efêmera de orçamento anexada ao fim de cada request.
-    assert len(observed_lengths[-1]) <= _MAX_TOOL_LOOP_MESSAGES + 1
+    assert len(observed_lengths[-1]) <= _MAX_TOOL_LOOP_MESSAGES
     assert observed_lengths[-1][0]["role"] == "system"
-    assert observed_lengths[-1][1]["role"] == "user"
-    assert observed_lengths[-1][-1]["role"] == "user"
-    assert "max_tool_hops" in observed_lengths[-1][-1]["content"]
+    assert any(
+        message.get("role") == "user" and message.get("content") == "liste arquivos"
+        for message in observed_lengths[-1]
+    )
+    serialized = json.dumps(observed_lengths[-1], ensure_ascii=False)
+    assert "Orçamento de ferramentas:" not in serialized
 
 
 def test_run_api_error_returns_none():
@@ -2379,28 +2396,46 @@ def test_driver_repl_run_one_shot_and_interactive_commands():
     assert "[sem resposta]" in printed
 
 
-def test_run_max_hops_returns_last_text():
-    """Quando o modelo não para de chamar tools, o loop encerra no MAX_TOOL_HOPS."""
+def test_run_max_hops_gets_final_toolless_response():
+    """Ao esgotar tool hops, reserva um request final sem tools e com aviso factual."""
     driver, mock_client = _make_driver()
     tc = _make_tool_call("c", "run_shell", '{"command":"x"}')
 
-    def always_tool_response(*args, **kwargs):
+    def response_for_request(*args, **kwargs):
+        if "tools" not in kwargs:
+            return _make_streaming_response(content="resposta final", tool_calls=None)
         return _make_streaming_response(content="parcial", tool_calls=[tc])
 
-    mock_client.chat.completions.create.side_effect = always_tool_response
+    mock_client.chat.completions.create.side_effect = response_for_request
 
     mock_executor = MagicMock()
     mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
     mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="ok")
 
-    from quimera.runtime.tool_hops import MAX_TOOL_HOPS_BY_RELIABILITY
     expected_hops = MAX_TOOL_HOPS_BY_RELIABILITY["medium"]
     driver.tool_use_reliability = "medium"
-    result = driver.run(_prompt(), tool_executor=mock_executor)
-    assert result is not None
-    assert mock_client.chat.completions.create.call_count == expected_hops + 1
+    abort_reasons = []
+    result = driver.run(
+        _prompt(),
+        tool_executor=mock_executor,
+        on_tool_abort=abort_reasons.append,
+    )
 
+    assert result == "resposta final"
+    assert mock_client.chat.completions.create.call_count == expected_hops + 1
+    assert mock_executor.execute.call_count == expected_hops
+    final_request = mock_client.chat.completions.create.call_args_list[-1].kwargs
+    assert "tools" not in final_request
+    assert "tool_choice" not in final_request
+    assert final_request["messages"][0] == {
+        "role": "system",
+        "content": openai_compat_module._TOOLS_UNAVAILABLE_NOTICE,
+    }
+    final_messages = json.dumps(final_request["messages"], ensure_ascii=False)
+    assert "Use as ferramentas disponíveis" not in final_messages
+    assert {"role": "user", "content": "prompt"} in final_request["messages"]
+    assert abort_reasons == ["max_tool_hops"]
 
 def test_run_low_reliability_uses_lower_max_hops():
     """Verifica que Test run low reliability uses lower max hops."""
@@ -2421,6 +2456,7 @@ def test_run_low_reliability_uses_lower_max_hops():
     result = driver.run(_prompt(), tool_executor=mock_executor)
     assert result is not None
     assert mock_client.chat.completions.create.call_count == MAX_TOOL_HOPS_BY_RELIABILITY["low"] + 1
+    assert "tools" not in mock_client.chat.completions.create.call_args_list[-1].kwargs
 
 
 def test_run_aborts_on_repeated_policy_error_for_all_reliabilities():
@@ -3136,12 +3172,11 @@ def test_run_releases_backend_slot_while_tool_executes():
     assert driver._semaphore._value == 1
 
 
-def test_run_stops_before_exceeding_model_request_budget():
-    """O orçamento independente impede novo request após tool call já executada."""
+def test_run_reserves_final_response_when_model_request_budget_ends_tools():
+    """O último model request é reservado para uma resposta sem ferramentas."""
     driver, mock_client = _make_driver(max_model_requests=1)
-    tool_call = _make_tool_call("call_once", "read_file", '{"path":"a.py"}')
     mock_client.chat.completions.create.return_value = _make_streaming_response(
-        content="", tool_calls=[tool_call]
+        content="resposta final", tool_calls=None
     )
 
     executor = MagicMock()
@@ -3156,14 +3191,23 @@ def test_run_stops_before_exceeding_model_request_budget():
         on_tool_abort=abort_reasons.append,
     )
 
-    assert result == "Limite de chamadas ao modelo atingido."
+    assert result == "resposta final"
     assert mock_client.chat.completions.create.call_count == 1
+    request = mock_client.chat.completions.create.call_args.kwargs
+    assert "tools" not in request
+    assert request["messages"][0] == {
+        "role": "system",
+        "content": openai_compat_module._TOOLS_UNAVAILABLE_NOTICE,
+    }
+    assert "Use as ferramentas disponíveis" not in json.dumps(
+        request["messages"],
+        ensure_ascii=False,
+    )
+    assert {"role": "user", "content": "prompt"} in request["messages"]
     assert abort_reasons == ["max_model_requests"]
-    executor.execute.assert_called_once()
+    executor.execute.assert_not_called()
 
-
-def test_tool_budget_prompt_exposes_model_request_budget():
-    """O modelo recebe os budgets de hops e requests restantes."""
+def test_run_exposes_effective_tool_budget_without_model_request_budget():
     driver, mock_client = _make_driver(max_model_requests=7)
     mock_client.chat.completions.create.return_value = _make_streaming_response(
         content="ok", tool_calls=None
@@ -3174,10 +3218,13 @@ def test_tool_budget_prompt_exposes_model_request_budget():
 
     assert driver.run(_prompt(), tool_executor=executor) == "ok"
 
-    budget = mock_client.chat.completions.create.call_args.kwargs["messages"][-1]["content"]
-    assert "max_model_requests=7" in budget
-    assert "remaining_model_requests=7" in budget
-
+    serialized = json.dumps(
+        mock_client.chat.completions.create.call_args.kwargs["messages"],
+        ensure_ascii=False,
+    )
+    assert "até 6 rodadas" in serialized
+    assert "max_model_requests" not in serialized
+    assert "remaining_model_requests" not in serialized
 
 def test_context_pruning_preserves_current_user_and_drops_old_conversation():
     messages = [

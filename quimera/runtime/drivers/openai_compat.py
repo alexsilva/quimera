@@ -34,7 +34,6 @@ from ..tool_hops import (
 from .tool_schemas import resolve_tool_schemas
 from .prompt_adapter import (
     _build_openai_messages_from_prompt,
-    _build_tool_budget_prompt,
     _build_tool_system_prompt,
 )
 from ..errors import ToolValidationError
@@ -285,20 +284,14 @@ _LEDGER_HEADER = (
 _MAX_LEDGER_ENTRIES = 300
 _MAX_LEDGER_CHARS = 20_000
 
-# Forcing function de convergência: a cada N hops o modelo é instruído a
-# sintetizar o que já sabe antes de continuar, e perto do fim do orçamento a
-# instrução muda para concluir com o que tem.
-_CHECKPOINT_EVERY_HOPS = 16
-_CHECKPOINT_PROMPT = (
-    "CHECKPOINT DE CONVERGÊNCIA: você já executou muitas chamadas nesta "
-    "execução. Antes da próxima ação, escreva um resumo curto (3-6 linhas) do "
-    "que já descobriu e do plano restante, e então prossiga com a próxima ação "
-    "concreta. Não releia arquivos nem repita buscas já feitas; confie no "
-    "histórico e no seu resumo."
-)
-_FINAL_STRETCH_PROMPT = (
-    "ATENÇÃO: o orçamento de chamadas está quase esgotado. Pare de explorar, "
-    "conclua a mudança principal e produza a resposta final com o que já tem."
+# O orçamento de tools é apresentado de forma esparsa. Repetir contadores a cada
+# request polui o contexto e pode induzir modelos menores a reagirem ao harness
+# em vez de continuar o trabalho normalmente.
+_FINAL_STRETCH_FRACTION = 10
+_MIN_FINAL_STRETCH_HOPS = 4
+_TOOLS_UNAVAILABLE_NOTICE = (
+    "O runtime encerrou a disponibilidade de ferramentas para esta execução. "
+    "Novas chamadas de ferramentas não serão executadas."
 )
 
 # Limite padrão de conexões concorrentes ao backend OpenAI-compatible.
@@ -951,28 +944,50 @@ class ToolCallingDriver:
             split_recent_conversation=True,
         )
 
-    def _build_turn_guidance(self, hop: int, max_tool_hops: int) -> str:
-        """Nota efêmera de orçamento e convergência anexada ao fim do request.
+    def _build_turn_guidance(self, hop: int, tool_request_limit: int) -> str:
+        """Expõe o orçamento efetivo de tools apenas em marcos úteis do turno.
 
-        Nunca entra no histórico persistente: assim o prefixo enviado ao
-        provedor permanece estável entre hops (prompt caching) e a instrução
-        de convergência sempre aparece na posição de maior atenção do modelo.
+        A mensagem é efêmera e enviada como ``system`` somente no request
+        corrente. O modelo é avisado no início, no meio e ao entrar na reta
+        final, sem receber contadores mutáveis em todo hop.
         """
-        parts = [
-            _build_tool_budget_prompt(
-                max_tool_hops=max_tool_hops,
-                remaining_tool_hops=max(max_tool_hops - hop, 0),
-                max_model_requests=self.max_model_requests,
-                remaining_model_requests=max(self.max_model_requests - hop, 0),
+        if tool_request_limit <= 0 or hop < 0 or hop >= tool_request_limit:
+            return ""
+
+        remaining = tool_request_limit - hop
+        if hop == 0:
+            return (
+                "Orçamento de ferramentas: esta execução permite até "
+                f"{tool_request_limit} rodadas com ferramentas. Quando esse limite "
+                "for atingido, o runtime encerrará novas ferramentas e preservará "
+                "uma resposta final sem ferramentas."
             )
-        ]
-        remaining = min(max_tool_hops - hop, self.max_model_requests - hop)
-        final_stretch = max(min(max_tool_hops, self.max_model_requests) // 10, 4)
-        if 0 <= remaining <= final_stretch:
-            parts.append(_FINAL_STRETCH_PROMPT)
-        elif hop > 0 and hop % _CHECKPOINT_EVERY_HOPS == 0:
-            parts.append(_CHECKPOINT_PROMPT)
-        return "\n\n".join(parts)
+
+        midpoint_hop = tool_request_limit // 2
+        final_stretch = max(
+            tool_request_limit // _FINAL_STRETCH_FRACTION,
+            _MIN_FINAL_STRETCH_HOPS,
+        )
+        # Para budgets pequenos, mantém o aviso final depois do midpoint sempre
+        # que houver espaço para ambos os marcos.
+        final_stretch_hop = min(
+            max(tool_request_limit - final_stretch, midpoint_hop + 1),
+            tool_request_limit - 1,
+        )
+
+        if hop == midpoint_hop:
+            return (
+                "Checkpoint do orçamento de ferramentas: "
+                f"{hop} de {tool_request_limit} rodadas foram usadas; "
+                f"restam {remaining}."
+            )
+        if hop == final_stretch_hop:
+            return (
+                "Orçamento de ferramentas próximo do fim: restam "
+                f"{remaining} de {tool_request_limit} rodadas. Ao atingir o limite, "
+                "o runtime desabilitará novas ferramentas."
+            )
+        return ""
 
     def run(
             self,
@@ -1020,16 +1035,25 @@ class ToolCallingDriver:
 
             messages: list[dict] = []
             max_tool_hops = get_max_tool_hops(self.tool_use_reliability)
+            # Reserva um request final sem tools para que o modelo possa responder
+            # quando o runtime encerrar a disponibilidade de ferramentas.
+            tool_request_limit = (
+                min(max_tool_hops, max(self.max_model_requests - 1, 0))
+                if tools
+                else 0
+            )
+            tool_system_message = None
             if tools:
                 tool_names = [t["function"]["name"] for t in tools]
                 config = getattr(tool_executor, "config", None)
                 workspace = getattr(config, "workspace", None)
                 workspace_root = workspace.cwd if workspace is not None else None
                 shell_allowlist = getattr(getattr(tool_executor, "config", None), "shell_allowlist", None)
-                messages.append({
+                tool_system_message = {
                     "role": "system",
                     "content": _build_tool_system_prompt(tool_names, workspace_root, shell_allowlist),
-                })
+                }
+                messages.append(tool_system_message)
             messages.extend(self._build_messages_from_prompt(prompt))
             # Assinaturas de chamadas já executadas -> hop em que ocorreram.
             # Usado para avisar o modelo quando ele repete uma ação idêntica.
@@ -1040,37 +1064,56 @@ class ToolCallingDriver:
             max_consecutive_invalid_signatures = get_invalid_tool_loop_threshold(self.tool_use_reliability)
 
             try:
-                for hop in range(max_tool_hops + 1):
+                for hop in range(tool_request_limit + 1):
                     if cancel_event is not None and cancel_event.is_set():
                         return None
-                    if hop >= self.max_model_requests:
+
+                    final_without_tools = bool(tools) and hop == tool_request_limit
+                    request_tools = [] if final_without_tools else tools
+
+                    guidance_text = ""
+                    if final_without_tools:
+                        tool_end_reason = (
+                            "max_tool_hops"
+                            if tool_request_limit == max_tool_hops
+                            else "max_model_requests"
+                        )
                         _logger.warning(
-                            "OpenAICompatDriver: max model requests (%d) reached",
-                            self.max_model_requests,
+                            "OpenAICompatDriver: tool execution ended reason=%s",
+                            tool_end_reason,
                         )
                         if on_tool_abort is not None:
-                            on_tool_abort("max_model_requests")
-                        return "Limite de chamadas ao modelo atingido."
-                    # A nota de orçamento/convergência é efêmera: vai apenas no
-                    # request, nunca no histórico persistente. O pruning acontece
-                    # antes dela, reservando seu espaço, para que o pedido atual
-                    # continue sendo a última mensagem user protegida.
-                    guidance_message = None
-                    if tools:
-                        guidance_message = {
-                            "role": "user",
-                            "content": self._build_turn_guidance(hop, max_tool_hops),
-                        }
+                            on_tool_abort(tool_end_reason)
+                        guidance_text = _TOOLS_UNAVAILABLE_NOTICE
+                    elif tools:
+                        guidance_text = self._build_turn_guidance(
+                            hop,
+                            tool_request_limit,
+                        )
+
+                    guidance_message = (
+                        {"role": "system", "content": guidance_text}
+                        if guidance_text
+                        else None
+                    )
+                    request_source_messages = messages
+                    if final_without_tools and tool_system_message is not None:
+                        request_source_messages = [
+                            message
+                            for message in messages
+                            if message is not tool_system_message
+                        ]
+
                     request_messages, fits_context = _prune_request_messages(
-                        messages,
-                        tools,
+                        request_source_messages,
+                        request_tools,
                         context_window=self.context_window,
                         context_reserve_tokens=self.context_reserve_tokens,
                         extra_chars=_message_size(guidance_message) if guidance_message else 0,
                         loop_budget=self._loop_budget,
                     )
                     if fits_context and guidance_message is not None:
-                        request_messages = [*request_messages, guidance_message]
+                        request_messages = [guidance_message, *request_messages]
                     if not fits_context:
                         _logger.warning(
                             "OpenAICompatDriver: request protected content exceeds configured context window model=%s context_window=%s",
@@ -1083,7 +1126,7 @@ class ToolCallingDriver:
                     try:
                         response_text, tool_calls = self._chat(
                             request_messages,
-                            tools,
+                            request_tools,
                             cancel_event=cancel_event,
                             on_text_chunk=on_text_chunk,
                         )
@@ -1139,11 +1182,11 @@ class ToolCallingDriver:
                     if not tool_calls:
                         return response_text or None
 
-                    if hop == max_tool_hops:
-                        _logger.warning("OpenAICompatDriver: max tool hops (%d) reached", max_tool_hops)
-                        if on_tool_abort is not None:
-                            on_tool_abort("max_tool_hops")
-                        return response_text or "Limite de chamadas de ferramenta atingido."
+                    if final_without_tools:
+                        _logger.warning(
+                            "OpenAICompatDriver: backend returned tool calls after tools were disabled"
+                        )
+                        return response_text or "A execução de ferramentas foi encerrada pelo runtime."
 
                     # Adiciona turno do assistente com os tool calls
                     assistant_msg: dict = {

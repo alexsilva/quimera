@@ -9,7 +9,6 @@ from quimera.prompt_kinds import PromptKind
 from quimera.prompt_templates import PromptText
 from quimera.runtime.drivers.prompt_adapter import (
     _build_openai_messages_from_prompt,
-    _build_tool_budget_prompt,
     _build_tool_system_prompt,
 )
 
@@ -461,14 +460,6 @@ def test_build_tool_system_prompt_includes_shell_policy_rules():
     assert "comandos permitidos" not in prompt
 
 
-def test_build_tool_budget_prompt_includes_max_and_remaining():
-    """Budget prompt inclui máximo e restante de tool hops."""
-    prompt = _build_tool_budget_prompt(max_tool_hops=24, remaining_tool_hops=17)
-
-    assert "max_tool_hops=24" in prompt
-    assert "remaining_tool_hops=17" in prompt
-
-
 # ---------------------------------------------------------------------------
 # Invariante de contrato: todo PromptKind deve terminar com role "user"
 #
@@ -538,16 +529,3 @@ def test_build_openai_messages_ends_with_user_for_every_prompt_kind():
             f"PromptKind.{kind.name}: última mensagem tem role '{messages[-1]['role']}', "
             f"esperado 'user'. Verifique a ordem e os roles em ROLES_BY_KIND[PromptKind.{kind.name}]."
         )
-
-
-
-def test_build_tool_budget_prompt_includes_model_request_budget_when_provided():
-    prompt = _build_tool_budget_prompt(
-        max_tool_hops=24,
-        remaining_tool_hops=17,
-        max_model_requests=10,
-        remaining_model_requests=4,
-    )
-
-    assert "max_model_requests=10" in prompt
-    assert "remaining_model_requests=4" in prompt
