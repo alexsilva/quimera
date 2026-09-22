@@ -43,7 +43,30 @@ def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
         inp = part.get("input") or part.get("args") or event.get("input") or event.get("args") or {}
         detail = describe_tool_input(tool_name, inp)
         text = detail if detail else f"usando {tool_name}"
-        return [SpyEvent(kind="tool", text=text, transient=True)]
+        raw_status = str(part.get("status") or event.get("status") or "").strip().lower()
+        is_end = (
+            any(token in marker for token in {"result", "finish", "completed", "complete", "end"})
+            or raw_status in {"completed", "complete", "ok", "success", "error", "failed", "failure"}
+        )
+        if raw_status in {"error", "failed", "failure"}:
+            status = "error"
+        elif is_end:
+            status = "ok"
+        else:
+            status = "running"
+        return [
+            SpyEvent(
+                kind="tool",
+                text=text,
+                transient=True,
+                data={
+                    "tool": tool_name,
+                    "operation": "end" if is_end else "start",
+                    "status": status,
+                    "input": inp,
+                },
+            )
+        ]
 
     return []
 

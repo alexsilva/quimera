@@ -182,6 +182,40 @@ def test_live_delegation_view_falls_back_to_stream_tail():
     assert view["last_thinking"].endswith("direto no stdout")
 
 
+def test_registry_activity_refreshes_run_without_overwriting_thinking():
+    """Tool activity mantém o run vivo sem ser confundida com reasoning."""
+    now = {"t": 1.0}
+    registry = AgentRunRegistry(clock=lambda: now["t"])
+    registry.record(_event("started"))
+    registry.record(_event("delta", text="<think>vou revisar o fluxo</think>"))
+
+    now["t"] = 20.0
+    registry.record(_event("activity", text="$ rg -n last_thinking quimera"))
+    now["t"] = 23.0
+
+    view = registry.live_delegation_view("dlg-1")
+
+    assert view == {
+        "agent": "codex",
+        "status": "running",
+        "last_thinking": "vou revisar o fluxo",
+        "last_activity": "$ rg -n last_thinking quimera",
+        "updated_seconds_ago": 3.0,
+    }
+
+
+def test_registry_ignores_late_activity_after_final_event():
+    registry = AgentRunRegistry()
+    registry.record(_event("activity", text="$ pytest"))
+    finished = registry.record(_event("finished", text="ok"))
+
+    record = registry.record(_event("activity", text="✓ pytest"))
+
+    assert record is finished
+    assert record.status == "finished"
+    assert record.last_activity == "$ pytest"
+
+
 def test_registry_prune_drops_parser_state():
     registry = AgentRunRegistry(max_runs=1)
     registry.record(_event("delta", text="<think>a</think>", run_id="agentrun:a", delegation_id="dlg-a"))
@@ -293,6 +327,74 @@ def test_cli_delegate_updates_live_thinking_before_process_finishes():
     assert result["value"] == "Fluxo validado"
 
 
+def test_silent_cli_delegate_tracks_tool_activity_before_process_finishes():
+    """Tool activity continua observável mesmo sem o pipeline visual do presenter."""
+    from tests.test_agent_run_events import make_gateway
+
+    release_final = threading.Event()
+
+    def stdout_lines():
+        yield '{"type":"item.started","item":{"type":"reasoning","summary":"Vou revisar o fluxo"}}\n'
+        yield (
+            '{"type":"item.started","item":{"type":"command_execution",'
+            '"command":"rg -n last_thinking quimera","id":"tool-1"}}\n'
+        )
+        assert release_final.wait(2)
+        yield (
+            '{"type":"item.completed","item":{"type":"command_execution",'
+            '"command":"rg -n last_thinking quimera","exit_code":0,"id":"tool-1"}}\n'
+        )
+        yield '{"type":"item.completed","item":{"type":"agent_message","text":"Fluxo validado"}}\n'
+
+    proc = MagicMock()
+    proc.stdout = stdout_lines()
+    proc.stderr = iter([])
+    proc.returncode = 0
+    proc.stdin = MagicMock()
+    renderer = MagicMock()
+    client = AgentClient(renderer)
+    registry = AgentRunRegistry()
+    gateway = make_gateway(client, sink=AgentRunController(registry=registry))
+    result = {}
+
+    with patch("subprocess.Popen", return_value=proc), patch.object(
+        client, "_should_use_warm_pool", return_value=False
+    ):
+        worker = threading.Thread(
+            target=lambda: result.setdefault(
+                "value",
+                gateway.call(
+                    "codex",
+                    delegation={"delegation_id": "dlg-cli-tool-live"},
+                    delegation_only=True,
+                    protocol_mode="delegation",
+                    silent=True,
+                    show_output=False,
+                ),
+            )
+        )
+        worker.start()
+        deadline = time.monotonic() + 2
+        live = None
+        while time.monotonic() < deadline:
+            live = registry.live_delegation_view("dlg-cli-tool-live")
+            if live and live.get("last_activity"):
+                break
+            time.sleep(0.01)
+
+        assert live is not None
+        assert live["status"] == "running"
+        assert live["last_thinking"] == "Vou revisar o fluxo"
+        assert live["last_activity"] == "$ rg -n last_thinking quimera"
+        assert live["updated_seconds_ago"] < 1
+
+        release_final.set()
+        worker.join(3)
+
+    assert not worker.is_alive()
+    assert result["value"] == "Fluxo validado"
+
+
 # ── TaskTools.list_tasks: campo live ─────────────────────────────────────
 
 
@@ -325,6 +427,7 @@ def test_list_tasks_attaches_live_thinking_for_running_delegations(mock_list, ta
             "agent": "codex",
             "status": "running",
             "last_thinking": "analisando o diff",
+            "last_activity": "$ git diff",
             "updated_seconds_ago": 1.2,
         },
     }
@@ -340,6 +443,7 @@ def test_list_tasks_attaches_live_thinking_for_running_delegations(mock_list, ta
             "agent": "codex",
             "status": "running",
             "last_thinking": "analisando o diff",
+            "last_activity": "$ git diff",
             "updated_seconds_ago": 1.2,
         },
     ]

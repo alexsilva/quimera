@@ -435,7 +435,8 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                 'content': {'type': 'string',
                             'description': 'JSON array of TaskRecord objects; delegações '
                                            "in_progress trazem 'live': [{delegation_id, agent, "
-                                           'status, last_thinking, updated_seconds_ago}]'},
+                                           'status, last_thinking, last_activity?, '
+                                           'updated_seconds_ago}]'},
                 'truncated': {'type': 'boolean'},
                 'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
  'required': ['ok', 'content']},

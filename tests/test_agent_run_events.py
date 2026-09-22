@@ -56,6 +56,20 @@ class FakeAgentClient:
         self.flushed = True
 
 
+class FakeActivityAgentClient(FakeAgentClient):
+    def call_with_run_activity(self, agent, prompt, *, run_activity_callback=None, **kwargs):
+        if run_activity_callback is not None:
+            run_activity_callback(
+                {
+                    "text": "$ git diff",
+                    "tool": "exec_command",
+                    "operation": "start",
+                    "status": "running",
+                }
+            )
+        return self.call(agent, prompt, **kwargs)
+
+
 def make_gateway(client, sink=None):
     return AgentGateway(
         agent_client=client,
@@ -129,6 +143,21 @@ def test_agent_gateway_can_hide_protocol_deltas_without_hiding_run_boundaries():
     assert result == "resposta final"
     assert [event.kind for event in sink.events] == ["started", "finished"]
     assert sink.events[0].metadata["emit_run_deltas"] is False
+
+
+def test_agent_gateway_emit_run_deltas_false_hides_tool_activity_too():
+    sink = RecordingSink()
+    gateway = make_gateway(FakeActivityAgentClient(), sink=sink)
+
+    result = gateway.call(
+        "codex",
+        silent=True,
+        show_output=False,
+        emit_run_deltas=False,
+    )
+
+    assert result == "resposta final"
+    assert [event.kind for event in sink.events] == ["started", "finished"]
 
 
 def test_agent_gateway_propagates_delegation_run_metadata():

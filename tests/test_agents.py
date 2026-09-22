@@ -1445,6 +1445,39 @@ def test_spy_output_presenter_collects_structured_turn_detail(renderer):
     assert isinstance(detail["tools"][0]["duration_ms"], int)
 
 
+def test_spy_output_presenter_normalizes_tool_activity(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    start = presenter.tool_activity(SpyEvent(kind="tool", text="$ rg -n last_thinking quimera"))
+    end = presenter.tool_activity(SpyEvent(kind="tool", text="✓ rg -n last_thinking quimera"))
+
+    assert start == {
+        "text": "$ rg -n last_thinking quimera",
+        "tool": "exec_command",
+        "operation": "start",
+        "status": "running",
+    }
+    assert end == {
+        "text": "✓ rg -n last_thinking quimera",
+        "tool": "exec_command",
+        "operation": "end",
+        "status": "ok",
+    }
+
+
+def test_cli_run_activity_parser_failure_is_best_effort(renderer):
+    """Falha do formatter de telemetria não pode quebrar a execução do agente."""
+    client = AgentClient(renderer)
+    activity = []
+    client._spy_output_presenter.format_stdout = MagicMock(
+        side_effect=AttributeError("unexpected JSON shape")
+    )
+
+    client._notify_cli_run_activities("codex", "[]", activity.append)
+
+    assert activity == []
+
+
 def test_spy_output_presenter_persists_evidence_from_raw_output(renderer, tmp_path):
     """Verifica que spy output presenter persists evidence from raw output."""
     presenter = SpyOutputPresenter(
@@ -1950,6 +1983,7 @@ def test_agent_client_api_quiet_silent_records_tools_without_rendering(renderer)
     client.tool_executor = MagicMock()
     profile = _make_api_profile()
     mock_driver = MagicMock()
+    activity = []
 
     def run_with_tool(**kwargs):
         kwargs["on_tool_call"]("read_file", {"path": "README.md"})
@@ -1968,7 +2002,12 @@ def test_agent_client_api_quiet_silent_records_tools_without_rendering(renderer)
     client._api_drivers["test-agent"] = mock_driver
 
     result = client._call_api(
-        "test-agent", profile, "prompt", silent=True, show_status=False,
+        "test-agent",
+        profile,
+        "prompt",
+        silent=True,
+        show_status=False,
+        run_activity_callback=activity.append,
     )
 
     assert result == "api response"
@@ -1976,6 +2015,20 @@ def test_agent_client_api_quiet_silent_records_tools_without_rendering(renderer)
     renderer.show_feed.assert_not_called()
     renderer.show_system_neutral.assert_not_called()
     assert client.last_spy_turn_detail["tools"][0]["status"] == "ok"
+    assert activity == [
+        {
+            "text": "⚒ read_file README.md",
+            "tool": "read_file",
+            "operation": "start",
+            "status": "running",
+        },
+        {
+            "text": "✓ read_file",
+            "tool": "read_file",
+            "operation": "end",
+            "status": "ok",
+        },
+    ]
 
 
 def _make_api_profile(agent="test-agent"):
@@ -2474,7 +2527,17 @@ def test_format_claude_spy_event_summarizes_assistant_and_result():
     )
     result = _format_claude_spy_event('{"type":"result","result":"ok","is_error":false}')
     assert assistant == [
-        SpyEvent(kind="tool", text="usando Bash", transient=True),
+        SpyEvent(
+            kind="tool",
+            text="usando Bash",
+            transient=True,
+            data={
+                "tool": "Bash",
+                "operation": "start",
+                "status": "running",
+                "input": {},
+            },
+        ),
         SpyEvent(kind="response", text="Vou validar com um teste focado antes de concluir.", transient=True),
     ]
     assert result == [SpyEvent(kind="context", text="execução concluída", transient=True)]
@@ -2503,7 +2566,44 @@ def test_format_opencode_spy_event_reports_tool_calls_as_tool_messages():
     tool = _format_opencode_spy_event(
         '{"type":"tool_call","part":{"type":"tool-call","tool":"run_shell"}}'
     )
-    assert tool == [SpyEvent(kind="tool", text="usando run_shell", transient=True)]
+    assert tool == [
+        SpyEvent(
+            kind="tool",
+            text="usando run_shell",
+            transient=True,
+            data={
+                "tool": "run_shell",
+                "operation": "start",
+                "status": "running",
+                "input": {},
+            },
+        )
+    ]
+
+
+def test_claude_and_opencode_tool_events_feed_structured_run_activity(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+    claude = _format_claude_spy_event(
+        '{"type":"assistant","message":{"content":['
+        '{"type":"tool_use","name":"Read","input":{"path":"README.md"}}]}}'
+    )[0]
+    opencode = _format_opencode_spy_event(
+        '{"type":"tool_call","part":{"type":"tool-call","tool":"grep",'
+        '"input":{"pattern":"last_activity"}}}'
+    )[0]
+
+    assert presenter.tool_activity(claude) == {
+        "text": "README.md",
+        "tool": "Read",
+        "operation": "start",
+        "status": "running",
+    }
+    assert presenter.tool_activity(opencode) == {
+        "text": 'buscar "last_activity"',
+        "tool": "grep",
+        "operation": "start",
+        "status": "running",
+    }
 
 
 def test_parse_opencode_json_with_text(renderer):

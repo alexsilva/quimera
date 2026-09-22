@@ -24,6 +24,14 @@ _TASK_TOOL_NAMES = ["tasks", "list_tasks", "list_jobs", "get_job"]
 _LIVE_THINKING_MAX_CHARS = 400
 
 
+def _live_excerpt(value) -> str:
+    """Mantém a cauda do texto ao vivo dentro do limite publicado pela tool."""
+    text = str(value or "")
+    if len(text) > _LIVE_THINKING_MAX_CHARS:
+        return "…" + text[-_LIVE_THINKING_MAX_CHARS:]
+    return text
+
+
 class _TaskCreationReceipt(Protocol):
     """Contrato mínimo do recibo retornado pelo domínio de tasks."""
 
@@ -62,8 +70,9 @@ class TaskTools(ToolBase):
         """Injeta lookup do run ao vivo de uma delegação por delegation_id.
 
         Assinatura esperada: fn(delegation_id) -> {agent, status, last_thinking,
-        updated_seconds_ago} | None. O lookup consulta o registry de runs em
-        memória do processo — visibilidade cross-processo fica fora do escopo.
+        last_activity?, updated_seconds_ago} | None. O lookup consulta o registry
+        de runs em memória do processo — visibilidade cross-processo fica fora
+        do escopo.
         """
         self._delegation_run_lookup = fn
 
@@ -192,18 +201,18 @@ class TaskTools(ToolBase):
                 continue
             if not isinstance(view, dict):
                 continue
-            thinking = str(view.get("last_thinking") or "")
-            if len(thinking) > _LIVE_THINKING_MAX_CHARS:
-                thinking = "…" + thinking[-_LIVE_THINKING_MAX_CHARS:]
-            live.append(
-                {
-                    "delegation_id": delegation_id,
-                    "agent": str(view.get("agent") or step.get("target_agent") or ""),
-                    "status": str(view.get("status") or ""),
-                    "last_thinking": thinking,
-                    "updated_seconds_ago": view.get("updated_seconds_ago"),
-                }
-            )
+            thinking = _live_excerpt(view.get("last_thinking"))
+            item = {
+                "delegation_id": delegation_id,
+                "agent": str(view.get("agent") or step.get("target_agent") or ""),
+                "status": str(view.get("status") or ""),
+                "last_thinking": thinking,
+                "updated_seconds_ago": view.get("updated_seconds_ago"),
+            }
+            activity = _live_excerpt(view.get("last_activity"))
+            if activity:
+                item["last_activity"] = activity
+            live.append(item)
         if not live:
             return task
         enriched = dict(task)

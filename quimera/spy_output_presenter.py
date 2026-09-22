@@ -118,6 +118,31 @@ class SpyOutputPresenter:
             return {"tool": text[7:].strip() or "ferramenta", "operation": "start", "status": "running"}
         return None
 
+    def tool_activity(self, event: SpyEvent) -> dict | None:
+        """Resume um SpyEvent de tool para observabilidade do run."""
+        if event.kind != "tool":
+            return None
+        data = self._normalize_tool_data(event)
+        if not data:
+            return None
+        operation = str(data.get("operation") or "")
+        if operation not in {"start", "end"}:
+            return None
+        return {
+            "text": str(event.text or "").strip(),
+            "tool": str(data.get("tool") or ""),
+            "operation": operation,
+            "status": str(data.get("status") or ""),
+        }
+
+    def tool_call_activity(self, tool: str, arguments: dict | None = None) -> dict | None:
+        """Normaliza atividade de início para drivers sem stdout estruturado."""
+        return self.tool_activity(self._tool_call_event(tool, arguments))
+
+    def tool_result_activity(self, result) -> dict | None:
+        """Normaliza atividade de conclusão para drivers sem stdout estruturado."""
+        return self.tool_activity(self._tool_result_event(result))
+
     def _record_tool_event(self, event: SpyEvent) -> None:
         if event.kind not in {"tool", "diff"}:
             return

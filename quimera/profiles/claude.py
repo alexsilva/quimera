@@ -52,7 +52,19 @@ def _format_claude_spy_event(line: str) -> list[SpyEvent]:
             inp = block.get("input") or {}
             detail = describe_tool_input(tool_name, inp)
             text = detail if detail else f"usando {tool_name}"
-            messages.append(SpyEvent(kind="tool", text=text, transient=True))
+            messages.append(
+                SpyEvent(
+                    kind="tool",
+                    text=text,
+                    transient=True,
+                    data={
+                        "tool": tool_name,
+                        "operation": "start",
+                        "status": "running",
+                        "input": inp,
+                    },
+                )
+            )
     return messages
 
 

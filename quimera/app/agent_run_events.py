@@ -141,6 +141,7 @@ class AgentRunRecord:
     last_text: str = ""
     last_thinking: str = ""
     stream_tail: str = ""
+    last_activity: str = ""
     event_count: int = 0
 
 
@@ -187,14 +188,15 @@ class AgentRunRegistry:
         now = self._clock()
         with self._lock:
             current = self._runs.get(run_id)
-            if event.kind == "delta" and current is not None and current.finished_at is not None:
+            if event.kind in {"delta", "activity"} and current is not None and current.finished_at is not None:
                 # Uma thread leitora de CLI pode encerrar alguns instantes após
-                # cancelamento/timeout. O delta tardio não pode ressuscitar um
-                # run já terminal como "running".
+                # cancelamento/timeout. Eventos tardios de stream/tool não podem
+                # ressuscitar um run já terminal como "running".
                 return current
             status = _event_status(event.kind, self._field(event, "status"))
             last_thinking = current.last_thinking if current else ""
             stream_tail = current.stream_tail if current else ""
+            last_activity = current.last_activity if current else ""
             if event.kind == "delta" and event.text:
                 parser = self._stream_parsers.get(run_id)
                 if parser is None:
@@ -203,6 +205,8 @@ class AgentRunRegistry:
                 parser.feed(str(event.text))
                 last_thinking = parser.last_thinking or last_thinking
                 stream_tail = parser.stream_tail or stream_tail
+            elif event.kind == "activity" and event.text:
+                last_activity = str(event.text)
             record = AgentRunRecord(
                 run_id=run_id,
                 agent=str(event.agent or (current.agent if current else "")),
@@ -217,6 +221,7 @@ class AgentRunRegistry:
                 last_text=str(event.text or ""),
                 last_thinking=last_thinking,
                 stream_tail=stream_tail,
+                last_activity=last_activity,
                 event_count=(current.event_count if current else 0) + 1,
             )
             self._runs[run_id] = record
@@ -295,12 +300,15 @@ class AgentRunRegistry:
         record = self.find_by_delegation(delegation_id)
         if record is None:
             return None
-        return {
+        view = {
             "agent": record.agent,
             "status": record.status,
             "last_thinking": record.last_thinking or record.stream_tail,
             "updated_seconds_ago": max(0.0, round(self._clock() - record.updated_at, 1)),
         }
+        if record.last_activity:
+            view["last_activity"] = record.last_activity
+        return view
 
     @staticmethod
     def _field(event: AgentRunEvent, name: str) -> str:

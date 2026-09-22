@@ -208,6 +208,20 @@ class AgentGateway:
                 thinking_relay.feed(text)
             _stream_buffer.append(chunk)
 
+        def _on_run_activity(activity) -> None:
+            if not emit_run_deltas:
+                return
+            payload = dict(activity) if isinstance(activity, dict) else {}
+            activity_metadata = dict(event_metadata)
+            activity_metadata["activity"] = payload
+            self._agent_run_sink.emit(
+                _run_event(
+                    "activity",
+                    text=str(payload.get("text") or payload.get("tool") or ""),
+                    metadata=activity_metadata,
+                )
+            )
+
         shared_state = self._get_shared_state()
         active_execution_mode = self._get_execution_mode()
 
@@ -270,14 +284,27 @@ class AgentGateway:
             return None
 
         try:
-            result = agent_client.call(
-                agent,
-                prompt,
-                silent=silent,
-                on_text_chunk=_on_text_chunk,
-                progress_callback=progress_callback,
-                from_agent=from_agent,
-            )
+            call_kwargs = {
+                "silent": silent,
+                "on_text_chunk": _on_text_chunk,
+                "progress_callback": progress_callback,
+                "from_agent": from_agent,
+            }
+            call_with_activity = getattr(type(agent_client), "call_with_run_activity", None)
+            if callable(call_with_activity):
+                result = call_with_activity(
+                    agent_client,
+                    agent,
+                    prompt,
+                    run_activity_callback=_on_run_activity,
+                    **call_kwargs,
+                )
+            else:
+                result = agent_client.call(
+                    agent,
+                    prompt,
+                    **call_kwargs,
+                )
         except Exception as exc:
             fail_metadata = dict(event_metadata)
             fail_metadata["error"] = _safe_agent_error(

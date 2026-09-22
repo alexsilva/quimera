@@ -178,6 +178,7 @@ class AgentClient:
         self._cancel_notice_lock = threading.Lock()
         self._cancel_notice_state = {"shown": False}
         self._call_lock = threading.RLock()
+        self._run_activity_callback = None
         self._agent_running = False
         self._running_agent = None
         self._current_proc = None
@@ -287,6 +288,29 @@ class AgentClient:
             reporter(message)
             return
         self.renderer.show_system_neutral(message)
+
+    @staticmethod
+    def _notify_run_activity(callback, activity) -> None:
+        """Publica observabilidade best-effort sem afetar a execução do agente."""
+        if callback is None or activity is None:
+            return
+        try:
+            callback(activity)
+        except Exception:
+            _logger.warning("run activity callback failed", exc_info=True)
+
+    def _notify_cli_run_activities(self, agent, line: str, callback) -> None:
+        """Extrai atividade CLI sem permitir que telemetria afete a execução."""
+        if callback is None:
+            return
+        try:
+            events = self._spy_output_presenter.format_stdout(agent, line)
+        except Exception:
+            _logger.debug("run activity parsing failed agent=%s", agent, exc_info=True)
+            return
+        for event in events:
+            activity = self._spy_output_presenter.tool_activity(event)
+            self._notify_run_activity(callback, activity)
 
     def _show_tool_preview(self, message: str, *, agent: str | None = None, metadata=None) -> None:
         """Exibe preview operacional de tool no feed quando possível."""
@@ -1358,6 +1382,23 @@ class AgentClient:
                 from_agent=from_agent,
             )
 
+    def call_with_run_activity(
+        self,
+        agent,
+        prompt: PromptText,
+        *,
+        run_activity_callback=None,
+        **kwargs,
+    ):
+        """Executa uma chamada associando observabilidade de tools ao run atual."""
+        with self._call_lock:
+            previous = self._run_activity_callback
+            self._run_activity_callback = run_activity_callback
+            try:
+                return self.call(agent, prompt, **kwargs)
+            finally:
+                self._run_activity_callback = previous
+
     def _call_impl(
         self,
         agent,
@@ -1371,6 +1412,7 @@ class AgentClient:
         from_agent=None,
     ):
         """Resolve o comando do agente e delega a execução."""
+        run_activity_callback = self._run_activity_callback
         profile = profiles.get(agent)
         if profile is None:
             self._show_error(f"[erro] agente desconhecido: {agent}")
@@ -1389,6 +1431,7 @@ class AgentClient:
                 allow_tools=allow_tools,
                 progress_callback=progress_callback,
                 from_agent=from_agent,
+                run_activity_callback=run_activity_callback,
         )
         self._spy_output_presenter.set_turn_runtime("cli")
         cmd, prompt_as_arg, output_format = self._resolve_profile_cli_attrs(profile, connection)
@@ -1431,10 +1474,12 @@ class AgentClient:
             "show_status": show_status,
             "progress_callback": progress_callback,
         }
-        if on_text_chunk is not None:
+        if on_text_chunk is not None or run_activity_callback is not None:
             def _on_cli_stdout_line(line: str) -> None:
-                for text in _extract_cli_text_chunks(line, output_format):
-                    on_text_chunk({"text": text, "_quimera_cli_semantic": True})
+                if on_text_chunk is not None:
+                    for text in _extract_cli_text_chunks(line, output_format):
+                        on_text_chunk({"text": text, "_quimera_cli_semantic": True})
+                self._notify_cli_run_activities(agent, line, run_activity_callback)
 
             run_kwargs["on_text_chunk"] = _on_cli_stdout_line
         if extra_env is not None:
@@ -1498,6 +1543,7 @@ class AgentClient:
         allow_tools=True,
         progress_callback=None,
         from_agent=None,
+        run_activity_callback=None,
     ):
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
         connection = self._resolve_profile_connection(profile)
@@ -1627,12 +1673,16 @@ class AgentClient:
                         return active_tool_executions > 0
 
                 def _record_api_tool_call(name, arguments) -> None:
+                    activity = self._spy_output_presenter.tool_call_activity(name, arguments)
+                    self._notify_run_activity(run_activity_callback, activity)
                     if not silent and self.visibility == Visibility.QUIET:
                         self._spy_output_presenter.emit_tool_call(agent, name, arguments)
                     else:
                         self._spy_output_presenter.record_tool_call(name, arguments)
 
                 def _record_api_tool_result(tool_result) -> None:
+                    activity = self._spy_output_presenter.tool_result_activity(tool_result)
+                    self._notify_run_activity(run_activity_callback, activity)
                     if not silent and self.visibility == Visibility.QUIET:
                         self._spy_output_presenter.emit_tool_result(agent, tool_result)
                     else:
