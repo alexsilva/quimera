@@ -29,6 +29,17 @@ _ATTACHED_IMAGE_LABEL = "🖼 imagem anexada"
 class _FeedEntry(Static):
     """Slot visual substituível dentro do feed unificado."""
 
+    @property
+    def allow_select(self) -> bool:
+        """Recusa seleção enquanto o slot está fora da árvore de widgets.
+
+        Entre ``remove_children()`` e o reflow do compositor o slot já foi
+        desanexado (``parent is None``), mas continua mapeado para cliques. Ao
+        iniciar uma seleção o Textual acessa ``widget.parent.region`` e quebra
+        com ``AttributeError``; recusar a seleção fecha essa janela.
+        """
+        return super().allow_select and self.is_attached
+
 
 class _UnifiedFeed(VerticalScroll, can_focus=True):
     """Feed rolável cujos itens podem ser atualizados sem reescrever o histórico."""

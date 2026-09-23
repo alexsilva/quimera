@@ -4138,6 +4138,65 @@ def test_textual_unified_feed_anchors_to_bottom_on_mount():
     asyncio.run(run_test())
 
 
+def test_textual_unified_feed_click_on_pruned_slot_does_not_crash():
+    import asyncio
+
+    from textual import events
+    from textual.app import App, ComposeResult
+
+    class FeedApp(App):
+        def compose(self) -> ComposeResult:
+            yield _UnifiedFeed(id="feed")
+
+    async def run_test() -> None:
+        app = FeedApp()
+        async with app.run_test(size=(80, 24)) as pilot:
+            feed = app.query_one("#feed", _UnifiedFeed)
+            feed.sync_entries(
+                [(index, False, f"entrada {index}", False) for index in range(1, 5)]
+            )
+            await pilot.pause()
+
+            victim = list(feed.children)[-1]
+            region = victim.region
+            assert victim.allow_select is True
+
+            # Encolher o feed dispara remove_children(); o prune desanexa o slot
+            # antes do reflow, deixando o compositor com uma região defasada.
+            feed.sync_entries(
+                [(index, False, f"entrada {index}", False) for index in range(1, 3)]
+            )
+            for _ in range(50):
+                if not victim.is_attached:
+                    break
+                await asyncio.sleep(0)
+
+            assert victim.is_attached is False
+            assert app.screen._compositor.get_widget_and_offset_at(
+                region.x + 1, region.y
+            )[0] is victim
+            assert victim.allow_select is False
+
+            # Sem a guarda o Textual acessaria `widget.parent.region` e quebraria
+            # com AttributeError ao iniciar a seleção.
+            app.screen._forward_event(
+                events.MouseDown(
+                    None,
+                    x=region.x + 1,
+                    y=region.y,
+                    delta_x=0,
+                    delta_y=0,
+                    button=1,
+                    shift=False,
+                    meta=False,
+                    ctrl=False,
+                )
+            )
+            assert app.screen._select_state is None
+
+    asyncio.run(run_test())
+
+
 def test_toolbar_coordinator_formats_agent_names_with_profile_icons():
     from types import SimpleNamespace
 
