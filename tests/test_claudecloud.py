@@ -208,8 +208,9 @@ def test_build_anthropic_payload_maps_roles_and_tools():
     assert body["system"][1]["cache_control"] == {"type": "ephemeral"}
     assert body["stream"] is True
     assert body["max_tokens"] == 32000
-    # Família com budget_tokens: sem default de thinking adaptive.
-    assert "thinking" not in body
+    # Família budget-only: recebe default explícito de budget (adaptive dá 400
+    # nela e omitir thinking deixa o feed de raciocínio mudo).
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 8192}
     assert body["tools"] == [{
         "name": "read_file", "description": "lê", "input_schema": {"type": "object"},
     }]
@@ -251,6 +252,68 @@ def test_build_anthropic_payload_defaults_adaptive_thinking():
     override.close()
 
 
+def test_build_anthropic_payload_budget_thinking_rules():
+    transport = httpx.MockTransport(lambda request: httpx.Response(500))
+
+    # extra_body tem precedência sobre o default de budget.
+    override = ClaudeCloudDriver(
+        model="claude-sonnet-4-5", auth=_FakeAuth(),
+        http_client=httpx.Client(transport=transport),
+        extra_body={"thinking": {"type": "enabled", "budget_tokens": 2048}},
+    )
+    body = override._build_anthropic_payload([{"role": "user", "content": "oi"}], [])
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    override.close()
+
+    # max_tokens baixo: o budget cede espaço (metade) em vez de estourar o teto.
+    small = ClaudeCloudDriver(
+        model="claude-haiku-4-5", auth=_FakeAuth(),
+        http_client=httpx.Client(transport=transport),
+        extra_body={"max_tokens": 4096},
+    )
+    body = small._build_anthropic_payload([{"role": "user", "content": "oi"}], [])
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    small.close()
+
+    # max_tokens minúsculo: budget ficaria < 1024, então thinking é omitido.
+    tiny = ClaudeCloudDriver(
+        model="claude-haiku-4-5", auth=_FakeAuth(),
+        http_client=httpx.Client(transport=transport),
+        extra_body={"max_tokens": 2000},
+    )
+    body = tiny._build_anthropic_payload([{"role": "user", "content": "oi"}], [])
+    assert "thinking" not in body
+    tiny.close()
+
+    # Família claude-3: qualquer bloco thinking dá 400, então nada é enviado.
+    legacy = ClaudeCloudDriver(
+        model="claude-3-5-haiku-20241022", auth=_FakeAuth(),
+        http_client=httpx.Client(transport=transport),
+    )
+    body = legacy._build_anthropic_payload([{"role": "user", "content": "oi"}], [])
+    assert "thinking" not in body
+    legacy.close()
+
+
+def test_request_headers_add_interleaved_beta_only_for_budget_models():
+    transport = httpx.MockTransport(lambda request: httpx.Response(500))
+
+    budget = ClaudeCloudDriver(
+        model="claude-sonnet-4-5", auth=_FakeAuth(),
+        http_client=httpx.Client(transport=transport),
+    )
+    beta = budget._request_headers("tok")["anthropic-beta"]
+    assert beta == "oauth-2025-04-20,interleaved-thinking-2025-05-14"
+    budget.close()
+
+    adaptive = ClaudeCloudDriver(
+        model="claude-sonnet-5", auth=_FakeAuth(),
+        http_client=httpx.Client(transport=transport),
+    )
+    assert adaptive._request_headers("tok")["anthropic-beta"] == "oauth-2025-04-20"
+    adaptive.close()
+
+
 def test_chat_tools_to_anthropic_tools_ignores_malformed():
     assert _chat_tools_to_anthropic_tools([{"type": "function"}, "junk"]) == []
 
@@ -275,7 +338,10 @@ def test_messages_turn_streams_text():
 
     def handler(request):
         assert request.headers["authorization"] == "Bearer token-abc"
-        assert request.headers["anthropic-beta"] == "oauth-2025-04-20"
+        # Modelo budget-only do _make_driver: OAuth + interleaved thinking.
+        assert request.headers["anthropic-beta"] == (
+            "oauth-2025-04-20,interleaved-thinking-2025-05-14"
+        )
         assert request.url.path.endswith("/v1/messages")
         return httpx.Response(200, text=_sse(events),
                               headers={"content-type": "text/event-stream"})

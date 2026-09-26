@@ -54,14 +54,26 @@ _MAX_TURN_BLOCKS = 256
 # ("rate_limit_error: Error", sem headers de rate limit) em vez de 403.
 CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 
-# Famílias que só aceitam thinking com budget_tokens; `adaptive` dá 400 nelas,
-# então o default de thinking do driver não se aplica a elas.
-_PRE_ADAPTIVE_MODELS = (
+# Famílias que só aceitam thinking com budget_tokens; `adaptive` dá 400 nelas.
+# Sem nenhum bloco `thinking` no request elas não raciocinam e o feed de
+# thinking do Quimera fica mudo, então recebem um default explícito de budget.
+_BUDGET_THINKING_MODELS = (
     "claude-haiku-4-5",
     "claude-sonnet-4-5",
     "claude-opus-4-5",
-    "claude-3",
 )
+
+# Famílias sem suporte a extended thinking: qualquer `thinking` dá 400.
+_NO_THINKING_MODELS = ("claude-3",)
+
+# Budget default das famílias budget-only; a API exige
+# 1024 <= budget_tokens < max_tokens.
+_DEFAULT_THINKING_BUDGET_TOKENS = 8192
+
+# Permite blocos thinking entre tool calls nas famílias budget-only; sem o
+# beta, o modelo só raciocina no primeiro hop de cada turno do usuário.
+# Onde não há suporte (haiku-4-5), o beta é aceito e ignorado pela API.
+ANTHROPIC_INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14"
 
 _TRANSIENT_HTTP_STATUS = {408, 409, 429, 529}
 _FATAL_AUTH_MESSAGE = (
@@ -316,7 +328,16 @@ class ClaudeCloudBackend:
         body.update(extra)
         # Sem display o thinking chega com deltas vazios ("omitted") e o feed
         # de raciocínio do Quimera fica mudo; extra_body tem precedência.
-        if not str(body["model"]).startswith(_PRE_ADAPTIVE_MODELS):
+        model_id = str(body["model"])
+        if model_id.startswith(_NO_THINKING_MODELS):
+            pass
+        elif model_id.startswith(_BUDGET_THINKING_MODELS):
+            budget = min(_DEFAULT_THINKING_BUDGET_TOKENS, int(body["max_tokens"]) // 2)
+            if budget >= 1024:
+                body.setdefault(
+                    "thinking", {"type": "enabled", "budget_tokens": budget}
+                )
+        else:
             body.setdefault("thinking", {"type": "adaptive", "display": "summarized"})
         return body
 
@@ -356,10 +377,13 @@ class ClaudeCloudBackend:
     # ------------------------------------------------------------------
 
     def _request_headers(self, access_token: str) -> dict:
+        betas = [ANTHROPIC_OAUTH_BETA]
+        if str(self._resolved_model or self.model).startswith(_BUDGET_THINKING_MODELS):
+            betas.append(ANTHROPIC_INTERLEAVED_THINKING_BETA)
         return {
             "Authorization": f"Bearer {access_token}",
             "anthropic-version": ANTHROPIC_VERSION,
-            "anthropic-beta": ANTHROPIC_OAUTH_BETA,
+            "anthropic-beta": ",".join(betas),
             "x-app": "cli",
             "user-agent": "quimera-claudecloud/1.0",
             "accept": "text/event-stream",
