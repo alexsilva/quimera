@@ -7,6 +7,7 @@ construtor fino. A implementação foi movida mecanicamente na Fase 5.
 import os
 from pathlib import Path
 
+from .agent_gateway import cleanup_agent_transient_if_unowned
 from .agent_pool import AgentPoolView
 from .chat_processor import run_chat_loop
 from .inputs import AskUserPrompter
@@ -456,8 +457,7 @@ class CoreFacadeMixin:
         renderer = self.renderer
         if not renderer:
             return
-        renderer.clear_agent_transient(agent_name)
-        renderer.abort_message_stream(agent_name)
+        cleanup_agent_transient_if_unowned(renderer, agent_name)
 
     def _redisplay_user_prompt_if_needed(self, clear_first: bool = True) -> None:
         """Executa redisplay user prompt if needed."""

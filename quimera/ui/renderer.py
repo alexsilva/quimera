@@ -835,8 +835,18 @@ class TerminalRenderer(RendererBase):
         with self._lock:
             self.agent_window_controller(agent).abort_stream(self)
 
-    def update_agent_transient(self, agent, message: str) -> None:
+    def update_agent_transient(
+        self,
+        agent,
+        message: str,
+        *,
+        run_id: str = "",
+        parent_run_id: str = "",
+        delegation_id: str = "",
+        transport: str = "",
+    ) -> None:
         """Atualiza progresso transitório do agente sem acumular linhas."""
+        del parent_run_id, delegation_id, transport
         if not self._console or not agent:
             return
         clean_message = strip_ansi(str(message or "")).strip("\r\n")
@@ -856,6 +866,10 @@ class TerminalRenderer(RendererBase):
             fallback: tuple[str, str] | None = None
             with self._lock:
                 container = self._container(agent)
+                scoped_run_id = str(run_id or "").strip()
+                if scoped_run_id and container.transient_run_id != scoped_run_id:
+                    container.transient.clear()
+                    container.transient_run_id = scoped_run_id
                 buf = container.transient
                 if buf and buf[-1] == clean_message:
                     return
@@ -887,6 +901,10 @@ class TerminalRenderer(RendererBase):
 
         with self._lock:
             container = self._container(agent)
+            scoped_run_id = str(run_id or "").strip()
+            if scoped_run_id and container.transient_run_id != scoped_run_id:
+                container.transient.clear()
+                container.transient_run_id = scoped_run_id
             is_owned = container.transient_active
             is_active = container.streaming
             if not is_owned and is_active:
@@ -903,14 +921,28 @@ class TerminalRenderer(RendererBase):
             self.start_message_stream(agent)
         self.update_message_stream(agent, {"diff": [{"op": "replace", "text": display_content}]})
 
-    def clear_agent_transient(self, agent) -> None:
+    def clear_agent_transient(
+        self,
+        agent,
+        *,
+        run_id: str = "",
+        parent_run_id: str = "",
+        delegation_id: str = "",
+        transport: str = "",
+    ) -> None:
         """Limpa o bloco transitório do agente, se ativo."""
+        del parent_run_id, delegation_id, transport
         if not self._console or not agent:
             return
         prompt_active = bool(self._is_prompt_active_fn and self._is_prompt_active_fn())
 
         with self._lock:
             container = self._deck.get(agent)
+            scoped_run_id = str(run_id or "").strip()
+            if scoped_run_id and (
+                container is None or container.transient_run_id != scoped_run_id
+            ):
+                return
             is_transient_agent = bool(container and container.transient_active)
             changed = bool(container and container.transient)
             if container is not None:

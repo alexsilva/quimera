@@ -1,7 +1,9 @@
 """AgentGateway — chamada bruta a agentes: prompt, backend, streaming."""
 import queue as _queue_module
+import threading
 import time
 import uuid
+import weakref
 from contextlib import nullcontext
 
 from ..agents.capabilities import get_cancel_event, is_user_cancelled
@@ -9,6 +11,50 @@ from ..prompt_kinds import PromptKind
 from .agent_run_events import AgentRunEvent, ThinkingStreamParser, coerce_agent_run_sink
 from .config import logger
 from .render_event import RenderEvent
+
+
+class _ThinkingRelayCoordinator:
+    """Runs delegados ativos, compartilhados por gateways do mesmo renderer."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.active_runs_by_agent: dict[str, set[str]] = {}
+
+
+_THINKING_COORDINATORS_LOCK = threading.Lock()
+_THINKING_COORDINATORS = weakref.WeakKeyDictionary()
+
+
+def _thinking_relay_coordinator(renderer) -> _ThinkingRelayCoordinator | None:
+    """Retorna o coordenador único associado ao renderer da sessão."""
+    if renderer is None:
+        return None
+    with _THINKING_COORDINATORS_LOCK:
+        coordinator = _THINKING_COORDINATORS.get(renderer)
+        if coordinator is None:
+            coordinator = _ThinkingRelayCoordinator()
+            _THINKING_COORDINATORS[renderer] = coordinator
+        return coordinator
+
+
+def cleanup_agent_transient_if_unowned(renderer, agent) -> bool:
+    """Executa cleanup externo sem apagar um relay delegado ainda ativo."""
+    coordinator = _thinking_relay_coordinator(renderer)
+    if coordinator is None:
+        return False
+    clear = getattr(renderer, "clear_agent_transient", None)
+    abort = getattr(renderer, "abort_message_stream", None)
+    if not callable(clear) and not callable(abort):
+        return False
+    agent_key = str(agent)
+    with coordinator.lock:
+        if coordinator.active_runs_by_agent.get(agent_key):
+            return False
+        if callable(clear):
+            clear(agent)
+        if callable(abort):
+            abort(agent)
+    return True
 
 
 def _safe_agent_error(error: BaseException, fallback: str) -> str:
@@ -23,10 +69,17 @@ class _ThinkingStreamRelay:
     raciocínio do modelo) já aparece no feed transitório enquanto o turno roda.
     """
 
-    def __init__(self, renderer, agent) -> None:
+    def __init__(self, renderer, agent, *, publish=None) -> None:
         self._renderer = renderer
         self._agent = agent
+        self._publish_callback = publish
+        self._published = False
         self._parser = ThinkingStreamParser(on_thinking=self._publish)
+
+    @property
+    def published(self) -> bool:
+        """Indica se ao menos um bloco de thinking chegou ao renderer."""
+        return self._published
 
     def feed(self, chunk_text: str) -> None:
         """Processa um novo pedaço de texto bruto do stream."""
@@ -34,7 +87,11 @@ class _ThinkingStreamRelay:
 
     def _publish(self, text: str) -> None:
         if self._renderer is not None:
-            self._renderer.update_agent_transient(self._agent, text)
+            self._published = True
+            if self._publish_callback is not None:
+                self._publish_callback(text)
+            else:
+                self._renderer.update_agent_transient(self._agent, text)
 
 
 def _is_user_cancelled(agent_client) -> bool:
@@ -107,6 +164,76 @@ class AgentGateway:
         self._counter_lock = counter_lock
         self._ui_queue = ui_queue
         self._agent_run_sink = coerce_agent_run_sink(agent_run_sink)
+
+    def _register_thinking_relay_run(self, agent, run_id: str) -> None:
+        """Protege o run desde started, inclusive antes do primeiro thinking."""
+        coordinator = _thinking_relay_coordinator(self._renderer)
+        if coordinator is None:
+            return
+        with coordinator.lock:
+            coordinator.active_runs_by_agent.setdefault(str(agent), set()).add(str(run_id))
+
+    def _publish_thinking_relay(
+        self,
+        agent,
+        run_id: str,
+        text: str,
+        *,
+        parent_run_id: str = "",
+        delegation_id: str = "",
+        transport: str = "delegate",
+    ) -> None:
+        """Publica thinking com identidade explícita do run."""
+        update = getattr(self._renderer, "update_agent_transient", None)
+        coordinator = _thinking_relay_coordinator(self._renderer)
+        if coordinator is None or not callable(update):
+            return
+        with coordinator.lock:
+            update(
+                agent,
+                text,
+                run_id=str(run_id),
+                parent_run_id=str(parent_run_id or ""),
+                delegation_id=str(delegation_id or ""),
+                transport=str(transport or ""),
+            )
+
+    def _finish_thinking_relay_run(
+        self,
+        agent,
+        run_id: str,
+        *,
+        published: bool,
+        parent_run_id: str = "",
+        delegation_id: str = "",
+        transport: str = "delegate",
+    ) -> bool:
+        """Finaliza um run e limpa somente seu transitório run-scoped."""
+        clear = getattr(self._renderer, "clear_agent_transient", None)
+        coordinator = _thinking_relay_coordinator(self._renderer)
+        if coordinator is None:
+            return False
+        agent_key = str(agent)
+        run_key = str(run_id)
+        with coordinator.lock:
+            cleared = False
+            try:
+                if published and callable(clear):
+                    clear(
+                        agent,
+                        run_id=run_key,
+                        parent_run_id=str(parent_run_id or ""),
+                        delegation_id=str(delegation_id or ""),
+                        transport=str(transport or ""),
+                    )
+                    cleared = True
+            finally:
+                active_runs = coordinator.active_runs_by_agent.get(agent_key)
+                if active_runs is not None:
+                    active_runs.discard(run_key)
+                    if not active_runs:
+                        coordinator.active_runs_by_agent.pop(agent_key, None)
+        return cleared
 
     def call(
         self,
@@ -182,14 +309,66 @@ class AgentGateway:
                 transport=transport,
             )
 
-        self._agent_run_sink.emit(_run_event("started"))
-
         _stream_buffer = []
+        visibility = getattr(agent_client, "visibility", None)
+        visibility_name = str(getattr(visibility, "value", visibility) or "").strip().lower()
+        relay_hidden_delegate = transport == "delegate" and not show_output
+        relay_run_active = relay_hidden_delegate
+        if relay_run_active:
+            self._register_thinking_relay_run(agent, run_id)
         thinking_relay = (
-            _ThinkingStreamRelay(self._renderer, agent)
-            if not silent and show_output and self._renderer is not None
+            _ThinkingStreamRelay(
+                self._renderer,
+                agent,
+                publish=(
+                    (
+                        lambda text: self._publish_thinking_relay(
+                            agent,
+                            run_id,
+                            text,
+                            parent_run_id=parent_run_id,
+                            delegation_id=delegation_id,
+                            transport=transport,
+                        )
+                    )
+                    if relay_hidden_delegate
+                    else None
+                ),
+            )
+            if not silent
+            and visibility_name != "quiet"
+            and self._renderer is not None
+            and (show_output or transport == "delegate")
             else None
         )
+
+        def _finish_hidden_delegate_relay() -> None:
+            nonlocal relay_run_active
+            if not relay_run_active:
+                return
+            relay_run_active = False
+            try:
+                self._finish_thinking_relay_run(
+                    agent,
+                    run_id,
+                    published=bool(thinking_relay and thinking_relay.published),
+                    parent_run_id=parent_run_id,
+                    delegation_id=delegation_id,
+                    transport=transport,
+                )
+            except Exception:
+                logger.debug(
+                    "clear_agent_transient falhou agent=%s run_id=%s",
+                    agent,
+                    run_id,
+                    exc_info=True,
+                )
+
+        try:
+            self._agent_run_sink.emit(_run_event("started"))
+        except Exception:
+            _finish_hidden_delegate_relay()
+            raise
 
         def _on_text_chunk(chunk):
             if not chunk:
@@ -202,10 +381,15 @@ class AgentGateway:
                 self._agent_run_sink.emit(
                     _run_event("delta", text=str(text))
                 )
-            if silent or not show_output:
+            if silent:
                 return
+            # No transporte delegate, show_output=False suprime só a resposta
+            # final, que o chamador apresenta; o raciocínio segue visível no
+            # transitório, como já ocorre com stdout de agentes CLI delegados.
             if thinking_relay is not None and not cli_semantic:
                 thinking_relay.feed(text)
+            if not show_output:
+                return
             _stream_buffer.append(chunk)
 
         def _on_run_activity(activity) -> None:
@@ -273,13 +457,19 @@ class AgentGateway:
                 "Falha ao preparar a execução do agente.",
             )
             logger.exception("falha ao preparar prompt agent=%s", agent)
-            self._agent_run_sink.emit(_run_event("failed", metadata=fail_metadata))
+            try:
+                self._agent_run_sink.emit(_run_event("failed", metadata=fail_metadata))
+            finally:
+                _finish_hidden_delegate_relay()
             raise
 
         if _is_user_cancelled(agent_client):
             cancel_metadata = dict(event_metadata)
             cancel_metadata["elapsed"] = time.time() - start
-            self._agent_run_sink.emit(_run_event("cancelled", metadata=cancel_metadata))
+            try:
+                self._agent_run_sink.emit(_run_event("cancelled", metadata=cancel_metadata))
+            finally:
+                _finish_hidden_delegate_relay()
             logger.debug("[GATEWAY] agent=%s cancelled by user before backend call, aborting", agent)
             return None
 
@@ -312,30 +502,36 @@ class AgentGateway:
                 "O agente não conseguiu concluir a execução.",
             )
             logger.exception("falha no backend agent=%s", agent)
-            self._agent_run_sink.emit(_run_event("failed", metadata=fail_metadata))
+            try:
+                self._agent_run_sink.emit(_run_event("failed", metadata=fail_metadata))
+            finally:
+                _finish_hidden_delegate_relay()
             raise
 
-        if _stream_buffer or result:
-            if self._ui_queue is not None:
-                self._ui_queue.put(RenderEvent(RenderEvent.REDISPLAY, "", agent=agent))
-            else:
-                renderer = self._renderer
-                with (output_lock if output_lock is not None else nullcontext()):
-                    if renderer is not None:
-                        renderer.flush()
-                    self._redisplay_prompt(clear_first=False)
+        try:
+            if _stream_buffer or result:
+                if self._ui_queue is not None:
+                    self._ui_queue.put(RenderEvent(RenderEvent.REDISPLAY, "", agent=agent))
+                else:
+                    renderer = self._renderer
+                    with (output_lock if output_lock is not None else nullcontext()):
+                        if renderer is not None:
+                            renderer.flush()
+                        self._redisplay_prompt(clear_first=False)
 
-        agent_client.flush_pending_summary()
-        elapsed = time.time() - start
-        finish_metadata = dict(event_metadata)
-        finish_metadata["elapsed"] = elapsed
-        self._agent_run_sink.emit(
-            _run_event(
-                "finished" if result else "failed",
-                text=str(result or ""),
-                metadata=finish_metadata,
+            agent_client.flush_pending_summary()
+            elapsed = time.time() - start
+            finish_metadata = dict(event_metadata)
+            finish_metadata["elapsed"] = elapsed
+            self._agent_run_sink.emit(
+                _run_event(
+                    "finished" if result else "failed",
+                    text=str(result or ""),
+                    metadata=finish_metadata,
+                )
             )
-        )
-        self._update_session(agent, bool(result), elapsed, str(result or ""))
-        logger.debug("[GATEWAY] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
-        return result
+            self._update_session(agent, bool(result), elapsed, str(result or ""))
+            logger.debug("[GATEWAY] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
+            return result
+        finally:
+            _finish_hidden_delegate_relay()

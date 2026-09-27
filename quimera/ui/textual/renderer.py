@@ -157,12 +157,15 @@ class TextualRenderer(RendererBase):
         self,
         agent,
         extra: dict[str, Any] | None = None,
+        *,
+        include_run_context: bool = True,
     ) -> dict[str, Any]:
         """Monta payload visual comum para eventos de agente."""
         agent_name = str(agent or "")
         style, label = self._resolve_agent_style(agent_name)
         payload = {"label": label, "style": style, "theme": self._theme.name}
-        payload.update(self._agent_run_context(agent_name))
+        if include_run_context:
+            payload.update(self._agent_run_context(agent_name))
         if self._orchestrator_agent and agent_name.lower().strip() == self._orchestrator_agent:
             payload["orchestrator"] = True
         if extra:
@@ -687,16 +690,63 @@ class TextualRenderer(RendererBase):
             )
         self._clear_agent_run_context(agent_key, run_id=str(payload.get("run_id") or ""))
 
-    def update_agent_transient(self, agent, message: str) -> None:
+    def update_agent_transient(
+        self,
+        agent,
+        message: str,
+        *,
+        run_id: str = "",
+        parent_run_id: str = "",
+        delegation_id: str = "",
+        transport: str = "",
+    ) -> None:
         """Exibe progresso transitório como linha de status."""
-        payload = self._agent_event_payload(agent, {"content": str(message)})
+        extra = {
+            key: value
+            for key, value in {
+                "content": str(message),
+                "run_id": str(run_id or "").strip(),
+                "parent_run_id": str(parent_run_id or "").strip(),
+                "delegation_id": str(delegation_id or "").strip(),
+                "transport": str(transport or "").strip(),
+            }.items()
+            if value
+        }
+        payload = self._agent_event_payload(
+            agent,
+            extra,
+            include_run_context=not bool(run_id or delegation_id),
+        )
         self._bridge.emit(TextualUiEvent("agent_update", payload, agent=str(agent)))
 
-    def clear_agent_transient(self, agent) -> None:
+    def clear_agent_transient(
+        self,
+        agent,
+        *,
+        run_id: str = "",
+        parent_run_id: str = "",
+        delegation_id: str = "",
+        transport: str = "",
+    ) -> None:
         """Compatibilidade com TerminalRenderer."""
         agent_name = str(agent)
-        payload = self._agent_event_payload(agent_name)
-        self._clear_agent_run_context(agent_name, run_id=str(payload.get("run_id") or ""))
+        extra = {
+            key: value
+            for key, value in {
+                "run_id": str(run_id or "").strip(),
+                "parent_run_id": str(parent_run_id or "").strip(),
+                "delegation_id": str(delegation_id or "").strip(),
+                "transport": str(transport or "").strip(),
+            }.items()
+            if value
+        }
+        payload = self._agent_event_payload(
+            agent_name,
+            extra,
+            include_run_context=not bool(run_id or delegation_id),
+        )
+        scoped_run_id = str(run_id or payload.get("run_id") or "")
+        self._clear_agent_run_context(agent_name, run_id=scoped_run_id)
         self._bridge.emit(TextualUiEvent("visual_reset", payload, agent=agent_name))
 
     def reset_visual_state(self, agent: str | None = None) -> None:

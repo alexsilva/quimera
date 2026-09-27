@@ -144,10 +144,10 @@ class RendererBase:
         """Exibe texto longo em janela dedicada; fallback textual via show_plain."""
         self.show_plain(f"\n{content}\n")
 
-    def update_agent_transient(self, agent, message):
+    def update_agent_transient(self, agent, message, **run_metadata):
         return None
 
-    def clear_agent_transient(self, agent):
+    def clear_agent_transient(self, agent, **run_metadata):
         return None
 
     def update_submission_status(self, submission_id, status, **metadata):

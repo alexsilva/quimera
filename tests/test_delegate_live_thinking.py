@@ -16,6 +16,7 @@ from quimera.app.agent_run_events import (
     ThinkingStreamParser,
 )
 from quimera.agents import AgentClient
+from quimera.domain.task_states import Visibility
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
@@ -241,6 +242,359 @@ def test_gateway_delta_extracts_text_from_dict_chunks():
 
     deltas = [event.text for event in sink.events if event.kind == "delta"]
     assert deltas == ["<think>pensando</think>", "texto plano"]
+
+
+def test_codexcloud_thinking_reaches_feed_via_delegate_step():
+    """Codexcloud chamado pelo caminho real do step de delegate mantém thinking.
+
+    O driver codexcloud entrega reasoning/commentary ao AgentClient como blocos
+    <think>. O delegate força show_output=False para não duplicar a resposta
+    final; esse detalhe não pode também suprimir o thinking transitório.
+    """
+    from tests.test_agent_run_events import FakeAgentClient, RecordingSink, make_gateway
+    from quimera.runtime.tools.delegate import DelegateTools
+
+    renderer = MagicMock()
+    gateway = make_gateway(
+        FakeAgentClient(
+            chunks=[
+                "<think>hop 0 antes da tool</think>",
+                "<think>hop 1 após a tool</think>",
+                "resposta final",
+            ]
+        ),
+        sink=RecordingSink(),
+    )
+    gateway._renderer = renderer
+
+    forwarded = {}
+
+    def delegate_fn(agent, **options):
+        forwarded.update(options)
+        gateway_options = {
+            key: options[key]
+            for key in (
+                "delegation",
+                "delegation_only",
+                "protocol_mode",
+                "primary",
+                "silent",
+                "show_output",
+                "history_snapshot",
+                "from_agent",
+                "progress_callback",
+            )
+        }
+        return gateway.call(agent, **gateway_options)
+
+    selected, result, error = DelegateTools._execute_single_step(
+        {
+            "target_agent": "codexcloud-gpt-5-6",
+            "request": "investigue o feed",
+            "context": "",
+            "fallback_agents": [],
+            "source_agent": "claude-sonnet",
+            "delegation_id": "dlg-api-live",
+        },
+        delegate_fn,
+        progress_callback=None,
+        normalize_agent_fn=lambda value: str(value),
+    )
+
+    assert (selected, result, error) == (
+        "codexcloud-gpt-5-6",
+        "resposta final",
+        None,
+    )
+    assert forwarded["silent"] is False
+    assert forwarded["show_output"] is False
+    update_calls = renderer.update_agent_transient.call_args_list
+    transient_texts = [call.args[1] for call in update_calls]
+    assert "hop 0 antes da tool" in transient_texts
+    assert "hop 1 após a tool" in transient_texts
+    assert "resposta final" not in transient_texts
+    assert {call.kwargs["run_id"] for call in update_calls} == {
+        renderer.clear_agent_transient.call_args.kwargs["run_id"]
+    }
+    assert all(call.kwargs["delegation_id"] == "dlg-api-live" for call in update_calls)
+    assert all(call.kwargs["transport"] == "delegate" for call in update_calls)
+    assert renderer.clear_agent_transient.call_args.args == ("codexcloud-gpt-5-6",)
+    assert renderer.clear_agent_transient.call_args.kwargs["delegation_id"] == "dlg-api-live"
+
+
+def test_gateway_silent_delegation_keeps_feed_quiet():
+    from tests.test_agent_run_events import FakeAgentClient, RecordingSink, make_gateway
+
+    renderer = MagicMock()
+    gateway = make_gateway(
+        FakeAgentClient(chunks=["<think>raciocínio oculto</think>"]),
+        sink=RecordingSink(),
+    )
+    gateway._renderer = renderer
+
+    gateway.call(
+        "codexcloud-gpt-5-6",
+        delegation={"delegation_id": "dlg-silent"},
+        delegation_only=True,
+        protocol_mode="delegation",
+        silent=True,
+        show_output=False,
+    )
+
+    renderer.update_agent_transient.assert_not_called()
+    renderer.clear_agent_transient.assert_not_called()
+
+
+def test_gateway_quiet_visibility_suppresses_delegated_thinking_but_keeps_deltas():
+    """Quiet oculta narrativa no feed sem perder eventos estruturados do run."""
+    from tests.test_agent_run_events import FakeAgentClient, RecordingSink, make_gateway
+
+    renderer = MagicMock()
+    sink = RecordingSink()
+    client = FakeAgentClient(chunks=["<think>raciocínio estruturado</think>"])
+    client.visibility = Visibility.QUIET
+    gateway = make_gateway(client, sink=sink)
+    gateway._renderer = renderer
+
+    gateway.call(
+        "codexcloud-gpt-5-6",
+        delegation={"delegation_id": "dlg-quiet"},
+        delegation_only=True,
+        protocol_mode="delegation",
+        silent=False,
+        show_output=False,
+    )
+
+    deltas = [event.text for event in sink.events if event.kind == "delta"]
+    assert deltas == ["<think>raciocínio estruturado</think>"]
+    renderer.update_agent_transient.assert_not_called()
+    renderer.clear_agent_transient.assert_not_called()
+
+
+def test_gateway_delegation_skips_cli_semantic_chunks():
+    """CLI delegado já renderiza via spy; o relay não pode duplicar o transitório."""
+    from tests.test_agent_run_events import FakeAgentClient, RecordingSink, make_gateway
+
+    renderer = MagicMock()
+    gateway = make_gateway(
+        FakeAgentClient(
+            chunks=[
+                {
+                    "text": "<think>já exibido pelo CLI</think>",
+                    "_quimera_cli_semantic": True,
+                }
+            ]
+        ),
+        sink=RecordingSink(),
+    )
+    gateway._renderer = renderer
+
+    gateway.call(
+        "codex",
+        delegation={"delegation_id": "dlg-cli-sem"},
+        delegation_only=True,
+        protocol_mode="delegation",
+        silent=False,
+        show_output=False,
+    )
+
+    renderer.update_agent_transient.assert_not_called()
+    renderer.clear_agent_transient.assert_not_called()
+
+
+def test_gateway_non_delegate_show_output_false_does_not_expose_thinking():
+    """show_output=False mantém seu contrato fora do transporte delegate."""
+    from tests.test_agent_run_events import FakeAgentClient, RecordingSink, make_gateway
+
+    renderer = MagicMock()
+    gateway = make_gateway(
+        FakeAgentClient(chunks=["<think>conteúdo que deve ficar oculto</think>"]),
+        sink=RecordingSink(),
+    )
+    gateway._renderer = renderer
+
+    gateway.call(
+        "codexcloud-gpt-5-6",
+        silent=False,
+        show_output=False,
+    )
+
+    renderer.update_agent_transient.assert_not_called()
+    renderer.clear_agent_transient.assert_not_called()
+
+
+def test_gateway_failed_delegate_clears_partial_thinking():
+    """Falha do backend não deixa o thinking já publicado preso no feed."""
+    from tests.test_agent_run_events import FakeAgentClient, RecordingSink, make_gateway
+
+    class PartialFailureClient(FakeAgentClient):
+        def call(self, agent, prompt, *, on_text_chunk=None, **kwargs):
+            del agent, prompt, kwargs
+            if on_text_chunk is not None:
+                on_text_chunk("<think>análise antes da falha</think>")
+            raise RuntimeError("falha simulada")
+
+    renderer = MagicMock()
+    gateway = make_gateway(PartialFailureClient(), sink=RecordingSink())
+    gateway._renderer = renderer
+
+    with pytest.raises(RuntimeError, match="falha simulada"):
+        gateway.call(
+            "codexcloud-gpt-5-6",
+            delegation={"delegation_id": "dlg-failure"},
+            delegation_only=True,
+            protocol_mode="delegation",
+            silent=False,
+            show_output=False,
+        )
+
+    update_call = renderer.update_agent_transient.call_args
+    clear_call = renderer.clear_agent_transient.call_args
+    assert update_call.args == (
+        "codexcloud-gpt-5-6",
+        "análise antes da falha",
+    )
+    assert clear_call.args == ("codexcloud-gpt-5-6",)
+    assert update_call.kwargs["run_id"] == clear_call.kwargs["run_id"]
+    assert update_call.kwargs["delegation_id"] == "dlg-failure"
+    assert clear_call.kwargs["delegation_id"] == "dlg-failure"
+
+
+def test_concurrent_delegate_runs_are_scoped_in_textual_renderer():
+    """Dois gateways reais não atribuem update/cleanup ao run concorrente."""
+    from quimera.app.agent_gateway import cleanup_agent_transient_if_unowned
+    from quimera.app.agent_run_events import AgentRunController
+    from quimera.ui.textual.bridge import TextualUiBridge
+    from quimera.ui.textual.renderer import TextualRenderer
+    from tests.test_agent_run_events import FakeAgentClient, make_gateway
+
+    old_published = threading.Event()
+    release_old = threading.Event()
+    new_backend_entered = threading.Event()
+    release_new_thinking = threading.Event()
+
+    class OldClient(FakeAgentClient):
+        def call(self, agent, prompt, *, on_text_chunk=None, **kwargs):
+            del agent, prompt, kwargs
+            on_text_chunk("<think>thinking A</think>")
+            old_published.set()
+            assert release_old.wait(2)
+            return "resposta A"
+
+    class NewClient(FakeAgentClient):
+        def call(self, agent, prompt, *, on_text_chunk=None, **kwargs):
+            del agent, prompt, kwargs
+            new_backend_entered.set()
+            assert release_new_thinking.wait(2)
+            on_text_chunk("<think>thinking B</think>")
+            return "resposta B"
+
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    bridge.clear_agent_active = lambda _agent: None
+    renderer = TextualRenderer(bridge)
+    renderer.flush = lambda timeout=5.0: None
+    sink = AgentRunController(renderer)
+
+    old_gateway = make_gateway(OldClient(), sink=sink)
+    new_gateway = make_gateway(NewClient(), sink=sink)
+    old_gateway._renderer = renderer
+    new_gateway._renderer = renderer
+    errors = []
+
+    def run(gateway, delegation):
+        try:
+            gateway.call(
+                "codexcloud-gpt-5-6",
+                delegation=delegation,
+                delegation_only=True,
+                protocol_mode="delegation",
+                silent=False,
+                show_output=False,
+            )
+        except Exception as exc:  # pragma: no cover - deixa falha da thread visível
+            errors.append(exc)
+
+    old_thread = threading.Thread(
+        target=run,
+        args=(
+            old_gateway,
+            {"delegation_id": "dlg:A", "run_id": "run:A"},
+        ),
+    )
+    new_thread = threading.Thread(
+        target=run,
+        args=(
+            new_gateway,
+            {
+                "delegation_id": "dlg:B",
+                "run_id": "run:B",
+                "parent_run_id": "run:parent-B",
+            },
+        ),
+    )
+
+    old_thread.start()
+    assert old_published.wait(1)
+    new_thread.start()
+    assert new_backend_entered.wait(1)
+
+    release_old.set()
+    old_thread.join(2)
+    assert not old_thread.is_alive()
+    assert not errors
+    assert renderer._agent_run_context("codexcloud-gpt-5-6")["run_id"] == "run:B"
+
+    # B já está ativo, mas ainda não publicou thinking. O cleanup externo do
+    # step A não pode remover seu contexto/transitório futuro.
+    assert cleanup_agent_transient_if_unowned(
+        renderer, "codexcloud-gpt-5-6"
+    ) is False
+    assert renderer._agent_run_context("codexcloud-gpt-5-6")["run_id"] == "run:B"
+
+    release_new_thinking.set()
+    new_thread.join(2)
+    assert not new_thread.is_alive()
+    assert not errors
+
+    updates = [event for event in emitted if event.kind == "agent_update"]
+    resets = [event for event in emitted if event.kind == "visual_reset"]
+    assert [(event.payload["run_id"], event.payload["content"]) for event in updates] == [
+        ("run:A", "thinking A"),
+        ("run:B", "thinking B"),
+    ]
+    assert [event.payload["run_id"] for event in resets] == ["run:A", "run:B"]
+    assert "parent_run_id" not in resets[0].payload
+    assert resets[1].payload["parent_run_id"] == "run:parent-B"
+
+
+def test_terminal_renderer_scopes_delegate_transient_cleanup_by_run():
+    """No terminal, cleanup antigo não apaga o thinking do run mais novo."""
+    from rich.console import Console
+    from quimera.ui import TerminalRenderer
+
+    renderer = TerminalRenderer(theme="line")
+    renderer._console = Console(width=100, record=True, force_terminal=False)
+    try:
+        renderer.update_agent_transient(
+            "codexcloud-gpt-5-6", "thinking A", run_id="run:A"
+        )
+        renderer.update_agent_transient(
+            "codexcloud-gpt-5-6", "thinking B", run_id="run:B"
+        )
+
+        renderer.clear_agent_transient("codexcloud-gpt-5-6", run_id="run:A")
+        container = renderer._deck.get("codexcloud-gpt-5-6")
+        assert container is not None
+        assert container.transient_run_id == "run:B"
+        assert container.transient == ["thinking B"]
+
+        renderer.clear_agent_transient("codexcloud-gpt-5-6", run_id="run:B")
+        assert container.transient_run_id == ""
+        assert container.transient == []
+    finally:
+        renderer.close(timeout=1.0)
 
 
 def test_gateway_does_not_render_cli_semantic_chunk_twice():

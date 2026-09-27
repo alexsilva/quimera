@@ -96,6 +96,7 @@ class AgentWindowState:
     stream_theme_name: str = ""
     transient_active: bool = False
     transient: list[str] = field(default_factory=list)
+    transient_run_id: str = ""
     pending_kind: str = ""
     pending_question: str = ""
     transient_limit: int = 10
@@ -122,6 +123,7 @@ class AgentWindowState:
         """Clear rolling transient messages for this agent window."""
         self.transient.clear()
         self.transient_active = False
+        self.transient_run_id = ""
 
 
 @dataclass
