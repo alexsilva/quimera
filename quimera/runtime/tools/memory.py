@@ -30,6 +30,7 @@ class MemoryTools(ToolBase, tool_prefix="memory"):
                 value=call.arguments.get("value"),
                 ttl_seconds=call.arguments.get("ttl_seconds"),
                 actor=self._actor_from_call(call),
+                tags=call.arguments.get("tags"),
             )
         except (ValueError, RuntimeError) as exc:
             return ToolResult(ok=False, tool_name=call.name, content="", error=str(exc))
@@ -40,6 +41,7 @@ class MemoryTools(ToolBase, tool_prefix="memory"):
             "namespace": result.namespace,
             "key": result.key,
             "updated_at": result.updated_at,
+            "tags": result.tags,
         }
         return ToolResult(ok=True, tool_name=call.name, content=str(payload), data=payload)
 
@@ -144,6 +146,7 @@ class MemoryToolsValidator(ValidatableTool):
                 raise ToolPolicyError("memory_save.ttl_seconds deve ser inteiro positivo") from exc
             if ttl_int <= 0:
                 raise ToolPolicyError("memory_save.ttl_seconds deve ser inteiro positivo")
+        self._validate_tags_argument(call.arguments.get("tags"), tool_name="memory_save")
 
     def _validate_memory_retrieve(self, call: ToolCall) -> None:
         """Valida memory_retrieve: campos opcionais devem ser strings seguras."""
@@ -162,16 +165,7 @@ class MemoryToolsValidator(ValidatableTool):
             if not isinstance(prefix, str) or not prefix.strip():
                 raise ToolPolicyError("memory_retrieve.prefix deve ser string não vazia")
             self._validate_memory_token(prefix, field_name="prefix")
-        tags = call.arguments.get("tags")
-        if tags is not None:
-            if not isinstance(tags, list):
-                raise ToolPolicyError("memory_retrieve.tags deve ser lista de strings")
-            for tag in tags:
-                if not isinstance(tag, str) or not tag.strip():
-                    raise ToolPolicyError(
-                        "memory_retrieve.tags deve conter apenas strings não vazias"
-                    )
-                self._validate_memory_token(tag, field_name="tag")
+        self._validate_tags_argument(call.arguments.get("tags"), tool_name="memory_retrieve")
         limit = call.arguments.get("limit")
         if limit is not None:
             try:
@@ -195,6 +189,19 @@ class MemoryToolsValidator(ValidatableTool):
 
     def _validate_memory_list_namespaces(self, call: ToolCall) -> None:
         return
+
+    def _validate_tags_argument(self, tags, *, tool_name: str) -> None:
+        """Valida um argumento opcional de tags: lista de tokens seguros não vazios."""
+        if tags is None:
+            return
+        if not isinstance(tags, list):
+            raise ToolPolicyError(f"{tool_name}.tags deve ser lista de strings")
+        for tag in tags:
+            if not isinstance(tag, str) or not tag.strip():
+                raise ToolPolicyError(
+                    f"{tool_name}.tags deve conter apenas strings não vazias"
+                )
+            self._validate_memory_token(tag, field_name="tag")
 
     def _validate_memory_token(self, value: str, *, field_name: str) -> None:
         """Valida que um token de memória não contém paths nem caracteres inválidos."""

@@ -177,7 +177,10 @@ def test_executor_memory_list_namespaces_and_delete_roundtrip(tmp_path):
     )
 
     assert listed.ok is True
-    assert listed.data["namespaces"] == [{"namespace": "workspace", "keys": 1}]
+    (namespace_row,) = listed.data["namespaces"]
+    assert namespace_row["namespace"] == "workspace"
+    assert namespace_row["keys"] == 1
+    assert namespace_row["updated_at"] is not None
     assert deleted.ok is True
     assert deleted.data["removed"] == 1
     assert retrieved.ok is True

@@ -592,6 +592,13 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                 'key': {'type': 'string',
                         'description': 'Chave determinística dentro do namespace.'},
                 'value': {'description': 'Valor JSON-serializable a persistir.'},
+                'tags': {'type': 'array',
+                         'items': {'type': 'string'},
+                         'description': 'Tags da entrada, filtráveis no memory_retrieve; tokens '
+                                        "sem path (letras, números, '.', '_', ':' ou '-'). Cada "
+                                        'save substitui as tags da entrada: lista vazia limpa; '
+                                        'se omitidas, extrai do campo tags do value quando o '
+                                        'value é objeto (comportamento legado).'},
                 'ttl_seconds': {'type': ['integer', 'null'],
                                 'description': 'TTL opcional em segundos. Se omitido ou null, a '
                                                'entrada não expira.'}},
@@ -602,6 +609,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                 'namespace': {'type': 'string'},
                 'key': {'type': 'string'},
                 'updated_at': {'type': 'string'},
+                'tags': {'type': 'array', 'items': {'type': 'string'}},
                 'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
  'required': ['ok', 'revision', 'namespace', 'key', 'updated_at']},
     ),
@@ -664,7 +672,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='memory_list_namespaces',
-        description='Lista namespaces ativos na memória do workspace e a quantidade de chaves em cada um.',
+        description='Lista namespaces ativos na memória do workspace, a quantidade de chaves e o updated_at mais recente de cada um.',
         parameters={'type': 'object', 'properties': {}, 'required': []},
         output_schema={'type': 'object',
  'properties': {'ok': {'type': 'boolean'},

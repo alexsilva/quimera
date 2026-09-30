@@ -16,7 +16,7 @@ from quimera.runtime.tools import memory as memory_tools
 from quimera.runtime.tools import todo as todo_tools
 
 _EXPECTED_SCHEMA_FINGERPRINT = (
-    "2db3fe36b35b3facb19b0281cb138c73faaf4ec5a9496aebc7d9a05b37513284"
+    "a6feca8705fe18920192b18b400b7dd62e47db29e7529ee13e2b1167b19f37e7"
 )
 
 
@@ -126,6 +126,36 @@ def test_memory_todo_state_contracts_are_available_on_registry(tmp_path: Path):
     # Fora de job ativo a tool falha de forma controlada, mas o handler existe.
     assert written.ok is False
     assert "QUIMERA_CURRENT_JOB_ID" in (written.error or "")
+
+
+def test_memory_save_tags_roundtrip_via_registry(tmp_path: Path):
+    """memory_save com tags explícitas persiste, devolve no payload e filtra no retrieve."""
+    config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
+    executor = ToolExecutor(config, approval_handler=None)
+
+    save = executor.registry.get("memory_save")(
+        ToolCall(
+            "memory_save",
+            {"namespace": "rules", "key": "k1", "value": {"rule": "x"}, "tags": ["git", "pdb"]},
+        )
+    )
+    assert save.ok is True
+    assert save.data["tags"] == ["git", "pdb"]
+
+    filtered = executor.registry.get("memory_retrieve")(
+        ToolCall("memory_retrieve", {"tags": ["git"]})
+    )
+    assert filtered.ok is True
+    assert [entry["key"] for entry in filtered.data["entries"]] == ["k1"]
+
+    legacy_save = executor.registry.get("memory_save")(
+        ToolCall(
+            "memory_save",
+            {"namespace": "rules", "key": "k2", "value": {"rule": "y"}},
+        )
+    )
+    assert legacy_save.ok is True
+    assert legacy_save.data["tags"] == []
 
     listed = executor.registry.get("todo_list")(ToolCall("todo_list", {}))
     assert listed.ok is False

@@ -298,6 +298,34 @@ def test_policy_memory_retrieve_rejects_invalid_tags(policy):
         )
 
 
+def test_policy_memory_save_accepts_valid_tags(policy):
+    policy.validate(
+        ToolCall(
+            name="memory_save",
+            arguments={"namespace": "rules", "key": "k", "value": {"v": 1}, "tags": ["git", "pdb"]},
+        )
+    )
+
+
+_MEMORY_SAVE_INVALID_TAGS = [
+    pytest.param("git", "tags deve ser lista de strings", id="tags-nao-lista"),
+    pytest.param(["ok", ""], "tags deve conter apenas strings não vazias", id="tag-vazia"),
+    pytest.param(["ok", 3], "tags deve conter apenas strings não vazias", id="tag-nao-string"),
+    pytest.param(["../etc"], "tag não pode conter path", id="tag-com-path"),
+]
+
+
+@pytest.mark.parametrize(("tags", "match"), _MEMORY_SAVE_INVALID_TAGS)
+def test_policy_memory_save_rejects_invalid_tags(policy, tags, match):
+    with pytest.raises(ToolPolicyError, match=match):
+        policy.validate(
+            ToolCall(
+                name="memory_save",
+                arguments={"namespace": "rules", "key": "k", "value": {"v": 1}, "tags": tags},
+            )
+        )
+
+
 def test_policy_update_shared_state_valid_payload_does_not_run_shell_validation(policy):
     policy.validate(
         ToolCall(name="update_shared_state", arguments={"updates": {"phase": "x"}})

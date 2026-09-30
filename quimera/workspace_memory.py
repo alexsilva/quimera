@@ -43,6 +43,7 @@ class MemorySaveResult:
     namespace: str
     key: str
     updated_at: str
+    tags: list[str]
 
 
 class WorkspaceMemoryStore:
@@ -60,8 +61,13 @@ class WorkspaceMemoryStore:
         value: Any,
         ttl_seconds: int | None,
         actor: str | None,
+        tags: list[str] | None = None,
     ) -> MemorySaveResult:
-        """Salva ou atualiza uma entrada na memória com validação e lock exclusivo."""
+        """Salva ou atualiza uma entrada na memória com validação e lock exclusivo.
+
+        `tags=None` preserva o comportamento legado de extrair a lista do campo
+        `tags` do value; lista explícita (inclusive vazia) substitui a extração.
+        """
         namespace = self._validate_token(namespace, field_name="namespace", max_len=_MAX_NAMESPACE_LEN)
         key = self._validate_token(key, field_name="key", max_len=_MAX_KEY_LEN)
         normalized_value = self._normalize_value(value)
@@ -71,7 +77,12 @@ class WorkspaceMemoryStore:
                 f"value excede o limite de {_MAX_VALUE_BYTES} bytes serializados"
             )
         normalized_actor = self._normalize_actor(actor)
-        tags = self._extract_tags(normalized_value)
+        if tags is None:
+            entry_tags = self._extract_tags(normalized_value)
+        else:
+            if not isinstance(tags, list):
+                raise ValueError("tags deve ser lista de strings")
+            entry_tags = self._normalize_tags(tags)
         ttl_value = self._normalize_ttl(ttl_seconds)
         now = _utc_now()
         expires_at = _isoformat(now + timedelta(seconds=ttl_value)) if ttl_value is not None else None
@@ -87,7 +98,7 @@ class WorkspaceMemoryStore:
                 "namespace": namespace,
                 "key": key,
                 "value": normalized_value,
-                "tags": tags,
+                "tags": entry_tags,
                 "created_at": created_at,
                 "created_by": created_by,
                 "updated_at": _isoformat(now),
@@ -104,6 +115,7 @@ class WorkspaceMemoryStore:
             namespace=namespace,
             key=key,
             updated_at=_isoformat(now),
+            tags=entry_tags,
         )
 
     def retrieve(
@@ -206,7 +218,13 @@ class WorkspaceMemoryStore:
                 for name in sorted(entries.keys()):
                     namespace_entries = entries.get(name)
                     count = len(namespace_entries) if isinstance(namespace_entries, dict) else 0
-                    namespaces.append({"namespace": name, "keys": count})
+                    namespaces.append(
+                        {
+                            "namespace": name,
+                            "keys": count,
+                            "updated_at": self._latest_updated_at(namespace_entries),
+                        }
+                    )
             revision = int(data.get("revision", 0))
         return {"revision": revision, "namespaces": namespaces}
 
@@ -325,6 +343,24 @@ class WorkspaceMemoryStore:
         for namespace_name in empty_namespaces:
             entries.pop(namespace_name, None)
         return changed
+
+    @staticmethod
+    def _latest_updated_at(namespace_entries: Any) -> str | None:
+        """Retorna o updated_at mais recente do namespace, tolerando entradas legadas."""
+        if not isinstance(namespace_entries, dict):
+            return None
+        latest: datetime | None = None
+        for raw_entry in namespace_entries.values():
+            if not isinstance(raw_entry, dict):
+                continue
+            parsed = _parse_iso(raw_entry.get("updated_at"))
+            if parsed is None:
+                continue
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            if latest is None or parsed > latest:
+                latest = parsed
+        return _isoformat(latest) if latest is not None else None
 
     @staticmethod
     def _normalize_actor(actor: str | None) -> str | None:
