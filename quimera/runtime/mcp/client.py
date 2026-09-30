@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import socket
 import sys
@@ -32,8 +33,11 @@ from typing import IO, Any
 
 from quimera import process_factory as subprocess
 from quimera.environment import build_env_vars
-from quimera.sandbox.state import wrap_subprocess_cmd
-from quimera.runtime.mcp.remote_credentials import migrate_legacy_remote_credentials
+from quimera.sandbox.state import is_sandbox_enabled, wrap_subprocess_cmd
+from quimera.runtime.mcp.remote_credentials import (
+    migrate_legacy_remote_credentials,
+    remote_config_dir,
+)
 from quimera.runtime.models import ToolCall, ToolResult
 
 _logger = logging.getLogger(__name__)
@@ -47,6 +51,176 @@ class MCPClientRuntime:
     bridge: "MCPClientBridge | None" = None
     specs: tuple[str, ...] = ()
     env_overrides: dict[str, dict[str, str]] | None = None
+
+
+class MCPConnectionPhase:
+    """Fases do ciclo de vida de uma conexão MCP client."""
+
+    PENDING = "pending"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    FAILED = "failed"
+    DISCONNECTED = "disconnected"
+
+
+@dataclass(frozen=True)
+class MCPConnectionState:
+    """Estado observável de uma conexão MCP client, para UI e diagnóstico.
+
+    O bridge publica um snapshot imutável por conexão; ``detail`` carrega o
+    erro da última falha ou um aviso operacional (ex.: autorização OAuth
+    pendente no navegador) enquanto o handshake está em andamento.
+    """
+
+    name: str
+    transport: str = ""
+    phase: str = MCPConnectionPhase.PENDING
+    detail: str = ""
+    tools: int = 0
+    updated_at: float = 0.0
+    #: URL de autorização OAuth que o servidor pediu para abrir no navegador;
+    #: vazia quando não há autorização pendente.
+    auth_url: str = ""
+
+    @property
+    def connected(self) -> bool:
+        return self.phase == MCPConnectionPhase.CONNECTED
+
+    @property
+    def auth_pending(self) -> bool:
+        return bool(self.auth_url)
+
+    @property
+    def in_progress(self) -> bool:
+        return self.phase in {MCPConnectionPhase.PENDING, MCPConnectionPhase.CONNECTING}
+
+    @property
+    def failed(self) -> bool:
+        return self.phase == MCPConnectionPhase.FAILED
+
+
+MCPNoticeCallback = Callable[[str, str], None]
+
+
+class MCPConnectError(ConnectionError):
+    """Falha de handshake com um servidor MCP externo.
+
+    ``str(exc)`` é um resumo de uma linha, apresentável no bloco de status e
+    no MCP Hub. O comando e o stderr do processo ficam em ``diagnostics`` e
+    vão apenas para o log do app — nunca para o chat.
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        name: str = "",
+        command: str = "",
+        stderr: str = "",
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.name = name
+        self.command = command
+        self.stderr = stderr
+
+    @property
+    def diagnostics(self) -> str:
+        """Texto completo para o log: motivo, comando e stderr do processo."""
+        parts = [self.reason]
+        if self.command:
+            parts.append(f"comando: {self.command}")
+        if self.stderr:
+            parts.append(f"stderr:\n{self.stderr}")
+        return "\n".join(parts)
+
+
+class MCPConnectSuperseded(MCPConnectError):
+    """Handshake abandonado porque outra tentativa da mesma conexão começou.
+
+    Um reconectar (ou desconectar) enquanto o handshake anterior ainda espera
+    — por exemplo, uma autorização OAuth nunca concluída — encerra o
+    transporte antigo. A thread daquela tentativa recebe esta exceção e não
+    publica estado, para não sobrescrever o progresso da tentativa nova.
+    """
+
+
+_STDERR_PREFIX_RE = re.compile(r"^(?:\s*\[[^\]]*\])+\s*")
+_STDERR_SUMMARY_PRIORITY = (
+    "fatal error",
+    "error:",
+    "erofs",
+    "eacces",
+    "enoent",
+    "unauthorized",
+    "forbidden",
+    "error",
+    "failed",
+    "exception",
+)
+_READ_ONLY_FS_MARKERS = ("erofs", "read-only file system")
+
+
+def shorten_text(text: object, limit: int) -> str:
+    """Colapsa espaços e corta em ``limit`` caracteres com reticências."""
+    flat = " ".join(str(text or "").split())
+    if len(flat) <= limit:
+        return flat
+    return flat[: max(limit - 1, 1)].rstrip() + "…"
+
+
+def summarize_stderr(stderr: str, *, limit: int = 160) -> str:
+    """Resume o stderr de um servidor stdio em uma única linha apresentável.
+
+    Prefere a última linha que nomeia um erro (``Fatal error``, ``Error:``,
+    códigos ``EROFS``/``EACCES``…) e ignora frames de stack trace e JSON. O
+    texto completo continua disponível para o log; este resumo é o que o
+    bloco de status e o MCP Hub exibem.
+    """
+    lines: list[str] = []
+    for raw in str(stderr or "").splitlines():
+        clean = _STDERR_PREFIX_RE.sub("", raw).strip()
+        if not clean:
+            continue
+        if clean.startswith("at ") or clean.startswith(("{", "}", "[")):
+            continue
+        lines.append(clean)
+    if not lines:
+        return ""
+    lowered = [line.lower() for line in lines]
+    for pattern in _STDERR_SUMMARY_PRIORITY:
+        for index in range(len(lines) - 1, -1, -1):
+            if pattern in lowered[index]:
+                return shorten_text(lines[index], limit)
+    return shorten_text(lines[-1], limit)
+
+
+def _looks_like_read_only_fs(stderr: str) -> bool:
+    lowered = str(stderr or "").lower()
+    return any(marker in lowered for marker in _READ_ONLY_FS_MARKERS)
+
+
+def _uses_mcp_remote(command: list[str]) -> bool:
+    return any("mcp-remote" in str(part) for part in command)
+
+
+def _ensure_directory(path) -> str:
+    """Cria ``path`` (0700) se necessário; o bwrap só monta origens existentes."""
+    try:
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError as exc:
+        _logger.debug("MCP stdio: não foi possível criar %s: %s", path, exc)
+    return str(path)
+
+
+def _sandbox_enabled(workspace) -> bool:
+    if workspace is None:
+        return False
+    try:
+        return bool(is_sandbox_enabled(workspace))
+    except Exception:
+        # Config inválida: wrap_subprocess_cmd falha fechado logo em seguida.
+        return False
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -111,6 +285,15 @@ class MCPTransport(ABC):
     def transport_type(self) -> str:
         """Identificador do tipo de transporte (stdio, socket, http)."""
 
+    def set_notice_callback(self, callback: MCPNoticeCallback | None) -> None:
+        """Registra destino para avisos operacionais (``auth``/``error``).
+
+        Transportes sem diagnóstico próprio ignoram o callback. Quando
+        definido, o transporte deixa de escrever no stderr — a UI é quem
+        apresenta o aviso.
+        """
+        return None
+
 
 class StdioMCPTransport(MCPTransport):
     """Transporte via subprocesso (stdio)."""
@@ -165,6 +348,35 @@ class StdioMCPTransport(MCPTransport):
             "on",
         }
         self._stderr_printed: set[str] = set()
+        self._stderr_thread: threading.Thread | None = None
+        self._sandboxed = False
+        self._notice_callback: MCPNoticeCallback | None = None
+
+    def set_notice_callback(self, callback: MCPNoticeCallback | None) -> None:
+        self._notice_callback = callback
+
+    def sandbox_rw_paths(self) -> list[str]:
+        """Diretórios fora do workspace que o servidor precisa escrever no sandbox.
+
+        O ``mcp-remote`` guarda tokens OAuth e lockfiles em
+        ``MCP_REMOTE_CONFIG_DIR`` (padrão ``~/.mcp-auth``); sem essa exceção o
+        ``$HOME`` somente leitura do sandbox derruba o handshake com ``EROFS``.
+        O diretório é criado aqui porque o bwrap só monta origens existentes.
+        """
+        if not _uses_mcp_remote(self._command):
+            return []
+        return [_ensure_directory(remote_config_dir(self._env))]
+
+    def _emit_notice(self, kind: str, text: str) -> bool:
+        """Entrega o aviso ao callback registrado; False se não houver."""
+        callback = self._notice_callback
+        if callback is None:
+            return False
+        try:
+            callback(kind, text)
+        except Exception:
+            _logger.debug("MCP stdio: callback de aviso falhou", exc_info=True)
+        return True
 
     def connect(self) -> tuple[IO[str], IO[str]]:
         proc_env = build_env_vars(
@@ -174,10 +386,13 @@ class StdioMCPTransport(MCPTransport):
         )
         command = list(self._command)
         if self.workspace is not None:
+            self._sandboxed = _sandbox_enabled(self.workspace)
+            extra_rw_paths = self.sandbox_rw_paths() if self._sandboxed else []
             command = wrap_subprocess_cmd(
                 self.workspace,
                 str(self.workspace.cwd),
                 command,
+                extra_rw_paths=extra_rw_paths,
                 die_with_parent=True,
             )
         self._process = subprocess.Popen(
@@ -210,7 +425,8 @@ class StdioMCPTransport(MCPTransport):
                         self._stderr_lines = self._stderr_lines[-200:]
                 self._print_stderr_line(text)
 
-        threading.Thread(target=pump, daemon=True).start()
+        self._stderr_thread = threading.Thread(target=pump, daemon=True)
+        self._stderr_thread.start()
 
     def _strip_mcp_remote_prefix(self, text: str) -> str:
         stripped = text.strip()
@@ -261,6 +477,11 @@ class StdioMCPTransport(MCPTransport):
         if rendered in self._stderr_printed:
             return
         self._stderr_printed.add(rendered)
+        # Diagnóstico do processo vai para o log do app; o chat só recebe o
+        # resumo da falha quando o handshake termina (ver describe_failure).
+        _logger.info("%s", rendered)
+        if self._emit_notice("error", clean):
+            return
         print(f"  {rendered}", file=sys.stderr)
 
     def _print_auth_prompt(self, url: str) -> None:
@@ -273,6 +494,8 @@ class StdioMCPTransport(MCPTransport):
         if url in self._stderr_printed:
             return
         self._stderr_printed.add(url)
+        if self._emit_notice("auth", url):
+            return
         label = f" '{self._name}'" if self._name else ""
         bar = "─" * 64
         lines = [
@@ -297,6 +520,40 @@ class StdioMCPTransport(MCPTransport):
         with self._stderr_lock:
             stderr = "\n".join(self._stderr_lines)
         return stderr.strip()[-limit:]
+
+    def _drain_stderr(self, timeout: float = 0.5) -> None:
+        """Espera (limitado) o pump consumir o stderr restante de um processo que caiu."""
+        thread = self._stderr_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout)
+
+    def describe_failure(self, exc: BaseException, *, name: str = "") -> "MCPConnectError":
+        """Converte a exceção do handshake em ``MCPConnectError``.
+
+        O motivo apresentável combina a exceção com a linha mais informativa do
+        stderr (ex.: ``Fatal error: … EROFS``) e, quando o sandbox do workspace
+        está ativo e o erro é de filesystem somente leitura, aponta a causa.
+        Comando e stderr completos ficam só em ``diagnostics`` para o log.
+        """
+        self._drain_stderr()
+        stderr = self.stderr_tail()
+        reason = str(exc).strip() or exc.__class__.__name__
+        if self._sandboxed and _looks_like_read_only_fs(stderr):
+            # A causa acionável vem antes do trecho do stderr: o bloco de
+            # status corta detalhes longos pelo fim.
+            reason = (
+                f"{reason} · escrita bloqueada pelo sandbox do workspace "
+                f"(/sandbox status)"
+            )
+        summary = summarize_stderr(stderr)
+        if summary and summary not in reason:
+            reason = f"{reason} · {summary}"
+        return MCPConnectError(
+            reason,
+            name=name or self._name or "",
+            command=self.command_label(),
+            stderr=stderr,
+        )
 
     def command_label(self) -> str:
         """Comando formatado para diagnóstico sem expor ambiente."""
@@ -345,6 +602,11 @@ class RemoteMCPTransport(StdioMCPTransport):
     ) -> None:
         super().__init__(command, env=env, name=name, workspace=workspace)
         self._remote_endpoint = endpoint
+
+    def sandbox_rw_paths(self) -> list[str]:
+        # O runner pode ser sobrescrito (QUIMERA_MCP_REMOTE_CMD) sem conter
+        # "mcp-remote" no nome; o transporte remote sempre usa o store OAuth.
+        return [_ensure_directory(remote_config_dir(self._env))]
 
     def connect(self) -> tuple[IO[str], IO[str]]:
         migration = migrate_legacy_remote_credentials(
@@ -545,6 +807,10 @@ class MCPClientSession:
     def transport_type(self) -> str:
         return self._transport.transport_type
 
+    @property
+    def transport(self) -> MCPTransport:
+        return self._transport
+
     def connect(self) -> None:
         self._reader, self._writer = self._transport.connect()
         self._connected = True
@@ -567,13 +833,15 @@ class MCPClientSession:
         except Exception as exc:
             self._connected = False
             if isinstance(self._transport, StdioMCPTransport):
-                stderr = self._transport.stderr_tail()
-                command = self._transport.command_label()
-                if stderr:
-                    raise ConnectionError(
-                        f"{exc}; comando: {command}; stderr: {stderr}"
-                    ) from exc
-                raise ConnectionError(f"{exc}; comando: {command}") from exc
+                error = self._transport.describe_failure(exc, name=self._name)
+                # Comando e stderr completos só no log do app; o chat e o MCP
+                # Hub recebem apenas ``str(error)``.
+                _logger.error(
+                    "MCP client '%s': falha no handshake\n%s",
+                    self._name,
+                    error.diagnostics,
+                )
+                raise error from exc
             raise
 
         self._server_info = result.get("serverInfo", result)
@@ -667,6 +935,12 @@ class MCPClientBridge:
         self._started = False
         self._schemas: list[dict] = []
         self._schema_lock = threading.Lock()
+        self._states: dict[str, MCPConnectionState] = {}
+        self._listeners: list[Callable[[], None]] = []
+        # Geração da tentativa corrente por conexão e o transporte cujo
+        # handshake está em andamento; ver ``_begin_attempt``.
+        self._attempts: dict[str, int] = {}
+        self._inflight: dict[str, tuple[int, MCPTransport]] = {}
 
     @property
     def started(self) -> bool:
@@ -674,20 +948,240 @@ class MCPClientBridge:
 
     @property
     def sessions(self) -> dict[str, MCPClientSession]:
-        return dict(self._sessions)
+        with self._lock:
+            return dict(self._sessions)
+
+    # ── Estado observável ────────────────────────────────────────────
+
+    def states(self) -> dict[str, MCPConnectionState]:
+        """Snapshot do estado de todas as conexões conhecidas, na ordem de registro."""
+        with self._lock:
+            return dict(self._states)
+
+    def state(self, name: str) -> MCPConnectionState | None:
+        """Estado atual de uma conexão específica, se conhecida."""
+        with self._lock:
+            return self._states.get(name)
+
+    def subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
+        """Registra observador chamado a cada mudança de estado.
+
+        O listener roda na thread que provocou a mudança (normalmente uma
+        thread de conexão em background); deve ser rápido e thread-safe.
+        Retorna a função de cancelamento da inscrição.
+        """
+        with self._lock:
+            self._listeners.append(listener)
+
+        def unsubscribe() -> None:
+            with self._lock:
+                try:
+                    self._listeners.remove(listener)
+                except ValueError:
+                    pass
+
+        return unsubscribe
+
+    def _notify_listeners(self) -> None:
+        with self._lock:
+            listeners = list(self._listeners)
+        for listener in listeners:
+            try:
+                listener()
+            except Exception:
+                _logger.exception("MCP bridge: listener de estado falhou")
+
+    def _set_state(
+        self,
+        name: str,
+        *,
+        phase: str | None = None,
+        transport: str | None = None,
+        detail: str | None = None,
+        tools: int | None = None,
+        auth_url: str | None = None,
+    ) -> MCPConnectionState:
+        with self._lock:
+            current = self._states.get(name) or MCPConnectionState(name=name)
+            updated = MCPConnectionState(
+                name=name,
+                transport=current.transport if transport is None else str(transport),
+                phase=current.phase if phase is None else str(phase),
+                detail=current.detail if detail is None else str(detail),
+                tools=current.tools if tools is None else int(tools),
+                updated_at=time.time(),
+                auth_url=current.auth_url if auth_url is None else str(auth_url),
+            )
+            self._states[name] = updated
+        self._notify_listeners()
+        return updated
+
+    def mark_pending(self, name: str, transport: str = "") -> MCPConnectionState:
+        """Declara uma conexão configurada cujo handshake ainda não começou."""
+        return self._set_state(
+            name,
+            phase=MCPConnectionPhase.PENDING,
+            transport=transport,
+            detail="",
+            tools=0,
+            auth_url="",
+        )
+
+    def mark_connecting(self, name: str, transport: str = "") -> MCPConnectionState:
+        """Marca o início do handshake de uma conexão."""
+        return self._set_state(
+            name,
+            phase=MCPConnectionPhase.CONNECTING,
+            transport=transport,
+            detail="",
+            tools=0,
+            auth_url="",
+        )
+
+    def mark_failed(
+        self, name: str, error: object, transport: str | None = None
+    ) -> MCPConnectionState:
+        """Registra falha de conexão com o erro apresentável ao usuário."""
+        return self._set_state(
+            name,
+            phase=MCPConnectionPhase.FAILED,
+            transport=transport,
+            detail=str(error),
+            tools=0,
+            auth_url="",
+        )
+
+    def set_state_detail(self, name: str, detail: str) -> MCPConnectionState:
+        """Atualiza só o aviso operacional da conexão."""
+        return self._set_state(name, detail=detail)
+
+    def set_auth_url(
+        self, name: str, url: str, *, transport: MCPTransport | None = None
+    ) -> MCPConnectionState | None:
+        """Publica a URL de autorização OAuth pedida pelo servidor.
+
+        Com ``transport`` informado, o aviso só é aceito se vier do handshake
+        em andamento ou da sessão viva da conexão — uma tentativa abandonada
+        pode ainda emitir sua URL depois que outra começou.
+        """
+        if transport is not None and not self._transport_is_active(name, transport):
+            _logger.debug(
+                "MCP bridge '%s': URL de autorização de transporte substituído ignorada",
+                name,
+            )
+            return None
+        return self._set_state(name, auth_url=str(url or ""))
+
+    def _transport_is_active(self, name: str, transport: MCPTransport) -> bool:
+        with self._lock:
+            inflight = self._inflight.get(name)
+            session = self._sessions.get(name)
+        if inflight is not None and inflight[1] is transport:
+            return True
+        return session is not None and getattr(session, "transport", None) is transport
+
+    def forget_connection(self, name: str) -> None:
+        """Remove o estado de uma conexão que deixou de estar configurada."""
+        with self._lock:
+            removed = self._states.pop(name, None) is not None
+        if removed:
+            self._notify_listeners()
+
+    def _update_tool_counts(self, counts: dict[str, int]) -> None:
+        with self._lock:
+            changed = False
+            for name, count in counts.items():
+                current = self._states.get(name)
+                if current is None or current.tools == count:
+                    continue
+                self._states[name] = MCPConnectionState(
+                    name=name,
+                    transport=current.transport,
+                    phase=current.phase,
+                    detail=current.detail,
+                    tools=int(count),
+                    updated_at=time.time(),
+                )
+                changed = True
+        if changed:
+            self._notify_listeners()
+
+    # ── Sessões ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _release_failed_transport(name: str, transport: MCPTransport) -> None:
+        """Encerra o transporte de um handshake que falhou (processo, sessão HTTP)."""
+        try:
+            transport.disconnect()
+        except Exception as exc:
+            _logger.debug(
+                "MCP bridge '%s': erro ao encerrar transporte após falha: %s",
+                name,
+                exc,
+            )
+
+    # ── Tentativas de handshake ──────────────────────────────────────
+
+    def _begin_attempt(self, name: str, transport: MCPTransport) -> int:
+        """Registra uma nova tentativa de handshake e abandona a anterior.
+
+        Cada tentativa recebe uma geração; só a corrente pode publicar o
+        resultado. O transporte da tentativa anterior é encerrado (o processo
+        preso em OAuth morre), o que libera a thread que o aguardava com
+        :class:`MCPConnectSuperseded`.
+        """
+        with self._lock:
+            attempt = self._attempts.get(name, 0) + 1
+            self._attempts[name] = attempt
+            previous = self._inflight.pop(name, None)
+            self._inflight[name] = (attempt, transport)
+        if previous is not None:
+            _logger.info(
+                "MCP bridge '%s': handshake anterior abandonado por nova tentativa",
+                name,
+            )
+            self._release_failed_transport(name, previous[1])
+        return attempt
+
+    def _attempt_is_current(self, name: str, attempt: int) -> bool:
+        with self._lock:
+            return self._attempts.get(name) == attempt
+
+    def _end_attempt(self, name: str, attempt: int) -> None:
+        with self._lock:
+            inflight = self._inflight.get(name)
+            if inflight is not None and inflight[0] == attempt:
+                self._inflight.pop(name)
+
+    def abort_inflight(self, name: str) -> bool:
+        """Cancela o handshake em andamento de ``name``, se houver.
+
+        Encerra o transporte (processo/sessão HTTP) e invalida a geração, de
+        modo que a thread da tentativa não publique estado. Retorna True se
+        havia handshake em andamento.
+        """
+        with self._lock:
+            previous = self._inflight.pop(name, None)
+            if previous is not None:
+                self._attempts[name] = self._attempts.get(name, 0) + 1
+        if previous is None:
+            return False
+        _logger.info("MCP bridge '%s': handshake em andamento cancelado", name)
+        self._release_failed_transport(name, previous[1])
+        return True
+
+    def connecting(self, name: str) -> bool:
+        """Há um handshake em andamento para ``name``?"""
+        with self._lock:
+            return name in self._inflight
+
+    # ── Sessões ──────────────────────────────────────────────────────
 
     def add_connection(
         self, name: str, transport: MCPTransport
     ) -> MCPClientSession:
-        session = MCPClientSession(transport, name=name)
-        session.connect()
-        with self._lock:
-            self._sessions[name] = session
-            self._started = True
-        _logger.info(
-            "MCP bridge: '%s' conectado (%s)", name, transport.transport_type
-        )
-        return session
+        """Conecta ``name``; equivale a :meth:`replace_connection` sem sessão prévia."""
+        return self.replace_connection(name, transport)
 
     def replace_connection(
         self, name: str, transport: MCPTransport
@@ -695,14 +1189,64 @@ class MCPClientBridge:
         """Conecta a nova sessão antes de substituir uma conexão existente.
 
         A troca é transacional do ponto de vista do bridge: se o novo handshake
-        falhar, a sessão antiga continua registrada e utilizável.
+        falhar, a sessão antiga continua registrada e utilizável — o estado
+        publicado segue ``connected`` com o motivo da reconexão falha em
+        ``detail``. Um handshake anterior ainda em andamento para o mesmo nome
+        é abandonado (ver :meth:`_begin_attempt`).
         """
         new_session = MCPClientSession(transport, name=name)
-        new_session.connect()
+        attempt = self._begin_attempt(name, transport)
         with self._lock:
-            old_session = self._sessions.get(name)
-            self._sessions[name] = new_session
-            self._started = True
+            had_session = name in self._sessions
+        if not had_session:
+            self.mark_connecting(name, transport.transport_type)
+        try:
+            new_session.connect()
+        except Exception as exc:
+            self._end_attempt(name, attempt)
+            if not self._attempt_is_current(name, attempt):
+                self._release_failed_transport(name, transport)
+                raise MCPConnectSuperseded(
+                    f"handshake de '{name}' abandonado por nova tentativa", name=name
+                ) from exc
+            if had_session:
+                # A sessão antiga segue viva: continua "connected", com o
+                # motivo da reconexão falha visível no detalhe.
+                self._set_state(
+                    name,
+                    phase=MCPConnectionPhase.CONNECTED,
+                    detail=f"reconexão falhou: {exc}",
+                    auth_url="",
+                )
+            else:
+                self.mark_failed(name, exc, transport=transport.transport_type)
+            self._release_failed_transport(name, transport)
+            raise
+        with self._lock:
+            current = self._attempts.get(name) == attempt
+            if current:
+                self._inflight.pop(name, None)
+                old_session = self._sessions.get(name)
+                self._sessions[name] = new_session
+                self._started = True
+        if not current:
+            # Outra tentativa (ou um desconectar) venceu enquanto o handshake
+            # terminava: a sessão recém-aberta não pode entrar no bridge.
+            try:
+                new_session.disconnect()
+            except Exception:
+                _logger.debug("MCP bridge '%s': erro ao descartar sessão superada", name)
+            raise MCPConnectSuperseded(
+                f"handshake de '{name}' abandonado por nova tentativa", name=name
+            )
+        self._set_state(
+            name,
+            phase=MCPConnectionPhase.CONNECTED,
+            transport=transport.transport_type,
+            detail="",
+            tools=0,
+            auth_url="",
+        )
         if old_session is not None:
             try:
                 old_session.disconnect()
@@ -717,13 +1261,29 @@ class MCPClientBridge:
         )
         return new_session
 
-    def disconnect_connection(self, name: str) -> bool:
-        """Desconecta uma sessão específica e a remove do bridge."""
+    def disconnect_connection(self, name: str, *, forget: bool = False) -> bool:
+        """Desconecta uma sessão específica e a remove do bridge.
+
+        Com ``forget=True`` o estado da conexão também é descartado (a
+        configuração deixou de existir); caso contrário ela segue visível
+        como ``disconnected`` e pode ser reconectada pelo MCP Hub.
+        """
+        aborted = self.abort_inflight(name)
         with self._lock:
             session = self._sessions.pop(name, None)
             self._started = bool(self._sessions)
+        if forget:
+            self.forget_connection(name)
+        elif session is not None or aborted or self.state(name) is not None:
+            self._set_state(
+                name,
+                phase=MCPConnectionPhase.DISCONNECTED,
+                detail="",
+                tools=0,
+                auth_url="",
+            )
         if session is None:
-            return False
+            return aborted
         try:
             session.disconnect()
         finally:
@@ -738,8 +1298,11 @@ class MCPClientBridge:
         """
         registered = []
         all_schemas: list[dict] = []
+        tool_counts: dict[str, int] = {}
 
-        for session_name, session in self._sessions.items():
+        # Snapshot: conexões em background podem entrar no dict durante a
+        # iteração; elas serão incluídas no próximo refresh_registration.
+        for session_name, session in list(self.sessions.items()):
             try:
                 tools = session.list_tools()
             except Exception as exc:
@@ -750,6 +1313,7 @@ class MCPClientBridge:
                 )
                 continue
 
+            tool_counts[session_name] = 0
             effective_prefix = f"{session_name}_"
             for tool in tools:
                 tool_name = tool.get("name", "")
@@ -775,6 +1339,7 @@ class MCPClientBridge:
                 )
                 registry.register(local_name, handler)
                 registered.append(local_name)
+                tool_counts[session_name] += 1
 
                 openai_schema = {
                     "type": "function",
@@ -795,6 +1360,7 @@ class MCPClientBridge:
 
         with self._schema_lock:
             self._schemas = all_schemas
+        self._update_tool_counts(tool_counts)
 
         return registered
 
@@ -850,7 +1416,12 @@ class MCPClientBridge:
         return handler
 
     def shutdown(self) -> None:
-        for name, session in self._sessions.items():
+        with self._lock:
+            inflight = list(self._inflight)
+        for name in inflight:
+            # Sem isso um ``mcp-remote`` esperando OAuth sobreviveria ao app.
+            self.abort_inflight(name)
+        for name, session in self.sessions.items():
             try:
                 session.disconnect()
                 _logger.info("MCP bridge: '%s' desconectado", name)
@@ -858,8 +1429,19 @@ class MCPClientBridge:
                 _logger.warning(
                     "MCP bridge '%s': erro ao desconectar: %s", name, exc
                 )
-        self._sessions.clear()
-        self._started = False
+        with self._lock:
+            self._sessions.clear()
+            self._started = False
+            self._states = {
+                name: MCPConnectionState(
+                    name=name,
+                    transport=state.transport,
+                    phase=MCPConnectionPhase.DISCONNECTED,
+                    tools=0,
+                    updated_at=time.time(),
+                )
+                for name, state in self._states.items()
+            }
         with self._schema_lock:
             self._schemas.clear()
 
@@ -1034,6 +1616,16 @@ def _spec_name(spec: str) -> str:
     return spec.split("=", 1)[0].strip() if "=" in spec else spec.strip()
 
 
+def spec_transport_type(spec: str) -> str:
+    """Deduz o transporte declarado em uma spec ``nome=...`` sem abrir conexão."""
+    rest = spec.split("=", 1)[1].strip() if "=" in spec else ""
+    if rest.startswith("http://") or rest.startswith("https://"):
+        return "http"
+    if ":" in rest:
+        return rest.split(":", 1)[0].strip().lower()
+    return ""
+
+
 def merge_specs_by_name(
     existing: list[str] | None, incoming: list[str] | None
 ) -> list[str]:
@@ -1062,10 +1654,15 @@ def start_mcp_clients(
     config: Any,
     workspace=None,
 ) -> MCPClientRuntime:
-    """Inicializa MCP clients externos e publica o bridge global.
+    """Prepara os MCP clients externos e publica o bridge global sem conectar.
 
-    Deve rodar antes da criação do ``QuimeraApp`` para que o ``ToolExecutor``
-    registre handlers das tools externas durante o bootstrap.
+    Deve rodar antes da criação do ``QuimeraApp``: o ``ToolExecutor`` encontra
+    o bridge (ainda sem sessões) durante o bootstrap e as tools externas passam
+    a ser registradas dinamicamente conforme cada handshake completa em
+    background — ver :func:`connect_mcp_clients_in_background`. Assim uma
+    conexão lenta ou quebrada nunca bloqueia a inicialização da interface; o
+    bloco de status do boot e o MCP Hub refletem cada conexão como
+    ``pending``/``connecting``/``connected``/``failed``.
 
     Specs vindas da CLI são combinadas às persistidas por nome de conexão: uma
     conexão nova é adicionada às já existentes, enquanto uma conexão de mesmo
@@ -1084,29 +1681,136 @@ def start_mcp_clients(
     if not specs:
         return MCPClientRuntime(enabled=False)
 
-    env_overrides = parse_mcp_client_env_specs(env_specs)
-    bridge = build_bridge_from_cli(
-        specs,
-        env_overrides=env_overrides,
-        workspace=workspace,
+    from quimera.runtime.drivers.tool_schemas import set_bridge_schemas
+    from quimera.runtime.tools.mcp_clients import (
+        set_bridge as set_mcp_client_bridge,
     )
-    if bridge and bridge.started:
-        from quimera.runtime.drivers.tool_schemas import set_bridge_schemas
-        from quimera.runtime.tools.mcp_clients import (
-            set_bridge as set_mcp_client_bridge,
-        )
 
-        set_mcp_client_bridge(bridge)
-        schemas = bridge.get_schemas()
-        if schemas:
-            set_bridge_schemas(schemas)
+    env_overrides = parse_mcp_client_env_specs(env_specs)
+    bridge = MCPClientBridge()
+    for spec in specs:
+        name = _spec_name(spec)
+        if name:
+            bridge.mark_pending(name, spec_transport_type(spec))
+    set_mcp_client_bridge(bridge)
+    set_bridge_schemas([])
 
     if cli_specs:
         config.set_mcp_configuration(specs, env_specs)
 
     return MCPClientRuntime(
-        enabled=bool(bridge and bridge.started),
+        enabled=True,
         bridge=bridge,
         specs=tuple(specs),
         env_overrides=env_overrides,
     )
+
+
+def connect_mcp_clients_in_background(
+    runtime: MCPClientRuntime | None,
+    *,
+    executor: Any,
+    workspace=None,
+    thread_factory: Callable[..., threading.Thread] = threading.Thread,
+) -> list[threading.Thread]:
+    """Conecta cada MCP client preparado por :func:`start_mcp_clients` em background.
+
+    Cada conexão ganha uma thread daemon própria, para que um handshake
+    travado (ex.: OAuth aguardando o navegador) não atrase as demais. O
+    progresso é publicado no bridge; ao conectar, as tools do servidor são
+    registradas no ``executor`` via ``refresh_registration`` e aparecem para
+    os agentes na próxima chamada ``tools/list``. Falhas ficam no estado da
+    conexão com o erro e podem ser refeitas pelo MCP Hub.
+    """
+    bridge = getattr(runtime, "bridge", None)
+    specs = tuple(getattr(runtime, "specs", ()) or ())
+    if bridge is None or not specs:
+        return []
+    env_overrides = getattr(runtime, "env_overrides", None)
+    threads: list[threading.Thread] = []
+    for spec in specs:
+        name = _spec_name(spec) or spec
+        thread = thread_factory(
+            target=connect_mcp_client_spec,
+            args=(bridge, spec),
+            kwargs={
+                "env_overrides": env_overrides,
+                "workspace": workspace,
+                "executor": executor,
+            },
+            name=f"quimera-mcp-client-{name}",
+            daemon=True,
+        )
+        thread.start()
+        threads.append(thread)
+    return threads
+
+
+def bind_bridge_notices(
+    bridge: MCPClientBridge, name: str, transport: MCPTransport
+) -> None:
+    """Encaminha os avisos do transporte ao estado da conexão no bridge.
+
+    Só a autorização OAuth vira estado visível (``auth_url``): é uma ação do
+    usuário. As linhas de erro do stderr já foram para o log do app pelo
+    transporte; se o handshake falhar, o resumo chega via
+    :class:`MCPConnectError`. Com o callback registrado o transporte também
+    deixa de escrever no stderr do processo, o que mantém o chat (Textual ou
+    pipe) limpo.
+    """
+
+    def _on_notice(kind: str, text: str) -> None:
+        if kind == "auth":
+            bridge.set_auth_url(name, text, transport=transport)
+
+    transport.set_notice_callback(_on_notice)
+
+
+def connect_mcp_client_spec(
+    bridge: MCPClientBridge,
+    spec: str,
+    *,
+    env_overrides: dict[str, dict[str, str]] | None = None,
+    workspace=None,
+    executor: Any = None,
+) -> bool:
+    """Conecta uma spec ao bridge e registra suas tools no executor.
+
+    Nunca propaga exceções: o resultado vai para o estado da conexão no
+    bridge (``connected`` ou ``failed`` com o motivo). Retorna True quando a
+    conexão está utilizável.
+    """
+    name = _spec_name(spec) or spec
+    try:
+        name, transport = parse_mcp_client_spec(
+            spec, env_overrides, workspace=workspace
+        )
+    except Exception as exc:
+        _logger.error("MCP client '%s': especificação inválida: %s", name, exc)
+        bridge.mark_failed(name, exc, transport=spec_transport_type(spec))
+        return False
+
+    bind_bridge_notices(bridge, name, transport)
+    try:
+        bridge.replace_connection(name, transport)
+    except MCPConnectSuperseded:
+        # Outra tentativa (reconectar/desconectar pelo hub) assumiu; o estado
+        # publicado é o dela.
+        _logger.info("MCP client '%s': tentativa substituída por outra", name)
+        return False
+    except Exception as exc:
+        # replace_connection já publicou o estado failed/detail.
+        _logger.error("Falha ao conectar MCP client '%s': %s", name, exc)
+        return False
+
+    if executor is None:
+        return True
+    from quimera.runtime.tools.mcp_clients import refresh_registration
+
+    try:
+        refresh_registration(executor, bridge)
+    except Exception as exc:
+        _logger.exception("MCP client '%s': falha ao registrar tools", name)
+        bridge.mark_failed(name, f"tools não registradas: {exc}")
+        return False
+    return True

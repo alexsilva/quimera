@@ -14,6 +14,7 @@ from quimera.ui.text import (
     strip_ansi,
 )
 from quimera.ui.base import RendererBase
+from quimera.ui.boot_status import coerce_boot_status_lines
 from quimera.ui.textual.bridge import TextualUiBridge, _TextualConsoleShim
 from quimera.ui.textual.constants import (
     APPROVAL_OPTIONS as _APPROVAL_OPTIONS,
@@ -418,6 +419,14 @@ class TextualRenderer(RendererBase):
     def show_boot_message(self, message: str) -> None:
         """Exibe uma linha compacta pertencente apenas ao cabeçalho de boot."""
         self._bridge.emit(TextualUiEvent("muted", str(message), compact=True))
+
+    def show_boot_status(self, key: str, lines) -> None:
+        """Cria ou substitui no lugar o bloco de status do boot ``key``."""
+        payload = {
+            "key": str(key),
+            "lines": [line.as_payload() for line in coerce_boot_status_lines(lines)],
+        }
+        self._bridge.emit(TextualUiEvent("boot_status", payload, compact=True))
 
     def show_system_neutral(self, message: str) -> None:
         """Exibe mensagem neutra com o espaçamento normal do feed."""

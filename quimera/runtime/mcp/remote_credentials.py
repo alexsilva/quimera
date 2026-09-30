@@ -108,7 +108,14 @@ def migrate_legacy_remote_credentials(
     )
 
 
-def _config_base_dir(env: dict[str, str] | None) -> Path:
+def remote_config_dir(env: dict[str, str] | None = None) -> Path:
+    """Diretório onde o ``mcp-remote`` guarda credenciais OAuth e lockfiles.
+
+    Respeita ``MCP_REMOTE_CONFIG_DIR`` (primeiro no ``env`` da conexão, depois
+    no ambiente do processo) e cai no padrão ``~/.mcp-auth``. É o mesmo
+    diretório que o sandbox do workspace precisa liberar para escrita, já que
+    o ``$HOME`` confinado é somente leitura.
+    """
     override = None
     if env:
         override = str(env.get("MCP_REMOTE_CONFIG_DIR") or "").strip() or None
@@ -117,6 +124,10 @@ def _config_base_dir(env: dict[str, str] | None) -> Path:
     if override:
         return Path(override).expanduser()
     return Path.home() / ".mcp-auth"
+
+
+def _config_base_dir(env: dict[str, str] | None) -> Path:
+    return remote_config_dir(env)
 
 
 def _server_url_hash(server_url: str) -> str:

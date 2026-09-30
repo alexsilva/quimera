@@ -67,8 +67,14 @@ O sandbox de workspace pode ser controlado pelo seletor **Sandbox do
 Workspace** ou por `/sandbox on|off`. A opção é persistida separadamente para
 cada workspace. Quando ativa, execuções de agentes, shell, Git e clientes MCP
 stdio ficam confinadas ao workspace, `/tmp` e aos diretórios de runtime já
-declarados pelos profiles. A ativação falha de forma segura quando o
-`bubblewrap` não está instalado ou não funciona no sistema.
+declarados pelos profiles. Clientes MCP baseados em `mcp-remote` também
+recebem o diretório de credenciais OAuth (`MCP_REMOTE_CONFIG_DIR`, padrão
+`~/.mcp-auth`) como exceção de escrita, para que o login não falhe com
+`EROFS`. Como o `mcp-remote` confinado não alcança o navegador, o próprio
+Quimera abre a URL de autorização OAuth (uma vez por URL); defina
+`QUIMERA_OPEN_BROWSER=0` para desligar e usar o link do bloco de status ou o
+botão `Autorizar no navegador` do MCP Hub. A ativação falha de forma segura
+quando o `bubblewrap` não está instalado ou não funciona no sistema.
 
 ## Paralelismo e timeouts
 

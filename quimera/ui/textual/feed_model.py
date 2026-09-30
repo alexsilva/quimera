@@ -266,6 +266,8 @@ class TextualFeedModel:
             return False
         if event.kind == "submission_status":
             return self._apply_submission_status(event)
+        if event.kind == "boot_status":
+            return self._apply_boot_status(event)
         if event.kind == "visual_reset":
             return self._apply_visual_reset(event)
         if event.kind == "agent_message":
@@ -358,6 +360,34 @@ class TextualFeedModel:
             self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
             return True
         item = TextualFeedItem(event, transient=False)
+        self._items.append(item)
+        self._last_change = TextualFeedChange(True, appended=item)
+        return True
+
+    @staticmethod
+    def _boot_status_key(event: TextualUiEvent) -> str:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        return str(payload.get("key") or "")
+
+    def _apply_boot_status(self, event: TextualUiEvent) -> bool:
+        """Substitui no lugar o bloco de status com a mesma chave, ou o anexa.
+
+        O bloco vive no cabeçalho de boot e continua atualizável depois que o
+        histórico restaurado e as mensagens do chat foram anexados abaixo.
+        """
+        key = self._boot_status_key(event)
+        item = TextualFeedItem(event, transient=False)
+        for index, existing in enumerate(self._items):
+            if existing.event.kind != "boot_status":
+                continue
+            if self._boot_status_key(existing.event) != key:
+                continue
+            if existing.event.payload == event.payload:
+                self._last_change = TextualFeedChange(False)
+                return False
+            self._items[index] = item
+            self._last_change = TextualFeedChange(True, redraw=True)
+            return True
         self._items.append(item)
         self._last_change = TextualFeedChange(True, appended=item)
         return True

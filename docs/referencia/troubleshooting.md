@@ -27,6 +27,56 @@ Se um override estiver errado, remova com `/disconnect <agente>` ou edite a cone
 4. Para socket Unix, verifique se o profile selecionado sabe injetar MCP.
 5. No HTTP, confirme que o cliente concluiu o fluxo OAuth e recebeu um access token. Não há token estático alternativo para o transporte HTTP.
 
+## MCP client externo não conectou no boot
+
+As conexões `--mcp-client` fecham o handshake em background: a interface sobe
+mesmo que um servidor esteja lento, exigindo autorização OAuth ou fora do ar.
+
+1. Olhe o bloco de status no início do chat: cada conexão aparece como
+   `aguardando`, `conectando…`, `conectado · N tool(s)` ou `falha — <erro>`.
+   Não há linha de resumo: cada servidor mostra o próprio estado.
+2. Para `remote:`, uma autorização pendente aparece como
+   `conectando… · autorização pendente no navegador`, seguida de uma linha
+   com a URL completa (clicável na TUI). Veja "Autorização OAuth pendente"
+   abaixo; a conexão completa sozinha depois da confirmação.
+3. Falhas mostram no bloco um resumo de uma linha (a exceção mais a linha
+   mais informativa do stderr do servidor). O comando completo e o stderr
+   inteiro ficam apenas no log do app, cujo caminho aparece no próprio bloco
+   quando há falha (`/tmp/quimera/<hash>/data/logs/app-<sessão>.log`). Corrija
+   a causa (rede, token, comando) e use o MCP Hub (`F9` → aba Servidores →
+   Reconectar) sem reiniciar.
+4. As tools de uma conexão só entram no `tools/list` dos agentes depois que ela
+   conecta; agentes que já listaram as tools antes disso precisam listar de novo.
+
+### Autorização OAuth pendente
+
+O `mcp-remote` roda dentro do sandbox do workspace e não consegue abrir o
+navegador; quem abre é o Quimera, uma vez por URL, assim que ela chega. Se
+nada abrir (sem `DISPLAY`/`WAYLAND_DISPLAY`, sessão SSH, ou
+`QUIMERA_OPEN_BROWSER=0`), use uma destas saídas:
+
+- Clique na URL do bloco de status (ou Ctrl+clique, nos terminais com
+  hyperlinks): o Quimera abre o navegador ou, se não conseguir, copia o link
+  para a área de transferência via OSC 52.
+- No MCP Hub (`F9` → aba Servidores), selecione a conexão: a linha
+  `Autorizar no navegador` / `Copiar link` aparece enquanto a autorização
+  está pendente, e o rodapé mostra a URL completa.
+
+Reconectar pelo hub durante uma autorização pendente abandona o handshake
+preso (o processo antigo é encerrado) e começa outro, com uma URL nova; o
+hub continua utilizável e pode ser fechado enquanto o servidor espera.
+`Desconectar` cancela o handshake sem tentar de novo.
+
+### `EROFS: read-only file system` com o sandbox ativo
+
+Com o sandbox do workspace ligado, o `$HOME` do servidor stdio é somente
+leitura. O `mcp-remote` precisa gravar tokens OAuth em `MCP_REMOTE_CONFIG_DIR`
+(padrão `~/.mcp-auth`); o Quimera libera esse diretório automaticamente para
+conexões `remote:` e para comandos `stdio:` que invocam `mcp-remote`. Se um
+outro servidor stdio falhar com `EROFS`, o resumo no bloco termina em
+`escrita bloqueada pelo sandbox do workspace`: rode-o fora do sandbox
+(`/sandbox off`) ou faça-o gravar dentro do workspace ou de `/tmp`.
+
 ## Tool de shell foi bloqueada
 
 O runtime aplica allowlist e denylist. Comandos perigosos ou fora da política são recusados. Prefira comandos pequenos e objetivos (`python`, `pytest`, `git`, `sed`, `find`, `head`, `tail`) e evite operações destrutivas.

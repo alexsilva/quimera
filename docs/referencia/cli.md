@@ -48,6 +48,18 @@ quimera [opções] [test_agent]
 | `--mcp-port N` | Porta HTTP MCP; padrão `9090`. |
 | `--mcp-host HOST` | Host HTTP MCP; padrão `127.0.0.1`. |
 | `--mcp-http-allow-tools CSV` | Allowlist de tools para MCP HTTP externo (padrão: read). |
+| `--mcp-client nome=transporte:endpoint` | Conecta a um servidor MCP externo e expõe suas tools com prefixo `nome_`. Aceita `remote:` (OAuth via `mcp-remote`), `stdio:`, `socket:` e URLs `http(s)://`. Persistido por workspace; pode ser repetido. |
+| `--mcp-client-env nome=KEY=val,...` | Variáveis de ambiente para uma conexão MCP client. |
+
+As conexões `--mcp-client` não bloqueiam a inicialização: o handshake de cada
+servidor roda em background depois que a interface sobe. O bloco de status no
+início do chat mostra cada conexão como aguardando, conectando, conectada (com a
+quantidade de tools) ou com falha (com o erro). Uma autorização OAuth pendente
+(`remote:`) ganha uma linha com a URL completa, clicável, e o navegador é aberto
+automaticamente (desligue com `QUIMERA_OPEN_BROWSER=0`). Assim que uma conexão
+completa, suas tools passam a aparecer no `tools/list` do MCP embutido e ficam
+disponíveis aos agentes. Conexões com falha ou presas podem ser refeitas no MCP
+Hub (`F9`) sem travar a interface.
 
 ## Exemplos
 

@@ -6,6 +6,7 @@ para registrar handlers que fazem proxy para servidores MCP externos.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -17,6 +18,10 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 _bridge: MCPClientBridge | None = None
+# Serializa refresh_registration: conexões em background, o MCP Hub e
+# reconexões podem terminar ao mesmo tempo, e o refresh é um ciclo
+# "desregistra tudo / registra tudo" que não pode se intercalar.
+_registration_lock = threading.RLock()
 
 
 class ExternalMCPToolValidator:
@@ -90,23 +95,24 @@ def refresh_registration(executor, bridge: MCPClientBridge | None = None) -> lis
         set_bridge_schemas,
     )
 
-    current_bridge = bridge if bridge is not None else _bridge
-    previous_names = [
-        str(schema.get("function", {}).get("name") or "")
-        for schema in get_bridge_schemas()
-    ]
-    previous_names = [name for name in previous_names if name]
-    executor.registry.unregister_many(previous_names)
-    executor.policy.unregister_tool_validators(previous_names)
-    executor.policy.unregister_external_mcp_tools(previous_names)
+    with _registration_lock:
+        current_bridge = bridge if bridge is not None else _bridge
+        previous_names = [
+            str(schema.get("function", {}).get("name") or "")
+            for schema in get_bridge_schemas()
+        ]
+        previous_names = [name for name in previous_names if name]
+        executor.registry.unregister_many(previous_names)
+        executor.policy.unregister_tool_validators(previous_names)
+        executor.policy.unregister_external_mcp_tools(previous_names)
 
-    if current_bridge is None:
-        set_bridge_schemas([])
-        return []
+        if current_bridge is None:
+            set_bridge_schemas([])
+            return []
 
-    registered = current_bridge.register_handlers(executor.registry)
-    if registered:
-        executor.policy.register_tool_validator(registered, ExternalMCPToolValidator())
-        executor.policy.register_external_mcp_tools(registered)
-    set_bridge_schemas(current_bridge.get_schemas())
-    return registered
+        registered = current_bridge.register_handlers(executor.registry)
+        if registered:
+            executor.policy.register_tool_validator(registered, ExternalMCPToolValidator())
+            executor.policy.register_external_mcp_tools(registered)
+        set_bridge_schemas(current_bridge.get_schemas())
+        return registered

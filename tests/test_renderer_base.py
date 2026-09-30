@@ -20,6 +20,7 @@ CONTRACT = [
     "show_error",
     "show_banner",
     "show_boot_message",
+    "show_boot_status",
     "show_system_neutral",
     "show_approval",
     "show_feed",
@@ -103,6 +104,31 @@ class TestRendererBaseContract(unittest.TestCase):
         self.assertEqual(
             renderer.system_messages[1],
             format_retry_message("no_response", 1, 2, "d"),
+        )
+
+    def test_show_boot_status_prints_only_new_or_changed_lines(self):
+        renderer = _RecordingRenderer()
+        renderer.show_boot_status(
+            "mcp",
+            [("ok", "MCP interno iniciado"), ("busy", "MCP client 'x': conectando…")],
+        )
+        renderer.show_boot_status(
+            "mcp",
+            [("ok", "MCP interno iniciado"), ("ok", "MCP client 'x': conectado · 3 tool(s)")],
+        )
+        renderer.show_boot_status(
+            "mcp",
+            [("ok", "MCP interno iniciado"), ("ok", "MCP client 'x': conectado · 3 tool(s)")],
+        )
+        renderer.show_boot_status("outro", "linha solta")
+        self.assertEqual(
+            renderer.system_messages,
+            [
+                "● MCP interno iniciado",
+                "◌ MCP client 'x': conectando…",
+                "● MCP client 'x': conectado · 3 tool(s)",
+                "· linha solta",
+            ],
         )
 
     def test_infra_methods_are_noop(self):

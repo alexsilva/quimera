@@ -5247,3 +5247,363 @@ def test_config_screen_keeps_close_and_actions_outside_scrollable_fields(tmp_pat
             assert not isinstance(app.screen, ConfigScreen)
 
     asyncio.run(run_test())
+
+
+def test_textual_feed_boot_status_replaces_block_in_place():
+    model = TextualFeedModel()
+    assert model.apply(TextualUiEvent("muted", "Projeto: /tmp/projeto", compact=True))
+    first = TextualUiEvent(
+        "boot_status",
+        {"key": "mcp", "lines": [{"status": "busy", "text": "MCP client 'x': conectando…"}]},
+        compact=True,
+    )
+    assert model.apply(first)
+    assert model.hydrate_from_history([{"role": "claude", "content": "resposta antiga"}])
+
+    second = TextualUiEvent(
+        "boot_status",
+        {"key": "mcp", "lines": [{"status": "ok", "text": "MCP client 'x': conectado"}]},
+        compact=True,
+    )
+    assert model.apply(second) is True
+
+    assert [item.event.kind for item in model.items] == ["muted", "boot_status", "agent_message"]
+    assert model.items[1].event is second
+    assert model.last_change.redraw is True
+
+    # Payload idêntico não gera redesenho.
+    assert model.apply(
+        TextualUiEvent(
+            "boot_status",
+            {"key": "mcp", "lines": [{"status": "ok", "text": "MCP client 'x': conectado"}]},
+            compact=True,
+        )
+    ) is False
+    # Outra chave é um bloco novo.
+    assert model.apply(TextualUiEvent("boot_status", {"key": "outro", "lines": []}, compact=True))
+    assert [item.event.kind for item in model.items] == [
+        "muted",
+        "boot_status",
+        "agent_message",
+        "boot_status",
+    ]
+
+
+def test_textual_renderer_show_boot_status_emits_compact_event():
+    from quimera.ui.boot_status import BootStatusLine
+
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_boot_status(
+        "mcp",
+        [("ok", "MCP interno iniciado em /tmp/x.sock"), BootStatusLine("error", "falha")],
+    )
+
+    assert len(emitted) == 1
+    event = emitted[0]
+    assert event.kind == "boot_status"
+    assert event.compact is True
+    assert event.payload == {
+        "key": "mcp",
+        "lines": [
+            {"status": "ok", "text": "MCP interno iniciado em /tmp/x.sock"},
+            {"status": "error", "text": "falha"},
+        ],
+    }
+
+
+def test_render_boot_status_uses_status_glyphs():
+    event = TextualUiEvent(
+        "boot_status",
+        {
+            "key": "mcp",
+            "lines": [
+                {"status": "ok", "text": "MCP interno iniciado"},
+                {"status": "busy", "text": "MCP client 'y': conectando…"},
+                {"status": "error", "text": "MCP client 'x': falha"},
+            ],
+        },
+        compact=True,
+    )
+
+    renderable = _render_event(event)
+
+    assert renderable.plain == (
+        "● MCP interno iniciado\n◌ MCP client 'y': conectando…\n✗ MCP client 'x': falha"
+    )
+    styles = {str(span.style) for span in renderable.spans}
+    assert {"green", "yellow", "red", "dim"} <= styles
+
+
+def test_mcp_connections_screen_shows_background_connection_phases(tmp_path):
+    from textual.app import App
+    from textual.widgets import DataTable, Label
+
+    from quimera.runtime.mcp.client import MCPClientBridge
+    from quimera.runtime.tools.mcp_clients import set_bridge
+
+    bridge = MCPClientBridge()
+    bridge.mark_connecting("wiki", "http")
+    bridge.mark_failed("jira", "Connection refused", transport="stdio")
+    set_bridge(bridge)
+    config_file = tmp_path / "mcp-config.json"
+    config_file.write_text(
+        '{"mcp_clients":["wiki=http://localhost:3100/mcp","jira=stdio:jira-cmd"]}',
+        encoding="utf-8",
+    )
+    quimera_app = SimpleNamespace(
+        workspace=SimpleNamespace(mcp_config_file=config_file),
+        tool_executor=Mock(),
+        mcp_socket_path="/tmp/quimera.sock",
+        mcp_http_url="",
+        external_mcp_http_server=None,
+    )
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(120, 34)) as pilot:
+            app.push_screen(MCPConnectionsScreen(quimera_app, app))
+            await pilot.pause()
+
+            screen = app.screen
+            assert isinstance(screen, MCPConnectionsScreen)
+            table = screen.query_one("#mcp_table", DataTable)
+            assert table.row_count == 2
+            assert str(table.get_row_at(0)[3]) == "conectando…"
+            assert str(table.get_row_at(1)[3]) == "falha"
+            summary = str(screen.query_one("#mcp_clients_summary", Label).render())
+            assert "0/2 conectados" in summary
+            assert "1 conectando" in summary
+
+            # Uma transição vinda do conector em background atualiza o hub aberto.
+            bridge.mark_failed("wiki", "timeout", transport="http")
+            await pilot.pause()
+            assert str(table.get_row_at(0)[3]) == "falha"
+            summary = str(screen.query_one("#mcp_clients_summary", Label).render())
+            assert "conectando" not in summary
+
+            await pilot.click("#mcp_close_top")
+            await pilot.pause()
+            assert not isinstance(app.screen, MCPConnectionsScreen)
+
+    asyncio.run(run_test())
+    set_bridge(None)
+
+
+def test_render_boot_status_torna_url_de_autorizacao_clicavel():
+    url = "https://auth.example.test/authorize?client_id=abc&code_challenge=xyz"
+    event = TextualUiEvent(
+        "boot_status",
+        {
+            "key": "mcp",
+            "lines": [
+                {"status": "busy", "text": "MCP client 'jira': conectando…"},
+                {"status": "info", "text": "autorize 'jira' no navegador:", "url": url},
+            ],
+        },
+        compact=True,
+    )
+
+    renderable = _render_event(event)
+
+    assert renderable.plain == (
+        f"◌ MCP client 'jira': conectando…\n· autorize 'jira' no navegador: {url}"
+    )
+    link_spans = [span for span in renderable.spans if getattr(span.style, "link", None) == url]
+    assert len(link_spans) == 1
+    meta = link_spans[0].style.meta
+    assert meta["@click"] == f"app.open_external_url({url!r})"
+    assert renderable.plain[link_spans[0].start : link_spans[0].end] == url
+
+
+def test_textual_renderer_show_boot_status_preserva_url():
+    from quimera.ui.boot_status import BootStatusLine
+
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_boot_status(
+        "mcp", [BootStatusLine("info", "autorize 'jira' no navegador:", url="https://auth")]
+    )
+
+    assert emitted[0].payload["lines"] == [
+        {"status": "info", "text": "autorize 'jira' no navegador:", "url": "https://auth"}
+    ]
+
+
+def test_textual_app_action_open_external_url_usa_helper_seguro(monkeypatch):
+    """O clique no link abre pelo helper (nunca pelo webbrowser da stdlib)."""
+    import asyncio
+
+    from quimera.ui.textual import app as textual_app_module
+
+    opened: list[str] = []
+    monkeypatch.setattr(textual_app_module, "open_in_browser", lambda url: opened.append(url) or True)
+    app = _capture_quimera_textual_app(_fake_quimera_app(), TextualUiBridge())
+
+    async def run_test() -> None:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await app.run_action("app.open_external_url('https://auth.example.test/x?a=1')")
+            await pilot.pause()
+            assert opened == ["https://auth.example.test/x?a=1"]
+
+            copied: list[str] = []
+            monkeypatch.setattr(textual_app_module, "open_in_browser", lambda url: False)
+            monkeypatch.setattr(app, "copy_to_clipboard", lambda text: copied.append(text))
+            await app.run_action("app.open_external_url('https://auth.example.test/y')")
+            await pilot.pause()
+            assert copied == ["https://auth.example.test/y"]
+
+    asyncio.run(run_test())
+
+
+def test_mcp_connections_screen_reconnect_nao_bloqueia_e_oferece_autorizacao(tmp_path, monkeypatch):
+    """Reconectar roda em background: o hub segue utilizável e pode ser fechado.
+
+    Enquanto o servidor espera a autorização OAuth, a linha de autorização
+    aparece com os botões e a URL completa fica no rodapé.
+    """
+    import asyncio
+    import threading
+
+    from textual.app import App
+    from textual.widgets import Button, DataTable, Label
+
+    from quimera.runtime.mcp.client import MCPClientBridge, MCPConnectionPhase
+    from quimera.runtime.mcp import manager as manager_module
+    from quimera.runtime.tools.mcp_clients import set_bridge
+    from quimera.ui.textual import mcp_screen as mcp_screen_module
+
+    url = "https://auth.example.test/authorize?client_id=abc&state=" + "s" * 300
+    bridge = MCPClientBridge()
+    bridge.mark_failed("jira", "recusada", transport="stdio")
+    set_bridge(bridge)
+    config_file = tmp_path / "mcp-config.json"
+    config_file.write_text('{"mcp_clients":["jira=stdio:jira-cmd"]}', encoding="utf-8")
+    quimera_app = SimpleNamespace(
+        workspace=SimpleNamespace(mcp_config_file=config_file),
+        tool_executor=Mock(),
+        mcp_socket_path="/tmp/quimera.sock",
+        mcp_http_url="",
+        external_mcp_http_server=None,
+    )
+    release = threading.Event()
+    started: list[str] = []
+
+    def fake_connect(bridge_arg, spec, **kwargs):
+        # Handshake "preso" em OAuth até o teste liberar.
+        started.append(spec)
+        bridge_arg.mark_connecting("jira", "stdio")
+        bridge_arg.set_auth_url("jira", url)
+        release.wait(5)
+        bridge_arg._set_state("jira", phase=MCPConnectionPhase.CONNECTED, detail="", auth_url="", tools=3)
+        return True
+
+    monkeypatch.setattr(manager_module, "connect_mcp_client_spec", fake_connect)
+    opened: list[str] = []
+    monkeypatch.setattr(mcp_screen_module, "open_in_browser", lambda target: opened.append(target) or True)
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(120, 34)) as pilot:
+            app.push_screen(MCPConnectionsScreen(quimera_app, app))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, MCPConnectionsScreen)
+            await pilot.click("#mcp_tab_servers")
+            await pilot.pause()
+            table = screen.query_one("#mcp_table", DataTable)
+            assert str(table.get_row_at(0)[3]) == "falha"
+            assert screen.query_one("#mcp_auth_row").display is False
+
+            await pilot.click("#mcp_reconnect")
+            await pilot.pause()
+            await asyncio.sleep(0.2)
+            await pilot.pause()
+
+            assert started == ["jira=stdio:jira-cmd"]
+            # Nada bloqueado: botões ativos e a tabela já mostra a autorização.
+            assert screen._busy is False
+            assert screen.query_one("#mcp_reconnect", Button).disabled is False
+            assert screen.query_one("#mcp_disconnect", Button).disabled is False
+            assert str(table.get_row_at(0)[3]) == "autorização pendente"
+            assert screen.query_one("#mcp_auth_row").display is True
+            assert "'jira' aguarda autorização" in str(
+                screen.query_one("#mcp_auth_label", Label).render()
+            )
+            # A tabela reconstruída manteve a seleção e o rodapé mostra a URL.
+            activity = str(screen.query_one("#mcp_activity", Label).render())
+            assert "jira: autorização pendente" in activity
+
+            await pilot.click("#mcp_authorize")
+            await pilot.pause()
+            assert opened == [url]
+
+            copied: list[str] = []
+            monkeypatch.setattr(app, "copy_to_clipboard", lambda text: copied.append(text))
+            await pilot.click("#mcp_copy_auth")
+            await pilot.pause()
+            assert copied == [url]
+            assert url in str(screen.query_one("#mcp_activity", Label).render())
+
+            # A conexão termina com o hub aberto: linha de autorização some,
+            # estado vira conectado e o usuário é avisado.
+            release.set()
+            await asyncio.sleep(0.2)
+            await pilot.pause()
+            assert str(table.get_row_at(0)[3]) == "conectado"
+            assert screen.query_one("#mcp_auth_row").display is False
+            assert any(
+                "MCP 'jira' conectado · 3 tool(s)." in notification.message
+                for notification in app._notifications
+            )
+
+            # E o hub fecha normalmente (antes ficava preso em _busy).
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, MCPConnectionsScreen)
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        release.set()
+        set_bridge(None)
+
+
+def test_mcp_server_editor_salva_e_conecta_em_background(tmp_path):
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import Input, Select
+
+    from quimera.ui.textual.mcp_screen import MCPServerEditorScreen
+
+    manager = Mock()
+    manager.upsert_in_background = Mock()
+    results: list[str | None] = []
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(100, 28)) as pilot:
+            app.push_screen(MCPServerEditorScreen(manager, app), results.append)
+            await pilot.pause()
+            screen = app.screen
+            screen.query_one("#mcp_editor_name", Input).value = "jira"
+            screen.query_one("#mcp_editor_transport", Select).value = "remote"
+            screen.query_one("#mcp_editor_endpoint", Input).value = "https://mcp.example.test/mcp"
+            screen.action_save()
+            await pilot.pause()
+            assert not isinstance(app.screen, MCPServerEditorScreen)
+
+    asyncio.run(run_test())
+
+    manager.upsert_in_background.assert_called_once_with(
+        "jira=remote:https://mcp.example.test/mcp", env_spec=None
+    )
+    manager.upsert.assert_not_called()
+    assert results == ["jira"]

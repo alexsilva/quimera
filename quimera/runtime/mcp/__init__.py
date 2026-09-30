@@ -22,12 +22,19 @@ from quimera.runtime.mcp.session import (
 from quimera.runtime.mcp.client import (
     MCPClientBridge,
     MCPClientSession,
+    MCPConnectError,
+    MCPConnectSuperseded,
+    MCPConnectionPhase,
+    MCPConnectionState,
     MCPTransport,
+    RemoteMCPTransport,
     StdioMCPTransport,
     SocketMCPTransport,
     HttpMCPTransport,
     build_bridge_from_cli,
+    connect_mcp_clients_in_background,
     parse_mcp_client_spec,
+    start_mcp_clients,
 )
 
 __all__ = [
@@ -48,10 +55,17 @@ __all__ = [
     "parse_client_specs",
     "MCPClientBridge",
     "MCPClientSession",
+    "MCPConnectError",
+    "MCPConnectSuperseded",
+    "MCPConnectionPhase",
+    "MCPConnectionState",
     "MCPTransport",
+    "RemoteMCPTransport",
     "StdioMCPTransport",
     "SocketMCPTransport",
     "HttpMCPTransport",
     "build_bridge_from_cli",
+    "connect_mcp_clients_in_background",
     "parse_mcp_client_spec",
+    "start_mcp_clients",
 ]

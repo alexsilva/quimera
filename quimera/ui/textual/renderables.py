@@ -13,6 +13,7 @@ from rich.padding import Padding
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.segment import Segment
+from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from quimera.domain.execution import ExecutionControlSource, ExecutionControlStatus
@@ -25,6 +26,12 @@ from quimera.ui.textual.constants import (
     APPROVAL_TITLE as _APPROVAL_TITLE,
 )
 from quimera.app.submission_tracker import TERMINAL_SUBMISSION_STATUSES
+from quimera.ui.boot_status import (
+    BOOT_STATUS_GLYPHS,
+    BOOT_STATUS_INFO,
+    BOOT_STATUS_STYLES,
+    coerce_boot_status_lines,
+)
 from quimera.ui.branding import banner_gradient_text
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.clipboard_support import ClipboardManager
@@ -946,6 +953,8 @@ def _render_event(event: TextualUiEvent):
         return Text(content)
     if event.kind == "muted":
         return Text(str(event.payload), style="dim")
+    if event.kind == "boot_status":
+        return _build_boot_status_renderable(event.payload)
     if event.kind == "system":
         payload_text = str(event.payload or "").strip()
         if payload_text.startswith("[") and "]" in payload_text:
@@ -961,6 +970,41 @@ def _render_event(event: TextualUiEvent):
         theme_name = str(payload.get("theme", "")).strip()
         return Text(f"tema: {theme_name}" if theme_name else "tema atualizado", style="dim cyan")
     return Text(str(event.payload))
+
+
+def boot_status_link_style(url: str) -> Style:
+    """Estilo de um link do bloco de boot: clique abre no navegador.
+
+    ``link`` emite o hyperlink OSC 8 (Ctrl+clique nos terminais que suportam)
+    e ``@click`` aciona ``open_external_url`` do app Textual, que abre o
+    navegador sem tocar no terminal.
+    """
+    return Style(
+        color="cyan",
+        underline=True,
+        link=url,
+        meta={"@click": f"app.open_external_url({url!r})"},
+    )
+
+
+def _build_boot_status_renderable(payload) -> Text:
+    """Bloco compacto do boot: um glifo colorido por status e texto dim.
+
+    Linhas com ``url`` mostram o link completo depois do texto, clicável.
+    """
+    data = payload if isinstance(payload, dict) else {}
+    text = Text(no_wrap=False, overflow="fold")
+    for index, line in enumerate(coerce_boot_status_lines(data.get("lines") or [])):
+        if index:
+            text.append("\n")
+        glyph = BOOT_STATUS_GLYPHS.get(line.status, BOOT_STATUS_GLYPHS[BOOT_STATUS_INFO])
+        style = BOOT_STATUS_STYLES.get(line.status, BOOT_STATUS_STYLES[BOOT_STATUS_INFO])
+        text.append(glyph, style=style)
+        text.append(f" {line.text}", style="dim")
+        if line.url:
+            text.append(" ")
+            text.append(line.url, style=boot_status_link_style(line.url))
+    return text
 
 
 def _render_themed_agent_block(theme_name: str, label: str, style: str, body, *, streaming: bool = False):

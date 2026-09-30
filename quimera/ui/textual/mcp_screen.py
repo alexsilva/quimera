@@ -1,6 +1,8 @@
 """Hub visual para inspecionar e gerenciar conexões MCP da sessão."""
 from __future__ import annotations
 
+import threading
+
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
@@ -10,6 +12,7 @@ from textual.widgets import Button, DataTable, Input, Label, Select
 
 from quimera.runtime.drivers.tool_schemas import get_bridge_schemas
 from quimera.runtime.mcp.manager import MCPConnectionInfo, MCPConnectionManager
+from quimera.ui.browser import open_in_browser
 
 
 class MCPServerEditorScreen(ModalScreen[str | None]):
@@ -157,6 +160,12 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
             self.dismiss(None)
 
     def action_save(self) -> None:
+        """Valida, persiste e dispara o handshake em background.
+
+        O editor não espera o servidor responder: uma conexão ``remote:`` pode
+        ficar minutos aguardando a autorização OAuth no navegador, e a tabela
+        do hub mostra o progresso depois que o editor fecha.
+        """
         if self._busy:
             return
         try:
@@ -166,8 +175,15 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
             return
         previous_name = self.info.name if self.info is not None else None
         self._busy = True
-        self.query_one("#mcp_editor_activity", Label).update(f"Conectando {name}…")
-        self._save_worker(spec, env_spec, name, previous_name)
+        self.query_one("#mcp_editor_activity", Label).update(f"Salvando {name}…")
+        try:
+            self.manager.upsert_in_background(spec, env_spec=env_spec)
+            if previous_name and previous_name != name:
+                self.manager.remove(previous_name)
+        except Exception as exc:
+            self._save_failed(name, str(exc))
+            return
+        self._save_succeeded(name)
 
     def _build_specs(self) -> tuple[str, str | None, str]:
         name = self.query_one("#mcp_editor_name", Input).value.strip()
@@ -194,33 +210,16 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
         env_spec = f"{name}={env_text}" if env_text else None
         return spec, env_spec, name
 
-    @work(thread=True, exclusive=True, group="mcp-editor")
-    def _save_worker(
-        self,
-        spec: str,
-        env_spec: str | None,
-        name: str,
-        previous_name: str | None,
-    ) -> None:
-        try:
-            self.manager.upsert(spec, env_spec=env_spec)
-            if previous_name and previous_name != name:
-                self.manager.remove(previous_name)
-        except Exception as exc:
-            self.app.call_from_thread(self._save_failed, name, str(exc))
-            return
-        self.app.call_from_thread(self._save_succeeded, name)
-
     def _save_failed(self, name: str, error: str) -> None:
         self._busy = False
-        message = f"Falha ao conectar {name}: {error}"
+        message = f"Falha ao salvar {name}: {error}"
         self.query_one("#mcp_editor_activity", Label).update(message)
         self.parent_app.notify(message, severity="error")
 
     def _save_succeeded(self, name: str) -> None:
         self._busy = False
         self.parent_app.notify(
-            f"MCP '{name}' conectado e salvo.",
+            f"MCP '{name}' salvo · conectando em background.",
             severity="information",
         )
         self.dismiss(name)
@@ -320,6 +319,20 @@ class MCPConnectionsScreen(ModalScreen[None]):
         border: none;
         margin-right: 1;
     }
+    #mcp_auth_row {
+        height: 1;
+        margin-top: 1;
+    }
+    #mcp_auth_row Button {
+        height: 1;
+        min-width: 12;
+        border: none;
+        margin-right: 1;
+    }
+    #mcp_auth_label {
+        width: 1fr;
+        color: $warning;
+    }
     #mcp_activity {
         height: 1;
         color: $text-muted;
@@ -333,6 +346,7 @@ class MCPConnectionsScreen(ModalScreen[None]):
         ("ctrl+n", "new_connection", "Adicionar servidor"),
         ("ctrl+e", "edit_connection", "Editar servidor"),
         ("ctrl+r", "reconnect", "Reconectar"),
+        ("ctrl+o", "authorize", "Autorizar no navegador"),
     ]
 
     AUTO_FOCUS = "#mcp_incoming_table"
@@ -346,6 +360,10 @@ class MCPConnectionsScreen(ModalScreen[None]):
         self._selected_client_id: str | None = None
         self._active_tab = "clients"
         self._busy = False
+        self._unsubscribe_bridge = None
+        self._ui_thread_id: int | None = None
+        # Conexões iniciadas por este hub; avisadas ao terminar o handshake.
+        self._pending_connections: set[str] = set()
 
     def compose(self) -> ComposeResult:
         with Container(id="mcp_dialog"):
@@ -388,6 +406,12 @@ class MCPConnectionsScreen(ModalScreen[None]):
                     yield Button("Reconectar", id="mcp_reconnect")
                     yield Button("Desconectar", id="mcp_disconnect")
                     yield Button("Remover", id="mcp_remove", variant="error")
+                with Horizontal(id="mcp_auth_row", classes="hidden"):
+                    yield Button(
+                        "Autorizar no navegador", id="mcp_authorize", variant="warning"
+                    )
+                    yield Button("Copiar link", id="mcp_copy_auth")
+                    yield Label("", id="mcp_auth_label")
             yield Label("", id="mcp_activity")
 
     def on_mount(self) -> None:
@@ -398,6 +422,36 @@ class MCPConnectionsScreen(ModalScreen[None]):
         self._refresh_view()
         self._update_action_state()
         self._update_client_action_state()
+        # Conexões iniciadas em background podem terminar com o hub aberto:
+        # acompanha o bridge para a tabela refletir cada transição.
+        self._ui_thread_id = threading.get_ident()
+        subscribe = getattr(self.manager, "subscribe", None)
+        if callable(subscribe):
+            self._unsubscribe_bridge = subscribe(self._on_bridge_state_changed)
+
+    def on_unmount(self) -> None:
+        unsubscribe = self._unsubscribe_bridge
+        self._unsubscribe_bridge = None
+        if callable(unsubscribe):
+            unsubscribe()
+
+    def _on_bridge_state_changed(self) -> None:
+        if threading.get_ident() == self._ui_thread_id:
+            self._refresh_connections_safely()
+            return
+        try:
+            self.app.call_from_thread(self._refresh_connections_safely)
+        except RuntimeError:
+            # App já encerrado ou callback fora do loop Textual.
+            return
+
+    def _refresh_connections_safely(self) -> None:
+        if not self.is_mounted:
+            return
+        try:
+            self._refresh_connections()
+        except Exception:
+            return
 
     def _refresh_view(self) -> None:
         self._refresh_roles()
@@ -459,29 +513,68 @@ class MCPConnectionsScreen(ModalScreen[None]):
         table.clear()
         connections = self.manager.list_connections()
         connected = sum(1 for item in connections if item.connected)
+        in_progress = sum(1 for item in connections if item.in_progress)
         schemas = get_bridge_schemas()
-        self.query_one("#mcp_clients_summary", Label).update(
-            f"{connected}/{len(connections)} conectados · {len(schemas)} tools"
-        )
-        for info in connections:
+        summary = f"{connected}/{len(connections)} conectados · {len(schemas)} tools"
+        if in_progress:
+            summary = f"{summary} · {in_progress} conectando"
+        self.query_one("#mcp_clients_summary", Label).update(summary)
+        selected_row: int | None = None
+        for index, info in enumerate(connections):
             table.add_row(
                 info.name,
                 info.transport,
                 self._short_endpoint(info.endpoint),
-                "conectado" if info.connected else "offline",
+                self._state_cell(info),
                 key=info.name,
             )
-        if self._selected_name and not any(
-            item.name == self._selected_name for item in connections
-        ):
+            if info.name == self._selected_name:
+                selected_row = index
+        if self._selected_name and selected_row is None:
             self._selected_name = None
+        elif selected_row is not None and table.cursor_row != selected_row:
+            # A tabela é reconstruída a cada transição do bridge; sem isso o
+            # cursor voltaria à primeira linha e trocaria a seleção.
+            table.move_cursor(row=selected_row, animate=False)
         self._update_action_state()
+        self._check_pending_connections(connections)
+
+    def _check_pending_connections(self, connections: list[MCPConnectionInfo]) -> None:
+        """Avisa o resultado das conexões iniciadas por este hub."""
+        if not self._pending_connections:
+            return
+        by_name = {item.name: item for item in connections}
+        for name in list(self._pending_connections):
+            info = by_name.get(name)
+            if info is not None and info.in_progress:
+                continue
+            self._pending_connections.discard(name)
+            if info is None:
+                continue
+            if info.established:
+                message = f"MCP '{name}' conectado · {info.tools} tool(s)."
+                self._set_activity(message)
+                self.parent_app.notify(message, severity="information")
+            elif info.failed:
+                # O bloco de status do chat já emitiu o toast da falha.
+                self._set_activity(f"Falha ao conectar {name}: {info.detail}")
 
     @staticmethod
     def _short_endpoint(endpoint: str, limit: int = 48) -> str:
         if len(endpoint) <= limit:
             return endpoint
         return endpoint[: limit - 1] + "…"
+
+    @staticmethod
+    def _state_cell(info: MCPConnectionInfo) -> Text:
+        label = info.state_label
+        if info.failed:
+            return Text(label, style="red")
+        if info.in_progress or info.auth_pending:
+            return Text(label, style="yellow")
+        if info.established:
+            return Text(label, style="green")
+        return Text(label, style="dim")
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Mantém o estado das ações alinhado à linha visualmente destacada."""
@@ -499,6 +592,16 @@ class MCPConnectionsScreen(ModalScreen[None]):
             return
         self._selected_name = name
         self._update_action_state()
+        info = next(
+            (item for item in self.manager.list_connections() if item.name == name),
+            None,
+        )
+        if info is not None and info.auth_pending:
+            self._set_activity(f"{name}: autorização pendente · {info.auth_url}")
+            return
+        if info is not None and info.detail and (info.failed or info.in_progress):
+            self._set_activity(f"{name}: {info.detail}")
+            return
         self._set_activity(f"Servidor selecionado: {name}")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -524,6 +627,10 @@ class MCPConnectionsScreen(ModalScreen[None]):
             self.action_edit_connection()
         elif button_id == "mcp_reconnect":
             self.action_reconnect()
+        elif button_id == "mcp_authorize":
+            self.action_authorize()
+        elif button_id == "mcp_copy_auth":
+            self._copy_authorization_link()
         elif button_id == "mcp_disconnect":
             self._disconnect_selected()
         elif button_id == "mcp_remove":
@@ -573,18 +680,80 @@ class MCPConnectionsScreen(ModalScreen[None]):
     def _on_editor_closed(self, name: str | None) -> None:
         if name:
             self._selected_name = name
+            self._pending_connections.add(name)
         self._refresh_view()
         if name:
-            self._set_activity(f"Servidor '{name}' atualizado.")
+            self._set_activity(f"Servidor '{name}' salvo · conectando em background.")
 
     def action_reconnect(self) -> None:
+        """Refaz o handshake em background; o hub continua utilizável.
+
+        Um handshake anterior ainda preso (ex.: OAuth não concluído) é
+        abandonado pelo bridge. A tabela acompanha as transições e o resultado
+        vira toast quando chega.
+        """
         if self._busy:
             return
         name = self._require_selected()
         if name is None:
             return
-        self._start_busy(f"Reconectando {name}…")
-        self._reconnect_worker(name)
+        try:
+            self.manager.reconnect_in_background(name)
+        except Exception as exc:
+            message = f"Falha ao reconectar {name}: {exc}"
+            self._set_activity(message)
+            self.parent_app.notify(message, severity="error")
+            return
+        self._pending_connections.add(name)
+        self._refresh_connections()
+        self._set_activity(f"Reconectando {name}… o hub pode ser fechado enquanto isso.")
+
+    def _selected_auth_url(self) -> tuple[str, str] | None:
+        """``(nome, url)`` da autorização pendente da linha selecionada."""
+        info = self._selected_info()
+        if info is None or not info.auth_pending:
+            return None
+        return info.name, info.auth_url
+
+    def action_authorize(self) -> None:
+        """Abre a URL de autorização OAuth da conexão selecionada no navegador."""
+        pending = self._selected_auth_url()
+        if pending is None:
+            self.parent_app.notify(
+                "A conexão selecionada não tem autorização pendente.", severity="warning"
+            )
+            return
+        name, url = pending
+        if open_in_browser(url):
+            message = f"Autorização de '{name}' aberta no navegador."
+            self._set_activity(message)
+            self.parent_app.notify(message, severity="information")
+            return
+        self._copy_authorization_link(
+            prefix="Navegador indisponível; ", severity="warning"
+        )
+
+    def _copy_authorization_link(
+        self, *, prefix: str = "", severity: str = "information"
+    ) -> None:
+        """Copia a URL de autorização via OSC 52 (depende do terminal)."""
+        pending = self._selected_auth_url()
+        if pending is None:
+            self.parent_app.notify(
+                "A conexão selecionada não tem autorização pendente.", severity="warning"
+            )
+            return
+        name, url = pending
+        try:
+            self.app.copy_to_clipboard(url)
+        except Exception:
+            pass
+        message = (
+            f"{prefix}link de autorização de '{name}' copiado para a área de "
+            "transferência (se o terminal suportar OSC 52)."
+        )
+        self._set_activity(f"{name}: autorização pendente · {url}")
+        self.parent_app.notify(message, severity=severity)
 
     def _disconnect_selected(self) -> None:
         if self._busy:
@@ -630,6 +799,19 @@ class MCPConnectionsScreen(ModalScreen[None]):
         ):
             self.query_one(widget_id, Button).disabled = busy_or_empty
         self.query_one("#mcp_new", Button).disabled = self._busy
+        self._update_auth_row()
+
+    def _update_auth_row(self) -> None:
+        """Mostra a linha de autorização só quando a seleção tem OAuth pendente."""
+        pending = self._selected_auth_url() if self._selected_name else None
+        row = self.query_one("#mcp_auth_row")
+        row.set_class(pending is None, "hidden")
+        if pending is None:
+            return
+        name, _url = pending
+        self.query_one("#mcp_auth_label", Label).update(
+            f"'{name}' aguarda autorização no navegador"
+        )
 
     def _update_client_action_state(self) -> None:
         self.query_one("#mcp_revoke_client", Button).disabled = (
@@ -679,25 +861,6 @@ class MCPConnectionsScreen(ModalScreen[None]):
         self._update_client_action_state()
         self._set_activity(message)
         self.parent_app.notify(message, severity=severity)
-
-    @work(thread=True, exclusive=True, group="mcp-management")
-    def _reconnect_worker(self, name: str) -> None:
-        try:
-            self.manager.reconnect(name)
-        except Exception as exc:
-            self.app.call_from_thread(
-                self._finish_busy,
-                f"Falha ao reconectar {name}: {exc}",
-                "error",
-                name,
-            )
-            return
-        self.app.call_from_thread(
-            self._finish_busy,
-            f"MCP '{name}' reconectado.",
-            "information",
-            name,
-        )
 
     @work(thread=True, exclusive=True, group="mcp-management")
     def _disconnect_worker(self, name: str) -> None:

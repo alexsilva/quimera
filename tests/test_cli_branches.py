@@ -1260,3 +1260,28 @@ def test_main_flags_de_sessao_vencem_config(monkeypatch):
 
     assert _FakeApp.last_instance.kwargs["visibility"] == cli.Visibility.SUMMARY
     assert _FakeApp.last_instance.kwargs["threads"] == 2
+
+
+def test_main_connects_mcp_clients_in_background_after_app_creation(monkeypatch):
+    """O handshake dos MCP clients roda em background, com o executor do app já criado."""
+    _patch_main_basics(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["quimera", "--no-mcp"])
+    runtime = object()
+    captured = {}
+    monkeypatch.setattr(cli, "start_mcp_clients", lambda **kwargs: runtime)
+
+    def fake_connect(runtime_arg, *, executor, workspace):
+        captured["runtime"] = runtime_arg
+        captured["executor"] = executor
+        captured["workspace"] = workspace
+        return []
+
+    monkeypatch.setattr(cli, "connect_mcp_clients_in_background", fake_connect)
+
+    cli.main()
+
+    app = _FakeApp.last_instance
+    assert captured["runtime"] is runtime
+    assert captured["executor"] is app.tool_executor
+    assert captured["workspace"] is app.workspace
+    assert app.ran is True

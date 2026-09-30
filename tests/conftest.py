@@ -208,6 +208,17 @@ def cleanup_env_vars(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def never_open_browser(monkeypatch):
+    """Nenhum teste pode abrir o navegador da máquina (autorização OAuth MCP).
+
+    Testes que exercitam a abertura injetam um opener falso ou passam um
+    ``environ`` explícito ao helper.
+    """
+    monkeypatch.setenv("QUIMERA_OPEN_BROWSER", "0")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def reset_stdout_stderr(monkeypatch):
     """Verifica que sys.stdout e sys.stderr são restaurados após cada teste."""
     import sys

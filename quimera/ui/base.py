@@ -20,6 +20,10 @@ from __future__ import annotations
 import sys
 from contextlib import nullcontext
 
+from quimera.ui.boot_status import (
+    coerce_boot_status_lines,
+    format_boot_status_line,
+)
 from quimera.ui.messages import (
     FAILOVER_DEFAULT_MESSAGE,
     format_failover_message,
@@ -61,6 +65,23 @@ class RendererBase:
     def show_boot_message(self, message):
         """Exibe uma linha informativa pertencente ao bloco de inicialização."""
         self.show_system_neutral(message)
+
+    def show_boot_status(self, key, lines):
+        """Atualiza o bloco de status do boot identificado por ``key``.
+
+        Renderers sem slot atualizável imprimem, como mensagens de boot
+        comuns, apenas as linhas novas ou alteradas desde a última chamada
+        para a mesma chave — assim a saída sequencial registra cada
+        transição sem repetir o bloco inteiro.
+        """
+        normalized = coerce_boot_status_lines(lines)
+        cache = self.__dict__.setdefault("_boot_status_lines", {})
+        previous = set(cache.get(key, ()))
+        cache[key] = tuple(normalized)
+        for line in normalized:
+            if line in previous:
+                continue
+            self.show_boot_message(format_boot_status_line(line))
 
     def show_system_neutral(self, message):
         self.show_system(message)

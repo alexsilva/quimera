@@ -26,7 +26,10 @@ from .app import QuimeraApp
 from .ui.textual import TextualUiBridge, run_textual_quimera_app
 from .app.simple_input_gate import SimpleInputGate
 from .runtime.mcp import build_oauth_provider, start_embedded_mcp
-from .runtime.mcp.client import start_mcp_clients
+from .runtime.mcp.client import (
+    connect_mcp_clients_in_background,
+    start_mcp_clients,
+)
 from .config import ConfigManager
 from .workspace import Workspace
 from .prompt_templates import PromptText
@@ -636,7 +639,9 @@ def main():
         fake_openai_backend = _start_test_fake_openai_backend()
     try:
         mcp_config = ConfigManager(workspace.mcp_config_file)
-        start_mcp_clients(
+        # Só prepara o bridge (estado "pending" por conexão); os handshakes
+        # rodam em background depois que o app existe, sem travar o boot.
+        mcp_client_runtime = start_mcp_clients(
             cli_specs=args.mcp_clients,
             cli_env_specs=args.mcp_client_env,
             config=mcp_config,
@@ -660,6 +665,11 @@ def main():
                          theme=args.theme,
                          renderer_override=textual_bridge.create_renderer(),
                          input_gate_factory=input_gate_factory)
+        connect_mcp_clients_in_background(
+            mcp_client_runtime,
+            executor=app.tool_executor,
+            workspace=workspace,
+        )
         if args.interactive_test:
             if TerminalRenderer is None or AgentClient is None:
                 raise RuntimeError("Modo interativo não disponível: dependências de UI não instaladas.")

@@ -35,6 +35,7 @@ As funcionalidades centrais são:
 Usuário inicia `quimera`
   -> CLI carrega configuração, profiles e workspace
   -> app inicia renderer, session state, logs e agentes ativos
+  -> MCP clients externos (`--mcp-client`) conectam em background, sem travar o boot
   -> MCP embutido é iniciado, salvo `--no-mcp`
   -> usuário envia mensagem ou comando slash
   -> CommandRouter resolve modo/agente

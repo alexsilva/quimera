@@ -13,6 +13,7 @@ from ..agents.capabilities import mark_user_cancelled
 from .config import logger
 from .welcome_presenter import WelcomePresenter
 from .lifecycle import AppLifecycle
+from .mcp_status import install_mcp_boot_status
 from .tty_control import TtyController
 from .session_bootstrap import (
     resolve_render_debug_log_path,
@@ -21,8 +22,6 @@ from .session_bootstrap import (
 from .submission_tracker import new_submission_id, submission_id_of
 from .turn import TurnManager
 from .worker import ChatWorker, ChatWorkItem
-from ..runtime.tools.mcp_clients import get_bridge as get_mcp_client_bridge
-from ..runtime.drivers.tool_schemas import get_bridge_schemas
 from ..constants import (
     CMD_ALIASES,
     CMD_EDIT,
@@ -94,22 +93,10 @@ def run_chat_loop(
             summary_loaded=app._format_yes_no(app.session_state["summary_loaded"]),
         )
     )
-    mcp_http_url = getattr(app, "mcp_http_url", None)
-    mcp_socket_path = getattr(app, "mcp_socket_path", None)
-    if mcp_socket_path:
-        _show_neutral(f"MCP interno iniciado em {mcp_socket_path}")
-    if mcp_http_url:
-        _show_neutral(f"MCP HTTP externo iniciado em {mcp_http_url}")
-    mcp_client_bridge = get_mcp_client_bridge()
-    if mcp_client_bridge is not None:
-        schemas = get_bridge_schemas()
-        if schemas:
-            _show_neutral(
-                f"MCP client ativo: {len(schemas)} tools disponíveis "
-                f"({len(mcp_client_bridge.sessions)} conexão(ões))"
-            )
-        else:
-            _show_neutral("MCP client: conectado mas nenhuma tool exposta pelo servidor")
+    # Bloco dinâmico: servidores MCP da sessão e o estado de cada MCP client
+    # externo. As conexões externas fecham o handshake em background, então o
+    # bloco é atualizado no lugar conforme cada uma conecta ou falha.
+    mcp_boot_status = install_mcp_boot_status(app, app.renderer)
     if getattr(app, "debug_prompt_metrics", False):
         session_log_path = resolve_session_log_path(app.storage)
         if session_log_path:
@@ -342,6 +329,7 @@ def run_chat_loop(
             mark_user_cancelled(agent_client)
         app.system_layer.show_muted_message(MSG_SHUTDOWN)
     finally:
+        mcp_boot_status.stop()
         if _pending_async_slot:
             app.runtime_state.decrement_chat_inflight(app._refresh_parallel_toolbar)
             app.runtime_state.release_chat_slot()

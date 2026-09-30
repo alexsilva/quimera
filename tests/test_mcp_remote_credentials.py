@@ -4,7 +4,10 @@ import hashlib
 import json
 from pathlib import Path
 
-from quimera.runtime.mcp.remote_credentials import migrate_legacy_remote_credentials
+from quimera.runtime.mcp.remote_credentials import (
+    migrate_legacy_remote_credentials,
+    remote_config_dir,
+)
 
 
 def _server_hash(url: str) -> str:
@@ -244,3 +247,12 @@ def test_migrated_files_are_private(tmp_path: Path):
     assert (store.stat().st_mode & 0o777) == 0o700
     assert ((store / f"{server_hash}_client_info.json").stat().st_mode & 0o777) == 0o600
     assert ((store / f"{server_hash}_tokens.json").stat().st_mode & 0o777) == 0o600
+
+
+def test_remote_config_dir_prefere_env_da_conexao_depois_do_processo(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("MCP_REMOTE_CONFIG_DIR", raising=False)
+    assert remote_config_dir(None) == Path.home() / ".mcp-auth"
+
+    monkeypatch.setenv("MCP_REMOTE_CONFIG_DIR", str(tmp_path / "proc"))
+    assert remote_config_dir({}) == tmp_path / "proc"
+    assert remote_config_dir({"MCP_REMOTE_CONFIG_DIR": str(tmp_path / "conn")}) == tmp_path / "conn"

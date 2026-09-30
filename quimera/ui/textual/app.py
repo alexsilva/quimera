@@ -27,6 +27,7 @@ def _is_android() -> bool:
 
 from quimera.app.config import handler as _screen_handler
 from quimera.app.prompt_formatter import PromptFormatter
+from quimera.ui.browser import open_in_browser
 from quimera.ui.textual.bridge import TextualUiBridge
 from quimera.ui.textual.constants import (
     SUMMARY_NOTIFICATION_MESSAGE as _SUMMARY_NOTIFICATION_MESSAGE,
@@ -257,6 +258,30 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         def action_open_mcp(self) -> None:
             """Abre o hub de conexões MCP."""
             self.push_screen(MCPConnectionsScreen(quimera_app, self))
+
+        def action_open_external_url(self, url: str) -> None:
+            """Abre um link do feed (ex.: autorização OAuth) no navegador.
+
+            Sem navegador gráfico alcançável, tenta copiar o link para a área
+            de transferência via OSC 52 e avisa o usuário.
+            """
+            target = str(url or "").strip()
+            if not target:
+                return
+            if open_in_browser(target):
+                self.notify("Link aberto no navegador.", timeout=4, markup=False)
+                return
+            try:
+                self.copy_to_clipboard(target)
+            except Exception:
+                _logger.debug("copy_to_clipboard indisponível", exc_info=True)
+            self.notify(
+                "Navegador indisponível; o link foi copiado para a área de "
+                "transferência (se o terminal suportar OSC 52).",
+                severity="warning",
+                timeout=8,
+                markup=False,
+            )
 
         def on_unmount(self) -> None:
             gate = getattr(quimera_app, "input_gate", None)

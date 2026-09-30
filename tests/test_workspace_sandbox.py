@@ -58,6 +58,27 @@ def test_wrapper_uses_confined_builder_when_sandbox_is_on(tmp_path):
     mask.assert_not_called()
 
 
+def test_wrapper_appends_extra_rw_paths_only_when_sandbox_is_on(tmp_path):
+    workspace = Workspace(tmp_path)
+    auth_dir = str(tmp_path / ".mcp-auth")
+
+    with patch("quimera.sandbox.state.build_secret_mask_cmd", return_value=["masked"]) as mask:
+        wrap_subprocess_cmd(workspace, str(tmp_path), ["echo"], extra_rw_paths=[auth_dir])
+    assert "rw_paths" not in mask.call_args.kwargs
+
+    ConfigManager(workspace.workspace_config_file).set_sandbox_enabled(True)
+    with patch(
+        "quimera.sandbox.state.agent_runtime_rw_paths", return_value=["/home/u/.codex"]
+    ), patch(
+        "quimera.sandbox.state.build_workspace_sandbox_cmd", return_value=["bwrap"]
+    ) as confined:
+        wrap_subprocess_cmd(
+            workspace, str(tmp_path), ["echo"], extra_rw_paths=[auth_dir, auth_dir, ""]
+        )
+
+    assert confined.call_args.kwargs["rw_paths"] == ["/home/u/.codex", auth_dir]
+
+
 def test_invalid_workspace_config_blocks_execution(tmp_path):
     workspace = Workspace(tmp_path)
     workspace.workspace_config_file.write_text("{invalid", encoding="utf-8")
