@@ -21,6 +21,7 @@ from quimera.agents import (
 from quimera.agents.client import _extract_cli_text_chunks
 from quimera.agents.process_runner import ProcessRunner
 from quimera.constants import Visibility
+from quimera.paths import TMP_BASE_DIR
 from quimera.profiles import get as get_profile
 from quimera.prompt_templates import PromptText
 from quimera.profiles.base import (
@@ -2442,17 +2443,47 @@ def test_opencode_profile_injects_mcp_via_env_var():
             "--agent-name", "opencode",
         ]
         assert config["mcp"]["quimera"]["enabled"] is True
+        assert config["permission"]["external_directory"] == {
+            str(TMP_BASE_DIR / "**"): "allow",
+        }
     finally:
         profile.set_mcp_socket_path(original_mcp_socket)
 
 
-def test_opencode_profile_omits_mcp_env_when_no_socket():
-    """Verifica que opencode profile omits mcp env when no socket."""
+def test_opencode_profile_permission_does_not_depend_on_workspace_config(tmp_path, monkeypatch):
+    """A permissão do tmp do Quimera é inteiramente injetada pelo profile."""
+    profile = OpenCodeProfile(
+        name="opencode-test",
+        prefix="/opencode-test",
+        style=("blue", "OpenCode"),
+        cmd=["opencode", "run"],
+    )
+    socket_path = TMP_BASE_DIR / "workspace-hash" / "mcp-test.sock"
+    profile.set_mcp_socket_path(str(socket_path))
+
+    monkeypatch.chdir(tmp_path)
+    assert not (tmp_path / "opencode.json").exists()
+    config = json.loads(profile.env_for_cli()["OPENCODE_CONFIG_CONTENT"])
+    assert config["permission"]["external_directory"][str(TMP_BASE_DIR / "**")] == "allow"
+    assert config["mcp"]["quimera"]["command"][-4:] == [
+        "--connect-socket",
+        str(socket_path),
+        "--agent-name",
+        "opencode-test",
+    ]
+
+
+def test_opencode_profile_injects_tmp_permission_without_mcp_when_no_socket():
+    """A permissão de runtime não depende de o MCP estar habilitado."""
     profile = get_profile("opencode")
     original_mcp_socket = profile._mcp_socket_path
     try:
         profile.set_mcp_socket_path(None)
-        assert profile.env_for_cli() == {}
+        config = json.loads(profile.env_for_cli()["OPENCODE_CONFIG_CONTENT"])
+        assert "mcp" not in config
+        assert config["permission"]["external_directory"] == {
+            str(TMP_BASE_DIR / "**"): "allow",
+        }
     finally:
         profile.set_mcp_socket_path(original_mcp_socket)
 

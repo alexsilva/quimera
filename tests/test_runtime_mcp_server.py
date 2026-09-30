@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from quimera.paths import TMP_BASE_DIR
 from quimera.runtime.mcp import MCPServer
 from quimera.runtime.mcp.server import _openai_schema_to_mcp, _proxy_stdio_to_socket
 from quimera.runtime.config import ToolRuntimeConfig
@@ -1418,4 +1419,8 @@ class TestProfileHTTPIntegration:
 
         opencode = OpenCodeProfile(name="o", prefix="/o", style=("x", "O"))
         opencode.set_mcp_http_config("http://127.0.0.1:9090/mcp", "tok")
-        assert opencode.env_for_cli() == {}
+        config = json.loads(opencode.env_for_cli()["OPENCODE_CONFIG_CONTENT"])
+        assert "mcp" not in config
+        assert config["permission"]["external_directory"] == {
+            str(TMP_BASE_DIR / "**"): "allow",
+        }

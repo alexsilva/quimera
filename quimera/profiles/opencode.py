@@ -1,9 +1,9 @@
 """Componentes de `quimera.profiles.opencode`."""
 import json
 from pathlib import Path
-from typing import Optional
 
 from quimera.agent_events import SpyEvent
+from quimera.paths import TMP_BASE_DIR
 from quimera.profiles.base import ExecutionProfile, register
 from quimera.profiles.spy_utils import describe_tool_input, format_agent_message_lines
 
@@ -90,31 +90,38 @@ class OpenCodeProfile(ExecutionProfile):
         """OpenCode não aceita MCP via CLI args."""
         return []
 
-    def _mcp_config_content(self, socket_path: str) -> Optional[str]:
-        """Gera JSON de config para ativar MCP do Quimera."""
-        if not (socket_path or "").strip():
-            return None
-        proxy_cmd = self._build_mcp_proxy_command(socket_path)
+    def _config_content(self, socket_path: str | None) -> str:
+        """Gera a configuração efêmera do OpenCode para o Quimera.
+
+        O OpenCode trata paths fora do workspace como ``external_directory``.
+        Como o socket e outros artefatos de sessão ficam sob ``TMP_BASE_DIR``,
+        a permissão precisa viajar junto com a configuração do profile. Injetá-la
+        por ``OPENCODE_CONFIG_CONTENT`` evita depender de um ``opencode.json``
+        em cada workspace.
+        """
         config = {
-            "mcp": {
+            "permission": {
+                "external_directory": {
+                    str(TMP_BASE_DIR / "**"): "allow",
+                }
+            }
+        }
+        normalized_socket = (socket_path or "").strip()
+        if normalized_socket:
+            proxy_cmd = self._build_mcp_proxy_command(normalized_socket)
+            config["mcp"] = {
                 "quimera": {
                     "type": "local",
                     "command": proxy_cmd,
                     "enabled": True,
                 }
             }
-        }
         return json.dumps(config)
 
     def env_for_cli(self) -> dict:
-        """Retorna variáveis de ambiente do OpenCode para conectar ao MCP socket."""
+        """Injeta permissões de runtime e, quando disponível, o MCP socket."""
         socket_path = (self._mcp_socket_path or "").strip()
-        if not socket_path:
-            return {}
-        config_content = self._mcp_config_content(socket_path)
-        if not config_content:
-            return {}
-        return {"OPENCODE_CONFIG_CONTENT": config_content}
+        return {"OPENCODE_CONFIG_CONTENT": self._config_content(socket_path)}
 
 
 register(OpenCodeProfile(
