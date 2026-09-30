@@ -43,6 +43,9 @@ class _ExecutionModeProto(Protocol):
 
 _HOME_DIR = str(Path.home())
 _COMMON_RO_PATHS = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/opt", _HOME_DIR]
+_COMMON_RW_PATHS = [str(Path.home() / ".npm")]
+
+
 def _resolve_hidden_files(hidden_paths: list[str] | tuple[str, ...]) -> list[str]:
     """Normaliza somente arquivos existentes que precisam ser mascarados."""
     return [
@@ -173,9 +176,10 @@ def build_workspace_sandbox_cmd(
         if os.path.exists(path):
             bwrap += ["--ro-bind", path, path]
 
-    # Exceções de escrita: diretórios de runtime dos agentes (ex.: ~/.codex,
-    # ~/.claude) montados por cima do $HOME somente leitura.
-    for path in rw_paths:
+    # Exceções de escrita: caches compartilhados e diretórios de runtime dos
+    # agentes (ex.: ~/.npm, ~/.codex, ~/.claude) montados por cima do $HOME
+    # somente leitura.
+    for path in [*_COMMON_RW_PATHS, *rw_paths]:
         if os.path.exists(path):
             bwrap += ["--bind", path, path]
 
@@ -229,7 +233,7 @@ def build_bwrap_cmd(
 
     resolved_hidden_paths = _resolve_hidden_files(hidden_paths)
 
-    for path in getattr(profile, "runtime_rw_paths", []):
+    for path in [*_COMMON_RW_PATHS, *getattr(profile, "runtime_rw_paths", [])]:
         if os.path.exists(path):
             bwrap += ["--bind", path, path]
 

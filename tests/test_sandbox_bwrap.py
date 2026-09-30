@@ -336,6 +336,24 @@ class TestBuildBwrapCmd(unittest.TestCase):
         self.assertGreater(result.index(secret), result.index(runtime))
         self.assertEqual(result[-3:], ["--", "echo", "ok"])
 
+    def test_workspace_builder_uses_default_npm_cache_as_write_exception(self):
+        from unittest.mock import patch
+
+        npm_cache = str(Path.home() / ".npm")
+        with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
+            "quimera.sandbox.bwrap.os.path.exists", return_value=True
+        ):
+            result = build_workspace_sandbox_cmd(
+                "/project",
+                "/project",
+                ["npx", "-y", "mcp-remote"],
+            )
+
+        triples = list(zip(result, result[1:], result[2:]))
+        self.assertIn(("--bind", npm_cache, npm_cache), triples)
+        self.assertNotIn("npm_config_cache", result)
+        self.assertNotIn("/project/.quimera/npm-cache", result)
+
     def test_workspace_builder_combines_read_only_mode_and_network_isolation(self):
         from unittest.mock import patch
 
