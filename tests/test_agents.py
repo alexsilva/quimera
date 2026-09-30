@@ -27,6 +27,7 @@ from quimera.profiles.base import (
     CliConnection,
     OpenAIConnection,
     ProfileRegistry,
+    mcp_proxy_pythonpath,
     register_connection_profile,
 )
 from quimera.profiles.claude import ClaudeProfile, _format_claude_spy_event
@@ -2506,6 +2507,7 @@ def test_agent_client_call_dynamic_opencode_base_passes_env_for_cli_to_run(rende
         assert result == "ok"
         called_kwargs = mock_run.call_args.kwargs
         assert called_kwargs["extra_env"]["BASE_ENV"] == "1"
+        assert called_kwargs["extra_env"]["PYTHONPATH"] == mcp_proxy_pythonpath()
 
         config_raw = called_kwargs["extra_env"].get("OPENCODE_CONFIG_CONTENT")
         assert config_raw is not None

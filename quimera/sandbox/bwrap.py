@@ -143,12 +143,18 @@ def build_workspace_sandbox_cmd(
         cmd: list[str],
         hidden_paths: list[str] | tuple[str, ...] = (),
         *,
+        ro_paths: list[str] | tuple[str, ...] = (),
         rw_paths: list[str] | tuple[str, ...] = (),
         die_with_parent: bool = True,
         read_only_workspace: bool = False,
         allow_network: bool = True,
 ) -> list[str]:
     """Confina cmd ao workspace: escrita apenas no workspace, /tmp e rw_paths.
+
+    ``ro_paths`` expõe dependências de runtime estritamente como somente
+    leitura. Isso é necessário, por exemplo, para o pequeno proxy MCP que um
+    CLI inicia: o socket vive em ``/tmp``, mas o módulo Python do proxy pode
+    estar instalado fora do workspace que está sendo confinado.
 
     Diferente dos demais builders, este é fail-closed: levanta
     ``SandboxUnavailableError`` quando o bwrap não está instalado, em vez de
@@ -175,6 +181,11 @@ def build_workspace_sandbox_cmd(
     for path in _COMMON_RO_PATHS:
         if os.path.exists(path):
             bwrap += ["--ro-bind", path, path]
+
+    for path in ro_paths:
+        text = str(path)
+        if text and os.path.exists(text):
+            bwrap += ["--ro-bind", text, text]
 
     # Exceções de escrita: caches compartilhados e diretórios de runtime dos
     # agentes (ex.: ~/.npm, ~/.codex, ~/.claude) montados por cima do $HOME
@@ -212,6 +223,7 @@ def build_bwrap_cmd(
         profile: _ExecutionProfileProto | None = None,
         hidden_paths: list[str] | tuple[str, ...] = (),
         *,
+        ro_paths: list[str] | tuple[str, ...] = (),
         die_with_parent: bool = True,
 ) -> list[str]:
     """Envolve cmd com bwrap aplicando as restrições do ExecutionMode.
@@ -230,6 +242,11 @@ def build_bwrap_cmd(
     for path in _COMMON_RO_PATHS:
         if os.path.exists(path):
             bwrap += ["--ro-bind", path, path]
+
+    for path in ro_paths:
+        text = str(path)
+        if text and os.path.exists(text):
+            bwrap += ["--ro-bind", text, text]
 
     resolved_hidden_paths = _resolve_hidden_files(hidden_paths)
 

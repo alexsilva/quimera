@@ -987,14 +987,17 @@ def boot_status_link_style(url: str) -> Style:
     )
 
 
-def _build_boot_status_renderable(payload) -> Text:
-    """Bloco compacto do boot: um glifo colorido por status e texto dim.
+def _build_boot_status_renderable(payload):
+    """Bloco do boot separado do histórico por uma régua da identidade visual.
 
-    Linhas com ``url`` mostram o link completo depois do texto, clicável.
+    Linhas com ``url`` mostram o link completo depois do texto, clicável. A
+    régua usa o mesmo estilo do separador exibido logo abaixo da logo, deixando
+    claro onde termina o estado operacional e começa o conteúdo do chat.
     """
     data = payload if isinstance(payload, dict) else {}
     text = Text(no_wrap=False, overflow="fold")
-    for index, line in enumerate(coerce_boot_status_lines(data.get("lines") or [])):
+    lines = coerce_boot_status_lines(data.get("lines") or [])
+    for index, line in enumerate(lines):
         if index:
             text.append("\n")
         glyph = BOOT_STATUS_GLYPHS.get(line.status, BOOT_STATUS_GLYPHS[BOOT_STATUS_INFO])
@@ -1004,7 +1007,9 @@ def _build_boot_status_renderable(payload) -> Text:
         if line.url:
             text.append(" ")
             text.append(line.url, style=boot_status_link_style(line.url))
-    return text
+    if not lines:
+        return text
+    return Group(text, Rule(style="dim cyan"))
 
 
 def _render_themed_agent_block(theme_name: str, label: str, style: str, body, *, streaming: bool = False):

@@ -79,6 +79,33 @@ def test_wrapper_appends_extra_rw_paths_only_when_sandbox_is_on(tmp_path):
     assert confined.call_args.kwargs["rw_paths"] == ["/home/u/.codex", auth_dir]
 
 
+def test_wrapper_forwards_extra_ro_paths_only_to_workspace_sandbox(tmp_path):
+    workspace = Workspace(tmp_path)
+    runtime_dir = str(tmp_path / "proxy-runtime")
+
+    with patch("quimera.sandbox.state.build_secret_mask_cmd", return_value=["masked"]) as mask:
+        wrap_subprocess_cmd(
+            workspace,
+            str(tmp_path),
+            ["echo"],
+            extra_ro_paths=[runtime_dir],
+        )
+    assert "ro_paths" not in mask.call_args.kwargs
+
+    ConfigManager(workspace.workspace_config_file).set_sandbox_enabled(True)
+    with patch(
+        "quimera.sandbox.state.build_workspace_sandbox_cmd", return_value=["bwrap"]
+    ) as confined:
+        wrap_subprocess_cmd(
+            workspace,
+            str(tmp_path),
+            ["echo"],
+            extra_ro_paths=[runtime_dir],
+        )
+
+    assert confined.call_args.kwargs["ro_paths"] == [runtime_dir]
+
+
 def test_invalid_workspace_config_blocks_execution(tmp_path):
     workspace = Workspace(tmp_path)
     workspace.workspace_config_file.write_text("{invalid", encoding="utf-8")

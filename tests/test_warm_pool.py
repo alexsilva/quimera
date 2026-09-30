@@ -517,6 +517,32 @@ class TestAgentClientWarmPool:
         triples = list(zip(cmd, cmd[1:], cmd[2:]))
         assert ("--ro-bind", str(tmp_path), str(tmp_path)) in triples
 
+    def test_workspace_sandbox_exposes_mcp_proxy_runtime_read_only(
+        self, renderer, tmp_path
+    ):
+        workspace = Workspace(tmp_path)
+        ConfigManager(workspace.workspace_config_file).set_sandbox_enabled(True)
+        client = AgentClient(renderer, workspace=workspace)
+        proxy_runtime = tmp_path.parent / f"{tmp_path.name}-mcp-runtime"
+        proxy_runtime.mkdir()
+        profile = MagicMock(
+            runtime_rw_paths=[],
+            mcp_socket_path="/tmp/quimera.sock",
+        )
+
+        with patch("quimera.agents.client.profiles.get", return_value=profile), patch(
+            "quimera.agents.client.mcp_proxy_runtime_ro_paths",
+            return_value=[str(proxy_runtime)],
+        ), patch(
+            "quimera.sandbox.bwrap._find_bwrap_executable",
+            return_value="/usr/bin/bwrap",
+        ):
+            cmd, _ = client._build_effective_cmd(["agent-cli"], "codex", None)
+
+        triples = list(zip(cmd, cmd[1:], cmd[2:]))
+        assert ("--ro-bind", str(proxy_runtime), str(proxy_runtime)) in triples
+        assert ("--bind", str(proxy_runtime), str(proxy_runtime)) not in triples
+
     def test_workspace_sandbox_rejects_agent_cwd_outside_workspace(self, renderer, tmp_path):
         workspace = Workspace(tmp_path)
         ConfigManager(workspace.workspace_config_file).set_sandbox_enabled(True)

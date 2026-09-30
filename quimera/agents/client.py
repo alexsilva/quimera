@@ -16,7 +16,12 @@ from pathlib import Path
 
 import quimera.profiles as profiles
 from quimera.constants import MAX_STDERR_LINES, Visibility
-from quimera.profiles.base import CliConnection, OpenAIConnection
+from quimera.profiles.base import (
+    CliConnection,
+    OpenAIConnection,
+    mcp_proxy_pythonpath,
+    mcp_proxy_runtime_ro_paths,
+)
 from quimera import process_factory as subprocess
 from quimera.environment import RuntimeSecrets, build_env_vars
 from quimera.sandbox.bwrap import (
@@ -740,9 +745,17 @@ class AgentClient:
             if self.workspace is not None
             else self.runtime_secrets.existing_files()
         )
+        profile = profiles.get(agent) if agent else None
+        profile_socket_path = getattr(profile, "mcp_socket_path", None)
+        if not isinstance(profile_socket_path, str):
+            profile_socket_path = getattr(profile, "_mcp_socket_path", None)
+        proxy_ro_paths = (
+            mcp_proxy_runtime_ro_paths()
+            if isinstance(profile_socket_path, str) and profile_socket_path.strip()
+            else []
+        )
         sandbox_enabled = is_sandbox_enabled(self.workspace)
         if sandbox_enabled and effective_cwd:
-            profile = profiles.get(agent) if agent else None
             # Um agente conhecido recebe somente os próprios diretórios de
             # runtime. Lista vazia é uma decisão explícita do profile e não
             # pode abrir credenciais/estado de outros agentes por fallback.
@@ -762,6 +775,7 @@ class AgentClient:
                 effective_cwd,
                 list(cmd),
                 [str(path) for path in protected_files],
+                ro_paths=proxy_ro_paths,
                 rw_paths=rw_paths,
                 die_with_parent=die_with_parent,
                 read_only_workspace=bool(mode and mode.read_only_fs),
@@ -772,8 +786,9 @@ class AgentClient:
                 self.execution_mode,
                 effective_cwd,
                 cmd,
-                profile=profiles.get(agent) if agent else None,
+                profile=profile,
                 hidden_paths=[str(path) for path in protected_files],
+                ro_paths=proxy_ro_paths,
                 die_with_parent=die_with_parent,
             )
             return effective_cmd, effective_cwd
@@ -1449,6 +1464,11 @@ class AgentClient:
             or "OPENCODE_CONFIG_CONTENT" in extra_env
             or "QUIMERA_FAKE_MCP_SOCKET" in extra_env
         )
+        if has_mcp_context:
+            inherited_pythonpath = extra_env.get(
+                "PYTHONPATH", os.environ.get("PYTHONPATH")
+            )
+            extra_env["PYTHONPATH"] = mcp_proxy_pythonpath(inherited_pythonpath)
         if agent and has_mcp_context:
             extra_env["QUIMERA_MCP_AGENT_NAME"] = str(agent)
             if from_agent:

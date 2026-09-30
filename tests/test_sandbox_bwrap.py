@@ -70,6 +70,26 @@ class TestBuildBwrapCmd(unittest.TestCase):
         self.assertIn("--dev /dev", joined)
         self.assertIn("--proc /proc", joined)
 
+    def test_mode_builder_mounts_declared_runtime_dependency_read_only(self):
+        """O sandbox de execution mode também preserva o proxy MCP."""
+        from unittest.mock import patch
+
+        runtime = "/opt/quimera/quimera"
+        with patch(
+            "quimera.sandbox.bwrap._find_bwrap_executable",
+            return_value="/usr/bin/bwrap",
+        ), patch("quimera.sandbox.bwrap.os.path.exists", return_value=True):
+            result = build_bwrap_cmd(
+                EXECUTE,
+                "/project",
+                ["agent-cli"],
+                ro_paths=[runtime],
+            )
+
+        triples = list(zip(result, result[1:], result[2:]))
+        self.assertIn(("--ro-bind", runtime, runtime), triples)
+        self.assertNotIn(("--bind", runtime, runtime), triples)
+
     def test_uses_dynamic_home_bind_instead_of_hardcoded_user(self):
         """Verifica que o home do usuário é montado como --ro-bind."""
         from unittest.mock import patch
@@ -335,6 +355,25 @@ class TestBuildBwrapCmd(unittest.TestCase):
         self.assertIn(("--ro-bind", str(Path.home()), str(Path.home())), triples)
         self.assertGreater(result.index(secret), result.index(runtime))
         self.assertEqual(result[-3:], ["--", "echo", "ok"])
+
+    def test_workspace_builder_mounts_declared_runtime_dependency_read_only(self):
+        from unittest.mock import patch
+
+        runtime = "/opt/quimera/quimera"
+        with patch(
+            "quimera.sandbox.bwrap._find_bwrap_executable",
+            return_value="/usr/bin/bwrap",
+        ), patch("quimera.sandbox.bwrap.os.path.exists", return_value=True):
+            result = build_workspace_sandbox_cmd(
+                "/project",
+                "/project",
+                ["agent-cli"],
+                ro_paths=[runtime],
+            )
+
+        triples = list(zip(result, result[1:], result[2:]))
+        self.assertIn(("--ro-bind", runtime, runtime), triples)
+        self.assertNotIn(("--bind", runtime, runtime), triples)
 
     def test_workspace_builder_uses_default_npm_cache_as_write_exception(self):
         from unittest.mock import patch

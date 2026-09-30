@@ -54,6 +54,7 @@ def wrap_subprocess_cmd(
         working_dir: str,
         cmd: list[str],
         *,
+        extra_ro_paths: list[str] | tuple[str, ...] = (),
         rw_paths: list[str] | tuple[str, ...] | None = None,
         extra_rw_paths: list[str] | tuple[str, ...] = (),
         die_with_parent: bool = True,
@@ -65,6 +66,7 @@ def wrap_subprocess_cmd(
     - sandbox ON: confina ao workspace + /tmp + diretórios de runtime dos
       agentes, falhando fechado (``SandboxUnavailableError``) sem bwrap.
 
+    ``extra_ro_paths`` expõe dependências adicionais sem permitir escrita.
     ``rw_paths`` substitui a lista padrão de exceções de escrita;
     ``extra_rw_paths`` acrescenta a ela (ex.: o diretório de credenciais que
     um MCP client stdio precisa escrever). Ambos só têm efeito com o sandbox
@@ -90,6 +92,7 @@ def wrap_subprocess_cmd(
         working_dir,
         list(cmd),
         hidden_paths,
+        ro_paths=extra_ro_paths,
         rw_paths=effective_rw,
         die_with_parent=die_with_parent,
     )

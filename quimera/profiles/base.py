@@ -1,6 +1,7 @@
 """Componentes de `quimera.profiles.base`."""
 import json
 import logging
+import os
 import re
 import shlex
 import sys
@@ -49,6 +50,42 @@ class OpenAIConnection:
 
 
 Connection = Union[CliConnection, OpenAIConnection]
+
+
+_MCP_PROXY_PACKAGE_DIR = Path(__file__).resolve().parents[1]
+_MCP_PROXY_IMPORT_ROOT = _MCP_PROXY_PACKAGE_DIR.parent
+
+
+def mcp_proxy_pythonpath(existing: str | None = None) -> str:
+    """Inclui o código do proxy MCP no import path de CLIs filhos.
+
+    Em uma instalação editável/desenvolvimento, o Quimera pode ser iniciado
+    pelo repositório sem estar instalado no Python global. O CLI roda com cwd
+    no projeto do usuário e depois inicia ``python -m quimera.runtime.mcp``;
+    portanto o diretório pai do pacote precisa ser propagado explicitamente.
+    """
+    parts = [str(_MCP_PROXY_IMPORT_ROOT)]
+    for part in str(existing or "").split(os.pathsep):
+        normalized = part.strip()
+        if normalized and normalized not in parts:
+            parts.append(normalized)
+    return os.pathsep.join(parts)
+
+
+def mcp_proxy_runtime_ro_paths() -> list[str]:
+    """Paths mínimos que tornam o proxy MCP executável dentro do sandbox.
+
+    O pacote é montado isoladamente, não o repositório inteiro. O prefixo do
+    Python cobre ambientes virtuais instalados fora de ``/usr``/``$HOME``.
+    Ambos permanecem somente leitura; o socket compartilhado continua em
+    ``/tmp``.
+    """
+    paths: list[str] = []
+    for path in (_MCP_PROXY_PACKAGE_DIR, Path(sys.prefix).resolve()):
+        text = str(path)
+        if text not in paths:
+            paths.append(text)
+    return paths
 
 
 def extract_model_from_cli_cmd(cmd) -> Optional[str]:

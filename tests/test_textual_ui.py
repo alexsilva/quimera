@@ -5330,12 +5330,15 @@ def test_render_boot_status_uses_status_glyphs():
     )
 
     renderable = _render_event(event)
+    assert isinstance(renderable, Group)
+    status_text, separator = renderable.renderables
 
-    assert renderable.plain == (
+    assert status_text.plain == (
         "● MCP interno iniciado\n◌ MCP client 'y': conectando…\n✗ MCP client 'x': falha"
     )
-    styles = {str(span.style) for span in renderable.spans}
+    styles = {str(span.style) for span in status_text.spans}
     assert {"green", "yellow", "red", "dim"} <= styles
+    assert separator.style == "dim cyan"
 
 
 def test_mcp_connections_screen_shows_background_connection_phases(tmp_path):
@@ -5408,15 +5411,20 @@ def test_render_boot_status_torna_url_de_autorizacao_clicavel():
     )
 
     renderable = _render_event(event)
+    assert isinstance(renderable, Group)
+    status_text, separator = renderable.renderables
 
-    assert renderable.plain == (
+    assert status_text.plain == (
         f"◌ MCP client 'jira': conectando…\n· autorize 'jira' no navegador: {url}"
     )
-    link_spans = [span for span in renderable.spans if getattr(span.style, "link", None) == url]
+    link_spans = [
+        span for span in status_text.spans if getattr(span.style, "link", None) == url
+    ]
     assert len(link_spans) == 1
     meta = link_spans[0].style.meta
     assert meta["@click"] == f"app.open_external_url({url!r})"
-    assert renderable.plain[link_spans[0].start : link_spans[0].end] == url
+    assert status_text.plain[link_spans[0].start : link_spans[0].end] == url
+    assert separator.style == "dim cyan"
 
 
 def test_textual_renderer_show_boot_status_preserva_url():
