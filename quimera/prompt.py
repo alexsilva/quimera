@@ -189,7 +189,14 @@ class PromptBuilder:
         # permanecem sendo coletadas e ficam disponíveis ao humano via `/stats`.
         execution_state = self._build_execution_state_block(shared_state)
         execution_mode_prompt = self.execution_mode_presenter.present(execution_mode)
-        evidence_context_raw = self._build_evidence_context(shared_state, session_id)
+        # Evidências são instrumentação de diagnóstico: só entram no prompt
+        # quando a renderização foi pedida em modo debug. Além de evitar a
+        # exposição no fluxo normal, não consultamos o store fora desse modo.
+        evidence_context_raw = (
+            self._build_evidence_context(shared_state, session_id)
+            if debug
+            else ""
+        )
         bug_context_raw = self._build_bugs_context(shared_state, session_id)
         template = get_prompt_template(normalized_prompt_kind)
         prompt_text = template.render_prompt(

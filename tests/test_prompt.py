@@ -635,8 +635,9 @@ def test_prompt_shared_state():
     assert '"workspace_root": "/home/user/project"' in prompt
 
 
-def test_prompt_renders_evidence_context_when_session_has_entries(tmp_path):
-    """Verifica que prompt renders evidence context when session has entries."""
+@pytest.mark.parametrize("prompt_kind", (PromptKind.CHAT, PromptKind.DELEGATION))
+def test_prompt_renders_evidence_context_only_when_debug_is_enabled(tmp_path, prompt_kind):
+    """Evidências, definidas nos templates de chat e delegação, só renderizam em debug."""
     store = EvidenceStore(tmp_path, "sessao-1")
     try:
         store.append(
@@ -674,19 +675,57 @@ def test_prompt_renders_evidence_context_when_session_has_entries(tmp_path):
         },
     )
 
+    build_kwargs = {
+        "agent": "claude",
+        "history": [{"role": "human", "content": "continue"}],
+        "shared_state": {"session_id": "sessao-1"},
+        "prompt_kind": prompt_kind,
+    }
+    if prompt_kind is not PromptKind.CHAT:
+        build_kwargs.update(
+            delegation={"delegation_id": "dbg-1", "task": "validar prompt"},
+            delegation_only=True,
+            primary=False,
+        )
+
+    regular_prompt = builder.build(**build_kwargs)
+    assert '<evidence_context title="Contexto Compartilhado de Evidências">' not in regular_prompt
+
+    prompt, metrics = builder.build(debug=True, **build_kwargs)
+
+    assert '<evidence_context title="Contexto Compartilhado de Evidências">' in prompt
+    assert "- quimera/prompt.py" in prompt
+    assert "### Execução recente" in prompt
+    assert "exec_command: ok | cmd: rg" in prompt
+    assert metrics["total_chars"] == len(prompt)
+    evidence_messages = [
+        message
+        for message in _build_openai_messages_from_prompt(prompt)
+        if "exec_command: ok | cmd: rg" in str(message["content"])
+    ]
+    assert evidence_messages and evidence_messages[0]["role"] == "system"
+    if prompt_kind is PromptKind.CHAT:
+        assert prompt.index('<evidence_context title="Contexto Compartilhado de Evidências">') < prompt.index(
+            '<recent_conversation title="Conversa recente">'
+        )
+
+
+def test_prompt_does_not_query_evidence_store_without_debug():
+    """O modo normal não acessa o store de evidências."""
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        session_state={"session_id": "sessao-1", "evidence_base_dir": "/tmp/evidence"},
+    )
+    builder._build_evidence_context = MagicMock(return_value="EVIDENCIA_EXCLUSIVA_DEBUG")
+
     prompt = builder.build(
         agent="claude",
         history=[{"role": "human", "content": "continue"}],
         shared_state={"session_id": "sessao-1"},
     )
 
-    assert '<evidence_context title="Contexto Compartilhado de Evidências">' in prompt
-    assert "- quimera/prompt.py" in prompt
-    assert "### Execução recente" in prompt
-    assert "exec_command: ok | cmd: rg" in prompt
-    assert prompt.index('<evidence_context title="Contexto Compartilhado de Evidências">') < prompt.index(
-        '<recent_conversation title="Conversa recente">'
-    )
+    builder._build_evidence_context.assert_not_called()
+    assert "EVIDENCIA_EXCLUSIVA_DEBUG" not in prompt
 
 
 def test_prompt_evidence_pipeline_is_identical_across_compact_and_wide_tool_rendering(tmp_path):
