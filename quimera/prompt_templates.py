@@ -232,6 +232,7 @@ class PromptTemplate:
 
 _PROMPT_FILE_BY_KIND = {
     PromptKind.CHAT: "prompt.md",
+    PromptKind.DELEGATION: "delegate_prompt.md",
     PromptKind.TASK_EXECUTOR: "task_prompt.md",
     PromptKind.TASK_REVIEWER: "task_reviewer_prompt.md",
 }

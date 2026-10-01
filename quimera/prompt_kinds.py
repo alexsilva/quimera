@@ -5,6 +5,7 @@ from enum import Enum
 
 class PromptKind(str, Enum):
     CHAT = "chat"
+    DELEGATION = "delegation"
     TASK_EXECUTOR = "task_executor"
     TASK_REVIEWER = "task_reviewer"
 

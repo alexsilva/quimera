@@ -529,3 +529,24 @@ def test_build_openai_messages_ends_with_user_for_every_prompt_kind():
             f"PromptKind.{kind.name}: última mensagem tem role '{messages[-1]['role']}', "
             f"esperado 'user'. Verifique a ordem e os roles em ROLES_BY_KIND[PromptKind.{kind.name}]."
         )
+
+
+def test_build_openai_messages_maps_delegation_kind_blocks():
+    """Delegação agente→agente: identificação/protocolo viram system; payload e instrução viram user."""
+    prompt = (
+        '<header title="Delegação entre agentes">\nVocê é codex.\nAgente solicitante: claude\n</header>\n'
+        '<session_state title="Estado da sessão">\n- SESSÃO ATUAL: s1\n</session_state>\n'
+        '<delegation_rules title="Protocolo de delegação">\n- Inicie com [ACK:<DELEGATION_ID>].\n</delegation_rules>\n'
+        '<execution_mode title="Modo de execução ativo">\nsomente leitura\n</execution_mode>\n'
+        '<evidence_context title="Contexto Compartilhado de Evidências">\n- exec_command: ok\n</evidence_context>\n'
+        '<delegation title="Pedido do agente solicitante">\nREQUEST:\nRevise o parser\n</delegation>\n'
+        '<current_turn title="Instrução detalhada do agente solicitante">\nCompare com o contrato.\n</current_turn>'
+    )
+
+    messages = _build_openai_messages_from_prompt(_rendered(prompt, PromptKind.DELEGATION))
+
+    assert [m["role"] for m in messages] == ["system", "system", "system", "system", "system", "user", "user"]
+    assert messages[0]["content"].startswith("Delegação entre agentes")
+    assert "[ACK:<DELEGATION_ID>]" in messages[2]["content"]
+    assert messages[-2]["content"] == "REQUEST:\nRevise o parser"
+    assert messages[-1]["content"] == "Compare com o contrato."

@@ -3,6 +3,7 @@ import time
 
 import pytest
 
+from quimera.prompt_kinds import PromptKind
 from quimera.debate.commands import DebateCommand
 from quimera.debate.models import (
     DebateMode,
@@ -330,6 +331,10 @@ def test_debate_runs_two_rounds_and_converges(tmp_path):
     assert len(calls) == 7
     assert all(call[1]["show_delegation"] is False for call in calls)
     assert all(call[1]["emit_run_deltas"] is False for call in calls)
+    # Debate é sistema falando com agente: usa o template de delegação,
+    # nunca o prompt da conversa humana.
+    assert all(call[1]["prompt_kind"] is PromptKind.DELEGATION for call in calls)
+    assert all(call[1]["delegation_only"] is True for call in calls)
     assert all(
         "tool use is optional" in call[1]["request_override"].lower()
         for call in calls

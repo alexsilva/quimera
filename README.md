@@ -21,7 +21,7 @@ O Quimera coordena agentes (CLI e OpenAI-compatible), mantém estado compartilha
 - `quimera/runtime/tools/delegate.py`: `delegate` — delegação entre agentes via MCP (cross-MCP).
 - `quimera/profiles/`: catálogo de agentes e metadados de capacidade. Cada profile injeta configuração MCP no formato nativo do agente.
 - `quimera/ui/`: renderização terminal (temas, densidade, stream e resumo).
-- `quimera/prompt.md` / `quimera/task_prompt.md`: templates de prompt com blocos condicionais `<!-- IF:mcp_enabled -->`.
+- `quimera/prompt.md`: template do chat com o humano. `quimera/delegate_prompt.md`: template usado quando um agente delega para outro (`delegate`, debate), sem nome do humano, histórico ou contexto persistente. `quimera/task_prompt.md` / `quimera/task_reviewer_prompt.md`: templates de `/task`. Todos usam blocos condicionais `<!-- IF:... -->`.
 
 ## Requisitos
 

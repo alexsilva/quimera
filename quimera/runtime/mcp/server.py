@@ -476,6 +476,7 @@ class MCPServer:
             {"uri": "quimera://prompts/chat", "name": "chat-prompt", "title": "Chat Prompt Template", "description": "Base chat prompt used by Quimera", "mimeType": "text/markdown"},
             {"uri": "quimera://prompts/task", "name": "task-prompt", "title": "Task Prompt Template", "description": "Prompt used for explicit /task execution", "mimeType": "text/markdown"},
             {"uri": "quimera://prompts/reviewer", "name": "task-reviewer-prompt", "title": "Task Reviewer Prompt Template", "description": "Prompt used for cross-agent task review", "mimeType": "text/markdown"},
+            {"uri": "quimera://prompts/delegation", "name": "delegation-prompt", "title": "Delegation Prompt Template", "description": "Prompt used when an agent delegates to another agent", "mimeType": "text/markdown"},
         ]
         for rel in ("README.md", "AGENTS.md", "ARCHITECTURE.md"):
             path = root / rel
@@ -524,6 +525,7 @@ class MCPServer:
             "chat": root / "prompt.md",
             "task": root / "task_prompt.md",
             "reviewer": root / "task_reviewer_prompt.md",
+            "delegation": root / "delegate_prompt.md",
         }
         path = mapping.get(name)
         if path and path.exists():

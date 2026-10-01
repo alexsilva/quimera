@@ -92,14 +92,14 @@ class PromptBuilder:
             history = list(history)
         normalized_prompt_kind = coerce_prompt_kind(prompt_kind)
         is_chat_prompt = normalized_prompt_kind is PromptKind.CHAT
+        is_delegation_prompt = normalized_prompt_kind is PromptKind.DELEGATION
+        # Só o prompt de chat carrega o contexto da conversa humana. Delegação
+        # entre agentes e tasks usam templates próprios, sem esse material.
         context = self.context_manager.load() if is_chat_prompt else ""
         active_agents = self._get_active_agents()
 
         if delegation_only:
-            route_candidates = [n for n in active_agents if n.lower() != agent.lower()]
-            if from_agent:
-                route_candidates = [n for n in route_candidates if n.lower() != from_agent.lower()]
-            route_agents = ", ".join(route_candidates) if route_candidates else ""
+            route_agents = ""
             is_first_speaker_flag = False
             is_reviewer = False
         else:
@@ -134,7 +134,12 @@ class PromptBuilder:
         render_ansi_path = ""
         metrics_path = ""
         app_log_path = ""
-        if self.session_state and primary:
+        # `primary=False` só economiza o estado de sessão para falantes
+        # secundários do chat humano. Delegação e tasks rodam em processo
+        # próprio, sem outra fonte para workspace/job/SO, e seus templates
+        # contam com o bloco; por isso o estado entra sempre nesses kinds.
+        include_session_state = bool(self.session_state) and (primary or not is_chat_prompt)
+        if include_session_state:
             session_id = self.session_state.get("session_id", "desconhecida")
             current_job_id = self.session_state.get("current_job_id", "desconhecido")
             workspace_root = (
@@ -168,6 +173,13 @@ class PromptBuilder:
                 current_agent=agent,
             )
             shared_state_json, completed_task_results = self.shared_state_presenter.present(shared_state)
+        elif is_delegation_prompt:
+            # Agente falando com agente: o pedido vem inteiro no payload da
+            # delegação; `request_override` só entra como instrução detalhada
+            # do solicitante. Histórico e estado do chat humano ficam de fora.
+            request_index, request = None, (request_override or "").strip()
+            recent_conversation = ""
+            shared_state_json, completed_task_results = "", ""
         else:
             request_index, request = None, ""
             recent_conversation = ""
@@ -183,7 +195,7 @@ class PromptBuilder:
         prompt_text = template.render_prompt(
             normalized_prompt_kind,
             agent=agent,
-            user_name=self.memory_selector.user_name.upper(),
+            user_name=self.memory_selector.user_name.upper() if is_chat_prompt else "",
             agents=agents_list,
             route_agents=route_agents,
             is_orchestrator=is_orchestrator,

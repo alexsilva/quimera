@@ -16,6 +16,7 @@ from ..config import (
 )
 from ..models import ToolCall, ToolResult
 from ..policy import ToolPolicyError
+from ...prompt_kinds import PromptKind
 from ...tasks.api import (
     add_job,
     complete_task,
@@ -103,6 +104,7 @@ class _DelegateFnProto(Protocol):
         delegation: dict[str, object] | None = None,
         delegation_only: bool = True,
         protocol_mode: str = "delegation",
+        prompt_kind: PromptKind | str = PromptKind.DELEGATION,
         primary: bool = False,
         silent: bool = True,
         show_output: bool = False,
@@ -585,6 +587,9 @@ class DelegateTools(ToolBase):
                     "delegation": delegation,
                     "delegation_only": True,
                     "protocol_mode": "delegation",
+                    # Agente falando com agente: template próprio, sem o
+                    # contexto da conversa humana (quimera/delegate_prompt.md).
+                    "prompt_kind": PromptKind.DELEGATION,
                     "primary": False,
                     "silent": False,
                     "show_output": False,

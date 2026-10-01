@@ -1365,7 +1365,16 @@ class TestLatestMCPFeatures:
         [listed] = _exchange(server, {"jsonrpc": "2.0", "id": 51, "method": "resources/list"})
         uris = [r["uri"] for r in listed["result"]["resources"]]
         assert "quimera://workspace" in uris
+        assert "quimera://prompts/delegation" in uris
         assert (tmp_path / "README.md").as_uri() in uris
+
+        [delegation_prompt] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 58, "method": "resources/read",
+            "params": {"uri": "quimera://prompts/delegation"},
+        })
+        delegation_text = delegation_prompt["result"]["contents"][0]["text"]
+        assert '<delegation_rules title="Protocolo de delegação">' in delegation_text
+        assert "{user_name}" not in delegation_text
 
         [read] = _exchange(server, {
             "jsonrpc": "2.0", "id": 52, "method": "resources/read",

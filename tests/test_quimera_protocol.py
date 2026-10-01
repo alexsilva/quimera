@@ -48,7 +48,8 @@ from quimera.config import (
 from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_CONTEXT, CMD_DISCONNECT, CMD_HELP, CMD_POLICY, CMD_SANDBOX, CMD_PROMPT, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
 from quimera.constants import CMD_DEBATE
 from quimera.profiles import ExecutionProfile
-from quimera.prompt_templates import PromptText
+from quimera.prompt_kinds import PromptKind
+from quimera.prompt_templates import PromptText, get_prompt_template
 from quimera.profiles.base import ProfileRegistry
 from quimera.runtime.models import TaskRecord, ToolCall
 from quimera.domain.session_state import SessionRuntimeState
@@ -1716,8 +1717,8 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertIn("validador", second_prompt)
 
-    def test_prompt_delegation_only_allows_route_for_multi_hop(self):
-        """Verifica que prompt delegation only allows route for multi hop."""
+    def test_prompt_delegation_only_does_not_prompt_multi_hop(self):
+        """O contrato recebido não induz o agente a fazer nova delegação."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
@@ -1730,14 +1731,17 @@ class ProtocolTests(unittest.TestCase):
                 "expected": "1 parágrafo curto",
             },
             delegation_only=True,
+            from_agent="claude",
+            prompt_kind=PromptKind.DELEGATION,
         )
 
-        self.assertIn("Você recebeu uma subtarefa delegada", prompt)
+        self.assertIn("delegação direta de outro agente", prompt)
+        self.assertIn("Continue do ponto já avançado", prompt)
         self.assertIn("REQUEST:\nRevisar parser", prompt)
         self.assertIn("EXPECTED:\n1 parágrafo curto", prompt)
         self.assertNotIn("segundo agente nesta rodada", prompt)
-        self.assertIn("tool estruturada `delegate`", prompt)
-        self.assertIn("target_agent", prompt)
+        self.assertNotIn("tool estruturada `delegate`", prompt)
+        self.assertNotIn("target_agent", prompt)
         self.assertNotIn("Não delegue de volta", prompt)
 
     def test_prompt_includes_delegation_when_present(self):
@@ -1745,11 +1749,18 @@ class ProtocolTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
-        prompt = builder.build(AGENT_CODEX, history, delegation="Revise este ponto.")
+        prompt = builder.build(
+            AGENT_CODEX,
+            history,
+            delegation="Revise este ponto.",
+            delegation_only=True,
+            prompt_kind=PromptKind.DELEGATION,
+        )
 
-        self.assertIn('<delegation title="Mensagem direta do outro agente">', prompt)
+        self.assertIn('<delegation title="Pedido do agente solicitante">', prompt)
         self.assertIn("</delegation>", prompt)
         self.assertIn("Revise este ponto.", prompt)
+        self.assertNotIn("Pergunta", prompt)
 
     def test_prompt_includes_current_human_request_block(self):
         """Verifica que prompt includes current human request block."""
@@ -5027,10 +5038,10 @@ class ProfileTests(unittest.TestCase):
         """Route rule genérica não deve estar inline no template principal."""
         main = prompt_template._load()
 
-        self.assertIn("delegate", main)
+        self.assertIn("<!-- IF:is_orchestrator -->", main)
+        self.assertIn("tool `delegate`", main)
+        self.assertNotIn("via MCP", main)
         self.assertIn("target_agent", main)
-        self.assertIn("request", main)
-        self.assertIn("obrigatório", main)
         self.assertNotIn("não improvise", main)
         self.assertNotIn("Agentes: {route_agents}", main)
 
@@ -5236,11 +5247,11 @@ class MetricsFeedbackTests(unittest.TestCase):
         )
 
     def test_delegation_rule_mentions_ack(self):
-        """DELEGATION_RULE deve estar inline no template e mencionar ACK."""
-        main = prompt_template._load()
-        self.assertIn("ACK", main)
-        self.assertIn("delegate", main)
-        self.assertIn("arquivos", main)
+        """A regra de ACK vive no template de delegação, não no template do chat."""
+        delegation_template = get_prompt_template(PromptKind.DELEGATION)._load()
+        self.assertIn("ACK", delegation_template)
+        self.assertIn("arquivos", delegation_template)
+        self.assertNotIn("ACK", prompt_template._load())
 
     def test_behavior_metrics_tracker_integrated_with_app(self):
         """BehaviorMetricsTracker deve ser alimentado pelo app."""
@@ -5294,7 +5305,8 @@ class MetricsFeedbackTests(unittest.TestCase):
         main = prompt_template._load()
 
         self.assertIn("task", main)
-        self.assertIn("obrigatório", main)
+        self.assertIn("target_agent", main)
+        self.assertIn("<!-- IF:is_orchestrator -->", main)
         self.assertNotIn("Agentes: {route_agents}", main)
         self.assertNotIn("<!-- IF:route_agents -->", main)
 
@@ -5305,9 +5317,10 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("ACEITE", main)
 
     def test_delegation_rule_is_concise(self):
-        """DELEGATION_RULE deve estar inline no template e ser conciso."""
-        main = prompt_template._load()
-        self.assertIn("continue do ponto já avançado", main.lower())
+        """DELEGATION_RULE deve estar inline no template de delegação e ser conciso."""
+        delegation_template = get_prompt_template(PromptKind.DELEGATION)._load().lower()
+        self.assertIn("continue do ponto já avançado", delegation_template)
+        self.assertNotIn("continue do ponto já avançado", prompt_template._load().lower())
 
     def test_base_rules_are_concise(self):
         """Regras base devem estar inline no template principal."""
@@ -5558,7 +5571,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn('<persistent_context title="Contexto persistente do workspace">', prompt)
         self.assertIn("</persistent_context>", prompt)
         self.assertIn('<current_turn title="Pedido atual de >>>">', prompt)
-        self.assertIn('<delegation title="Mensagem direta do outro agente">', prompt)
+        self.assertNotIn("<delegation", prompt)
         self.assertIn('<recent_conversation title="Conversa recente">', prompt)
         self.assertNotIn('<response_prefix title="PREFIXO DE RESPOSTA">', prompt)
         self.assertNotIn("</response_prefix>", prompt)

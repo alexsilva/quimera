@@ -42,6 +42,16 @@ ROLES_BY_KIND = {
         "delegation": "user",
         "current_turn": "user",
     },
+    PromptKind.DELEGATION: {
+        "header": "system",
+        "session_state": "system",
+        "debug_state": "system",
+        "delegation_rules": "system",
+        "execution_mode": "system",
+        "evidence_context": "system",
+        "delegation": "user",
+        "current_turn": "user",
+    },
     PromptKind.TASK_EXECUTOR: {
         "header": "system",
         "session_state": "system",

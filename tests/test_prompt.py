@@ -11,7 +11,8 @@ from quimera.modes import get_mode
 from quimera.profiles.codex import _format_codex_spy_event
 from quimera.prompt import PromptBuilder
 from quimera.prompt_kinds import PromptKind
-from quimera.prompt_templates import PromptParser, PromptTemplate, PromptText
+from quimera.prompt_templates import PromptParser, PromptTemplate, PromptText, get_prompt_template
+from quimera.runtime.drivers.prompt_adapter import _build_openai_messages_from_prompt
 from quimera.ui import TerminalRenderer
 
 
@@ -62,7 +63,6 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
     prompt = builder.build(
         agent="codex",
         history=history,
-        delegation="Revise apenas os testes do prompt.",
         shared_state={
             "goal_canonical": "Melhorar qualidade do prompt",
             "current_step": "Remover blocos duplicados",
@@ -78,7 +78,6 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
         '<rules title="Suas regras">',
         '<execution_state title="Estado de execução atual">',
         '<shared_state title="Estado compartilhado">',
-        '<delegation title="Mensagem direta do outro agente">',
         '<persistent_context title="Contexto persistente do workspace">',
         '<recent_conversation title="Conversa recente">',
         '<current_turn title="Pedido atual de ALEX">',
@@ -98,9 +97,6 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
     assert '"working_dir": "/tmp/test"' in shared_state_block
     assert '"workspace_root": "/tmp/test"' in shared_state_block
     assert "ignored_internal_note" not in shared_state_block
-
-    delegation_block = _extract_block(prompt, "delegation")
-    assert "Revise apenas os testes do prompt." in delegation_block
 
     conversation_block = _extract_block(prompt, "recent_conversation")
     assert "[ALEX]: Contexto inicial" in conversation_block
@@ -338,11 +334,14 @@ def test_delegation_prompt_uses_current_active_agents_for_route_candidates():
     prompt = builder.build(
         agent="deepseek",
         history=[],
+        delegation={"task": "Revise o parser"},
         delegation_only=True,
         from_agent="codex",
+        prompt_kind=PromptKind.DELEGATION,
     )
 
     assert "- Agentes:" not in prompt
+    assert "Agentes de IA nesta conversa" not in prompt
     assert "claude" not in prompt
 
 
@@ -361,8 +360,52 @@ def test_prompt_omits_generic_delegation_contract_from_route_rules():
     assert "fallback_agents" not in prompt
 
 
-def test_delegation_only_prompt_includes_updated_delegation_contract():
-    """Verifica que delegation only prompt includes updated delegation contract."""
+def test_orchestrator_prompt_requires_delegation_and_forbids_direct_execution():
+    """O orquestrador coordena agentes e nunca executa a tarefa por conta própria."""
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        user_name="USUARIO_TESTE",
+        active_agents=["claude", "codex", "deepseek"],
+        orchestrator_provider=lambda: "claude",
+    )
+
+    prompt = builder.build(
+        agent="claude",
+        history=[{"role": "human", "content": "corrija o parser"}],
+    )
+
+    rules_block = _extract_block(prompt, "rules")
+    assert "Sua função é exclusivamente coordenar agentes" in rules_block
+    assert "não edite arquivos" in rules_block
+    assert "não rode comandos nem testes" in rules_block
+    assert "é obrigatório chamar ao menos um agente" in rules_block
+    assert "tool `delegate`" in rules_block
+    assert "target_agent" in rules_block
+    assert "request" in rules_block
+
+
+def test_orchestrator_prompt_does_not_assume_mcp_transport():
+    """O orquestrador pode ser OpenAI-compat (function calling nativo), não só CLI via MCP."""
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        user_name="USUARIO_TESTE",
+        active_agents=["ollama-llama", "codex", "deepseek"],
+        orchestrator_provider=lambda: "ollama-llama",
+    )
+
+    prompt = builder.build(
+        agent="ollama-llama",
+        history=[{"role": "human", "content": "corrija o parser"}],
+    )
+
+    rules_block = _extract_block(prompt, "rules")
+    assert "MCP" not in rules_block
+    assert "tool `delegate`" in rules_block
+    assert "tool `ask_user`" in rules_block
+
+
+def test_delegation_prompt_does_not_induce_redelegation_nor_assume_transport():
+    """O delegado decide sozinho se usa tools; o protocolo não sugere redelegação nem cita MCP."""
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
         active_agents=["claude", "codex", "deepseek"],
@@ -371,14 +414,209 @@ def test_delegation_only_prompt_includes_updated_delegation_contract():
     prompt = builder.build(
         agent="deepseek",
         history=[],
+        delegation={"task": "Revise o parser"},
         delegation_only=True,
         from_agent="codex",
+        prompt_kind=PromptKind.DELEGATION,
     )
 
-    assert "tool estruturada `delegate` via MCP" in prompt
-    assert "Delegação padrão:" in prompt
-    assert "fallback_agents" in prompt
-    assert "steps" in prompt
+    rules_block = _extract_block(prompt, "delegation_rules")
+    assert "[ACK:<DELEGATION_ID>]" in rules_block
+    assert "Continue do ponto já avançado" in rules_block
+    assert "tool `delegate`" not in rules_block
+    assert "Delegação padrão:" not in rules_block
+    assert "target_agent" not in rules_block
+    assert "fallback_agents" not in rules_block
+    assert "steps" not in rules_block
+    assert "MCP" not in prompt
+
+
+def test_delegation_prompt_uses_dedicated_template_without_human_context():
+    """Agente falando com agente: template próprio, sem nome do humano, chat ou contexto persistente."""
+    builder = PromptBuilder(
+        context_manager=_make_context_manager("contexto persistente do humano"),
+        session_state={"session_id": "sessao-1", "current_job_id": 7, "workspace_root": "/tmp/ws", "current_dir": "."},
+        user_name="USUARIO_TESTE",
+        active_agents=["claude", "codex", "deepseek"],
+    )
+
+    prompt = builder.build(
+        agent="deepseek",
+        history=[{"role": "human", "content": "mensagem privada do humano"}],
+        delegation={
+            "delegation_id": "dlg-42",
+            "task": "Revise o parser",
+            "context": "Foque na validação",
+            "chain": ["codex", "deepseek"],
+            "role": "reviewer",
+            "access_list": ["quimera/prompt.py"],
+        },
+        shared_state={"goal_canonical": "objetivo do chat humano", "working_dir": "/tmp/ws"},
+        delegation_only=True,
+        from_agent="codex",
+        request_override="Compare o resultado com o contrato.",
+        prompt_kind=PromptKind.DELEGATION,
+        # Mesmos parâmetros da tool `delegate`: o delegado nunca é o falante primário.
+        primary=False,
+    )
+
+    assert prompt.kind is PromptKind.DELEGATION
+    assert [block.name for block in prompt.blocks] == [
+        "header",
+        "session_state",
+        "delegation_rules",
+        "delegation",
+        "current_turn",
+    ]
+
+    header = _extract_block(prompt, "header")
+    assert "Você é deepseek." in header
+    assert "Agente solicitante: codex" in header
+    assert "não uma conversa com o usuário humano" in header
+    assert "USUARIO_TESTE" not in prompt
+    assert "Usuário humano" not in prompt
+    assert "Agentes de IA nesta conversa" not in prompt
+
+    assert "mensagem privada do humano" not in prompt
+    assert "contexto persistente do humano" not in prompt
+    assert "objetivo do chat humano" not in prompt
+    assert "<rules" not in prompt
+    assert "<recent_conversation" not in prompt
+    assert "<persistent_context" not in prompt
+    assert "<shared_state" not in prompt
+
+    delegation_block = _extract_block(prompt, "delegation")
+    assert "DELEGATION_ID:\ndlg-42" in delegation_block
+    assert "FROM:\ncodex" in delegation_block
+    assert "REQUEST:\nRevise o parser" in delegation_block
+    assert "CONTEXT:\nFoque na validação" in delegation_block
+    assert "ROLE:\nrevisor" in delegation_block
+    assert "ROLE_CONTRACT:\nRevise, aponte riscos e não edite o código." in delegation_block
+    assert "ACCESS_LIST:\n- quimera/prompt.py" in delegation_block
+    assert "CHAIN:\ncodex -> deepseek" in delegation_block
+
+    assert '<current_turn title="Instrução detalhada do agente solicitante">' in prompt
+    assert "Compare o resultado com o contrato." in _extract_block(prompt, "current_turn")
+
+    messages = _build_openai_messages_from_prompt(prompt)
+    assert [m["role"] for m in messages] == ["system", "system", "system", "user", "user"]
+    assert messages[-1]["content"].endswith("Compare o resultado com o contrato.")
+
+
+def test_delegation_prompt_keeps_session_state_when_not_primary():
+    """Delegado roda em processo próprio: sessão, job, workspace e SO entram mesmo com primary=False."""
+    session_state = {
+        "session_id": "sessao-delegada",
+        "current_job_id": 14,
+        "workspace_root": "/tmp/ws-delegado",
+        "current_dir": "quimera",
+        "os_info": "Linux 7.0.0-34-generic",
+    }
+    builder = PromptBuilder(context_manager=_make_context_manager(""), session_state=session_state)
+
+    prompt = builder.build(
+        agent="claude-sonnet",
+        history=[],
+        delegation={"delegation_id": "dlg-7", "task": "Verifique o parser"},
+        delegation_only=True,
+        from_agent="claude-fable",
+        prompt_kind=PromptKind.DELEGATION,
+        primary=False,
+    )
+
+    session_block = _extract_block(prompt, "session_state")
+    assert "- SESSÃO ATUAL: sessao-delegada" in session_block
+    assert "- JOB_ID ATUAL: 14" in session_block
+    assert "- WORKSPACE RAIZ: /tmp/ws-delegado" in session_block
+    assert "- DIRETÓRIO ATUAL: quimera" in session_block
+    assert "- SISTEMA OPERACIONAL: Linux 7.0.0-34-generic" in session_block
+    assert prompt.index("<session_state") < prompt.index("<delegation_rules")
+
+    # O chat humano mantém a economia: falante secundário continua sem o bloco.
+    chat_secondary = builder.build(
+        agent="claude-sonnet",
+        history=[{"role": "human", "content": "pedido"}],
+        primary=False,
+    )
+    assert '<session_state title="Estado da sessão">' not in chat_secondary
+
+
+def test_task_prompts_keep_session_state_when_not_primary():
+    """Runners de task também chamam com primary=False e o template de task conta com o bloco."""
+    session_state = {"session_id": "sessao-task", "current_job_id": 3, "workspace_root": "/tmp/ws-task", "current_dir": "."}
+    builder = PromptBuilder(context_manager=_make_context_manager(""), session_state=session_state)
+
+    for kind in (PromptKind.TASK_EXECUTOR, PromptKind.TASK_REVIEWER):
+        prompt = builder.build(
+            agent="codex",
+            history=[],
+            delegation={"delegation_id": "task-3", "task": "corrigir parser"},
+            delegation_only=True,
+            from_agent="claude",
+            prompt_kind=kind,
+            primary=False,
+        )
+        session_block = _extract_block(prompt, "session_state")
+        assert "- SESSÃO ATUAL: sessao-task" in session_block, kind
+        assert "- WORKSPACE RAIZ: /tmp/ws-task" in session_block, kind
+
+
+def test_delegation_prompt_omits_current_turn_without_extra_instruction():
+    """Sem request_override, o pedido vive só no payload da delegação."""
+    builder = PromptBuilder(context_manager=_make_context_manager("ctx"), user_name="USUARIO_TESTE")
+
+    prompt = builder.build(
+        agent="codex",
+        history=[{"role": "human", "content": "pedido humano"}],
+        delegation={"task": "Corrija o teste", "delegation_id": "dlg-1"},
+        delegation_only=True,
+        from_agent="claude",
+        prompt_kind=PromptKind.DELEGATION,
+    )
+
+    assert "<current_turn" not in prompt
+    assert "pedido humano" not in prompt
+    assert "REQUEST:\nCorrija o teste" in prompt
+    assert [m["role"] for m in _build_openai_messages_from_prompt(prompt)][-1] == "user"
+
+
+def test_chat_prompt_never_renders_delegation_payload():
+    """O template do chat é exclusivo da conversa humana: ignora payload de delegação."""
+    builder = PromptBuilder(
+        context_manager=_make_context_manager("Contexto"),
+        user_name="USUARIO_TESTE",
+        active_agents=["claude", "codex"],
+    )
+
+    prompt = builder.build(
+        agent="codex",
+        history=[{"role": "human", "content": "pedido do humano"}],
+        delegation={"task": "payload agente para agente", "delegation_id": "dlg-9"},
+        delegation_only=True,
+        from_agent="claude",
+    )
+
+    assert '<header title="Identificação">' in prompt
+    assert "Usuário humano: USUARIO_TESTE" in prompt
+    assert '<current_turn title="Pedido atual de USUARIO_TESTE">' in prompt
+    assert "<delegation" not in prompt
+    assert "payload agente para agente" not in prompt
+    assert "ACK" not in prompt
+    assert "subtarefa delegada" not in prompt
+
+
+def test_delegation_template_has_no_human_placeholders():
+    """Garantia estrutural: o template de delegação não referencia o humano nem a lista de agentes."""
+    template_text = get_prompt_template(PromptKind.DELEGATION)._load()
+
+    assert "{user_name}" not in template_text
+    assert "{agents}" not in template_text
+    assert "{route_agents}" not in template_text
+    assert "{context}" not in template_text
+    assert "{recent_conversation}" not in template_text
+    assert "{shared_state_json}" not in template_text
+    assert "MCP" not in template_text
+    assert "`delegate`" not in template_text
 
 
 def test_prompt_shared_state():
@@ -730,7 +968,7 @@ def test_prompt_history_window_property_setter_updates_memory_selector():
 
 
 def test_prompt_delegation_only_omits_route_list():
-    """Delegation-only chat prompt não injeta lista route_agents inline."""
+    """Prompt de delegação não injeta lista route_agents inline."""
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
         active_agents=["codex", "claude", "gemini"],
@@ -739,14 +977,17 @@ def test_prompt_delegation_only_omits_route_list():
     prompt = builder.build(
         agent="codex",
         history=[{"role": "human", "content": "faça a revisão"}],
+        delegation={"task": "faça a revisão"},
         delegation_only=True,
         from_agent="claude",
+        prompt_kind=PromptKind.DELEGATION,
     )
 
-    rules_block = _extract_block(prompt, "rules")
+    rules_block = _extract_block(prompt, "delegation_rules")
     assert "- Agentes:" not in rules_block
     assert "codex" not in rules_block
     assert "claude" not in rules_block
+    assert "gemini" not in prompt
 
 
 def test_task_executor_prompt_uses_dedicated_template_without_chat_blocks():

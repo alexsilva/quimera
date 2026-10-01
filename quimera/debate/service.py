@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from ..constants import TaskStatus, TaskType
 from ..domain.execution import ExecutionControlSource
+from ..prompt_kinds import PromptKind
 from ..runtime.tools.files import set_staging_root
 from .commands import (
     MAX_DEBATE_CONTEXT_CHARS,
@@ -790,6 +791,7 @@ class DebateService:
                 primary=False,
                 protocol_mode="debate",
                 delegation_only=True,
+                prompt_kind=PromptKind.DELEGATION,
                 silent=True,
                 show_output=False,
                 show_delegation=False,

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from quimera.prompt_kinds import PromptKind
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.workspace import Workspace
 from quimera.runtime.executor import ToolExecutor
@@ -528,6 +529,7 @@ def test_executor_delegate_dispatches_with_delegation_mode(tmp_path):
         "delegation": kwargs["delegation"],
         "delegation_only": True,
         "protocol_mode": "delegation",
+        "prompt_kind": PromptKind.DELEGATION,
         "primary": False,
         "silent": False,
         "show_output": False,

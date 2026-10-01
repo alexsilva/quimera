@@ -291,7 +291,7 @@ O Quimera implementa o protocolo MCP (`2025-11-25`, com negociação para versõ
 | **Proxy stdio→socket** | `runtime/mcp/server.py:_proxy_stdio_to_socket` | Ponte transparente entre stdio do agente e socket Unix do servidor |
 | **Profile MCP injection** | `profiles/{claude,codex,opencode}.py` | Cada profile injeta config MCP no formato nativo do agente |
 | **Tool schemas** | `runtime/drivers/tool_schemas.py` | Fonte única de schemas: `resolve_tool_schemas()` filtra por registro/política |
-| **Prompt conditionals** | `prompt.md`, `task_prompt.md` | Blocos `<!-- IF:mcp_enabled -->` ativam instruções MCP nos prompts |
+| **Prompt templates** | `prompt.md`, `delegate_prompt.md`, `task_prompt.md`, `task_reviewer_prompt.md` | Um template por `PromptKind` (`chat`, `delegation`, `task_executor`, `task_reviewer`); blocos `<!-- IF:... -->` ativam seções condicionais. `delegate` e debate usam `delegation`, que não carrega o contexto da conversa humana |
 | **Config bridge** | `app/core.py:configure_mcp_socket()` / `configure_mcp_http()` | Propaga socket/http endpoint e token para todos os profiles ativos |
 
 #### 3.9.2 Fluxo de Inicialização
