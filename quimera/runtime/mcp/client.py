@@ -395,27 +395,71 @@ class StdioMCPTransport(MCPTransport):
                 extra_rw_paths=extra_rw_paths,
                 die_with_parent=True,
             )
-        self._process = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            env=proc_env,
-            start_new_session=True,
-        )
-        self._start_stderr_pump()
+        self._process = self._spawn_in_keeper_thread(command, proc_env)
         return self._process.stdout, self._process.stdin
 
-    def _start_stderr_pump(self) -> None:
-        if not self._process or not self._process.stderr:
-            return
+    def _spawn_in_keeper_thread(
+        self, command: list[str], proc_env: dict[str, str]
+    ) -> subprocess.Popen:
+        """Lança o servidor a partir de uma thread que vive enquanto ele viver.
 
-        def pump() -> None:
-            assert self._process is not None
-            assert self._process.stderr is not None
-            for line in self._process.stderr:
+        O ``--die-with-parent`` do bwrap (``PR_SET_PDEATHSIG``) amarra a vida do
+        processo à *thread* que o criou, não ao processo do Quimera. As conexões
+        MCP são abertas em threads curtas de handshake (boot em background e
+        MCP Hub); se o ``Popen`` rodasse nelas, o servidor receberia SIGKILL
+        assim que a thread terminasse — logo após ``conectado`` e antes da
+        primeira ``tools/call`` — deixando a sessão viva com o pipe quebrado.
+        A thread criadora é a mesma que drena o stderr e só termina depois que
+        o processo sai, o que preserva o die-with-parent no encerramento do app.
+        Erros do ``Popen`` são repassados à thread do handshake.
+        """
+        ready = threading.Event()
+        outcome: dict[str, Any] = {}
+
+        def keeper() -> None:
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    env=proc_env,
+                    start_new_session=True,
+                )
+            except BaseException as exc:
+                outcome["error"] = exc
+                ready.set()
+                return
+            outcome["process"] = process
+            ready.set()
+            self._pump_stderr(process)
+            try:
+                process.wait()
+            except Exception:
+                _logger.debug("MCP stdio: espera pelo processo falhou", exc_info=True)
+
+        thread = threading.Thread(
+            target=keeper,
+            name=f"quimera-mcp-stdio-{self._name or 'external'}",
+            daemon=True,
+        )
+        self._stderr_thread = thread
+        thread.start()
+        ready.wait()
+        error = outcome.get("error")
+        if error is not None:
+            raise error
+        return outcome["process"]
+
+    def _pump_stderr(self, process) -> None:
+        """Consome o stderr do processo até o EOF, guardando as últimas linhas."""
+        stream = getattr(process, "stderr", None)
+        if not stream:
+            return
+        try:
+            for line in stream:
                 text = line.rstrip("\n").rstrip("\r")
                 if not text:
                     continue
@@ -424,9 +468,8 @@ class StdioMCPTransport(MCPTransport):
                     if len(self._stderr_lines) > 200:
                         self._stderr_lines = self._stderr_lines[-200:]
                 self._print_stderr_line(text)
-
-        self._stderr_thread = threading.Thread(target=pump, daemon=True)
-        self._stderr_thread.start()
+        except Exception:
+            _logger.debug("MCP stdio: leitura do stderr interrompida", exc_info=True)
 
     def _strip_mcp_remote_prefix(self, text: str) -> str:
         stripped = text.strip()

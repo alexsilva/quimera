@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+import sys
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -1411,3 +1412,49 @@ def test_manager_upsert_in_background_persiste_antes_de_conectar(tmp_path, monke
         manager.upsert_in_background("bad=ftp:host", thread_factory=LazyThread)
     assert ConfigManager(workspace.mcp_config_file).mcp_clients == ["jira=stdio:jira-cmd"]
     assert len(threads) == 1
+
+
+# ── Vida do subprocesso stdio × thread que o criou ───────────────────────
+# O bwrap --die-with-parent (PR_SET_PDEATHSIG) amarra o servidor à *thread*
+# criadora. O filho abaixo reproduz o mecanismo sem bwrap: pede o mesmo
+# PR_SET_PDEATHSIG=SIGKILL que o bwrap pede e fica aguardando.
+_PDEATHSIG_CHILD = (
+    "import ctypes, sys, time\n"
+    "ctypes.CDLL(None).prctl(1, 9)\n"
+    "sys.stdout.write('ready\\n'); sys.stdout.flush()\n"
+    "time.sleep(30)\n"
+)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="PR_SET_PDEATHSIG é específico do Linux")
+def test_stdio_transport_sobrevive_ao_fim_da_thread_de_handshake():
+    """Regressão: o servidor morria com SIGKILL assim que a thread curta de
+    conexão (boot em background / MCP Hub) terminava, deixando a sessão viva
+    com o pipe quebrado (`Broken pipe` em tools/list, `Unknown tool` depois)."""
+    transport = StdioMCPTransport([sys.executable, "-c", _PDEATHSIG_CHILD], name="pdeathsig")
+    outcome: dict[str, object] = {}
+
+    def handshake() -> None:
+        reader, _writer = transport.connect()
+        outcome["banner"] = reader.readline()
+
+    thread = threading.Thread(target=handshake, daemon=True)
+    thread.start()
+    thread.join(timeout=15)
+    assert not thread.is_alive()
+    assert outcome.get("banner") == "ready\n"
+    try:
+        time.sleep(0.5)
+        assert transport._process is not None
+        assert transport._process.poll() is None, "servidor morreu junto com a thread de handshake"
+        assert transport._stderr_thread is not None and transport._stderr_thread.is_alive()
+    finally:
+        transport.disconnect()
+    assert transport._process is None
+
+
+def test_stdio_transport_repassa_falha_do_popen_a_thread_do_handshake(tmp_path):
+    transport = StdioMCPTransport([str(tmp_path / "servidor-inexistente")], name="quebrado")
+    with pytest.raises(FileNotFoundError):
+        transport.connect()
+    assert transport._process is None
