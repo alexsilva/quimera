@@ -39,6 +39,7 @@ from quimera.ui.textual.theme_store import TuiThemeStore
 
 _logger = logging.getLogger(__name__)
 
+from quimera.ui.textual.driver import QuimeraLinuxDriver
 from quimera.ui.textual.renderables import (
     _build_question_overlay,
     _build_window_overlay_payload,
@@ -147,7 +148,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         ]
 
         def __init__(self) -> None:
-            super().__init__()
+            super().__init__(driver_class=QuimeraLinuxDriver)
             self._worker_thread: threading.Thread | None = None
             self._commands: list[str] = []
             self._summarizing = False

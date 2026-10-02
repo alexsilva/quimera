@@ -1,3 +1,4 @@
+import os
 import shutil
 import sys
 import tempfile
@@ -15,6 +16,12 @@ if str(ROOT) not in sys.path:
 # que fazem `from quimera.paths import CANDIDATE_DIRS`, então a mutação in-place é suficiente.
 import quimera.paths as _quimera_paths  # noqa: E402
 _quimera_paths.CANDIDATE_DIRS[:] = [_quimera_paths.TMP_BASE_DIR]
+
+# A TUI calibrada exporta UNICODE_VERSION (tabela de larguras do terminal em que
+# roda) aos processos filhos — inclusive a esta suíte, quando disparada de dentro
+# do Quimera. Os testes medem texto com a tabela padrão do Rich, como os baselines
+# visuais pressupõem; remover antes de qualquer import que use o Rich.
+os.environ.pop("UNICODE_VERSION", None)
 
 from quimera.runtime.config import ToolRuntimeConfig  # noqa: E402
 from quimera.workspace import Workspace  # noqa: E402
