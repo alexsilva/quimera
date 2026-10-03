@@ -274,7 +274,7 @@ class TextualFeedModel:
             delegation_id = self._event_delegation_id(event)
             if delegation_id and delegation_id in self._delegation_slots:
                 return self._finish_delegation_group(event, delegation_id)
-            summary = self._pop_pending_turn_summary(event)
+            summary = self._pending_turn_summary_by_agent.pop(self._agent_base(event), None)
             burst_stats, bursts_removed = self._consume_mcp_tool_bursts(
                 event, exclude_key=self._final_replacement_key(event)
             )
@@ -296,11 +296,15 @@ class TextualFeedModel:
                 appended=None if redraw else self._items[-1],
             )
             return True
+        if self._is_new_run_signal(event):
+            # Um resumo cuja resposta final nunca entrou no feed (delegação
+            # oculta, tentativa descartada) não pode virar rodapé do próximo
+            # turno do mesmo agente.
+            self._pending_turn_summary_by_agent.pop(self._agent_base(event), None)
         if event.kind == "stream_start":
             agent = self._agent_key(event)
             self._finalized_agents.discard(agent)
             self._transient_tools_by_agent.pop(agent, None)
-            self._pending_turn_summary_by_agent.pop(agent, None)
             self._stream_buffer_by_agent[agent] = ""
             self._stream_meta_by_agent[agent] = dict(event.payload or {}) if isinstance(event.payload, dict) else {}
             replaced = self._upsert_transient(event)
@@ -321,26 +325,22 @@ class TextualFeedModel:
         if event.kind == "delegation":
             return self._apply_delegation(event)
         if event.kind == "turn_summary":
-            agent = self._agent_key(event)
-            if not self._is_finalized_agent(agent):
-                self._pending_turn_summary_by_agent[agent] = event
-                self._last_change = TextualFeedChange(False)
-                return False
+            # Os stats do turno só existem como rodapé da resposta final, que
+            # chega em seguida. A pendência é pelo agente base porque o resumo
+            # e a resposta saem sem run_id (o contexto de run já foi limpo),
+            # enquanto os transitórios do mesmo turno carregam a chave com run.
+            self._pending_turn_summary_by_agent[self._agent_base(event)] = event
+            self._last_change = TextualFeedChange(False)
+            return False
         if event.kind in self._TRANSIENT_KINDS:
             agent = self._agent_key(event)
             if self._is_finalized_agent(agent):
-                # agent_update e lifecycle RUNNING sinalizam nova run — descarta estado finalizado.
-                # Agentes CLI (opencode etc.) não emitem stream_start, então não chegam ao discard
-                # acima; este bloco equivalente evita que a segunda run fique invisível.
-                is_new_run_signal = event.kind == "agent_update" or (
-                    event.kind == "agent_lifecycle"
-                    and isinstance(event.payload, dict)
-                    and _coerce_lifecycle_status(event.payload.get("status")) == AgentLifecycleStatus.RUNNING
-                )
-                if is_new_run_signal:
+                # Agentes CLI (opencode etc.) não emitem stream_start; para eles
+                # agent_update e lifecycle RUNNING sinalizam a nova run e evitam
+                # que ela fique invisível.
+                if self._is_new_run_signal(event):
                     self._finalized_agents.discard(agent)
                     self._transient_tools_by_agent.pop(agent, None)
-                    self._pending_turn_summary_by_agent.pop(agent, None)
                 else:
                     self._last_change = TextualFeedChange(False)
                     return False
@@ -511,18 +511,23 @@ class TextualFeedModel:
         """Encerra a delegação removendo cartão e feed do agente delegado."""
         agent_key = self._agent_key(event)
         self._finalized_agents.add(agent_key)
-        self._pending_turn_summary_by_agent.pop(agent_key, None)
+        self._pending_turn_summary_by_agent.pop(self._agent_base(event), None)
         removed = self._remove_transient_keys(
             self._delegation_group_keys(delegation_id, agent_keys=[agent_key])
         )
         self._last_change = TextualFeedChange(removed, redraw=removed)
         return removed
 
+    @staticmethod
+    def _agent_base(event: TextualUiEvent) -> str:
+        """Agente sem run nem delegação: a identidade que liga resumo e resposta final."""
+        return str(event.agent or "__global__")
+
     def _agent_key(self, event: TextualUiEvent) -> str:
         payload = event.payload if isinstance(event.payload, dict) else {}
         run_id = str(payload.get("run_id") or "").strip()
         delegation_id = str(payload.get("delegation_id") or "").strip()
-        base = str(event.agent or "__global__")
+        base = self._agent_base(event)
         transport = str(payload.get("transport") or "").strip()
         if transport == "mcp_http":
             # Sessão e run não são identidade visual estável para MCP HTTP:
@@ -601,7 +606,7 @@ class TextualFeedModel:
         payload = event.payload if isinstance(event.payload, dict) else {}
         if payload.get("run_id") or payload.get("delegation_id"):
             return preferred
-        base = str(event.agent or "__global__")
+        base = self._agent_base(event)
         prefix = f"{base}#"
         candidates = [
             key
@@ -629,6 +634,16 @@ class TextualFeedModel:
             AgentLifecycleStatus.CANCELLED,
             AgentLifecycleStatus.ABORTED,
         }
+
+    @staticmethod
+    def _is_new_run_signal(event: TextualUiEvent) -> bool:
+        """Retorna True para o primeiro sinal visual de uma nova execução do agente."""
+        if event.kind in {"stream_start", "agent_update"}:
+            return True
+        if event.kind != "agent_lifecycle":
+            return False
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        return _coerce_lifecycle_status(payload.get("status")) is AgentLifecycleStatus.RUNNING
 
     @staticmethod
     def _is_run_boundary_lifecycle(event: TextualUiEvent) -> bool:
@@ -933,25 +948,6 @@ class TextualFeedModel:
         merged["tools"] = visible_tools
         return TextualUiEvent(event.kind, merged, agent=event.agent)
 
-    def _pop_pending_turn_summary(self, event: TextualUiEvent) -> TextualUiEvent | None:
-        """Resgata o resumo pendente do turno tolerando variação de chave.
-
-        O ``turn_summary`` pode ter sido registrado com run context
-        (``base#run:<id>``) enquanto a resposta final resolve para outra chave
-        (ou vice-versa); qualquer pendência do mesmo agente base pertence ao
-        turno que está sendo finalizado agora.
-        """
-        key = self._final_replacement_key(event)
-        summary = self._pending_turn_summary_by_agent.pop(key, None)
-        if summary is not None:
-            return summary
-        base = str(event.agent or "__global__")
-        prefix = f"{base}#"
-        for candidate in list(self._pending_turn_summary_by_agent):
-            if candidate == base or candidate.startswith(prefix):
-                return self._pending_turn_summary_by_agent.pop(candidate)
-        return None
-
     def _consume_mcp_tool_bursts(
         self,
         event: TextualUiEvent,
@@ -965,7 +961,7 @@ class TextualFeedModel:
         separado acima da resposta até o dwell expirar, com os stats fora do
         bloco de resultado.
         """
-        base = str(event.agent or "__global__")
+        base = self._agent_base(event)
         prefix = f"{base}#mcp-client:"
         candidate_keys = set(self._transient_index_by_agent) | set(
             self._mcp_http_tool_stats_by_agent

@@ -654,6 +654,99 @@ def test_textual_feed_discards_stale_turn_summary_when_new_run_starts():
     assert [event.kind for event in _events(model)] == ["agent_message"]
 
 
+def test_textual_feed_turn_summary_stays_bound_to_final_message_across_runs():
+    """Dois turnos com tools do mesmo agente, na sequência real do renderer.
+
+    Os transitórios saem com ``run_id``; o resumo e a resposta final saem sem
+    (o contexto de run já foi limpo antes deles). A chave base fica finalizada
+    desde a primeira resposta e, ainda assim, o resumo do segundo turno tem que
+    virar rodapé da segunda resposta — nunca um item solto acima dela.
+    """
+    model = TextualFeedModel()
+    for turn in (1, 2):
+        scoped = {"label": "Claude Fable", "run_id": f"agentrun:{turn}"}
+        model.apply(TextualUiEvent(
+            "agent_lifecycle",
+            {**scoped, **_agent_lifecycle_payload("conectando...", status=AgentLifecycleStatus.RUNNING)},
+            agent="claude-fable",
+        ))
+        model.apply(TextualUiEvent("stream_start", scoped, agent="claude-fable"))
+        model.apply(TextualUiEvent("stream_chunk", {**scoped, "text": "pensando"}, agent="claude-fable"))
+        model.apply(TextualUiEvent(
+            "agent_lifecycle",
+            {**scoped, **_agent_lifecycle_payload("concluído", status=AgentLifecycleStatus.COMPLETED)},
+            agent="claude-fable",
+        ))
+        model.apply(TextualUiEvent("visual_reset", scoped, agent="claude-fable"))
+        assert model.apply(TextualUiEvent(
+            "turn_summary",
+            {"label": "Claude Fable", "total": 2, "ok_count": 2, "duration": "72.7s"},
+            agent="claude-fable",
+        )) is False
+        assert model.apply(TextualUiEvent(
+            "agent_message",
+            {"label": "Claude Fable", "content": f"Resposta {turn}."},
+            agent="claude-fable",
+        ))
+
+    assert [event.kind for event in _events(model)] == ["agent_message", "agent_message"]
+    assert [event.payload["turn_summary"]["total"] for event in _events(model)] == [2, 2]
+
+
+def test_textual_feed_turn_summary_after_final_lifecycle_becomes_footer():
+    """No caminho API o lifecycle COMPLETED do running_status antecede o resumo."""
+    model = TextualFeedModel()
+    model.apply(TextualUiEvent("stream_start", {"label": "Claude"}, agent="claude"))
+    model.apply(TextualUiEvent(
+        "agent_lifecycle",
+        _agent_lifecycle_payload("concluído", status=AgentLifecycleStatus.COMPLETED),
+        agent="claude",
+    ))
+    assert model.apply(TextualUiEvent(
+        "turn_summary",
+        {"total": 1, "ok_count": 1, "duration": "1.0s"},
+        agent="claude",
+    )) is False
+    assert model.apply(TextualUiEvent("agent_message", {"label": "Claude", "content": "ok"}, agent="claude"))
+
+    assert [event.kind for event in _events(model)] == ["agent_message"]
+    assert model.items[0].event.payload["turn_summary"]["total"] == 1
+
+
+def test_textual_feed_drops_turn_summary_without_final_message_on_next_run():
+    """Delegação com show_output=False emite o resumo, mas a resposta não entra no feed.
+
+    O resumo não pode aparecer sozinho nem virar rodapé do turno seguinte do
+    mesmo agente, qualquer que seja o sinal de nova execução (API ou CLI).
+    """
+    scoped = {"label": "Codex", "run_id": "agentrun:2"}
+    new_run_signals = [
+        TextualUiEvent("stream_start", scoped, agent="codex"),
+        TextualUiEvent("agent_update", {**scoped, "content": "lendo arquivos"}, agent="codex"),
+        TextualUiEvent(
+            "agent_lifecycle",
+            {**scoped, **_agent_lifecycle_payload("conectando...", status=AgentLifecycleStatus.RUNNING)},
+            agent="codex",
+        ),
+    ]
+    for signal in new_run_signals:
+        model = TextualFeedModel()
+        model.apply(TextualUiEvent("agent_message", {"label": "Codex", "content": "Resposta anterior."}, agent="codex"))
+        assert model.apply(TextualUiEvent(
+            "turn_summary",
+            {"label": "Codex", "total": 3, "ok_count": 3, "duration": "9.0s"},
+            agent="codex",
+        )) is False
+        assert [event.kind for event in _events(model)] == ["agent_message"]
+
+        model.apply(signal)
+        model.apply(TextualUiEvent("visual_reset", scoped, agent="codex"))
+        model.apply(TextualUiEvent("agent_message", {"label": "Codex", "content": "Resposta sem tools."}, agent="codex"))
+
+        assert [event.kind for event in _events(model)] == ["agent_message", "agent_message"], signal.kind
+        assert "turn_summary" not in model.items[-1].event.payload, signal.kind
+
+
 def test_textual_feed_marks_plain_events_as_append_only():
     model = TextualFeedModel()
 
@@ -3433,9 +3526,11 @@ def test_textual_feed_delegated_final_message_is_not_persisted():
     model.apply(TextualUiEvent("user_message", {"content": "faz isso", "label": ">>>"}))
     model.apply(_delegation_event())
     model.apply(TextualUiEvent("stream_start", delegated, agent="sonnet"))
+    model.apply(TextualUiEvent("turn_summary", {"total": 1, "ok_count": 1, "duration": "1.0s"}, agent="sonnet"))
     model.apply(TextualUiEvent("agent_message", {**delegated, "content": "feito"}, agent="sonnet"))
 
     assert [item.event.kind for item in model.items] == ["user_message"]
+    assert not model._pending_turn_summary_by_agent
 
 
 def test_textual_feed_removes_delegation_group_on_final_lifecycle():
