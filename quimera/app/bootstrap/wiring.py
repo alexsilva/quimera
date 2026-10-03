@@ -555,16 +555,7 @@ class AppAssembler:
         turn_manager = TurnManager()
         for handler in logger.handlers:
             if isinstance(handler, PromptAwareStderrHandler):
-                handler.bind_callbacks(
-                    output_lock=plat.output_lock,
-                    redisplay_prompt=app._redisplay_user_prompt_if_needed,
-                    show_error=sess.system_layer.show_error_message,
-                    show_warning=sess.system_layer.show_warning_message,
-                    show_system=sess.system_layer.show_system_message,
-                    show_muted=sess.system_layer.show_muted_message,
-                    is_reading=ui.input_gate.is_active,
-                    debug_enabled=app.is_debug_prompt_enabled,
-                )
+                handler.mark_ui_active()
         is_new_session = not sess.history_restored and not summary_loaded
 
         # Unify tasks database path
@@ -883,7 +874,6 @@ class AppAssembler:
             record_metric=_make_record_metric(ui.session_metrics, app),
             file_bug=app._file_bug,
             get_session_id=_make_get_session_id(plat.storage),
-            notify_warning=sess.system_layer.show_warning_message,
         )
         command_router = CommandRouter(
             agent_pool=plat.agent_pool,

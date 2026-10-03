@@ -1,111 +1,68 @@
 import logging
+from io import StringIO
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock
 
 import quimera.app.config as app_config
 from quimera.app.handlers import PromptAwareStderrHandler
-from tests.legacy_app_adapters import bind_handler_app
 
 
-def _app_with_system_layer(**extra):
-    system_layer = extra.pop("system_layer", None) or Mock()
-    return SimpleNamespace(system_layer=system_layer, **extra)
-
-
-def test_prompt_aware_stderr_handler_routes_warning_to_app_callback():
-    """Verifica que prompt aware stderr handler routes warning to app callback."""
-    handler = PromptAwareStderrHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s: %(message)s"))
-    app = _app_with_system_layer(
-        _nonblocking_input_status="reading",
-        system_layer=Mock(show_warning_message=Mock()),
-    )
-    bind_handler_app(handler, app)
-
-    record = logging.LogRecord(
-        name="quimera.staging",
-        level=logging.WARNING,
-        pathname=__file__,
-        lineno=1,
-        msg="retry for agent=%s",
-        args=("claude",),
-        exc_info=None,
+def _record(level, msg, name="quimera.staging"):
+    return logging.LogRecord(
+        name=name, level=level, pathname=__file__, lineno=1, msg=msg, args=(), exc_info=None
     )
 
-    handler.emit(record)
 
-    app.system_layer.show_warning_message.assert_called_once()
-    rendered = app.system_layer.show_warning_message.call_args[0][0]
-    assert "retry for agent=claude" in rendered
-
-
-def test_prompt_aware_stderr_handler_suppresses_mcp_info_while_prompt_reading_without_debug():
-    """Verifica que prompt aware stderr handler suppresses mcp info while prompt reading without debug."""
-    handler = PromptAwareStderrHandler()
-    app = _app_with_system_layer(
-        _nonblocking_input_status="reading",
-        debug_prompt_metrics=False,
-        system_layer=Mock(show_muted_message=Mock()),
-    )
-    bind_handler_app(handler, app)
-
-    record = logging.LogRecord(
-        name="quimera.runtime.mcp.server",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=1,
-        msg="MCP tools/call done tool=delegate ok=True duration_ms=10",
-        args=(),
-        exc_info=None,
-    )
-
-    handler.emit(record)
-    app.system_layer.show_muted_message.assert_not_called()
+def _handler():
+    stream = StringIO()
+    handler = PromptAwareStderrHandler(stream)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    return handler, stream
 
 
-def test_prompt_aware_stderr_handler_shows_mcp_info_while_prompt_reading_in_debug():
-    """Verifica que prompt aware stderr handler shows mcp info while prompt reading in debug."""
-    handler = PromptAwareStderrHandler()
-    app = _app_with_system_layer(
-        _nonblocking_input_status="reading",
-        debug_prompt_metrics=True,
-        system_layer=Mock(show_muted_message=Mock()),
-    )
-    bind_handler_app(handler, app)
+def test_screen_handler_keeps_runtime_warnings_and_errors_off_the_screen():
+    """Com a UI ativa, WARNING/ERROR do logger de tela não vão ao terminal nem ficam retidos."""
+    handler, stream = _handler()
+    handler.mark_ui_active()
 
-    record = logging.LogRecord(
-        name="quimera.runtime.mcp.server",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=1,
-        msg="MCP tools/call done tool=delegate ok=True duration_ms=10",
-        args=(),
-        exc_info=None,
-    )
+    handler.emit(_record(logging.WARNING, "retry for agent=claude"))
+    handler.emit(_record(logging.ERROR, "falha no backend agent=claude"))
+    handler.drain_to_stderr()
 
-    handler.emit(record)
-    app.system_layer.show_muted_message.assert_called_once()
+    assert stream.getvalue() == ""
 
 
-def test_quimera_root_logger_does_not_route_internal_warnings_to_ui():
-    system_layer = Mock(show_warning_message=Mock())
-    app = _app_with_system_layer(
-        _nonblocking_input_status="reading",
-        system_layer=system_layer,
-    )
-    previous_app = app_config.handler._app
-    previous_callbacks = app_config.handler._callbacks
-    bind_handler_app(app_config.handler, app)
+def test_screen_handler_buffers_startup_warnings_until_drained():
+    """Antes da UI, WARNING+ ficam retidos e saem no stderr apenas no drain."""
+    handler, stream = _handler()
+
+    handler.emit(_record(logging.INFO, "boot info"))
+    handler.emit(_record(logging.WARNING, "plugin sem config"))
+    assert stream.getvalue() == ""
+
+    handler.drain_to_stderr()
+    assert stream.getvalue() == "WARNING plugin sem config\n"
+
+    handler.drain_to_stderr()
+    assert stream.getvalue() == "WARNING plugin sem config\n"
+
+
+def test_staging_logger_errors_stay_in_the_log_file(tmp_path):
+    """O arquivo de log segue recebendo o ERROR que deixou de aparecer no chat."""
+    log_path = tmp_path / "quimera.log"
+    previous_log_path = Path(app_config._file_handler.baseFilename)
+    previous_state = app_config.handler._ui_active
     try:
-        logging.getLogger("quimera.runtime.process_supervisor").warning(
-            "registrando processo durante shutdown"
-        )
-    finally:
-        app_config.handler._app = previous_app
-        app_config.handler._callbacks = previous_callbacks
+        app_config.set_app_log_file(log_path)
+        app_config.handler.mark_ui_active()
 
-    system_layer.show_warning_message.assert_not_called()
+        app_config.logger.error("falha no backend agent=%s", "claudecloud-fable")
+
+        for handler in app_config.logger.handlers:
+            handler.flush()
+        assert "falha no backend agent=claudecloud-fable" in log_path.read_text(encoding="utf-8")
+    finally:
+        app_config.handler._ui_active = previous_state
+        app_config.set_app_log_file(previous_log_path)
 
 
 def test_quimera_root_logger_remains_audited_after_log_file_change(tmp_path):

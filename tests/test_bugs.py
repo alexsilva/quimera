@@ -5,7 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import json
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from quimera.bugs import (
     AgentRuntimeBugDetector,
@@ -248,6 +248,26 @@ def test_record_failure_files_agent_failure_burst_only_once_per_streak():
     tracker.record_failure("opencode-ring-2-6-1t-free")  # 3 -> não deve emitir de novo
 
     assert file_bug.call_count == 1
+
+
+def test_record_failure_logs_pool_removal_as_warning():
+    from quimera.app import agent_failure_tracker as tracker_module
+    from quimera.app.agent_failure_tracker import AgentFailureTracker
+
+    pool = ["claudecloud-fable"]
+    tracker = AgentFailureTracker(
+        normalize_agent_name=lambda agent: str(agent),
+        agent_pool=pool,
+        release_agent_tasks=lambda _name: None,
+    )
+
+    with patch.object(tracker_module.logger, "warning") as warning:
+        tracker.record_failure("claudecloud-fable")
+        tracker.record_failure("claudecloud-fable")
+
+    assert pool == []
+    warning.assert_called_once()
+    assert warning.call_args.args[1:] == ("claudecloud-fable", 2)
 
 
 def test_bug_correlator_produces_combined_bug_when_render_and_agent_failure_overlap():
