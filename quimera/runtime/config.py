@@ -12,6 +12,11 @@ if TYPE_CHECKING:
 
 
 DEFAULT_MCP_TOOL_TIMEOUT_SECONDS = 600
+# Workers do pool de tools do servidor MCP, compartilhado por todos os agentes
+# conectados à sessão.
+DEFAULT_MCP_TOOL_POOL_WORKERS = 4
+# Tool calls do mesmo turno que o harness nativo de um agente executa juntas.
+DEFAULT_MAX_PARALLEL_TOOL_CALLS = 4
 DEFAULT_DELEGATE_MAX_REQUEST_CHARS = 16_000
 DEFAULT_DELEGATE_MAX_CONTEXT_CHARS = 32_000
 # Delegações rodam trabalho longo (revisões, análises) e têm orçamento próprio,
@@ -30,6 +35,8 @@ class ToolRuntimeConfig:
     command_timeout_seconds: int = 20
     command_max_timeout_seconds: int = 300
     mcp_tool_timeout_seconds: int = DEFAULT_MCP_TOOL_TIMEOUT_SECONDS
+    mcp_tool_pool_workers: int = DEFAULT_MCP_TOOL_POOL_WORKERS
+    max_parallel_tool_calls: int = DEFAULT_MAX_PARALLEL_TOOL_CALLS
     delegate_parallel_timeout_seconds: int = DEFAULT_DELEGATE_TIMEOUT_SECONDS
     interactive_command_default_yield_ms: int = 1000
     max_output_chars: int = 1_000_000
@@ -125,6 +132,10 @@ class ToolRuntimeConfig:
         """Executa post init."""
         if self.workspace is None:
             raise TypeError("ToolRuntimeConfig exige Workspace")
+        for name in ("max_parallel_tool_calls", "mcp_tool_pool_workers"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{name} deve ser um inteiro positivo")
         self.allowed_read_roots = [Path(path).resolve() for path in self.allowed_read_roots]
 
     def read_roots(self) -> tuple[Path, ...]:

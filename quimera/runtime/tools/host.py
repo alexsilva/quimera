@@ -341,6 +341,7 @@ class HostTools(ToolBase, tool_prefix="host"):
                 sample["cpu_percent"] = None
             samples.append(sample)
             self._report_sample_progress(
+                call,
                 pid,
                 sample,
                 current=len(samples),
@@ -561,13 +562,15 @@ class HostTools(ToolBase, tool_prefix="host"):
 
     def _report_sample_progress(
         self,
+        call: ToolCall,
         pid: int,
         sample: dict[str, Any],
         *,
         current: int,
         total: int,
     ) -> None:
-        callback = self._progress_callback
+        metadata = call.metadata if isinstance(call.metadata, dict) else {}
+        callback = metadata.get("_tool_progress_callback") or self._progress_callback
         if callback is None:
             return
         fds = sample.get("fds")

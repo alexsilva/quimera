@@ -42,10 +42,14 @@ from quimera.runtime.drivers.repl import (
     _resolve_profile_driver,
 )
 from quimera.runtime.drivers.tool_schemas import TOOL_SCHEMAS, resolve_tool_schemas
+from quimera.runtime.approval import ApprovalManager, AutoApprovalHandler
+from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.errors import ToolPolicyViolationError, ToolValidationError
+from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall, ToolResult
 from quimera.profiles.base import OpenAIConnection
 from quimera.prompt_templates import PromptText
+from quimera.workspace import Workspace
 
 
 # ---------------------------------------------------------------------------
@@ -1424,6 +1428,171 @@ def test_run_tool_loop_one_hop():
     assert result == "Arquivo lido com sucesso."
     assert mock_executor.execute.call_count == 1
     assert mock_client.chat.completions.create.call_count == 2
+
+
+def test_run_parallelizes_safe_tool_batch_and_preserves_protocol_order(tmp_path):
+    """Reads run concurrently, inherit thread context and return in model order."""
+    (tmp_path / "slow.py").write_text("slow", encoding="utf-8")
+    (tmp_path / "fast.py").write_text("fast", encoding="utf-8")
+    driver, _mock_client = _make_driver()
+    calls = [
+        {
+            "id": "call_slow",
+            "name": "read_file",
+            "arguments": {"path": "slow.py"},
+            "raw_arguments": '{"path":"slow.py"}',
+            "argument_error": None,
+        },
+        {
+            "id": "call_fast",
+            "name": "read_file",
+            "arguments": {"path": "fast.py"},
+            "raw_arguments": '{"path":"fast.py"}',
+            "argument_error": None,
+        },
+    ]
+    requests = []
+    responses = iter([("", calls), ("final", [])])
+
+    def chat(messages, _tools, **_kwargs):
+        requests.append([dict(message) for message in messages])
+        return next(responses)
+
+    config = ToolRuntimeConfig(
+        workspace=Workspace(tmp_path),
+        require_approval_for_mutations=False,
+        max_parallel_tool_calls=2,
+    )
+    executor = ToolExecutor(config, ApprovalManager(config))
+    active = 0
+    max_active = 0
+    state_lock = threading.Lock()
+    seen_context = {}
+    approval_cancel_event = threading.Event()
+    parent_thread = threading.get_ident()
+    starts = []
+    completions = []
+
+    def read_handler(call):
+        nonlocal active, max_active
+        with state_lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            seen_context[call.call_id] = {
+                "scope": executor.get_thread_approval_scope(),
+                "approval_cancel": executor.get_thread_approval_cancel_event(),
+                "tool_cancel": call.metadata.get("_mcp_cancel_event"),
+            }
+            time.sleep(0.12 if call.call_id == "call_slow" else 0.02)
+            return ToolResult(
+                ok=True,
+                tool_name=call.name,
+                content=call.arguments["path"],
+            )
+        finally:
+            with state_lock:
+                active -= 1
+
+    def on_tool_call(name, arguments, tool_call_id=None):
+        starts.append((name, arguments["path"], tool_call_id, threading.get_ident()))
+
+    executor.registry.register("read_file", read_handler)
+    executor.bind_thread_approval_scope("run:parallel-test")
+    previous_cancel = executor.bind_approval_cancel_event(approval_cancel_event)
+    try:
+        with patch.object(driver, "_chat", side_effect=chat):
+            result = driver.run(
+                _prompt("leia os dois arquivos"),
+                tool_executor=executor,
+                cancel_event=approval_cancel_event,
+                on_tool_call=on_tool_call,
+                on_tool_result=lambda item: completions.append(
+                    item.data["tool_call_id"]
+                ),
+            )
+    finally:
+        executor.bind_approval_cancel_event(previous_cancel)
+
+    assert result == "final"
+    assert max_active == 2
+    assert [item[2] for item in starts] == ["call_slow", "call_fast"]
+    assert {item[3] for item in starts} == {parent_thread}
+    assert completions == ["call_fast", "call_slow"]
+    assert seen_context == {
+        "call_slow": {
+            "scope": "run:parallel-test",
+            "approval_cancel": approval_cancel_event,
+            "tool_cancel": approval_cancel_event,
+        },
+        "call_fast": {
+            "scope": "run:parallel-test",
+            "approval_cancel": approval_cancel_event,
+            "tool_cancel": approval_cancel_event,
+        },
+    }
+    tool_messages = [
+        message for message in requests[1] if message.get("role") == "tool"
+    ]
+    assert [message["tool_call_id"] for message in tool_messages] == [
+        "call_slow",
+        "call_fast",
+    ]
+    assert [json.loads(message["content"])["content"] for message in tool_messages] == [
+        "slow.py",
+        "fast.py",
+    ]
+
+
+def test_run_keeps_mutating_tool_batch_serial(tmp_path):
+    driver, _mock_client = _make_driver()
+    calls = [
+        {
+            "id": f"write_{index}",
+            "name": "write_file",
+            "arguments": {
+                "path": f"file-{index}.txt",
+                "content": str(index),
+                "replace_existing": True,
+            },
+            "raw_arguments": json.dumps({
+                "path": f"file-{index}.txt",
+                "content": str(index),
+                "replace_existing": True,
+            }),
+            "argument_error": None,
+        }
+        for index in range(2)
+    ]
+    responses = iter([("", calls), ("final", [])])
+    config = ToolRuntimeConfig(
+        workspace=Workspace(tmp_path),
+        require_approval_for_mutations=False,
+        max_parallel_tool_calls=4,
+    )
+    executor = ToolExecutor(config, AutoApprovalHandler())
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def write_handler(call):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            time.sleep(0.04)
+            return ToolResult(ok=True, tool_name=call.name, content=call.call_id)
+        finally:
+            with lock:
+                active -= 1
+
+    executor.registry.register("write_file", write_handler)
+    with patch.object(driver, "_chat", side_effect=lambda *_a, **_k: next(responses)):
+        result = driver.run(_prompt("grave dois arquivos"), tool_executor=executor)
+
+    assert result == "final"
+    assert max_active == 1
 
 
 def test_run_sanitizes_intermediate_tool_text_and_persists_thinking(tmp_path):

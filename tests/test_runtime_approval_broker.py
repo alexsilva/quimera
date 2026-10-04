@@ -319,6 +319,8 @@ def test_http_mcp_cannot_spoof_internal_transport_via_meta():
     """Verifica que Test http mcp cannot spoof internal transport via meta."""
     executor = MagicMock()
     executor.registry.names.return_value = ["delegate"]
+    executor.config.mcp_tool_pool_workers = 4
+    executor.config.delegation_budget_per_run = 8
     executor.execute.return_value = ToolResult(ok=True, tool_name="delegate", content="ok")
     server = MCPServer(executor)
     out = io.StringIO()

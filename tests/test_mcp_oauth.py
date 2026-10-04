@@ -44,6 +44,8 @@ def _make_executor(tool_names=None):
     executor = MagicMock()
     executor.registry.names.return_value = tool_names or sorted(HTTP_READ_LOCAL_TOOLS)
     executor.config.workspace = None
+    executor.config.mcp_tool_pool_workers = 4
+    executor.config.delegation_budget_per_run = 8
     executor.policy.blocked_tools = set()
     executor.execute.return_value = ToolResult(ok=True, tool_name="read_file", content="ok")
     return executor

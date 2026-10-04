@@ -35,6 +35,30 @@ def test_mutation_approval_tools_are_marked_as_mutating():
             assert metadata.mutates is True, name
 
 
+def test_parallel_safe_tools_are_explicit_and_read_only():
+    parallel_safe = {
+        name for name, metadata in TOOL_METADATA.items() if metadata.parallel_safe
+    }
+
+    assert {
+        "read_file",
+        "grep_search",
+        "web_search",
+        "list_tasks",
+        "git_status",
+        "host_process_sample",
+    } <= parallel_safe
+    assert parallel_safe.isdisjoint({
+        "write_file",
+        "run_shell",
+        "delegate",
+        "ask_user",
+        "browser_navigate",
+        "memory_retrieve",
+    })
+    assert all(not TOOL_METADATA[name].mutates for name in parallel_safe)
+
+
 def test_destructive_and_shell_tools_have_explicit_risk():
     assert TOOL_METADATA["remove_file"].risk == ToolRisk.DESTRUCTIVE
     assert TOOL_METADATA["memory_delete"].risk == ToolRisk.DESTRUCTIVE

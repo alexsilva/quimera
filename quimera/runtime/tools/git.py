@@ -38,7 +38,11 @@ class GitTool(ToolBase, tool_prefix="git"):
 
     def git_status(self, call: ToolCall) -> ToolResult:
         """Retorna o status do repositório git de forma estruturada."""
-        rc, stdout, stderr = self._run_git(["status", "--porcelain=v1", "-b"])
+        # Evita refresh/lock opcional do índice quando vários status read-only
+        # são executados pelo scheduler paralelo.
+        rc, stdout, stderr = self._run_git([
+            "--no-optional-locks", "status", "--porcelain=v1", "-b",
+        ])
         if rc != 0:
             return ToolResult(ok=False, tool_name=call.name, error=stderr.strip() or "git status failed")
 

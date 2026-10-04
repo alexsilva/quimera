@@ -70,6 +70,61 @@ def test_executor_normalizes_aliases(executor_with_workspace, alias, arguments, 
         assert result.data["status"] in {"running", "completed"}
 
 
+def test_executor_parallel_classification_is_fail_closed(executor):
+    assert executor.is_parallel_safe(
+        ToolCall(name="read_file", arguments={"path": "README.md"})
+    ) is True
+    assert executor.is_parallel_safe(
+        ToolCall(name="write_file", arguments={"path": "x", "content": "y"})
+    ) is False
+    assert executor.is_parallel_safe(
+        ToolCall(name="ask_user", arguments={"question": "Continuar?"})
+    ) is False
+    assert executor.is_parallel_safe(
+        ToolCall(name="future_external_tool", arguments={})
+    ) is False
+
+
+def test_executor_keeps_concurrent_progress_callbacks_per_call(executor):
+    barrier = threading.Barrier(2)
+    observed = {}
+    observed_lock = threading.Lock()
+
+    def handler(call):
+        callback = call.metadata.get("_tool_progress_callback")
+        barrier.wait(timeout=2)
+        callback(call.call_id)
+        with observed_lock:
+            observed[call.call_id] = callback
+        from quimera.runtime.models import ToolResult
+
+        return ToolResult(ok=True, tool_name=call.name, content="ok")
+
+    executor.registry.register("list_files", handler)
+    progress = {"one": [], "two": []}
+
+    threads = [
+        threading.Thread(
+            target=executor.execute,
+            args=(ToolCall(
+                name="list_files",
+                arguments={"path": "."},
+                call_id=call_id,
+            ),),
+            kwargs={"progress_callback": progress[call_id].append},
+        )
+        for call_id in ("one", "two")
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert progress == {"one": ["one"], "two": ["two"]}
+    assert observed["one"] is not observed["two"]
+
+
 # ════════════════════════════════════════════════════════════════════════
 # Memory tool tests
 # ════════════════════════════════════════════════════════════════════════

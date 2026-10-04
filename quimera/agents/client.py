@@ -1692,13 +1692,30 @@ class AgentClient:
                     with tool_execution_lock:
                         return active_tool_executions > 0
 
-                def _record_api_tool_call(name, arguments) -> None:
-                    activity = self._spy_output_presenter.tool_call_activity(name, arguments)
+                def _record_api_tool_call(
+                    name,
+                    arguments,
+                    tool_call_id=None,
+                ) -> None:
+                    activity = self._spy_output_presenter.tool_call_activity(
+                        name,
+                        arguments,
+                        tool_call_id=tool_call_id,
+                    )
                     self._notify_run_activity(run_activity_callback, activity)
                     if not silent and self.visibility == Visibility.QUIET:
-                        self._spy_output_presenter.emit_tool_call(agent, name, arguments)
+                        self._spy_output_presenter.emit_tool_call(
+                            agent,
+                            name,
+                            arguments,
+                            tool_call_id=tool_call_id,
+                        )
                     else:
-                        self._spy_output_presenter.record_tool_call(name, arguments)
+                        self._spy_output_presenter.record_tool_call(
+                            name,
+                            arguments,
+                            tool_call_id=tool_call_id,
+                        )
 
                 def _record_api_tool_result(tool_result) -> None:
                     activity = self._spy_output_presenter.tool_result_activity(tool_result)

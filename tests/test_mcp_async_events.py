@@ -58,6 +58,61 @@ def _recv_line(sock: socket.socket, timeout: float = 5) -> bytes:
 class TestConcurrentToolsCall:
     """Testa chamadas concorrentes de ferramentas via thread pool."""
 
+    def test_pool_uses_mcp_tool_pool_workers(self):
+        executor = _make_executor()
+        executor.config.mcp_tool_pool_workers = 2
+
+        server = _make_server(executor)
+
+        assert server._thread_pool._max_workers == 2
+
+    def test_pool_size_is_independent_from_native_batch_limit(self):
+        """Reduzir o lote nativo de um agente não estrangula as tools MCP."""
+        executor = _make_executor()
+        executor.config.max_parallel_tool_calls = 1
+        executor.config.mcp_tool_pool_workers = 3
+
+        server = _make_server(executor)
+
+        assert server._thread_pool._max_workers == 3
+
+    def test_delegate_does_not_starve_child_tool_pool_at_limit_one(self):
+        """Delegate espera o filho sem ocupar o único worker das tools MCP."""
+        executor = _make_executor(tool_names=["delegate", "read_file"])
+        executor.config.mcp_tool_pool_workers = 1
+        executor.config.delegation_budget_per_run = 1
+        child_finished = threading.Event()
+
+        def _execute(tool_call, progress_cb=None):
+            if tool_call.name == "delegate":
+                if not child_finished.wait(timeout=0.5):
+                    raise TimeoutError("child tool starved")
+                return ToolResult(ok=True, tool_name="delegate", content="delegated")
+            child_finished.set()
+            return ToolResult(ok=True, tool_name="read_file", content="child")
+
+        executor.execute.side_effect = _execute
+        server = _make_server(executor)
+        responses = _exchange(
+            server,
+            {
+                "jsonrpc": "2.0",
+                "id": "parent",
+                "method": "tools/call",
+                "params": {"name": "delegate", "arguments": {}},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": "child",
+                "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {}},
+            },
+        )
+
+        assert child_finished.is_set()
+        assert {response["id"] for response in responses} == {"parent", "child"}
+        assert all("result" in response for response in responses)
+
     def test_two_concurrent_calls(self, tmp_path):
         """Duas tools/call concorrentes: ambas completam."""
         executor = _make_executor()
@@ -212,6 +267,119 @@ class TestCancellation:
         responses = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
         assert len(responses) == 0, "cancelamento não deve gerar resposta"
 
+    def test_batch_cancel_is_consumed_while_tool_is_running(self):
+        """Reader stdio continua aceitando cancelamento enquanto agrega um batch."""
+        executor = _make_executor()
+        cancellation_seen = threading.Event()
+
+        def _execute_until_cancelled(tool_call, progress_cb=None):
+            cancel_event = tool_call.metadata["_mcp_cancel_event"]
+            if cancel_event.wait(timeout=1):
+                cancellation_seen.set()
+                return ToolResult(
+                    ok=False,
+                    tool_name="read_file",
+                    error="cancelled",
+                )
+            return ToolResult(ok=True, tool_name="read_file", content="too late")
+
+        executor.execute.side_effect = _execute_until_cancelled
+        server = _make_server(executor)
+        batch = [{
+            "jsonrpc": "2.0",
+            "id": "batch-slow",
+            "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {}},
+        }]
+        cancel = {
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": "batch-slow"},
+        }
+        inp = io.StringIO(f"{json.dumps(batch)}\n{json.dumps(cancel)}\n")
+        out = io.StringIO()
+
+        started = time.perf_counter()
+        server.serve(stdin=inp, stdout=out)
+        elapsed = time.perf_counter() - started
+
+        assert cancellation_seen.is_set()
+        assert elapsed < 0.5
+        assert out.getvalue() == ""
+
+    def test_cancelled_queued_mutation_never_executes(self):
+        """Future ainda na fila é cancelado antes de tocar estado."""
+        executor = _make_executor(tool_names=["read_file", "write_file"])
+        executor.config.mcp_tool_pool_workers = 1
+        mutation_ran = threading.Event()
+
+        def _execute(tool_call, progress_cb=None):
+            if tool_call.name == "read_file":
+                time.sleep(0.15)
+                return ToolResult(ok=True, tool_name="read_file", content="slow")
+            mutation_ran.set()
+            return ToolResult(ok=True, tool_name="write_file", content="mutated")
+
+        executor.execute.side_effect = _execute
+        server = _make_server(executor)
+        batch = [
+            {
+                "jsonrpc": "2.0", "id": "slow", "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {}},
+            },
+            {
+                "jsonrpc": "2.0", "id": "mut", "method": "tools/call",
+                "params": {"name": "write_file", "arguments": {}},
+            },
+        ]
+        cancel = {
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": "mut"},
+        }
+
+        responses = _exchange(server, batch, cancel)
+
+        assert mutation_ran.is_set() is False
+        assert [response["id"] for response in responses] == ["slow"]
+
+    def test_cancelled_non_cooperative_item_does_not_hold_batch(self):
+        """Resposta rápida sai sem esperar uma tool cancelada que ignora o evento."""
+        executor = _make_executor(tool_names=["read_file"])
+        executor.config.mcp_tool_pool_workers = 2
+
+        def _execute(tool_call, progress_cb=None):
+            if tool_call.arguments.get("path") == "slow":
+                time.sleep(0.5)
+                return ToolResult(ok=True, tool_name="read_file", content="late")
+            time.sleep(0.02)
+            return ToolResult(ok=True, tool_name="read_file", content="fast")
+
+        executor.execute.side_effect = _execute
+        server = _make_server(executor)
+        batch = [
+            {
+                "jsonrpc": "2.0", "id": "slow", "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {"path": "slow"}},
+            },
+            {
+                "jsonrpc": "2.0", "id": "fast", "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {"path": "fast"}},
+            },
+        ]
+        cancel = {
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": "slow"},
+        }
+
+        started = time.perf_counter()
+        responses = _exchange(server, batch, cancel)
+        elapsed = time.perf_counter() - started
+
+        assert elapsed < 0.25
+        assert [response["id"] for response in responses] == ["fast"]
+
 
 class TestProgressNotifications:
     """Testa notificações de progresso (notifications/progress)."""
@@ -363,6 +531,82 @@ class TestBatchAsync:
         assert len(responses) == 1
         assert responses[0]["result"]["content"][0]["text"] == "batch content"
 
+    def test_batch_does_not_consume_earlier_standalone_response(self):
+        """O agregador resolve apenas calls que pertencem ao próprio batch."""
+        executor = _make_executor()
+
+        def _execute(tool_call, progress_cb=None):
+            path = tool_call.arguments.get("path")
+            if path == "old":
+                time.sleep(0.15)
+            return ToolResult(
+                ok=True,
+                tool_name="read_file",
+                content=str(path),
+            )
+
+        executor.execute.side_effect = _execute
+        server = _make_server(executor)
+        standalone = {
+            "jsonrpc": "2.0",
+            "id": "old",
+            "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {"path": "old"}},
+        }
+        batch = [{
+            "jsonrpc": "2.0",
+            "id": "new",
+            "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {"path": "new"}},
+        }]
+
+        responses = _exchange(server, standalone, batch)
+
+        assert {response["id"] for response in responses} == {"old", "new"}
+
+    def test_batch_returns_immediate_tool_validation_error(self):
+        """Erro anterior à submissão da tool não desaparece do batch."""
+        server = _make_server(_make_executor())
+
+        responses = _exchange(server, [{
+            "jsonrpc": "2.0",
+            "id": "invalid-tool",
+            "method": "tools/call",
+            "params": {"name": "does_not_exist", "arguments": {}},
+        }])
+
+        assert len(responses) == 1
+        assert responses[0]["id"] == "invalid-tool"
+        assert responses[0]["error"]["code"] == -32602
+
+    def test_batch_uses_per_tool_deadline_for_delegate(self):
+        """Deadline longo de delegate não é cortado pelo timeout genérico."""
+        executor = _make_executor(tool_names=["delegate"])
+
+        def _execute(tool_call, progress_cb=None):
+            time.sleep(0.12)
+            return ToolResult(ok=True, tool_name="delegate", content="done")
+
+        executor.execute.side_effect = _execute
+        server = _make_server(executor)
+        batch = [{
+            "jsonrpc": "2.0",
+            "id": "delegate-long",
+            "method": "tools/call",
+            "params": {"name": "delegate", "arguments": {}},
+        }]
+
+        with patch.object(
+            server,
+            "_configured_tool_timeout",
+            side_effect=lambda name=None: 0.3 if name == "delegate" else 0.05,
+        ):
+            responses = _exchange(server, batch)
+
+        assert len(responses) == 1
+        assert responses[0]["id"] == "delegate-long"
+        assert responses[0]["result"]["structuredContent"]["ok"] is True
+
 
 class TestTimeout:
     """Testa timeout de execução de ferramentas."""
@@ -421,6 +665,7 @@ class TestTimeout:
         future = concurrent.futures.Future()
         cancel_event = threading.Event()
         out = io.StringIO()
+        batch_token = object()
         call = {
             "msg_id": 88,
             "future": future,
@@ -428,6 +673,7 @@ class TestTimeout:
             "started_at": time.perf_counter(),
             "tool_name": "read_file",
             "cancel_event": cancel_event,
+            "batch_token": batch_token,
         }
         server._cancel_events[88] = cancel_event
         server._pending_calls.append(call)
@@ -435,7 +681,9 @@ class TestTimeout:
 
         with patch.object(server, "_configured_tool_timeout", return_value=0.01):
             started_at = time.perf_counter()
-            server._resolve_batch_calls(out, responses, {88: 0})
+            server._resolve_batch_calls(
+                out, responses, {88: 0}, batch_token=batch_token,
+            )
 
         assert time.perf_counter() - started_at < 0.2
         assert cancel_event.is_set()

@@ -25,6 +25,45 @@ O servidor implementa, entre outros:
 - recursos, prompts e completion conforme suporte do runtime.
 
 Chamadas de tool podem ser executadas em thread pool, com cancelamento e progresso.
+O `tools/list` também publica `annotations` MCP (`readOnlyHint`,
+`destructiveHint` e `openWorldHint`) derivadas dos mesmos metadados usados pela
+policy. Elas ajudam clientes como Claude e Codex a apresentar e planejar o uso
+das tools, mas são apenas hints; autorização e isolamento continuam sendo
+aplicados pelo Quimera no servidor.
+
+## Paralelismo de ferramentas
+
+Há dois caminhos de execução, cada um com limite próprio em
+`ToolRuntimeConfig`:
+
+- **agentes MCP/CLI**: requisições `tools/call` simultâneas são submetidas ao
+  pool do servidor e podem progredir em paralelo, inclusive pela mesma conexão.
+  O pool tem `mcp_tool_pool_workers` workers (padrão: 4) e é compartilhado por
+  todos os agentes conectados à sessão. `delegate` aguarda o agente filho em um
+  pool separado, para não ocupar os workers de que as tools do filho precisam;
+- **backends nativos de API** (`openai_compat`, Codex Cloud e Claude Cloud):
+  quando um turno do modelo contém várias tool calls, runs adjacentes marcadas
+  explicitamente como `parallel_safe` são executadas juntas, até
+  `max_parallel_tool_calls` por turno (padrão: 4). Os resultados são
+  reenviados ao modelo na ordem original das calls, ainda que terminem fora de
+  ordem.
+
+Os limites são independentes: reduzir o lote nativo para depurar um agente não
+estrangula as tools dos demais agentes MCP, e vice-versa.
+
+O scheduler nativo é fail-closed. Leitura de arquivos, buscas, consultas de
+tasks/memória/host e git read-only podem rodar juntas. Mutações, shell,
+interação humana, delegação, estado de browser e tools importadas de MCPs
+externos formam barreiras seriais. Uma leitura que precise abrir um prompt de
+aprovação também fica serial para preservar a ordem observável. O limite
+`--threads` controla rodadas/agentes simultâneos e não este pool de tools.
+
+Cancelamento, escopo de aprovação e callback de progresso são propagados para
+cada worker. No transporte stdio, o agregador de um batch não bloqueia o reader:
+`notifications/cancelled` continua sendo consumido enquanto as calls do lote
+estão em andamento. A UI correlaciona início e fim por `tool_call_id`, portanto
+duas calls da mesma tool podem concluir fora de ordem sem trocar seus registros;
+um resultado sem evento de início ainda gera evidência com o mesmo ID.
 
 ## Ferramentas disponíveis
 

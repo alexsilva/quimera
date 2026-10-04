@@ -164,6 +164,12 @@ class DelegateTools(ToolBase):
         """Injeta callback para reporte de progresso."""
         self._progress_callback = fn
 
+    def _progress_callback_for(self, call: ToolCall) -> Callable[[str], None] | None:
+        """Resolve progresso por chamada antes do fallback global legado."""
+        metadata = call.metadata if isinstance(call.metadata, dict) else {}
+        callback = metadata.get("_tool_progress_callback")
+        return callback if callable(callback) else self._progress_callback
+
     def set_cleanup_callback(self, fn: Callable[[str], None] | None) -> None:
         """Injeta callback para limpeza do estado de render após cada step."""
         self._cleanup_callback = fn
@@ -432,7 +438,7 @@ class DelegateTools(ToolBase):
             return ToolResult(ok=False, tool_name=call.name, error=f"Failed to create task: {exc}")
 
         _fn = self._background_delegate_fn or self._delegate_fn
-        _progress_cb = self._progress_callback
+        _progress_cb = self._progress_callback_for(call)
         _resolve_active = self._resolve_active_agents
         _normalize = self._normalize_agent_identity
         _cleanup_cb = self._cleanup_callback
@@ -918,7 +924,7 @@ class DelegateTools(ToolBase):
             result = self._execute_steps_parallel(
                 steps,
                 delegate_fn,
-                self._progress_callback,
+                self._progress_callback_for(call),
                 self._resolve_active_agents,
                 self._normalize_agent_identity,
                 cleanup_callback=self._cleanup_callback,
@@ -929,7 +935,7 @@ class DelegateTools(ToolBase):
             result = self._execute_steps_inner(
                 steps,
                 delegate_fn,
-                self._progress_callback,
+                self._progress_callback_for(call),
                 self._resolve_active_agents,
                 self._normalize_agent_identity,
                 cleanup_callback=self._cleanup_callback,

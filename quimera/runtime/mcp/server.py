@@ -38,6 +38,7 @@ from quimera.runtime.config import (
 )
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
+from quimera.runtime.tool_metadata import ToolRisk, get_tool_metadata
 from quimera.runtime.drivers.tool_schemas import resolve_tool_schemas
 from quimera.version import __version__
 from quimera.workspace import Workspace
@@ -60,6 +61,27 @@ def _openai_schema_to_mcp(schema: dict) -> dict:
     output_schema = fn.get("output_schema")
     if output_schema is not None:
         tool["outputSchema"] = output_schema
+    metadata = get_tool_metadata(str(fn.get("name") or ""))
+    if metadata is not None:
+        # MCP ToolAnnotations são hints para clientes; enforcement continua
+        # exclusivamente em ToolPolicy/ApprovalManager no servidor.
+        tool["annotations"] = {
+            "readOnlyHint": not metadata.mutates,
+            "destructiveHint": bool(
+                metadata.mutates
+                and metadata.risk in {
+                    ToolRisk.WRITE,
+                    ToolRisk.SHELL,
+                    ToolRisk.DESTRUCTIVE,
+                    ToolRisk.DELEGATION,
+                }
+            ),
+            "openWorldHint": bool(
+                metadata.risk in {ToolRisk.NETWORK, ToolRisk.DELEGATION, ToolRisk.SHELL}
+                or str(fn.get("name") or "").startswith("browser_")
+                or str(fn.get("name") or "") in {"git_fetch", "git_push"}
+            ),
+        }
     return tool
 
 
@@ -184,12 +206,27 @@ class MCPServer:
         self._pending_lock = threading.Lock()
         self._progress_seq = 0
         self._progress_seq_lock = threading.Lock()
-        self._batch_outputs: set[int] = set()
-        self._batch_outputs_lock = threading.Lock()
         self._shutdown_event = threading.Event()
         self._shutdown_lock = threading.Lock()
+        # O pool é compartilhado por todos os agentes da sessão e tem limite
+        # próprio; ``max_parallel_tool_calls`` dimensiona só o lote nativo de
+        # um turno e não interfere aqui.
+        config = tool_executor.config
         self._thread_pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="mcp-tool"
+            max_workers=config.mcp_tool_pool_workers,
+            thread_name_prefix="mcp-tool",
+        )
+        # Uma delegate síncrona espera o agente filho, que por sua vez chama
+        # tools neste mesmo servidor. Se ela ocupar o pool geral, limite 1 (ou
+        # N delegates com limite N) deixa as tools filhas presas atrás dos pais.
+        # O pool separado preserva o limite das tools e deixa o runtime de
+        # agentes aplicar seu próprio controle de concorrência/delegação.
+        self._delegation_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(
+                config.mcp_tool_pool_workers,
+                config.delegation_budget_per_run,
+            ),
+            thread_name_prefix="mcp-delegate",
         )
         self._resource_subscriptions: set[str] = set()
 
@@ -331,6 +368,7 @@ class MCPServer:
                 )
 
             self._thread_pool.shutdown(wait=False, cancel_futures=True)
+            self._delegation_pool.shutdown(wait=False, cancel_futures=True)
     # ------------------------------------------------------------------
     # I/O
     # ------------------------------------------------------------------
@@ -345,8 +383,15 @@ class MCPServer:
     # Despacho de métodos
     # ------------------------------------------------------------------
 
-    def _handle(self, msg: dict, out: IO, blocking: bool = False,
-                used_ids: dict | None = None, state: dict | None = None) -> dict | None:
+    def _handle(
+        self,
+        msg: dict,
+        out: IO,
+        blocking: bool = False,
+        used_ids: dict | None = None,
+        state: dict | None = None,
+        batch_token: object | None = None,
+    ) -> dict | None:
         validation_error = self._validate_jsonrpc_message(msg)
         msg_id = msg.get("id") if isinstance(msg, dict) else None
         if validation_error is not None:
@@ -385,7 +430,13 @@ class MCPServer:
             return self._handle_tools_list(msg_id, params, state=state)
 
         if method == "tools/call":
-            return self._handle_tools_call(msg_id, params, out=out, blocking=blocking)
+            return self._handle_tools_call(
+                msg_id,
+                params,
+                out=out,
+                blocking=blocking,
+                batch_token=batch_token,
+            )
 
         if method == "resources/list":
             return self._handle_resources_list(msg_id, params)
@@ -637,6 +688,17 @@ class MCPServer:
             event = self._cancel_events.pop(request_key, None)
         if event is not None:
             event.set()
+            with self._pending_lock:
+                pending = next(
+                    (
+                        call
+                        for call in self._pending_calls
+                        if call.get("request_key") == request_key
+                    ),
+                    None,
+                )
+            if pending is not None:
+                pending["future"].cancel()
             _logger.debug("MCP cancel event set for id=%s", cancel_id)
 
     @staticmethod
@@ -691,7 +753,14 @@ class MCPServer:
             result["nextCursor"] = base64.urlsafe_b64encode(next_bytes).decode()
         return self._ok(msg_id, result)
 
-    def _handle_tools_call(self, msg_id: Any, params: dict, out: IO, blocking: bool = False) -> dict | None:
+    def _handle_tools_call(
+        self,
+        msg_id: Any,
+        params: dict,
+        out: IO,
+        blocking: bool = False,
+        batch_token: object | None = None,
+    ) -> dict | None:
         tool_name = params.get("name", "")
         arguments = params.get("arguments") or {}
         if self._shutdown_event.is_set():
@@ -797,11 +866,22 @@ class MCPServer:
         with self._cancel_lock:
             self._cancel_events[request_key] = cancel_event
 
-        future = self._thread_pool.submit(
-            self._executor.execute,
-            ToolCall(name=tool_name, arguments=arguments, metadata=call_metadata),
-            _progress_callback,
+        tool_call = ToolCall(
+            name=tool_name,
+            arguments=arguments,
+            metadata=call_metadata,
         )
+
+        def _execute_unless_cancelled():
+            # Fecha a janela entre submit e início do worker. Em especial,
+            # impede que uma mutação ainda na fila execute depois de o cliente
+            # cancelar a request.
+            if cancel_event.is_set():
+                return None
+            return self._executor.execute(tool_call, _progress_callback)
+
+        pool = self._delegation_pool if tool_name == "delegate" else self._thread_pool
+        future = pool.submit(_execute_unless_cancelled)
 
         call_info = {
             "msg_id": msg_id,
@@ -814,6 +894,7 @@ class MCPServer:
             "arg_keys": arg_keys,
             "trusted_context": trusted_context,
             "cancel_event": cancel_event,
+            "batch_token": batch_token,
         }
         with self._pending_lock:
             self._pending_calls.append(call_info)
@@ -939,6 +1020,23 @@ class MCPServer:
         if wait_timeout is None:
             wait_timeout = max(0.0, self._call_deadline(call) - time.perf_counter())
 
+        if cancel_event.is_set():
+            _logger.debug("MCP tools/call cancelled tool=%s — no response sent", tool_name)
+            duration_ms = int((time.perf_counter() - started_at) * 1000)
+            self._emit_tool_run_event(
+                "tool_cancelled",
+                call.get("trusted_context"),
+                tool_name,
+                msg_id=msg_id,
+                arg_keys=call.get("arg_keys") or [],
+                duration_ms=duration_ms,
+                ok=False,
+                error="cancelled",
+            )
+            with self._cancel_lock:
+                self._cancel_events.pop(request_key, None)
+            return None
+
         if not future.done():
             try:
                 future.result(timeout=wait_timeout)
@@ -1030,11 +1128,12 @@ class MCPServer:
         })
 
     def _flush_pending(self, out: IO) -> None:
-        with self._batch_outputs_lock:
-            if id(out) in self._batch_outputs:
-                return
         with self._pending_lock:
-            owned = [c for c in self._pending_calls if c["out"] is out]
+            owned = [
+                c
+                for c in self._pending_calls
+                if c["out"] is out and c.get("batch_token") is None
+            ]
 
         if not owned:
             return
@@ -1333,8 +1432,14 @@ class MCPServer:
     # Loop principal
     # ------------------------------------------------------------------
 
-    def _process_message(self, msg: Any, out: IO,
-                         used_ids: dict | None = None, transport: str | None = None) -> None:
+    def _process_message(
+        self,
+        msg: Any,
+        out: IO,
+        used_ids: dict | None = None,
+        transport: str | None = None,
+        asynchronous_batches: bool = False,
+    ) -> threading.Thread | None:
         """Processa uma mensagem ou lote JSON-RPC e escreve respostas."""
         state = getattr(out, "_mcp_state", None)
         if state is None:
@@ -1354,7 +1459,13 @@ class MCPServer:
             if not msg:
                 self._write(self._err(None, -32600, "Invalid Request: empty batch"), out)
                 return
-            return self._process_batch(msg, out, used_ids=used_ids, state=state)
+            return self._process_batch(
+                msg,
+                out,
+                used_ids=used_ids,
+                state=state,
+                asynchronous=asynchronous_batches,
+            )
 
         if not isinstance(msg, dict):
             self._write(self._err(None, -32600, "Invalid Request"), out)
@@ -1369,22 +1480,20 @@ class MCPServer:
 
         if response is not None:
             self._write(response, out)
+        return None
 
-    def _process_batch(self, msg: list, out: IO,
-                       used_ids: dict | None = None, state: dict | None = None) -> None:
+    def _process_batch(
+        self,
+        msg: list,
+        out: IO,
+        used_ids: dict | None = None,
+        state: dict | None = None,
+        asynchronous: bool = False,
+    ) -> threading.Thread | None:
         """Processa lote JSON-RPC: submete tools/call concorrentemente, resolve em bloco."""
-        with self._batch_outputs_lock:
-            self._batch_outputs.add(id(out))
-        try:
-            self._process_batch_impl(msg, out, used_ids=used_ids, state=state)
-        finally:
-            with self._batch_outputs_lock:
-                self._batch_outputs.discard(id(out))
-
-    def _process_batch_impl(self, msg: list, out: IO,
-                            used_ids: dict | None = None, state: dict | None = None) -> None:
         responses: list[dict | None] = [None] * len(msg)
         pending_ids: dict[Any, int] = {}  # msg_id -> list index
+        batch_token = object()
 
         for idx, item in enumerate(msg):
             if not isinstance(item, dict):
@@ -1393,8 +1502,17 @@ class MCPServer:
             try:
                 item_id = item.get("id")
                 if item.get("method") == "tools/call":
-                    self._handle(item, out=out, blocking=False, used_ids=used_ids, state=state)
-                    if item_id is not None:
+                    response = self._handle(
+                        item,
+                        out=out,
+                        blocking=False,
+                        used_ids=used_ids,
+                        state=state,
+                        batch_token=batch_token,
+                    )
+                    if response is not None:
+                        responses[idx] = response
+                    elif item_id is not None:
                         pending_ids[item_id] = idx
                 else:
                     resp = self._handle(item, out=out, used_ids=used_ids, state=state)
@@ -1404,34 +1522,109 @@ class MCPServer:
                 item_id = item.get("id")
                 responses[idx] = self._err(item_id, -32603, f"Internal error: {exc}") if item_id is not None else None
 
-        if pending_ids:
-            self._resolve_batch_calls(out, responses, pending_ids)
+        with self._pending_lock:
+            has_pending_calls = any(
+                call["out"] is out and call.get("batch_token") is batch_token
+                for call in self._pending_calls
+            )
+
+        if has_pending_calls and asynchronous:
+            worker = threading.Thread(
+                target=self._finish_batch,
+                args=(out, responses, pending_ids, batch_token),
+                daemon=True,
+                name="mcp-batch",
+            )
+            worker.start()
+            return worker
+
+        if has_pending_calls:
+            self._resolve_batch_calls(
+                out,
+                responses,
+                pending_ids,
+                batch_token=batch_token,
+            )
 
         non_null = [r for r in responses if r is not None]
         if non_null:
             self._write(non_null, out)
+        return None
 
-    def _resolve_batch_calls(self, out: IO, responses: list, pending_ids: dict) -> None:
+    def _finish_batch(
+        self,
+        out: IO,
+        responses: list[dict | None],
+        pending_ids: dict[Any, int],
+        batch_token: object,
+    ) -> None:
+        """Agrega um batch stdio sem bloquear o reader de notificações."""
+        try:
+            self._resolve_batch_calls(
+                out,
+                responses,
+                pending_ids,
+                batch_token=batch_token,
+            )
+            non_null = [response for response in responses if response is not None]
+            if non_null:
+                self._write(non_null, out)
+        except (OSError, ValueError):
+            _logger.debug("MCP batch descartado: saída indisponível", exc_info=True)
+        except Exception:
+            _logger.debug("MCP batch assíncrono falhou", exc_info=True)
+
+    def _resolve_batch_calls(
+        self,
+        out: IO,
+        responses: list,
+        pending_ids: dict,
+        *,
+        batch_token: object,
+    ) -> None:
         """Aguarda e coleta respostas de tools/call submetidas em lote."""
         with self._pending_lock:
-            owned = [c for c in self._pending_calls if c["out"] is out]
+            owned = [
+                call
+                for call in self._pending_calls
+                if call["out"] is out and call.get("batch_token") is batch_token
+            ]
 
-        futures = [c["future"] for c in owned]
-        if futures:
-            timeout = self._configured_tool_timeout()
-            concurrent.futures.wait(futures, timeout=timeout)
+        remaining = list(owned)
+        while remaining:
+            now = time.perf_counter()
+            ready = [
+                call
+                for call in remaining
+                if call["cancel_event"].is_set()
+                or call["future"].done()
+                or now >= self._call_deadline(call)
+            ]
+            if not ready:
+                # Future.cancel() só acorda futures ainda enfileirados. Para uma
+                # tool já em execução e não cooperativa, o cancel_event exige
+                # polling curto para que as demais respostas do batch não
+                # fiquem bloqueadas até o retorno tardio dessa tool.
+                next_deadline = min(self._call_deadline(call) for call in remaining)
+                wait_timeout = min(0.05, max(0.0, next_deadline - now))
+                concurrent.futures.wait(
+                    [call["future"] for call in remaining],
+                    timeout=wait_timeout,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                continue
 
-        for call in owned:
-            wait_timeout = timeout if call["future"].done() else 0
-            resp = self._resolve_tool_response(call, wait_timeout=wait_timeout)
-            idx = pending_ids.get(call["msg_id"])
-            if idx is not None and resp is not None:
-                responses[idx] = resp
-            with self._pending_lock:
-                try:
-                    self._pending_calls.remove(call)
-                except ValueError:
-                    pass
+            for call in ready:
+                resp = self._resolve_tool_response(call, wait_timeout=0)
+                idx = pending_ids.get(call["msg_id"])
+                if idx is not None and resp is not None:
+                    responses[idx] = resp
+                with self._pending_lock:
+                    try:
+                        self._pending_calls.remove(call)
+                    except ValueError:
+                        pass
+                remaining.remove(call)
 
     def serve(self, stdin: IO | None = None, stdout: IO | None = None) -> None:
         """Processa mensagens MCP até EOF no stdin.
@@ -1461,6 +1654,7 @@ class MCPServer:
         flush_thread.start()
 
         used_ids: dict[Any, None] = collections.OrderedDict()
+        batch_workers: list[threading.Thread] = []
 
         for raw_line in inp:
             line = raw_line.strip()
@@ -1474,7 +1668,15 @@ class MCPServer:
                 self._write({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"Parse error: {exc}"}}, out)
                 continue
 
-            self._process_message(msg, out, used_ids=used_ids)
+            batch_worker = self._process_message(
+                msg,
+                out,
+                used_ids=used_ids,
+                asynchronous_batches=True,
+            )
+            if batch_worker is not None:
+                batch_workers = [worker for worker in batch_workers if worker.is_alive()]
+                batch_workers.append(batch_worker)
 
         flusher_active[0] = False
         cancel_pending_on_eof = getattr(out, "_mcp_cancel_pending_on_eof", False)
@@ -1482,6 +1684,8 @@ class MCPServer:
         if should_cancel:
             self._cancel_pending_for_output(out)
         else:
+            for worker in batch_workers:
+                worker.join()
             self._drain_all_pending(out)
 
 

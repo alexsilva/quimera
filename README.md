@@ -199,6 +199,18 @@ O MCP HTTP é uma extensão externa opcional para clientes remotos. Ele usa uma 
 
 Ferramentas são executadas por chamadas estruturadas: MCP para agentes CLI/MCP-capazes e, quando o backend OpenAI-compatible oferece suporte nativo a tool calling, chamadas nativas do driver. Em ambos os caminhos, a execução concreta converge para `ToolExecutor.execute(ToolCall(...))`, com `ToolPolicy`, approval e `ToolRegistry` centralizando validação, permissão, auditoria e despacho para os handlers do runtime.
 
+O servidor MCP aceita `tools/call` concorrentes em um pool compartilhado por
+todos os agentes da sessão (`mcp_tool_pool_workers`, 4 por padrão); `delegate`
+aguarda o agente filho em um pool separado. No harness nativo compartilhado por
+OpenAI-compatible, Codex Cloud e Claude Cloud, múltiplas calls read-only
+explicitamente seguras do mesmo turno também rodam em paralelo, até
+`max_parallel_tool_calls` por turno (4 por padrão); mutações, shell, interação,
+browser state, delegação e tools MCP externas permanecem seriais. Os dois
+limites são independentes. Escopos de aprovação e cancelamento são propagados
+aos workers, e os resultados voltam ao modelo na ordem em que foram
+solicitados. `tools/list` expõe as anotações MCP de leitura, destrutividade e
+open-world; elas não substituem a policy do servidor.
+
 A ferramenta `delegate` permite que qualquer agente MCP-capaz delegue trabalho a outro agente no pool da sessão (disponível apenas quando MCP está ativo).
 
 ### Perfis embutidos

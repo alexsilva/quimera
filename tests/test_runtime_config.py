@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.session_paths import SessionPaths
 from quimera.workspace import Workspace
@@ -39,3 +41,24 @@ def test_workspace_paths_are_not_duplicated_in_runtime_config():
     assert not hasattr(config, "workspace_root")
     assert not hasattr(config, "db_path")
     assert not hasattr(config, "memory_file")
+
+
+@pytest.mark.parametrize("field", ["max_parallel_tool_calls", "mcp_tool_pool_workers"])
+@pytest.mark.parametrize("value", [0, -1, 1.5, True, "4"])
+def test_concurrency_limits_require_positive_integer(tmp_path, field, value):
+    with pytest.raises(ValueError, match=field):
+        ToolRuntimeConfig(workspace=Workspace(tmp_path), **{field: value})
+
+
+def test_concurrency_limits_default_to_four_and_are_independent(tmp_path):
+    config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
+    assert config.max_parallel_tool_calls == 4
+    assert config.mcp_tool_pool_workers == 4
+
+    tuned = ToolRuntimeConfig(
+        workspace=Workspace(tmp_path),
+        max_parallel_tool_calls=1,
+        mcp_tool_pool_workers=6,
+    )
+    assert tuned.max_parallel_tool_calls == 1
+    assert tuned.mcp_tool_pool_workers == 6

@@ -1597,6 +1597,57 @@ def test_spy_output_presenter_renders_explicit_openai_summary(renderer):
     assert detail["tools"][0]["status"] == "ok"
 
 
+def test_spy_output_presenter_correlates_parallel_same_name_calls_by_id(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+    presenter.set_turn_runtime("openai")
+    presenter.record_tool_call(
+        "read_file", {"path": "slow.py"}, tool_call_id="call_slow"
+    )
+    presenter.record_tool_call(
+        "read_file", {"path": "fast.py"}, tool_call_id="call_fast"
+    )
+
+    # A rápida termina primeiro; o id evita fechar o registro da call errada.
+    presenter.record_tool_result(SimpleNamespace(
+        ok=True,
+        tool_name="read_file",
+        error=None,
+        data={"tool_call_id": "call_fast"},
+    ))
+    presenter.record_tool_result(SimpleNamespace(
+        ok=False,
+        tool_name="read_file",
+        error="falhou",
+        data={"tool_call_id": "call_slow"},
+    ))
+
+    detail = presenter.finalize_turn("codexcloud", render_summary=True)
+
+    by_id = {item["tool_call_id"]: item for item in detail["tools"]}
+    assert by_id["call_fast"]["status"] == "ok"
+    assert by_id["call_slow"]["status"] == "error"
+
+
+def test_spy_output_presenter_records_result_with_id_without_start(renderer):
+    """Argument error sem evento de início preserva evidência e correlação."""
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+    result = SimpleNamespace(
+        ok=False,
+        tool_name="read_file",
+        error="argumentos inválidos",
+        data={"tool_call_id": "argerr-1"},
+    )
+
+    activity = presenter.tool_result_activity(result)
+    presenter.record_tool_result(result)
+
+    assert activity["tool_call_id"] == "argerr-1"
+    assert len(presenter.turn_tools) == 1
+    assert presenter.turn_tools[0]["tool_call_id"] == "argerr-1"
+    assert presenter.turn_tools[0]["status"] == "error"
+    assert presenter.turn_tools[0]["error"]["message"] == "argumentos inválidos"
+
+
 def test_spy_output_presenter_full_mode_renders_tool_timeline(renderer):
     """Verifica que spy output presenter full mode renders tool timeline."""
     presenter = SpyOutputPresenter(renderer, Visibility.FULL)

@@ -128,16 +128,26 @@ class SpyOutputPresenter:
         operation = str(data.get("operation") or "")
         if operation not in {"start", "end"}:
             return None
-        return {
+        activity = {
             "text": str(event.text or "").strip(),
             "tool": str(data.get("tool") or ""),
             "operation": operation,
             "status": str(data.get("status") or ""),
         }
+        if data.get("tool_call_id") is not None:
+            activity["tool_call_id"] = str(data["tool_call_id"])
+        return activity
 
-    def tool_call_activity(self, tool: str, arguments: dict | None = None) -> dict | None:
+    def tool_call_activity(
+        self,
+        tool: str,
+        arguments: dict | None = None,
+        tool_call_id: str | None = None,
+    ) -> dict | None:
         """Normaliza atividade de início para drivers sem stdout estruturado."""
-        return self.tool_activity(self._tool_call_event(tool, arguments))
+        return self.tool_activity(
+            self._tool_call_event(tool, arguments, tool_call_id=tool_call_id)
+        )
 
     def tool_result_activity(self, result) -> dict | None:
         """Normaliza atividade de conclusão para drivers sem stdout estruturado."""
@@ -196,7 +206,17 @@ class SpyOutputPresenter:
             return
 
         key = tool_call_id or self._find_open_tool(tool)
-        if not key:
+        record = self._active_tool_calls.get(key) if key else None
+        if record is None and tool_call_id:
+            # Um end repetido para o mesmo ID é ignorado; um end sem start
+            # (como o de ``argument_error``) cria o próprio registro abaixo.
+            record = self._find_record_by_id(tool_call_id)
+            if record is not None:
+                if record.get("ended_at") is not None:
+                    return
+                self._active_tool_calls[tool_call_id] = record
+
+        if record is None:
             key = self._tool_key(tool, tool_call_id)
             input_payload = data.get("input")
             activity = classify_tool_activity(
@@ -217,10 +237,6 @@ class SpyOutputPresenter:
             self.turn_tools.append(record)
             self._active_tool_calls[key] = record
 
-        record = self._active_tool_calls.get(key)
-        if not record:
-            return
-
         record["status"] = status or record.get("status") or "unknown"
         if data.get("activity"):
             record["activity"] = classify_tool_activity(
@@ -239,7 +255,12 @@ class SpyOutputPresenter:
         self._active_tool_calls.pop(key, None)
 
     @staticmethod
-    def _tool_call_event(tool: str, arguments: dict | None = None) -> SpyEvent:
+    def _tool_call_event(
+        tool: str,
+        arguments: dict | None = None,
+        *,
+        tool_call_id: str | None = None,
+    ) -> SpyEvent:
         """Normaliza uma chamada de tool vinda de drivers sem stdout próprio."""
         tool_name = str(tool or "ferramenta")
         input_payload = dict(arguments) if isinstance(arguments, dict) else None
@@ -252,6 +273,7 @@ class SpyOutputPresenter:
                 "operation": "start",
                 "status": "running",
                 "input": input_payload,
+                "tool_call_id": tool_call_id,
             },
         )
 
@@ -266,6 +288,9 @@ class SpyOutputPresenter:
             "operation": "end",
             "status": "ok" if ok else "error",
         }
+        result_data = getattr(result, "data", None)
+        if isinstance(result_data, dict) and result_data.get("tool_call_id"):
+            data["tool_call_id"] = str(result_data["tool_call_id"])
         if error:
             data["error"] = {"type": "ToolError", "message": error}
         return SpyEvent(
@@ -275,17 +300,33 @@ class SpyOutputPresenter:
             data=data,
         )
 
-    def record_tool_call(self, tool: str, arguments: dict | None = None) -> None:
+    def record_tool_call(
+        self,
+        tool: str,
+        arguments: dict | None = None,
+        tool_call_id: str | None = None,
+    ) -> None:
         """Registra início de tool executada por um driver sem stdout próprio."""
-        self._record_tool_event(self._tool_call_event(tool, arguments))
+        self._record_tool_event(
+            self._tool_call_event(tool, arguments, tool_call_id=tool_call_id)
+        )
 
     def record_tool_result(self, result) -> None:
         """Registra conclusão de ToolResult sem duplicar a preview visual."""
         self._record_tool_event(self._tool_result_event(result))
 
-    def emit_tool_call(self, agent: str | None, tool: str, arguments: dict | None = None) -> None:
+    def emit_tool_call(
+        self,
+        agent: str | None,
+        tool: str,
+        arguments: dict | None = None,
+        tool_call_id: str | None = None,
+    ) -> None:
         """Aplica a política visual ativa a uma chamada de tool estruturada."""
-        self.emit(agent, self._tool_call_event(tool, arguments))
+        self.emit(
+            agent,
+            self._tool_call_event(tool, arguments, tool_call_id=tool_call_id),
+        )
 
     def emit_tool_result(self, agent: str | None, result) -> None:
         """Aplica a política visual ativa a uma conclusão de tool estruturada."""

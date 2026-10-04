@@ -41,6 +41,7 @@ class ToolMetadata:
     path_args: tuple[str, ...] = ()
     requires_path_permission: bool = False
     serialization: str | None = None
+    parallel_safe: bool = False
     capabilities: tuple[str, ...] = ()
     http_profiles: frozenset[str] = frozenset()
 
@@ -58,6 +59,7 @@ def _meta(
     path_args: tuple[str, ...] = (),
     requires_path_permission: bool = False,
     serialization: str | None = None,
+    parallel_safe: bool = False,
     capabilities: tuple[str, ...] = (),
     http_profiles: frozenset[str] = frozenset(),
 ) -> ToolMetadata:
@@ -68,6 +70,7 @@ def _meta(
         path_args=path_args,
         requires_path_permission=requires_path_permission,
         serialization=serialization,
+        parallel_safe=parallel_safe,
         capabilities=capabilities,
         http_profiles=http_profiles,
     )
@@ -75,22 +78,32 @@ def _meta(
 
 TOOL_METADATA: dict[str, ToolMetadata] = {
     # Host diagnostics.
-    "host_processes": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
-    "host_process_inspect": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
-    "host_process_sample": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
-    "host_memory": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
+    "host_processes": _meta(
+        ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
+    ),
+    "host_process_inspect": _meta(
+        ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
+    ),
+    "host_process_sample": _meta(
+        ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
+    ),
+    "host_memory": _meta(
+        ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
+    ),
 
     # Files/workspace.
     "list_files": _meta(
         ToolRisk.READ,
         path_args=("path",),
         requires_path_permission=True,
+        parallel_safe=True,
         http_profiles=_READ_LOCAL,
     ),
     "read_file": _meta(
         ToolRisk.READ,
         path_args=("path",),
         requires_path_permission=True,
+        parallel_safe=True,
         http_profiles=_READ_LOCAL,
     ),
     "write_file": _meta(
@@ -118,9 +131,15 @@ TOOL_METADATA: dict[str, ToolMetadata] = {
         ToolRisk.READ,
         path_args=("path",),
         requires_path_permission=True,
+        parallel_safe=True,
         http_profiles=_READ_LOCAL,
     ),
-    "inspect_symbols": _meta(ToolRisk.READ, path_args=("path",), http_profiles=_READ_LOCAL),
+    "inspect_symbols": _meta(
+        ToolRisk.READ,
+        path_args=("path",),
+        parallel_safe=True,
+        http_profiles=_READ_LOCAL,
+    ),
     "remove_file": _meta(
         ToolRisk.DESTRUCTIVE,
         mutates=True,
@@ -170,15 +189,36 @@ TOOL_METADATA: dict[str, ToolMetadata] = {
         capabilities=("task_db", "tasks"),
         http_profiles=_AGENT,
     ),
-    "list_tasks": _meta(ToolRisk.READ, capabilities=("task_db",), http_profiles=_READ_LOCAL),
-    "list_jobs": _meta(ToolRisk.READ, capabilities=("task_db",), http_profiles=_READ_LOCAL),
-    "get_job": _meta(ToolRisk.READ, capabilities=("task_db",), http_profiles=_READ_LOCAL),
+    "list_tasks": _meta(
+        ToolRisk.READ,
+        parallel_safe=True,
+        capabilities=("task_db",),
+        http_profiles=_READ_LOCAL,
+    ),
+    "list_jobs": _meta(
+        ToolRisk.READ,
+        parallel_safe=True,
+        capabilities=("task_db",),
+        http_profiles=_READ_LOCAL,
+    ),
+    "get_job": _meta(
+        ToolRisk.READ,
+        parallel_safe=True,
+        capabilities=("task_db",),
+        http_profiles=_READ_LOCAL,
+    ),
     "todo_write": _meta(ToolRisk.WRITE, mutates=True),
-    "todo_list": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
+    "todo_list": _meta(
+        ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
+    ),
 
     # Network/web.
-    "web_search": _meta(ToolRisk.NETWORK, http_profiles=_READ_NETWORK),
-    "web_fetch": _meta(ToolRisk.NETWORK, http_profiles=_READ_NETWORK),
+    "web_search": _meta(
+        ToolRisk.NETWORK, parallel_safe=True, http_profiles=_READ_NETWORK,
+    ),
+    "web_fetch": _meta(
+        ToolRisk.NETWORK, parallel_safe=True, http_profiles=_READ_NETWORK,
+    ),
     # HTTP risk/mutation are method-dependent; NETWORK is the safe GET baseline.
     "http_request": _meta(
         ToolRisk.NETWORK,
@@ -190,6 +230,8 @@ TOOL_METADATA: dict[str, ToolMetadata] = {
     # Memory. memory_save intentionally preserves the current auto-approved
     # workspace-memory behavior; deletion remains destructive.
     "memory_save": _meta(ToolRisk.READ, mutates=True, http_profiles=_AGENT),
+    # retrieve poda TTLs expirados e pode reescrever memory.json; portanto é
+    # leitura na API, mas não uma operação sem mutação para o scheduler.
     "memory_retrieve": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
     "memory_delete": _meta(
         ToolRisk.DESTRUCTIVE,
@@ -197,7 +239,9 @@ TOOL_METADATA: dict[str, ToolMetadata] = {
         approval=ApprovalMode.MUTATION,
         http_profiles=_AGENT,
     ),
-    "memory_list_namespaces": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
+    "memory_list_namespaces": _meta(
+        ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
+    ),
 
     # Delegation/interactions/state.
     "delegate": _meta(
@@ -207,7 +251,12 @@ TOOL_METADATA: dict[str, ToolMetadata] = {
         capabilities=("delegate",),
         http_profiles=_AGENT,
     ),
-    "list_agents": _meta(ToolRisk.READ, capabilities=("delegate",), http_profiles=_AGENT),
+    "list_agents": _meta(
+        ToolRisk.READ,
+        parallel_safe=True,
+        capabilities=("delegate",),
+        http_profiles=_AGENT,
+    ),
     "ask_user": _meta(ToolRisk.READ, capabilities=("ask_user",)),
     "update_shared_state": _meta(
         ToolRisk.READ,
@@ -216,10 +265,18 @@ TOOL_METADATA: dict[str, ToolMetadata] = {
     ),
 
     # Git.
-    "git_status": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
-    "git_log": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
-    "git_diff": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
-    "git_branch": _meta(ToolRisk.READ, http_profiles=_READ_LOCAL),
+    "git_status": _meta(
+        ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
+    ),
+    "git_log": _meta(
+        ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
+    ),
+    "git_diff": _meta(
+        ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
+    ),
+    "git_branch": _meta(
+        ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
+    ),
     "git_fetch": _meta(
         ToolRisk.WRITE,
         mutates=True,

@@ -52,6 +52,8 @@ def make_mcp_executor(tool_names=None, call_result=None):
     names = tool_names or ["read_file", "run_shell"]
     executor.registry.names.return_value = names
     executor.config.workspace = None
+    executor.config.mcp_tool_pool_workers = 4
+    executor.config.delegation_budget_per_run = 8
     executor.policy.blocked_tools = set()
     if call_result is None:
         call_result = ToolResult(ok=True, tool_name="read_file", content="ok")

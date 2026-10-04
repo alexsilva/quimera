@@ -59,12 +59,34 @@ class TestOpenaiSchemaToMcp:
         assert result["name"] == "read_file"
         assert result["description"] == "Lê arquivo"
         assert result["inputSchema"]["required"] == ["path"]
+        assert result["annotations"] == {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "openWorldHint": False,
+        }
 
     def test_schema_sem_parameters_usa_padrao(self):
         """Verifica que Test schema sem parameters usa padrao."""
         schema = {"type": "function", "function": {"name": "ping", "description": ""}}
         result = _openai_schema_to_mcp(schema)
         assert result["inputSchema"] == {"type": "object", "properties": {}}
+        assert "annotations" not in result
+
+    def test_annotations_keep_network_and_mutation_risk_explicit(self):
+        web = _openai_schema_to_mcp({
+            "type": "function",
+            "function": {"name": "web_search", "description": "", "parameters": {}},
+        })
+        shell = _openai_schema_to_mcp({
+            "type": "function",
+            "function": {"name": "run_shell", "description": "", "parameters": {}},
+        })
+
+        assert web["annotations"]["readOnlyHint"] is True
+        assert web["annotations"]["openWorldHint"] is True
+        assert shell["annotations"]["readOnlyHint"] is False
+        assert shell["annotations"]["destructiveHint"] is True
+        assert shell["annotations"]["openWorldHint"] is True
 
 
 # ---------------------------------------------------------------------------

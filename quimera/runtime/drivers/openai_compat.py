@@ -6,6 +6,7 @@ A exibição da resposta final segue o pipeline normal do app (show_message).
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import hashlib
 import logging
@@ -989,6 +990,289 @@ class ToolCallingDriver:
             )
         return ""
 
+    @staticmethod
+    def _tool_call_is_parallel_safe(tool_executor, tc: dict) -> bool:
+        """Consulta a classificação fail-closed publicada pelo executor."""
+        if tc.get("argument_error") is not None:
+            # A call inválida só produz um ToolResult local e não toca estado.
+            return True
+        checker = getattr(tool_executor, "is_parallel_safe", None)
+        if not callable(checker):
+            return False
+        try:
+            call = ToolCall(
+                name=tc["name"],
+                arguments=tc["arguments"],
+                call_id=tc.get("id"),
+            )
+            decision = checker(call)
+        except Exception:
+            return False
+        # Contrato booleano e fail-closed: só ``True`` habilita concorrência.
+        if decision is not True:
+            return False
+
+        # Prompts humanos têm ordem observável. Mesmo uma leitura marcada como
+        # segura vira barreira quando path/policy exigiria autorização.
+        approval_checker = getattr(tool_executor, "would_require_approval", None)
+        if callable(approval_checker):
+            try:
+                if approval_checker(call) is True:
+                    return False
+            except Exception:
+                return False
+        return True
+
+    def _execute_one_tool_call(
+        self,
+        tc: dict,
+        tool_executor,
+        *,
+        agent_name: str | None,
+        parent_agent: str | None,
+        progress_callback,
+        cancel_event,
+        begin_tool_execution,
+        end_tool_execution,
+        on_tool_call,
+        notify_call: bool,
+        bind_worker_context: bool,
+        approval_scope: str | None,
+        approval_cancel_event,
+    ) -> ToolResult | None:
+        """Executa uma call e devolve ``None`` quando perde a fronteira de cancelamento."""
+        if cancel_event is not None and cancel_event.is_set():
+            return None
+
+        argument_error = tc.get("argument_error")
+        if argument_error is not None:
+            return ToolResult(
+                ok=False,
+                tool_name=tc["name"],
+                error=argument_error,
+                data={"tool_call_id": tc["id"]},
+            )
+
+        if notify_call and on_tool_call is not None:
+            on_tool_call(tc["name"], tc["arguments"], tool_call_id=tc["id"])
+        if cancel_event is not None and cancel_event.is_set():
+            return None
+
+        tool_boundary_entered = True
+        if begin_tool_execution is not None:
+            tool_boundary_entered = bool(begin_tool_execution())
+        if not tool_boundary_entered:
+            return None
+
+        scope_binder = getattr(tool_executor, "bind_thread_approval_scope", None)
+        cancel_binder = getattr(tool_executor, "bind_approval_cancel_event", None)
+        previous_scope = None
+        previous_cancel_event = None
+        scope_bound = False
+        cancel_bound = False
+        try:
+            if bind_worker_context and callable(scope_binder):
+                previous_scope = scope_binder(approval_scope)
+                scope_bound = True
+            if bind_worker_context and callable(cancel_binder):
+                previous_cancel_event = cancel_binder(approval_cancel_event)
+                cancel_bound = True
+            return self._execute_tool(
+                tc,
+                tool_executor,
+                agent_name=agent_name,
+                parent_agent=parent_agent,
+                progress_callback=progress_callback,
+                cancel_event=cancel_event,
+            )
+        finally:
+            if cancel_bound:
+                cancel_binder(previous_cancel_event)
+            if scope_bound:
+                scope_binder(previous_scope)
+            if end_tool_execution is not None:
+                end_tool_execution()
+
+    def _execute_tool_calls(
+        self,
+        tool_calls: list[dict],
+        tool_executor,
+        *,
+        hop: int,
+        agent_name: str | None,
+        parent_agent: str | None,
+        progress_callback,
+        cancel_event,
+        begin_tool_execution,
+        end_tool_execution,
+        on_tool_call,
+        on_tool_result,
+    ) -> list[ToolResult] | None:
+        """Executa runs adjacentes de calls read-only em paralelo.
+
+        Calls mutantes, interativas e desconhecidas são barreiras seriais. Os
+        resultados retornam na ordem emitida pelo modelo, enquanto callbacks de
+        conclusão refletem a ordem real em que cada call termina.
+        """
+        results: list[ToolResult | None] = [None] * len(tool_calls)
+
+        approval_scope = None
+        scope_getter = getattr(tool_executor, "get_thread_approval_scope", None)
+        if callable(scope_getter):
+            approval_scope = scope_getter()
+        approval_cancel_event = cancel_event
+        cancel_getter = getattr(
+            tool_executor, "get_thread_approval_cancel_event", None,
+        )
+        if callable(cancel_getter):
+            bound_cancel_event = cancel_getter()
+            if bound_cancel_event is not None:
+                approval_cancel_event = bound_cancel_event
+
+        def publish(index: int, result: ToolResult) -> None:
+            results[index] = result
+            _logger.info(
+                "OpenAICompatDriver: tool=%s ok=%s hop=%d",
+                tool_calls[index]["name"], result.ok, hop,
+            )
+            if on_tool_result is not None:
+                on_tool_result(result)
+
+        index = 0
+        while index < len(tool_calls):
+            if cancel_event is not None and cancel_event.is_set():
+                return None
+
+            if not self._tool_call_is_parallel_safe(tool_executor, tool_calls[index]):
+                result = self._execute_one_tool_call(
+                    tool_calls[index],
+                    tool_executor,
+                    agent_name=agent_name,
+                    parent_agent=parent_agent,
+                    progress_callback=progress_callback,
+                    cancel_event=cancel_event,
+                    begin_tool_execution=begin_tool_execution,
+                    end_tool_execution=end_tool_execution,
+                    on_tool_call=on_tool_call,
+                    notify_call=True,
+                    bind_worker_context=False,
+                    approval_scope=approval_scope,
+                    approval_cancel_event=approval_cancel_event,
+                )
+                if result is None or (cancel_event is not None and cancel_event.is_set()):
+                    return None
+                publish(index, result)
+                index += 1
+                continue
+
+            group_end = index + 1
+            while (
+                group_end < len(tool_calls)
+                and self._tool_call_is_parallel_safe(
+                    tool_executor, tool_calls[group_end],
+                )
+            ):
+                group_end += 1
+            group_indexes = list(range(index, group_end))
+            executable_count = sum(
+                tool_calls[item].get("argument_error") is None
+                for item in group_indexes
+            )
+            # Só um lote com duas ou mais calls executáveis consulta o limite;
+            # calls inválidas são seguras por construção e não tocam o executor.
+            max_workers = (
+                tool_executor.config.max_parallel_tool_calls
+                if executable_count > 1
+                else 1
+            )
+
+            if max_workers <= 1:
+                for item in group_indexes:
+                    result = self._execute_one_tool_call(
+                        tool_calls[item],
+                        tool_executor,
+                        agent_name=agent_name,
+                        parent_agent=parent_agent,
+                        progress_callback=progress_callback,
+                        cancel_event=cancel_event,
+                        begin_tool_execution=begin_tool_execution,
+                        end_tool_execution=end_tool_execution,
+                        on_tool_call=on_tool_call,
+                        notify_call=True,
+                        bind_worker_context=False,
+                        approval_scope=approval_scope,
+                        approval_cancel_event=approval_cancel_event,
+                    )
+                    if result is None or (
+                        cancel_event is not None and cancel_event.is_set()
+                    ):
+                        return None
+                    publish(item, result)
+                index = group_end
+                continue
+
+            if on_tool_call is not None:
+                for item in group_indexes:
+                    tc = tool_calls[item]
+                    if tc.get("argument_error") is None:
+                        on_tool_call(
+                            tc["name"], tc["arguments"], tool_call_id=tc["id"],
+                        )
+
+            workers = min(max_workers, executable_count)
+            _logger.debug(
+                "OpenAICompatDriver: parallel tool batch size=%d workers=%d hop=%d",
+                len(group_indexes), workers, hop,
+            )
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="model-tool",
+            ) as pool:
+                future_indexes = {
+                    pool.submit(
+                        self._execute_one_tool_call,
+                        tool_calls[item],
+                        tool_executor,
+                        agent_name=agent_name,
+                        parent_agent=parent_agent,
+                        progress_callback=progress_callback,
+                        cancel_event=cancel_event,
+                        begin_tool_execution=begin_tool_execution,
+                        end_tool_execution=end_tool_execution,
+                        on_tool_call=on_tool_call,
+                        notify_call=False,
+                        bind_worker_context=True,
+                        approval_scope=approval_scope,
+                        approval_cancel_event=approval_cancel_event,
+                    ): item
+                    for item in group_indexes
+                }
+                aborted = False
+                for future in concurrent.futures.as_completed(future_indexes):
+                    item = future_indexes[future]
+                    try:
+                        result = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        result = ToolResult(
+                            ok=False,
+                            tool_name=tool_calls[item]["name"],
+                            error=f"Falha inesperada: {exc}",
+                            data={"tool_call_id": tool_calls[item]["id"]},
+                        )
+                    if result is None:
+                        aborted = True
+                        continue
+                    if cancel_event is None or not cancel_event.is_set():
+                        publish(item, result)
+
+            if aborted or (cancel_event is not None and cancel_event.is_set()):
+                return None
+            index = group_end
+
+        if any(result is None for result in results):
+            return None
+        return [result for result in results if result is not None]
+
     def run(
             self,
             prompt: PromptText,
@@ -1206,49 +1490,29 @@ class ToolCallingDriver:
                     }
                     messages.append(assistant_msg)
 
-                    # Executa cada ferramenta e adiciona os resultados
+                    # Executa runs adjacentes de tools explicitamente seguras
+                    # em paralelo; mutações/interações permanecem como barreiras.
                     abort_invalid_loop = False
                     saw_invalid_result = False
-                    for tc in tool_calls:
-                        if cancel_event is not None and cancel_event.is_set():
-                            return None
-                        argument_error = tc.get("argument_error")
-                        if argument_error is not None:
-                            result = ToolResult(
-                                ok=False,
-                                tool_name=tc["name"],
-                                error=argument_error,
-                                data={"tool_call_id": tc["id"]},
-                            )
-                        else:
-                            if on_tool_call is not None:
-                                on_tool_call(tc["name"], tc["arguments"])
-                            if cancel_event is not None and cancel_event.is_set():
-                                return None
-                            tool_boundary_entered = True
-                            if begin_tool_execution is not None:
-                                tool_boundary_entered = bool(begin_tool_execution())
-                            if not tool_boundary_entered:
-                                return None
-                            try:
-                                result = self._execute_tool(
-                                    tc,
-                                    tool_executor,
-                                    agent_name=agent_name,
-                                    parent_agent=parent_agent,
-                                    progress_callback=progress_callback,
-                                )
-                            finally:
-                                if end_tool_execution is not None:
-                                    end_tool_execution()
-                        if cancel_event is not None and cancel_event.is_set():
-                            return None
-                        _logger.info(
-                            "OpenAICompatDriver: tool=%s ok=%s hop=%d",
-                            tc["name"], result.ok, hop,
-                        )
-                        if on_tool_result is not None:
-                            on_tool_result(result)
+                    tool_results = self._execute_tool_calls(
+                        tool_calls,
+                        tool_executor,
+                        hop=hop,
+                        agent_name=agent_name,
+                        parent_agent=parent_agent,
+                        progress_callback=progress_callback,
+                        cancel_event=cancel_event,
+                        begin_tool_execution=begin_tool_execution,
+                        end_tool_execution=end_tool_execution,
+                        on_tool_call=on_tool_call,
+                        on_tool_result=on_tool_result,
+                    )
+                    if tool_results is None:
+                        return None
+
+                    # O histórico segue a ordem original das tool calls, como
+                    # exigem Chat Completions, Responses e Messages APIs.
+                    for tc, result in zip(tool_calls, tool_results):
                         payload = result.to_prompt_payload(self._loop_budget.max_tool_result_chars)
                         signature = (tc["name"], _canonical_call_arguments(tc))
                         previous_hop = executed_call_hops.get(signature)
@@ -1460,6 +1724,7 @@ class ToolCallingDriver:
         agent_name: str | None = None,
         parent_agent: str | None = None,
         progress_callback=None,
+        cancel_event=None,
     ) -> ToolResult:
         """Executa um tool call via ToolExecutor."""
         metadata: dict = {}
@@ -1472,6 +1737,8 @@ class ToolCallingDriver:
             server_origin=self._server_origin,
         )
         metadata["trusted_context"] = trusted_context
+        if cancel_event is not None:
+            metadata["_mcp_cancel_event"] = cancel_event
         tool_call = ToolCall(
             name=tc["name"],
             arguments=tc["arguments"],
@@ -1479,10 +1746,21 @@ class ToolCallingDriver:
             metadata=metadata,
         )
         try:
-            return tool_executor.execute(tool_call, progress_callback=progress_callback)
+            result = tool_executor.execute(
+                tool_call,
+                progress_callback=progress_callback,
+            )
+            if isinstance(result, ToolResult):
+                result.data.setdefault("tool_call_id", tc["id"])
+            return result
         except Exception as exc:
             _logger.error("OpenAICompatDriver: tool execution failed for '%s': %s", tc["name"], exc)
-            return ToolResult(ok=False, tool_name=tc["name"], error=str(exc))
+            return ToolResult(
+                ok=False,
+                tool_name=tc["name"],
+                error=str(exc),
+                data={"tool_call_id": tc["id"]},
+            )
 
 
 class OpenAICompatDriver(ToolCallingDriver):

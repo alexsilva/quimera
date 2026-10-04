@@ -43,7 +43,7 @@ def _header(text: str) -> None:
     print(_SEP)
 
 
-def _on_tool_call(name: str, args: dict) -> None:
+def _on_tool_call(name: str, args: dict, tool_call_id: str | None = None) -> None:
     """Executa on tool call."""
     print(f"\n  ▶ TOOL CALL: {name}")
     for k, v in args.items():

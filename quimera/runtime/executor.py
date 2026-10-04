@@ -9,6 +9,7 @@ from .config import ToolRuntimeConfig
 from .models import ToolCall, ToolResult
 from .policy import ToolPolicy, ToolPolicyError
 from .registry import ToolRegistry
+from .tool_metadata import get_tool_metadata
 from .tools import browser as browser_tools
 from .tools import delegate as delegate_module
 from .tools import files as files_tools
@@ -149,11 +150,10 @@ class ToolExecutor:
     def fork_for_concurrent_run(self) -> "ToolExecutor":
         """Cria um executor isolado para uma execução concorrente.
 
-        ``ToolExecutor`` não é reentrante: ``execute()`` reconfigura o callback
-        de progresso das tools, ``set_spinner_callbacks`` e
-        ``set_approval_cancel_event`` são reescritos a cada chamada de API e o
-        ``PreApprovalHandler`` guarda approve-all por ciclo. Compartilhar a
-        mesma instância entre execuções paralelas faz o término de uma desligar
+        Um executor aceita chamadas paralelas do mesmo ciclo, mas não deve ser
+        compartilhado entre ciclos concorrentes de agentes: callbacks de
+        spinner, ciclo de approve-all e serviços stateful pertencem à execução.
+        Compartilhar a mesma instância entre runs faz o término de uma desligar
         aprovação e spinner das outras.
 
         O fork reconstrói registry, policy e tools do zero (sem cópia rasa de
@@ -250,6 +250,21 @@ class ToolExecutor:
             # Se validation falha, consideramos que precisa de aprovação
             # (seguro: mostra approval mesmo que não precise, nunca o contrário)
             return True
+
+    def is_parallel_safe(self, call: ToolCall) -> bool:
+        """Indica se uma tool pode integrar um lote concorrente do modelo.
+
+        A decisão é explícita e fail-closed: tools externas, interativas,
+        mutantes ou novas sem metadata ficam seriais. Validação e autorização
+        continuam ocorrendo normalmente dentro de :meth:`execute`.
+        """
+        normalized_call = self._normalize_call(call)
+        metadata = get_tool_metadata(normalized_call.name)
+        return bool(
+            metadata
+            and metadata.parallel_safe
+            and not metadata.mutates
+        )
 
     def set_tool_preview_callback(self, fn) -> None:
         """Registra um callback chamado antes de executar tools que NÃO passam por approval.
@@ -358,11 +373,20 @@ class ToolExecutor:
         """
         normalized_call = self._normalize_call(call)
         try:
-            # Sincroniza callback de progresso se fornecido (prioridade sobre o global)
+            # O callback por chamada viaja na metadata até a tool. Não grave o
+            # valor nos helpers compartilhados: tools/call MCP e lotes nativos
+            # podem executar em threads diferentes com callbacks distintos.
             effective_progress_callback = progress_callback or self._tool_progress_callback
             if effective_progress_callback:
-                self._delegate_tools.set_progress_callback(effective_progress_callback)
-                self._host_tools._set_progress_callback(effective_progress_callback)
+                normalized_call = ToolCall(
+                    name=normalized_call.name,
+                    arguments=normalized_call.arguments,
+                    call_id=normalized_call.call_id,
+                    metadata={
+                        **normalized_call.metadata,
+                        "_tool_progress_callback": effective_progress_callback,
+                    },
+                )
             if self.policy.requires_validation(normalized_call):
                 self.policy.validate(normalized_call)
 
