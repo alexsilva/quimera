@@ -22,7 +22,7 @@ class _FakeWorkspace:
     def __init__(self, cwd):
         self.cwd = cwd
         self.config_file = Path("/tmp/quimera-test-config.json")
-        self.mcp_config_file = Path("/tmp/quimera-test-workspace-mcp-config.json")
+        self.mcp_connections_file = Path("/tmp/quimera-test-mcp-connections.json")
         self.runtime_secret_files = ()
 
 
@@ -988,8 +988,8 @@ def test_main_mcp_uses_session_paths_and_configures_profiles(monkeypatch):
     assert _FakeApp.last_instance.mcp_socket_calls == [called_path]
 
 
-def test_main_mcp_client_uses_workspace_config(monkeypatch):
-    """Conexões MCP externas não usam a configuração global do usuário."""
+def test_main_mcp_client_uses_workspace_connections_file(monkeypatch):
+    """Conexões MCP externas usam o arquivo dedicado do workspace."""
     _patch_main_basics(monkeypatch)
     monkeypatch.setattr(sys, "argv", ["quimera", "--no-mcp"])
     captured = {}
@@ -998,7 +998,7 @@ def test_main_mcp_client_uses_workspace_config(monkeypatch):
     cli.main()
 
     assert captured["config"].config_file == Path(
-        "/tmp/quimera-test-workspace-mcp-config.json"
+        "/tmp/quimera-test-mcp-connections.json"
     )
     assert captured["config"].config_file != Path("/tmp/quimera-test-config.json")
 

@@ -1,7 +1,13 @@
+import json
+import time
 from types import SimpleNamespace
 from unittest.mock import ANY, patch
 
-from quimera.runtime.mcp import EmbeddedMCPRuntime, start_embedded_mcp
+from quimera.runtime.mcp import (
+    EmbeddedMCPRuntime,
+    load_persisted_authorized_clients,
+    start_embedded_mcp,
+)
 from quimera.runtime.mcp.http_server import DEFAULT_HTTP_READ_ONLY_TOOLS
 from quimera.session_paths import SessionPaths
 from quimera.workspace import Workspace
@@ -23,6 +29,80 @@ class _FakeApp:
 
 def _workspace(tmp_path):
     return Workspace(tmp_path)
+
+
+def test_load_persisted_authorized_clients_is_read_only(tmp_path):
+    """O Hub lê grants válidos sem iniciar provider nem regravar o store."""
+    store = tmp_path / "mcp-server.json"
+    now = time.time()
+    payload = {
+        "version": 1,
+        "clients": [
+            {
+                "client_id": "chatgpt-id",
+                "client_secret": None,
+                "client_name": "ChatGPT",
+                "redirect_uris": [],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "scope": "mcp:agent",
+                "created_at": now - 10,
+                "dynamic": True,
+            },
+            {
+                "client_id": "expired-id",
+                "client_secret": None,
+                "client_name": "Expirado",
+                "redirect_uris": [],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "scope": "mcp",
+                "created_at": now - 20,
+                "dynamic": True,
+            },
+        ],
+        "access_tokens": [
+            {
+                "token": "access-live",
+                "client_id": "chatgpt-id",
+                "scope": "mcp:agent",
+                "resource": "",
+                "expires_at": now + 3600,
+                "kind": "access",
+            }
+        ],
+        "refresh_tokens": [
+            {
+                "token": "refresh-expired",
+                "client_id": "expired-id",
+                "scope": "mcp",
+                "resource": "",
+                "expires_at": now - 1,
+                "kind": "refresh",
+            },
+            {
+                "token": "refresh-orphan",
+                "client_id": "orphan-id",
+                "scope": "mcp:read",
+                "resource": "",
+                "expires_at": now + 7200,
+                "kind": "refresh",
+            },
+        ],
+    }
+    store.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    before = store.read_bytes()
+    workspace = SimpleNamespace(
+        mcp_server_file=store,
+        runtime_secret_files=(),
+    )
+
+    clients = load_persisted_authorized_clients(workspace)
+
+    assert [(item.client_id, item.client_name, item.scope) for item in clients] == [
+        ("chatgpt-id", "ChatGPT", "mcp:agent"),
+        ("orphan-id", "orphan-id", "mcp:read"),
+    ]
+    assert all(item.authorized and not item.connected for item in clients)
+    assert store.read_bytes() == before
 
 
 def test_start_embedded_mcp_socket_default_centraliza_startup(tmp_path, monkeypatch):

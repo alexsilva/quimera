@@ -537,8 +537,6 @@ class CoreFacadeMixin:
         workspace = self.__dict__.get("workspace")
         config_path = getattr(workspace, "workspace_config_file", None)
         if config_path is None:
-            config_path = getattr(workspace, "mcp_config_file", None)
-        if config_path is None:
             raise RuntimeError("configuração do workspace indisponível")
         ConfigManager(config_path).set_sandbox_enabled(value)
         return value

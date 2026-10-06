@@ -140,7 +140,7 @@ class MCPConnectionManager:
     @property
     def config(self) -> ConfigManager:
         """Configuração MCP resolvida a partir do Workspace atual."""
-        return ConfigManager(self.workspace.mcp_config_file)
+        return ConfigManager(self.workspace.mcp_connections_file)
 
     def list_connections(self) -> list[MCPConnectionInfo]:
         """Lista configurações persistidas com o estado vivo da sessão."""

@@ -17,6 +17,7 @@ from quimera.runtime.mcp.oauth import (
 from quimera.runtime.mcp.session import (
     EmbeddedMCPRuntime,
     build_oauth_provider,
+    load_persisted_authorized_clients,
     start_embedded_mcp,
 )
 from quimera.runtime.mcp.client import (
@@ -45,6 +46,7 @@ __all__ = [
     "EmbeddedMCPRuntime",
     "start_embedded_mcp",
     "build_oauth_provider",
+    "load_persisted_authorized_clients",
     "AuthContext",
     "OAuthClient",
     "OAuthConfig",

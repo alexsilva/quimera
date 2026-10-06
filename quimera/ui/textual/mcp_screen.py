@@ -12,6 +12,7 @@ from textual.widgets import Button, DataTable, Input, Label, Select
 
 from quimera.runtime.drivers.tool_schemas import get_bridge_schemas
 from quimera.runtime.mcp.manager import MCPConnectionInfo, MCPConnectionManager
+from quimera.runtime.mcp.session import load_persisted_authorized_clients
 from quimera.ui.browser import open_in_browser
 
 
@@ -491,7 +492,12 @@ class MCPConnectionsScreen(ModalScreen[None]):
         table.clear()
         http_server = getattr(self.quimera_app, "external_mcp_http_server", None)
         if http_server is None:
-            clients = []
+            workspace = getattr(self.quimera_app, "workspace", None)
+            clients = (
+                load_persisted_authorized_clients(workspace)
+                if workspace is not None
+                else []
+            )
         else:
             provider = getattr(http_server, "known_clients", None)
             clients = provider() if callable(provider) else http_server.connected_clients()
@@ -822,8 +828,9 @@ class MCPConnectionsScreen(ModalScreen[None]):
         )
 
     def _update_client_action_state(self) -> None:
+        http_server = getattr(self.quimera_app, "external_mcp_http_server", None)
         self.query_one("#mcp_revoke_client", Button).disabled = (
-            self._busy or not self._selected_client_id
+            self._busy or not self._selected_client_id or http_server is None
         )
 
     def _revoke_selected_client(self) -> None:

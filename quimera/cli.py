@@ -465,7 +465,7 @@ def main():
         dest="mcp_oauth_store",
         default=None,
         metavar="PATH",
-        help="Arquivo JSON de estado OAuth (padrão: <base_dir>/state/mcp_oauth.json — global do app).",
+        help="Arquivo JSON de estado OAuth (padrão: <base_dir>/state/mcp-server.json — global do app).",
     )
     parser.add_argument(
         "--mcp-client",
@@ -638,7 +638,7 @@ def main():
     if args.test and _test_mode_uses_fake_openai(agents):
         fake_openai_backend = _start_test_fake_openai_backend()
     try:
-        mcp_config = ConfigManager(workspace.mcp_config_file)
+        mcp_config = ConfigManager(workspace.mcp_connections_file)
         # Só prepara o bridge (estado "pending" por conexão); os handshakes
         # rodam em background depois que o app existe, sem travar o boot.
         mcp_client_runtime = start_mcp_clients(

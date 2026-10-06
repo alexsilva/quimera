@@ -172,7 +172,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Bind RW do profile não pode reexpor um arquivo privado mascarado."""
         from unittest.mock import patch
         private_dir = str(Path.home() / ".local" / "share" / "quimera")
-        secret = f"{private_dir}/state/mcp_oauth.json"
+        secret = f"{private_dir}/state/mcp-server.json"
         profile = self._profile_with_rw_paths(private_dir)
         with patch("quimera.sandbox.bwrap._find_bwrap_executable", return_value="/usr/bin/bwrap"), patch(
             "quimera.sandbox.bwrap.os.path.exists", return_value=True
@@ -484,7 +484,7 @@ class TestBwrapIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             secret = root_path / "secrets.env"
-            oauth = root_path / "mcp_oauth.json"
+            oauth = root_path / "mcp-server.json"
             history = root_path / "history.jsonl"
             secret.write_text("API_KEY=private\n", encoding="utf-8")
             oauth.write_text('{"access_token":"private"}\n', encoding="utf-8")

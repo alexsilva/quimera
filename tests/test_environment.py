@@ -125,11 +125,12 @@ def test_workspace_protects_runtime_credentials_without_hiding_workspace_history
     (tmp_path / "connections.json.bak").write_text("{}\n", encoding="utf-8")
     state = tmp_path / "state"
     state.mkdir()
-    (state / "mcp_oauth.json").write_text("{}\n", encoding="utf-8")
+    (state / "mcp-server.json").write_text("{}\n", encoding="utf-8")
     project = tmp_path / "project"
     quimera_workspace = _workspace(monkeypatch, project, tmp_path)
     workspace = quimera_workspace.root
-    quimera_workspace.mcp_config_file.write_text("{}\n", encoding="utf-8")
+    quimera_workspace.workspace_config_file.write_text("{}\n", encoding="utf-8")
+    quimera_workspace.mcp_connections_file.write_text("{}\n", encoding="utf-8")
     sibling_workspace = tmp_path / "workspaces" / "def"
     sibling_workspace.mkdir(parents=True)
     sibling_config = sibling_workspace / "config.json"
@@ -144,8 +145,9 @@ def test_workspace_protects_runtime_credentials_without_hiding_workspace_history
     assert (tmp_path / "secrets.env").resolve() in protected
     assert (tmp_path / "connections.json").resolve() in protected
     assert (tmp_path / "connections.json.bak").resolve() in protected
-    assert (state / "mcp_oauth.json").resolve() in protected
+    assert (state / "mcp-server.json").resolve() in protected
     assert (workspace / "config.json").resolve() in protected
+    assert (workspace / "mcp-connections.json").resolve() in protected
     assert sibling_config.resolve() not in protected
     assert history.resolve() not in protected
 

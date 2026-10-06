@@ -22,8 +22,6 @@ def is_sandbox_enabled(workspace) -> bool:
         return False
     config_file = getattr(workspace, "workspace_config_file", None)
     if config_file is None:
-        config_file = getattr(workspace, "mcp_config_file", None)
-    if config_file is None:
         return False
     from quimera.config_store import read_json_object
 

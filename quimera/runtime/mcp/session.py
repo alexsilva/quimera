@@ -10,12 +10,18 @@ from typing import Any, Literal
 
 from quimera.environment import RuntimeSecrets
 from quimera.runtime.mcp.http_server import (
+    ConnectedMCPClient,
     DEFAULT_HTTP_READ_ONLY_TOOLS,
     DEFAULT_HTTP_TOOL_PROFILE,
     HTTP_TOOL_PROFILES,
     MCP_HTTPServer,
 )
-from quimera.runtime.mcp.oauth import OAuthProvider, build_provider_from_cli
+from quimera.runtime.mcp.oauth import (
+    OAuthConfig,
+    OAuthProvider,
+    OAuthStore,
+    build_provider_from_cli,
+)
 from quimera.runtime.mcp.server import MCPServer
 
 MCPTransport = Literal["socket", "http"]
@@ -87,14 +93,14 @@ def _default_socket_path(session_paths: Any) -> str:
 
 
 def _default_oauth_store_path(workspace: Any) -> Path | None:
-    """Resolve o arquivo de persistência OAuth global via ``workspace.oauth_store_file``.
+    """Resolve o estado do servidor MCP via ``workspace.mcp_server_file``.
 
-    O caminho em si (``<base_dir>/state/mcp_oauth.json``) é responsabilidade da
+    O caminho em si (``<base_dir>/state/mcp-server.json``) é responsabilidade da
     classe ``Workspace``, que já centraliza os demais paths do app. Retorna
     ``None`` quando o workspace informado não expõe essa property (ex.: mocks
     de teste sem ``base_dir``).
     """
-    return getattr(workspace, "oauth_store_file", None)
+    return getattr(workspace, "mcp_server_file", None)
 
 
 def build_oauth_provider(
@@ -110,7 +116,7 @@ def build_oauth_provider(
 ) -> OAuthProvider:
     """Constrói o ``OAuthProvider`` do MCP HTTP externo.
 
-    O store padrão fica em ``<base_dir>/state/mcp_oauth.json`` (global do app),
+    O store padrão fica em ``<base_dir>/state/mcp-server.json`` (global do app),
     de modo que clients registrados dinamicamente e refresh tokens sobrevivam a
     reinícios de sessão e a troca de workspace sem exigir reautorização.
     """
@@ -125,6 +131,72 @@ def build_oauth_provider(
         store_path=store_path or _default_oauth_store_path(workspace),
         runtime_secrets=RuntimeSecrets(workspace),
     )
+
+
+def load_persisted_authorized_clients(workspace: Any) -> list[ConnectedMCPClient]:
+    """Lê autorizações OAuth válidas sem iniciar nem alterar o servidor MCP.
+
+    A tela do Hub também existe em sessões iniciadas sem ``--mcp-http``. Nessa
+    situação não há um ``MCP_HTTPServer`` em memória, mas o estado global ainda
+    deve continuar visível. A leitura usa diretamente o store para evitar criar
+    um ``OAuthProvider`` concorrente, cuja compactação/persistência poderia
+    sobrescrever mudanças feitas pela instância que realmente serve o HTTP.
+    """
+    store_path = _default_oauth_store_path(workspace)
+    if store_path is None:
+        return []
+
+    runtime_secrets = RuntimeSecrets(workspace)
+    config = OAuthConfig.from_env(
+        runtime_secrets=runtime_secrets,
+        store_path=store_path,
+    )
+    clients, access_tokens, refresh_tokens = OAuthStore(
+        config.store_path,
+        config.store_key,
+    ).load_state()
+
+    token_by_client: dict[str, Any] = {}
+    for token in (*access_tokens.values(), *refresh_tokens.values()):
+        client_id = str(token.client_id or "").strip()
+        if client_id:
+            token_by_client.setdefault(client_id, token)
+
+    result: list[ConnectedMCPClient] = []
+    seen_client_ids: set[str] = set()
+    for client_id, client in clients.items():
+        token = token_by_client.get(client_id)
+        if token is None:
+            continue
+        seen_client_ids.add(client_id)
+        result.append(
+            ConnectedMCPClient(
+                session_id="",
+                client_id=client_id,
+                client_name=str(client.client_name or client_id),
+                scope=str(client.scope or token.scope or "mcp"),
+                profile="",
+                initialized=False,
+                connected=False,
+                authorized=True,
+            )
+        )
+    for client_id, token in token_by_client.items():
+        if client_id in seen_client_ids:
+            continue
+        result.append(
+            ConnectedMCPClient(
+                session_id="",
+                client_id=client_id,
+                client_name=client_id,
+                scope=str(token.scope or "mcp"),
+                profile="",
+                initialized=False,
+                connected=False,
+                authorized=True,
+            )
+        )
+    return result
 
 
 def start_embedded_mcp(

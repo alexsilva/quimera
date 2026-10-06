@@ -48,7 +48,7 @@ quimera [opções] [test_agent]
 | `--mcp-port N` | Porta HTTP MCP; padrão `9090`. |
 | `--mcp-host HOST` | Host HTTP MCP; padrão `127.0.0.1`. |
 | `--mcp-http-allow-tools CSV` | Allowlist de tools para MCP HTTP externo (padrão: read). |
-| `--mcp-client nome=transporte:endpoint` | Conecta a um servidor MCP externo e expõe suas tools com prefixo `nome_`. Aceita `remote:` (OAuth via `mcp-remote`), `stdio:`, `socket:` e URLs `http(s)://`. Persistido por workspace; pode ser repetido. |
+| `--mcp-client nome=transporte:endpoint` | Conecta a um servidor MCP externo e expõe suas tools com prefixo `nome_`. Aceita `remote:` (OAuth via `mcp-remote`), `stdio:`, `socket:` e URLs `http(s)://`. Persistido por workspace em `mcp-connections.json`; pode ser repetido. |
 | `--mcp-client-env nome=KEY=val,...` | Variáveis de ambiente para uma conexão MCP client. |
 
 As conexões `--mcp-client` não bloqueiam a inicialização: o handshake de cada

@@ -57,7 +57,7 @@ def test_mcp_connections_screen_mounts_and_shows_three_roles(tmp_path):
         encoding="utf-8",
     )
     quimera_app = SimpleNamespace(
-        workspace=SimpleNamespace(mcp_config_file=config_file),
+        workspace=SimpleNamespace(mcp_connections_file=config_file),
         tool_executor=Mock(),
         mcp_socket_path="/tmp/quimera.sock",
         mcp_http_url="http://127.0.0.1:9090/mcp",
@@ -173,7 +173,7 @@ def test_mcp_incoming_summary_counts_authorized_not_connected(tmp_path):
         ),
     ]
     quimera_app = SimpleNamespace(
-        workspace=SimpleNamespace(mcp_config_file=config_file),
+        workspace=SimpleNamespace(mcp_connections_file=config_file),
         tool_executor=Mock(),
         mcp_socket_path="",
         mcp_http_url="http://127.0.0.1:9090/mcp",
@@ -208,6 +208,72 @@ def test_mcp_incoming_summary_counts_authorized_not_connected(tmp_path):
             assert screen.query_one("#mcp_incoming_summary", Label).region.bottom <= app.size.height
 
     asyncio.run(run_test())
+
+
+def test_mcp_clients_load_persisted_authorizations_when_http_is_inactive(
+    tmp_path, monkeypatch
+):
+    """Servidor parado não faz as autorizações persistidas sumirem do Hub."""
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import Button, DataTable, Label
+
+    from quimera.runtime.mcp.client import MCPClientBridge
+    from quimera.runtime.mcp.http_server import ConnectedMCPClient
+    from quimera.runtime.tools.mcp_clients import set_bridge
+    from quimera.ui.textual import mcp_screen as mcp_screen_module
+
+    set_bridge(MCPClientBridge())
+    config_file = tmp_path / "mcp-connections.json"
+    config_file.write_text('{"mcp_clients":[]}', encoding="utf-8")
+    workspace = SimpleNamespace(mcp_connections_file=config_file)
+    quimera_app = SimpleNamespace(
+        workspace=workspace,
+        tool_executor=Mock(),
+        mcp_socket_path="/tmp/quimera.sock",
+        mcp_http_url="",
+        external_mcp_http_server=None,
+    )
+    monkeypatch.setattr(
+        mcp_screen_module,
+        "load_persisted_authorized_clients",
+        lambda candidate: [
+            ConnectedMCPClient(
+                session_id="",
+                client_id="chatgpt-id",
+                client_name="ChatGPT",
+                scope="mcp:agent",
+                profile="",
+                initialized=False,
+                connected=False,
+                authorized=True,
+            )
+        ]
+        if candidate is workspace
+        else [],
+    )
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(120, 34)) as pilot:
+            app.push_screen(MCPConnectionsScreen(quimera_app, app))
+            await pilot.pause()
+
+            screen = app.screen
+            table = screen.query_one("#mcp_incoming_table", DataTable)
+            assert table.row_count == 1
+            assert str(table.get_row_at(0)[0]) == "ChatGPT"
+            assert str(table.get_row_at(0)[3]) == "autorizado"
+            assert "1 autorizados" in str(
+                screen.query_one("#mcp_incoming_summary", Label).render()
+            )
+            assert screen.query_one("#mcp_revoke_client", Button).disabled is True
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        set_bridge(None)
 
 
 def test_mcp_server_editor_is_separate_modal(tmp_path):
@@ -5554,7 +5620,7 @@ def test_mcp_connections_screen_shows_background_connection_phases(tmp_path):
         encoding="utf-8",
     )
     quimera_app = SimpleNamespace(
-        workspace=SimpleNamespace(mcp_config_file=config_file),
+        workspace=SimpleNamespace(mcp_connections_file=config_file),
         tool_executor=Mock(),
         mcp_socket_path="/tmp/quimera.sock",
         mcp_http_url="",
@@ -5690,7 +5756,7 @@ def test_mcp_connections_screen_reconnect_nao_bloqueia_e_oferece_autorizacao(tmp
     config_file = tmp_path / "mcp-config.json"
     config_file.write_text('{"mcp_clients":["jira=stdio:jira-cmd"]}', encoding="utf-8")
     quimera_app = SimpleNamespace(
-        workspace=SimpleNamespace(mcp_config_file=config_file),
+        workspace=SimpleNamespace(mcp_connections_file=config_file),
         tool_executor=Mock(),
         mcp_socket_path="/tmp/quimera.sock",
         mcp_http_url="",

@@ -641,7 +641,7 @@ def test_stdio_transport_encaminha_avisos_ao_callback_sem_stderr(capsys):
 
 def test_manager_list_connections_expoe_fase_e_detalhe(tmp_path):
     workspace = Workspace(tmp_path)
-    ConfigManager(workspace.mcp_config_file).set_mcp_configuration(
+    ConfigManager(workspace.mcp_connections_file).set_mcp_configuration(
         ["jira=stdio:jira-cmd", "wiki=http://localhost:3100/mcp"], []
     )
     bridge = MCPClientBridge()
@@ -675,7 +675,7 @@ def test_describe_mcp_client_spec_separa_transporte_e_endpoint():
 def test_manager_disconnect_remove_tools_vivas_e_preserva_config(monkeypatch, tmp_path):
     captured = {}
     workspace = Workspace(tmp_path)
-    config = ConfigManager(workspace.mcp_config_file)
+    config = ConfigManager(workspace.mcp_connections_file)
     config.set_mcp_configuration(["jira=stdio:jira-cmd"], [])
 
     class FakeSession:
@@ -712,7 +712,7 @@ def test_manager_disconnect_remove_tools_vivas_e_preserva_config(monkeypatch, tm
 
 def test_manager_remove_desconecta_e_apaga_specs(monkeypatch, tmp_path):
     workspace = Workspace(tmp_path)
-    config = ConfigManager(workspace.mcp_config_file)
+    config = ConfigManager(workspace.mcp_connections_file)
     config.set_mcp_configuration(
         ["jira=stdio:jira-cmd", "github=stdio:github-cmd"],
         ["jira=TOKEN=abc", "github=TOKEN=def"],
@@ -1087,7 +1087,7 @@ def test_manager_reconnect_encaminha_autorizacao_oauth_e_silencia_stderr(
 ):
     """Reconectar pelo MCP Hub segue o mesmo contrato de avisos do boot."""
     workspace = Workspace(tmp_path)
-    ConfigManager(workspace.mcp_config_file).set_mcp_configuration(
+    ConfigManager(workspace.mcp_connections_file).set_mcp_configuration(
         ["jira=stdio:npx -y mcp-remote https://mcp.example.test/mcp"], []
     )
     captured: dict = {}
@@ -1342,7 +1342,7 @@ def _wait_for(predicate, timeout: float = 5.0) -> None:
 
 def test_manager_reconnect_in_background_usa_thread_e_marca_connecting(tmp_path, monkeypatch):
     workspace = Workspace(tmp_path)
-    ConfigManager(workspace.mcp_config_file).set_mcp_configuration(
+    ConfigManager(workspace.mcp_connections_file).set_mcp_configuration(
         ["jira=stdio:jira-cmd"], ["jira=TOKEN=abc"]
     )
     _install_fake_session(monkeypatch)
@@ -1401,8 +1401,8 @@ def test_manager_upsert_in_background_persiste_antes_de_conectar(tmp_path, monke
     assert info.name == "jira"
     assert info.connected is False
     assert info.phase == MCPConnectionPhase.PENDING
-    assert ConfigManager(workspace.mcp_config_file).mcp_clients == ["jira=stdio:jira-cmd"]
-    assert ConfigManager(workspace.mcp_config_file).mcp_client_env == ["jira=TOKEN=abc"]
+    assert ConfigManager(workspace.mcp_connections_file).mcp_clients == ["jira=stdio:jira-cmd"]
+    assert ConfigManager(workspace.mcp_connections_file).mcp_client_env == ["jira=TOKEN=abc"]
     assert len(threads) == 1 and threads[0].daemon is True
 
     threads[0].run()
@@ -1410,7 +1410,7 @@ def test_manager_upsert_in_background_persiste_antes_de_conectar(tmp_path, monke
 
     with pytest.raises(ValueError):
         manager.upsert_in_background("bad=ftp:host", thread_factory=LazyThread)
-    assert ConfigManager(workspace.mcp_config_file).mcp_clients == ["jira=stdio:jira-cmd"]
+    assert ConfigManager(workspace.mcp_connections_file).mcp_clients == ["jira=stdio:jira-cmd"]
     assert len(threads) == 1
 
 

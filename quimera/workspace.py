@@ -266,13 +266,13 @@ class Workspace:
         return self.base_dir / "connections.json"
 
     @property
-    def mcp_config_file(self) -> Path:
-        """Configuração de clientes MCP isolada para este workspace."""
-        return self.workspace_config_file
+    def mcp_connections_file(self) -> Path:
+        """Servidores MCP externos conectados a este workspace."""
+        return self._root / "mcp-connections.json"
 
     @property
     def workspace_config_file(self) -> Path:
-        """Configurações isoladas do workspace (MCP, sandbox e afins)."""
+        """Configurações gerais isoladas do workspace (sandbox e afins)."""
         return self._root / "config.json"
 
     @property
@@ -301,14 +301,14 @@ class Workspace:
         return self.runtime_secret_files[0]
 
     @property
-    def oauth_store_file(self) -> Path:
-        """Arquivo de persistência OAuth global (clients dinâmicos e refresh tokens).
+    def mcp_server_file(self) -> Path:
+        """Estado persistente global do servidor MCP HTTP do Quimera.
 
-        Fica em ``<base_dir>/state/mcp_oauth.json``, fora da árvore por-workspace,
+        Fica em ``<base_dir>/state/mcp-server.json``, fora da árvore por-workspace,
         para que a autorização de clientes MCP HTTP sobreviva a troca de
         workspace e a reinícios de sessão.
         """
-        return self.base_dir / "state" / "mcp_oauth.json"
+        return self.base_dir / "state" / "mcp-server.json"
 
     @property
     def protected_files(self) -> tuple[Path, ...]:
@@ -324,10 +324,11 @@ class Workspace:
         candidates: list[Path] = [
             self.legacy_secrets_file,
             self.secrets_file,
-            self.mcp_config_file,
+            self.workspace_config_file,
+            self.mcp_connections_file,
         ]
         candidates.extend(sorted(self.connections_file.parent.glob(f"{self.connections_file.name}*")))
-        candidates.extend(sorted(self.oauth_store_file.parent.glob(f"{self.oauth_store_file.name}*")))
+        candidates.extend(sorted(self.mcp_server_file.parent.glob(f"{self.mcp_server_file.name}*")))
         candidates.extend(_sensitive_home_files(Path.home()))
 
         unique: list[Path] = []
@@ -349,7 +350,7 @@ class Workspace:
             self.history_dir,
             self.state_dir,
             self.base_dir / "index",
-            self.oauth_store_file.parent,
+            self.mcp_server_file.parent,
         ]
         for d in dirs:
             try:

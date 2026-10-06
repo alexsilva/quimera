@@ -10,6 +10,19 @@ Transportes suportados:
 - **HTTP Streamable**: ativado por `--mcp-http`, útil para clientes externos locais;
 - **stdio standalone**: `python -m quimera.runtime.mcp` para usos isolados.
 
+## Arquivos persistentes
+
+Os dois sentidos da conexão usam arquivos separados e com nomes baseados no
+papel do Quimera:
+
+- `<base_dir>/workspaces/<hash>/mcp-connections.json`: servidores MCP externos
+  aos quais o Quimera se conecta;
+- `<base_dir>/state/mcp-server.json`: estado dos clientes externos que se
+  autorizam no servidor MCP HTTP do Quimera.
+
+O `config.json` do workspace continua reservado às opções gerais, como o
+sandbox. Os nomes antigos não são consultados.
+
 ## Autenticação
 
 Os transportes têm autenticação independente. Clientes do socket Unix enviam uma primeira linha JSON com `quimera_auth_token`; esse token pertence somente ao socket. O transporte HTTP usa exclusivamente OAuth e envia o access token em `Authorization: Bearer <token>`.
@@ -194,7 +207,7 @@ O Authorization Server grava em disco clients registrados dinamicamente, access 
 
 | Aspecto | Comportamento |
 |---|---|
-| Caminho padrão | `<base_dir>/state/mcp_oauth.json` (global do app, ex.: `~/.local/share/quimera/state/`; ou `--mcp-oauth-store` / `QUIMERA_MCP_OAUTH_STORE`) |
+| Caminho padrão | `<base_dir>/state/mcp-server.json` (global do app, ex.: `~/.local/share/quimera/state/`; ou `--mcp-oauth-store` / `QUIMERA_MCP_OAUTH_STORE`) |
 | Permissões | `0600` após cada gravação atômica |
 | Sem `QUIMERA_MCP_OAUTH_STORE_KEY` | JSON em **texto claro**: `client_secret`, access tokens e refresh tokens são legíveis no arquivo |
 | Com `QUIMERA_MCP_OAUTH_STORE_KEY` | Payload criptografado com Fernet (prefixo `quimera-oauth-fernet:v1:`); a chave é derivada da passphrase via PBKDF2-SHA256 |

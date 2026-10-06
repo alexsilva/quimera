@@ -57,7 +57,7 @@ class TestWorkspace(unittest.TestCase):
                 index = json.loads(index_path.read_text(encoding="utf-8"))
                 self.assertIn(ws.cwd_hash, index)
 
-    def test_mcp_config_file_is_isolated_per_workspace(self):
+    def test_mcp_connections_file_is_isolated_per_workspace(self):
         """Cada projeto mantém suas conexões MCP em configuração própria."""
         with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as projects_dir:
             base = Path(base_dir)
@@ -72,21 +72,42 @@ class TestWorkspace(unittest.TestCase):
                 second = Workspace(second_project)
 
             self.assertEqual(first.config_file, second.config_file)
-            self.assertEqual(first.mcp_config_file, first.root / "config.json")
-            self.assertEqual(second.mcp_config_file, second.root / "config.json")
-            self.assertEqual(first.workspace_config_file, first.mcp_config_file)
-            self.assertEqual(second.workspace_config_file, second.mcp_config_file)
-            self.assertNotEqual(first.mcp_config_file, second.mcp_config_file)
+            self.assertEqual(first.mcp_connections_file, first.root / "mcp-connections.json")
+            self.assertEqual(second.mcp_connections_file, second.root / "mcp-connections.json")
+            self.assertEqual(first.workspace_config_file, first.root / "config.json")
+            self.assertNotEqual(first.workspace_config_file, first.mcp_connections_file)
+            self.assertNotEqual(first.mcp_connections_file, second.mcp_connections_file)
 
-            ConfigManager(first.mcp_config_file).set_mcp_clients(
+            ConfigManager(first.mcp_connections_file).set_mcp_clients(
                 ["jira=https://mcp.atlassian.example/mcp"]
             )
 
             self.assertEqual(
-                ConfigManager(first.mcp_config_file).mcp_clients,
+                ConfigManager(first.mcp_connections_file).mcp_clients,
                 ["jira=https://mcp.atlassian.example/mcp"],
             )
-            self.assertIsNone(ConfigManager(second.mcp_config_file).mcp_clients)
+            self.assertIsNone(ConfigManager(second.mcp_connections_file).mcp_clients)
+
+    def test_mcp_server_file_is_global(self):
+        """O estado do servidor MCP é compartilhado entre workspaces."""
+        from quimera.runtime.mcp.session import build_oauth_provider
+
+        with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as projects_dir:
+            base = Path(base_dir)
+            projects = Path(projects_dir)
+            first_project = projects / "first"
+            second_project = projects / "second"
+            first_project.mkdir()
+            second_project.mkdir()
+
+            with patch("quimera.workspace.find_base_writable", lambda dirs: base):
+                first = Workspace(first_project)
+                second = Workspace(second_project)
+
+            expected = base / "state" / "mcp-server.json"
+            self.assertEqual(first.mcp_server_file, expected)
+            self.assertEqual(second.mcp_server_file, expected)
+            self.assertEqual(build_oauth_provider(first).config.store_path, expected)
 
     def test_ui_state_file_is_isolated_per_workspace(self):
         """Cada projeto guarda o estado visual da TUI (tema) em arquivo próprio."""
