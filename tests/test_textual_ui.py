@@ -258,6 +258,107 @@ def test_mcp_server_editor_is_separate_modal(tmp_path):
     asyncio.run(run_test())
 
 
+def test_mcp_server_editor_small_terminal_keeps_buttons_and_scrolls(tmp_path):
+    """Em terminais baixos os botões ficam visíveis e os campos rolam."""
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import Button, Input, Label
+
+    from quimera.config import ConfigManager
+    from quimera.ui.textual.mcp_screen import MCPServerEditorScreen
+
+    manager = Mock()
+    manager.config = ConfigManager(tmp_path / "mcp-config.json")
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(100, 28)) as pilot:
+            app.push_screen(MCPServerEditorScreen(manager, app))
+            await pilot.pause()
+
+            screen = app.screen
+            assert isinstance(screen, MCPServerEditorScreen)
+
+            save = screen.query_one("#mcp_editor_save", Button)
+            cancel = screen.query_one("#mcp_editor_cancel", Button)
+            for button in (save, cancel):
+                assert button.region.height > 0
+                assert button.region.bottom <= app.size.height
+
+            fields = screen.query_one("#mcp_editor_fields")
+            assert fields.max_scroll_y > 0
+            # O editor abre mostrando o início do formulário: o foco inicial
+            # no campo Nome não pode rolar o rótulo para fora da área visível.
+            assert fields.scroll_y == 0
+            first_label = fields.query(Label).first()
+            assert fields.region.contains_region(first_label.region)
+
+            env_input = screen.query_one("#mcp_editor_env", Input)
+            # O campo contém pares KEY=valor editáveis: mascarar como senha
+            # esconderia as chaves e impediria conferir o que foi colado.
+            assert env_input.password is False
+            fields.scroll_to_widget(env_input, animate=False)
+            await pilot.pause()
+            assert env_input.region.height > 0
+            assert env_input.region.bottom <= app.size.height
+
+            await pilot.click("#mcp_editor_cancel")
+            await pilot.pause()
+            assert not isinstance(app.screen, MCPServerEditorScreen)
+
+    asyncio.run(run_test())
+
+
+def test_mcp_server_editor_uses_available_vertical_space(tmp_path):
+    """Em terminais altos o formulário aparece inteiro, sem scroll interno."""
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import Button, Input
+
+    from quimera.config import ConfigManager
+    from quimera.ui.textual.mcp_screen import MCPServerEditorScreen
+
+    manager = Mock()
+    manager.config = ConfigManager(tmp_path / "mcp-config.json")
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(100, 50)) as pilot:
+            app.push_screen(MCPServerEditorScreen(manager, app))
+            await pilot.pause()
+
+            screen = app.screen
+            assert isinstance(screen, MCPServerEditorScreen)
+
+            # Com espaço de sobra, nada rola: o diálogo para na altura natural
+            # do formulário em vez de ocupar 90% da tela com área vazia.
+            fields = screen.query_one("#mcp_editor_fields")
+            assert fields.max_scroll_y == 0
+            dialog = screen.query_one("#mcp_editor_dialog")
+            assert dialog.region.height < int(app.size.height * 0.9)
+            env_input = screen.query_one("#mcp_editor_env", Input)
+            assert env_input.region.height > 0
+            assert env_input.region.bottom <= app.size.height
+            save = screen.query_one("#mcp_editor_save", Button)
+            assert save.region.bottom <= app.size.height
+
+            # Ao encolher o terminal, o diálogo acompanha os 90% da tela: os
+            # campos voltam a rolar e os botões continuam visíveis.
+            await pilot.resize_terminal(100, 24)
+            await pilot.pause()
+            assert fields.max_scroll_y > 0
+            assert save.region.height > 0
+            assert save.region.bottom <= app.size.height
+
+            await pilot.click("#mcp_editor_cancel")
+            await pilot.pause()
+            assert not isinstance(app.screen, MCPServerEditorScreen)
+
+    asyncio.run(run_test())
+
+
 def _events(model: TextualFeedModel):
     return [item.event for item in model.items]
 

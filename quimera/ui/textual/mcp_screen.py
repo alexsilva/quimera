@@ -6,7 +6,7 @@ import threading
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Input, Label, Select
 
@@ -25,14 +25,17 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
     }
     #mcp_editor_dialog {
         width: 82;
-        height: auto;
-        max-height: 90%;
+        height: 90%;
+        /* Altura natural do formulário: 20 linhas de campos + 10 de moldura
+           (borda, padding, header, botões e rodapé). Acima disso o diálogo não
+           cresce; abaixo, só a área de campos rola. */
+        max-height: 30;
         background: $surface;
         border: round $primary;
         padding: 1 2;
     }
     #mcp_editor_header {
-        height: 2;
+        height: 1;
         margin-bottom: 1;
     }
     #mcp_editor_title {
@@ -49,7 +52,11 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
         padding: 0;
     }
     #mcp_editor_fields {
-        height: auto;
+        height: 1fr;
+        min-height: 3;
+        /* Calha fixa: os campos nascem com a largura final, e o foco inicial
+           não rola o formulário ao surgir a barra de rolagem. */
+        scrollbar-gutter: stable;
     }
     #mcp_editor_fields Label {
         margin-top: 1;
@@ -59,7 +66,7 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
         width: 100%;
     }
     #mcp_editor_buttons {
-        height: 2;
+        height: 1;
         margin-top: 1;
         align-horizontal: right;
     }
@@ -82,6 +89,8 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
     ]
 
     AUTO_FOCUS = "#mcp_editor_name"
+
+    _HINT = "Ctrl+S salva · Esc cancela"
 
     def __init__(
         self,
@@ -108,7 +117,7 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
                 )
                 yield Button("×", id="mcp_editor_close")
 
-            with Vertical(id="mcp_editor_fields"):
+            with VerticalScroll(id="mcp_editor_fields"):
                 yield Label("Nome")
                 yield Input(
                     value=info.name if info is not None else "",
@@ -140,14 +149,13 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
                 )
                 yield Input(
                     placeholder="TOKEN=...",
-                    password=True,
                     id="mcp_editor_env",
                 )
 
             with Horizontal(id="mcp_editor_buttons"):
                 yield Button("Cancelar", id="mcp_editor_cancel")
                 yield Button("Conectar e salvar", id="mcp_editor_save", variant="primary")
-            yield Label("", id="mcp_editor_activity")
+            yield Label(self._HINT, id="mcp_editor_activity")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id in {"mcp_editor_close", "mcp_editor_cancel"}:
