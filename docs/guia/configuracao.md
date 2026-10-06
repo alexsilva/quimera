@@ -22,8 +22,10 @@ continua reservado a histórico, memória, logs e estado interno. O mecanismo de
 hash do workspace não participa da resolução de configuração operacional.
 
 As conexões a servidores MCP externos ficam em `mcp-connections.json`, no
-diretório do workspace. Servidores e
-variáveis de ambiente são persistidos juntos. Atualizações de configuração e
+diretório do workspace. Servidores e variáveis de ambiente são persistidos
+juntos: no MCP Hub, o editor de servidor abre com as variáveis salvas da
+conexão e grava exatamente o que estiver no campo Ambiente (vazio remove as
+variáveis). Atualizações de configuração e
 conexões usam substituição atômica e locks entre processos; arquivos `.lock`
 adjacentes coordenam essas gravações e podem permanecer no diretório.
 

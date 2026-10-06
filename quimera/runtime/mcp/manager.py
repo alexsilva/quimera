@@ -317,12 +317,12 @@ class MCPConnectionManager:
         ]
         self.config.set_mcp_configuration(specs, env_specs)
 
-    def env_spec_for(self, name: str) -> str | None:
-        """Retorna a configuração de ambiente persistida para a conexão."""
+    def env_text_for(self, name: str) -> str:
+        """Retorna os pares ``KEY=valor`` persistidos para a conexão (vazio se não há)."""
         for spec in self.config.mcp_client_env or []:
             if _spec_name(spec) == name:
-                return spec
-        return None
+                return spec.split("=", 1)[1].strip() if "=" in spec else ""
+        return ""
 
     def _find_spec(self, name: str) -> str:
         for spec in self.config.mcp_clients or []:

@@ -1414,6 +1414,48 @@ def test_manager_upsert_in_background_persiste_antes_de_conectar(tmp_path, monke
     assert len(threads) == 1
 
 
+def test_manager_env_text_for_devolve_os_pares_sem_o_nome_da_conexao(tmp_path, monkeypatch):
+    workspace = Workspace(tmp_path)
+    ConfigManager(workspace.mcp_connections_file).set_mcp_configuration(
+        ["jira=stdio:jira-cmd", "github=stdio:gh-cmd"], ["jira=TOKEN=abc,DISPLAY=:99"]
+    )
+    _install_fake_session(monkeypatch)
+    set_bridge(MCPClientBridge())
+    executor = MagicMock()
+    executor.registry = ToolRegistry()
+    manager = MCPConnectionManager(executor=executor, workspace=workspace)
+
+    assert manager.env_text_for("jira") == "TOKEN=abc,DISPLAY=:99"
+    assert manager.env_text_for("github") == ""
+    assert manager.env_text_for("inexistente") == ""
+
+
+def test_manager_upsert_in_background_com_env_vazio_remove_o_ambiente_da_conexao(
+    tmp_path, monkeypatch
+):
+    workspace = Workspace(tmp_path)
+    ConfigManager(workspace.mcp_connections_file).set_mcp_configuration(
+        ["jira=stdio:jira-cmd", "github=stdio:gh-cmd"],
+        ["jira=TOKEN=abc", "github=TOKEN=xyz"],
+    )
+    _install_fake_session(monkeypatch)
+    set_bridge(MCPClientBridge())
+    executor = MagicMock()
+    executor.registry = ToolRegistry()
+    manager = MCPConnectionManager(executor=executor, workspace=workspace)
+
+    class LazyThread(threading.Thread):
+        def start(self):
+            pass
+
+    manager.upsert_in_background("jira=stdio:jira-cmd", env_spec="", thread_factory=LazyThread)
+
+    config = ConfigManager(workspace.mcp_connections_file)
+    assert config.mcp_clients == ["jira=stdio:jira-cmd", "github=stdio:gh-cmd"]
+    assert config.mcp_client_env == ["github=TOKEN=xyz"]
+    assert manager.env_text_for("jira") == ""
+
+
 # ── Vida do subprocesso stdio × thread que o criou ───────────────────────
 # O bwrap --die-with-parent (PR_SET_PDEATHSIG) amarra o servidor à *thread*
 # criadora. O filho abaixo reproduz o mecanismo sem bwrap: pede o mesmo

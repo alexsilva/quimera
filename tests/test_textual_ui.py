@@ -287,6 +287,7 @@ def test_mcp_server_editor_is_separate_modal(tmp_path):
 
     manager = Mock()
     manager.config = ConfigManager(tmp_path / "mcp-config.json")
+    manager.env_text_for.return_value = ""
     info = SimpleNamespace(
         name="github",
         transport="remote",
@@ -5873,7 +5874,125 @@ def test_mcp_server_editor_salva_e_conecta_em_background(tmp_path):
     asyncio.run(run_test())
 
     manager.upsert_in_background.assert_called_once_with(
-        "jira=remote:https://mcp.example.test/mcp", env_spec=None
+        "jira=remote:https://mcp.example.test/mcp", env_spec=""
     )
     manager.upsert.assert_not_called()
     assert results == ["jira"]
+
+
+def test_mcp_server_editor_mostra_ambiente_salvo_e_grava_o_campo_inteiro():
+    """O campo Ambiente nasce com as variáveis persistidas; o que está nele é o que fica salvo."""
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import Input
+
+    from quimera.ui.textual.mcp_screen import MCPServerEditorScreen
+
+    manager = Mock()
+    manager.env_text_for.return_value = "TOKEN=abc,DISPLAY=:99"
+    info = SimpleNamespace(
+        name="cua", transport="stdio", endpoint="node cua.mjs", connected=True
+    )
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(100, 40)) as pilot:
+            app.push_screen(MCPServerEditorScreen(manager, app, info))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, MCPServerEditorScreen)
+            env_input = screen.query_one("#mcp_editor_env", Input)
+            assert env_input.value == "TOKEN=abc,DISPLAY=:99"
+            manager.env_text_for.assert_called_once_with("cua")
+
+            env_input.value = "TOKEN=abc,DISPLAY=:99,EXTRA=1"
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            assert not isinstance(app.screen, MCPServerEditorScreen)
+
+    asyncio.run(run_test())
+
+    manager.upsert_in_background.assert_called_once_with(
+        "cua=stdio:node cua.mjs", env_spec="cua=TOKEN=abc,DISPLAY=:99,EXTRA=1"
+    )
+    manager.remove.assert_not_called()
+
+
+def test_mcp_server_editor_campo_vazio_remove_ambiente_e_renomear_leva_o_ambiente():
+    """Limpar o campo apaga as variáveis; renomear grava o ambiente sob o novo nome."""
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import Input
+
+    from quimera.ui.textual.mcp_screen import MCPServerEditorScreen
+
+    manager = Mock()
+    manager.env_text_for.return_value = "TOKEN=abc"
+    info = SimpleNamespace(
+        name="cua", transport="stdio", endpoint="node cua.mjs", connected=True
+    )
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(100, 40)) as pilot:
+            app.push_screen(MCPServerEditorScreen(manager, app, info))
+            await pilot.pause()
+            app.screen.query_one("#mcp_editor_env", Input).value = ""
+            app.screen.action_save()
+            await pilot.pause()
+            assert not isinstance(app.screen, MCPServerEditorScreen)
+            manager.upsert_in_background.assert_called_once_with(
+                "cua=stdio:node cua.mjs", env_spec=""
+            )
+            manager.remove.assert_not_called()
+
+            manager.reset_mock()
+            app.push_screen(MCPServerEditorScreen(manager, app, info))
+            await pilot.pause()
+            assert app.screen.query_one("#mcp_editor_env", Input).value == "TOKEN=abc"
+            app.screen.query_one("#mcp_editor_name", Input).value = "cua2"
+            app.screen.action_save()
+            await pilot.pause()
+            assert not isinstance(app.screen, MCPServerEditorScreen)
+            # O ambiente entra sob o novo nome antes de o antigo ser descartado.
+            manager.upsert_in_background.assert_called_once_with(
+                "cua2=stdio:node cua.mjs", env_spec="cua2=TOKEN=abc"
+            )
+            manager.remove.assert_called_once_with("cua")
+
+    asyncio.run(run_test())
+
+
+def test_mcp_server_editor_rejeita_ambiente_malformado():
+    """Parte sem KEY= não é descartada em silêncio: o editor avisa e nada é gravado."""
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import Input
+
+    from quimera.ui.textual.mcp_screen import MCPServerEditorScreen
+
+    manager = Mock()
+    manager.env_text_for.return_value = ""
+    parent = Mock()
+    info = SimpleNamespace(
+        name="cua", transport="stdio", endpoint="node cua.mjs", connected=True
+    )
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(100, 40)) as pilot:
+            app.push_screen(MCPServerEditorScreen(manager, parent, info))
+            await pilot.pause()
+            app.screen.query_one("#mcp_editor_env", Input).value = "TOKEN=abc,DISPLAY"
+            app.screen.action_save()
+            await pilot.pause()
+            assert isinstance(app.screen, MCPServerEditorScreen)
+
+    asyncio.run(run_test())
+
+    manager.upsert_in_background.assert_not_called()
+    message = parent.notify.call_args.args[0]
+    assert "KEY=valor" in message and "DISPLAY" in message

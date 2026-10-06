@@ -145,10 +145,9 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
                     id="mcp_editor_endpoint",
                 )
 
-                yield Label(
-                    "Ambiente opcional · KEY=valor,KEY2=valor2 · vazio mantém o existente"
-                )
+                yield Label("Ambiente opcional · KEY=valor,KEY2=valor2")
                 yield Input(
+                    value=self.manager.env_text_for(info.name) if info is not None else "",
                     placeholder="TOKEN=...",
                     id="mcp_editor_env",
                 )
@@ -194,7 +193,7 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
             return
         self._save_succeeded(name)
 
-    def _build_specs(self) -> tuple[str, str | None, str]:
+    def _build_specs(self) -> tuple[str, str, str]:
         name = self.query_one("#mcp_editor_name", Input).value.strip()
         endpoint = self.query_one("#mcp_editor_endpoint", Input).value.strip()
         transport_value = self.query_one("#mcp_editor_transport", Select).value
@@ -215,8 +214,20 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
         else:
             raise ValueError("Selecione um transporte MCP válido.")
 
+        # O campo nasce com o ambiente persistido; o que está nele ao salvar é o
+        # que fica gravado, inclusive sob o novo nome quando a conexão é
+        # renomeada. Vazio remove as variáveis da conexão.
         env_text = self.query_one("#mcp_editor_env", Input).value.strip()
-        env_spec = f"{name}={env_text}" if env_text else None
+        malformed = [
+            part
+            for part in (item.strip() for item in env_text.split(","))
+            if part and ("=" not in part or not part.split("=", 1)[0].strip())
+        ]
+        if malformed:
+            raise ValueError(
+                "Ambiente deve ser KEY=valor,KEY2=valor2; inválido: " + ", ".join(malformed)
+            )
+        env_spec = f"{name}={env_text}" if env_text else ""
         return spec, env_spec, name
 
     def _save_failed(self, name: str, error: str) -> None:
