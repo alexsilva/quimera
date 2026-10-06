@@ -1174,6 +1174,43 @@ class TestToolsCallHTTP:
         finally:
             httpd.shutdown()
 
+    def test_tools_call_http_preserves_failed_process_content_without_error(self):
+        """HTTP MCP não substitui stderr/exit_code por 'Tool execution failed'."""
+        content = "exit_code: 7\n\nstderr:\nfalha real"
+        result = ToolResult(
+            ok=False,
+            tool_name="run_shell",
+            content=content,
+            exit_code=7,
+        )
+        executor = _make_executor(call_result=result, tool_names=["run_shell"])
+        httpd = MCP_HTTPServer(
+            _make_mcp_server(executor),
+            host="127.0.0.1",
+            port=0,
+            allowed_tools={"run_shell"},
+        )
+        httpd.start_background()
+        _wait_for_server(httpd.host, httpd.port)
+        try:
+            body = json.dumps({
+                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {"name": "run_shell", "arguments": {"command": "probe"}},
+            }).encode("utf-8")
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+
+            assert resp.status == 200
+            result_data = json.loads(resp.data)
+            assert result_data["result"]["isError"] is True
+            assert result_data["result"]["content"][0]["text"] == content
+            assert result_data["result"]["structuredContent"]["exit_code"] == 7
+        finally:
+            httpd.shutdown()
+
     def test_tools_call_via_sse_delivers_result_to_sse_channel(self):
         """tools/call via SSE: resultado chega pelo canal SSE (202 no POST)."""
         import time as _time

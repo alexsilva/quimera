@@ -191,6 +191,109 @@ class TestToolsCall:
         assert call_arg.name == "read_file"
         assert call_arg.arguments == {"path": "foo.py"}
 
+    def test_failed_tool_without_error_preserves_content_and_exit_code(self):
+        """Falha de processo mantém diagnóstico quando ToolResult.error é None."""
+        content = "exit_code: 7\n\nstderr:\nfalha real"
+        result = ToolResult(
+            ok=False,
+            tool_name="run_shell",
+            content=content,
+            exit_code=7,
+        )
+        executor = _make_executor(call_result=result, tool_names=["run_shell"])
+        server = _make_server(executor)
+
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 12, "method": "tools/call",
+            "params": {"name": "run_shell", "arguments": {"command": "probe"}},
+        })
+
+        assert resp["result"]["isError"] is True
+        assert resp["result"]["content"][0]["text"] == content
+        assert resp["result"]["structuredContent"]["content"] == content
+        assert resp["result"]["structuredContent"]["exit_code"] == 7
+
+    def test_failed_tool_with_empty_error_falls_back_to_content(self):
+        """Erro string vazio não deve esconder o diagnóstico disponível."""
+        result = ToolResult(
+            ok=False,
+            tool_name="run_shell",
+            content="stderr: detalhe",
+            error="",
+        )
+        executor = _make_executor(call_result=result, tool_names=["run_shell"])
+        server = _make_server(executor)
+
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 13, "method": "tools/call",
+            "params": {"name": "run_shell", "arguments": {"command": "probe"}},
+        })
+
+        assert resp["result"]["isError"] is True
+        assert resp["result"]["content"][0]["text"] == "stderr: detalhe"
+
+    def test_failed_tool_preserves_error_and_diagnostic_content(self):
+        """Erro resumido não pode esconder stdout/stderr parcial da tool."""
+        result = ToolResult(
+            ok=False,
+            tool_name="run_shell",
+            content="stdout:\nparcial\n\nstderr:\ndetalhe",
+            error="comando excedeu timeout de 30s",
+        )
+        executor = _make_executor(call_result=result, tool_names=["run_shell"])
+        server = _make_server(executor)
+
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 15, "method": "tools/call",
+            "params": {"name": "run_shell", "arguments": {"command": "probe"}},
+        })
+
+        text = resp["result"]["content"][0]["text"]
+        assert "comando excedeu timeout de 30s" in text
+        assert "stdout:\nparcial" in text
+        assert "stderr:\ndetalhe" in text
+
+    def test_empty_tool_error_falls_back_to_diagnostic_content(self):
+        """ToolError sem mensagem não deve apagar content útil."""
+        from quimera.runtime.errors import ToolEnvironmentError
+
+        result = ToolResult(
+            ok=False,
+            tool_name="read_file",
+            content="diagnóstico disponível",
+            error=ToolEnvironmentError(""),
+        )
+        executor = _make_executor(call_result=result)
+        server = _make_server(executor)
+
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 16, "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {"path": "x"}},
+        })
+
+        assert resp["result"]["content"][0]["text"] == "diagnóstico disponível"
+
+    def test_tool_error_is_serialized_in_structured_content(self):
+        """ToolError é convertido para string antes de entrar no JSON MCP."""
+        from quimera.runtime.errors import ToolEnvironmentError
+
+        result = ToolResult(
+            ok=False,
+            tool_name="read_file",
+            error=ToolEnvironmentError("arquivo indisponível"),
+        )
+        executor = _make_executor(call_result=result)
+        server = _make_server(executor)
+
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 14, "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {"path": "x"}},
+        })
+
+        assert resp["result"]["isError"] is True
+        assert resp["result"]["content"][0]["text"] == "arquivo indisponível"
+        assert resp["result"]["structuredContent"]["error"] == "arquivo indisponível"
+
     def test_capability_hidden_tool_cannot_be_called_directly(self, tmp_path):
         """tools/call deve aplicar os mesmos capability gates de tools/list."""
         executor = ToolExecutor(

@@ -10,6 +10,8 @@ import signal
 import threading
 import time
 import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -101,6 +103,7 @@ class CommandSession:
     stderr_truncated: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
     reader_threads: list[threading.Thread] = field(default_factory=list)
+    in_use: int = 0  # tools operando na sessão agora; protegido por _sessions_lock
 
 
 class ShellTool(ToolBase):
@@ -112,17 +115,72 @@ class ShellTool(ToolBase):
         self._sessions: dict[int, CommandSession] = {}
         self._next_session_id = random.SystemRandom().randint(100000, 999999999)
         self._sessions_lock = threading.Lock()
+        self._session_reservations = 0
 
-    def _enforce_session_limit(self) -> None:
-        """Remove a sessão mais antiga se o limite for excedido."""
-        while True:
-            with self._sessions_lock:
-                if len(self._sessions) <= _MAX_SESSIONS:
-                    return
-                oldest_id = min(self._sessions, key=lambda sid: self._sessions[sid].started_at)
-                session = self._sessions.pop(oldest_id, None)
+    def _reserve_session_slot(self) -> bool:
+        """Reserva atomicamente capacidade antes de iniciar um subprocesso.
+
+        Com a capacidade cheia, libera a sessão encerrada e ociosa mais antiga:
+        processo terminado e nenhuma tool operando nela. Sessões em execução
+        nunca são descartadas. O contador de reservas impede duas chamadas
+        concorrentes de ocuparem o mesmo slot entre a checagem de capacidade e
+        o registro da nova sessão.
+        """
+        reclaimed: CommandSession | None = None
+        with self._sessions_lock:
+            if len(self._sessions) + self._session_reservations >= _MAX_SESSIONS:
+                idle_finished = [
+                    session for session in self._sessions.values()
+                    if session.in_use == 0 and session.process.poll() is not None
+                ]
+                if idle_finished:
+                    oldest = min(idle_finished, key=lambda session: session.started_at)
+                    reclaimed = self._sessions.pop(oldest.session_id)
+            reserved = len(self._sessions) + self._session_reservations < _MAX_SESSIONS
+            if reserved:
+                self._session_reservations += 1
+        if reclaimed is not None:
+            self._cleanup_detached_session_resources(reclaimed)
+        return reserved
+
+    def _session_limit_error(self) -> str:
+        """Explica a recusa por capacidade e lista as sessões que a ocupam."""
+        with self._sessions_lock:
+            sessions = sorted(self._sessions.values(), key=lambda session: session.started_at)
+        open_sessions = ", ".join(
+            f"{session.session_id} ({' '.join(session.command.split())[:60]})"
+            for session in sessions
+        )
+        return (
+            f"Limite de {_MAX_SESSIONS} sessões shell abertas atingido e nenhuma "
+            "encerrada pôde ser liberada. Feche uma com close_command_session. "
+            f"Sessões abertas: {open_sessions or 'nenhuma'}"
+        )
+
+    def _release_session_slot(self) -> None:
+        """Libera uma reserva que não chegou a ser convertida em sessão."""
+        with self._sessions_lock:
+            if self._session_reservations <= 0:
+                raise RuntimeError("Tentativa de liberar slot de sessão não reservado")
+            self._session_reservations -= 1
+
+    @contextmanager
+    def _session_in_use(self, session_id: int) -> Iterator[CommandSession | None]:
+        """Busca a sessão e a protege da liberação por capacidade enquanto é usada."""
+        with self._sessions_lock:
+            session = self._sessions.get(session_id)
             if session is not None:
-                self._cleanup_session_resources(session, terminate=True)
+                session.in_use += 1
+        try:
+            yield session
+        finally:
+            if session is not None:
+                self._release_session_use(session)
+
+    def _release_session_use(self, session: CommandSession) -> None:
+        """Encerra o uso marcado por `_session_in_use` ou `_create_session`."""
+        with self._sessions_lock:
+            session.in_use -= 1
 
     def run_shell(self, call: ToolCall) -> ToolResult:
         """Executa um comando shell único e retorna stdout/stderr com timeout."""
@@ -270,6 +328,14 @@ class ShellTool(ToolBase):
 
         command = self._rewrite_command_for_local_venv(command, workdir)
         env = self._build_workspace_environment(workdir)
+
+        if not self._reserve_session_slot():
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=self._session_limit_error(),
+            )
+
         try:
             process, tty_master_fd = self._spawn_process(
                 command,
@@ -280,61 +346,83 @@ class ShellTool(ToolBase):
                 env=env,
             )
         except SandboxError as exc:
+            self._release_session_slot()
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
-        session = self._create_session(
-            process,
-            command=command,
-            cwd=workdir,
-            tty=tty_enabled,
-            tty_master_fd=tty_master_fd,
-        )
-        self._start_reader_threads(session)
-        return self._collect_session_result(
-            session,
-            yield_time_ms=yield_time_ms,
-            tool_name=call.name,
-            include_session_id=True,
-            wait_for_completion=tty_enabled,
-        )
+        except Exception:
+            self._release_session_slot()
+            raise
+
+        try:
+            session = self._create_session(
+                process,
+                command=command,
+                cwd=workdir,
+                tty=tty_enabled,
+                tty_master_fd=tty_master_fd,
+            )
+        except Exception:
+            self._release_session_slot()
+            provisional_session = CommandSession(
+                session_id=-1,
+                process=process,
+                command=command,
+                cwd=workdir,
+                started_at=time.perf_counter(),
+                tty=tty_enabled,
+                tty_master_fd=tty_master_fd,
+            )
+            self._cleanup_session_resources(provisional_session, terminate=True)
+            raise
+        try:
+            self._start_reader_threads(session)
+            return self._collect_session_result(
+                session,
+                yield_time_ms=yield_time_ms,
+                tool_name=call.name,
+                include_session_id=True,
+                wait_for_completion=tty_enabled,
+            )
+        finally:
+            self._release_session_use(session)
 
     def write_stdin(self, call: ToolCall) -> ToolResult:
         """Escreve no stdin de uma sessão ativa e devolve saída incremental."""
         session_id = int(call.arguments["session_id"])
-        session = self._sessions.get(session_id)
-        if session is None:
-            return ToolResult(
-                ok=False,
-                tool_name=call.name,
-                error=f"Sessão não encontrada: {session_id}",
-            )
-
         chars = call.arguments.get("chars", "")
         if chars is None:
             chars = ""
         close_stdin = bool(call.arguments.get("close_stdin", False))
         yield_time_ms = self._resolve_yield_time(call.arguments.get("yield_time_ms"))
 
-        try:
-            if chars:
-                self._write_to_session(session, str(chars))
-            if close_stdin:
-                self._close_session_stdin(session)
-        except BrokenPipeError:
-            close_stdin = True
-        except Exception as exc:  # noqa: BLE001
-            return ToolResult(
-                ok=False,
-                tool_name=call.name,
-                error=f"Falha ao escrever na sessão {session_id}: {exc}",
-            )
+        with self._session_in_use(session_id) as session:
+            if session is None:
+                return ToolResult(
+                    ok=False,
+                    tool_name=call.name,
+                    error=f"Sessão não encontrada: {session_id}",
+                )
 
-        return self._collect_session_result(
-            session,
-            yield_time_ms=yield_time_ms,
-            tool_name=call.name,
-            include_session_id=True,
-            wait_for_completion=close_stdin,
-        )
+            try:
+                if chars:
+                    self._write_to_session(session, str(chars))
+                if close_stdin:
+                    self._close_session_stdin(session)
+            except BrokenPipeError:
+                close_stdin = True
+            except Exception as exc:  # noqa: BLE001
+                return ToolResult(
+                    ok=False,
+                    tool_name=call.name,
+                    error=f"Falha ao escrever na sessão {session_id}: {exc}",
+                )
+
+            return self._collect_session_result(
+                session,
+                yield_time_ms=yield_time_ms,
+                tool_name=call.name,
+                include_session_id=True,
+                wait_for_completion=close_stdin,
+            )
 
     def poll_command_session(self, call: ToolCall) -> ToolResult:
         """Consulta a saída incremental de uma sessão sem escrever no stdin.
@@ -345,50 +433,55 @@ class ShellTool(ToolBase):
         """
 
         session_id = int(call.arguments["session_id"])
-        session = self._sessions.get(session_id)
-        if session is None:
-            return ToolResult(
-                ok=False,
-                tool_name=call.name,
-                error=f"Sessão não encontrada: {session_id}",
-            )
         yield_time_ms = self._resolve_yield_time(call.arguments.get("yield_time_ms"))
         wait_for_completion = bool(call.arguments.get("wait_for_completion", False))
-        return self._collect_session_result(
-            session,
-            yield_time_ms=yield_time_ms,
-            tool_name=call.name,
-            include_session_id=True,
-            wait_for_completion=wait_for_completion,
-        )
+        with self._session_in_use(session_id) as session:
+            if session is None:
+                return ToolResult(
+                    ok=False,
+                    tool_name=call.name,
+                    error=f"Sessão não encontrada: {session_id}",
+                )
+            return self._collect_session_result(
+                session,
+                yield_time_ms=yield_time_ms,
+                tool_name=call.name,
+                include_session_id=True,
+                wait_for_completion=wait_for_completion,
+            )
 
     def close_command_session(self, call: ToolCall) -> ToolResult:
         """Fecha explicitamente uma sessão ativa de comando."""
         session_id = int(call.arguments["session_id"])
-        session = self._sessions.get(session_id)
-        if session is None:
-            return ToolResult(
-                ok=False,
-                tool_name=call.name,
-                error=f"Sessão não encontrada: {session_id}",
-            )
-
         terminate = bool(call.arguments.get("terminate", True))
-        try:
-            if terminate and session.process.poll() is None:
-                _terminate_process_group(session.process)
-                try:
-                    session.process.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    _kill_process_group(session.process)
+        with self._session_in_use(session_id) as session:
+            if session is None:
+                return ToolResult(
+                    ok=False,
+                    tool_name=call.name,
+                    error=f"Sessão não encontrada: {session_id}",
+                )
+
+            try:
+                if terminate and session.process.poll() is None:
+                    _terminate_process_group(session.process)
                     try:
                         session.process.wait(timeout=1)
                     except subprocess.TimeoutExpired:
-                        pass
-            self._close_session_stdin(session)
-            stdout, stderr = self._drain_session_output(session)
-        finally:
-            self._cleanup_session(session_id)
+                        _kill_process_group(session.process)
+                        try:
+                            session.process.wait(timeout=1)
+                        except subprocess.TimeoutExpired:
+                            pass
+                self._close_session_stdin(session)
+                # Assim como no caminho normal de conclusão, o processo pode já
+                # ter encerrado enquanto as readers ainda drenam bytes pendentes.
+                # Aguarde um orçamento curto antes do último drain para não perder
+                # o tail ao fechar explicitamente a sessão.
+                self._join_reader_threads(session, timeout=0.5)
+                stdout, stderr = self._drain_session_output(session)
+            finally:
+                self._cleanup_session(session_id)
 
         payload = {
             "session_id": session_id,
@@ -553,16 +646,21 @@ class ShellTool(ToolBase):
         shell_args = self._wrap_subprocess_cmd(workdir, shell_args, die_with_parent=False)
         if tty:
             master_fd, slave_fd = pty.openpty()
-            process = subprocess.Popen(
-                shell_args,
-                cwd=str(workdir),
-                stdin=slave_fd,
-                stdout=slave_fd,
-                stderr=slave_fd,
-                close_fds=True,
-                env=env,
-                start_new_session=True,
-            )
+            try:
+                process = subprocess.Popen(
+                    shell_args,
+                    cwd=str(workdir),
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    close_fds=True,
+                    env=env,
+                    start_new_session=True,
+                )
+            except Exception:
+                os.close(master_fd)
+                os.close(slave_fd)
+                raise
             os.close(slave_fd)
             return process, master_fd
         process = subprocess.popen_text(
@@ -582,10 +680,16 @@ class ShellTool(ToolBase):
             tty: bool,
             tty_master_fd: int | None,
     ) -> CommandSession:
-        """Registra uma nova sessão interativa e devolve seu estado."""
+        """Converte um slot reservado em sessão registrada, já marcada em uso.
+
+        O chamador encerra o uso com `_release_session_use` ao terminar a coleta,
+        para que a sessão não seja liberada por capacidade antes disso.
+        """
         _rand = random.SystemRandom()
         session: CommandSession
         with self._sessions_lock:
+            if self._session_reservations <= 0:
+                raise RuntimeError("Criação de sessão sem slot previamente reservado")
             session_id = _rand.randint(100000, 999999999)
             while session_id in self._sessions:
                 session_id = _rand.randint(100000, 999999999)
@@ -597,9 +701,10 @@ class ShellTool(ToolBase):
                 started_at=time.perf_counter(),
                 tty=tty,
                 tty_master_fd=tty_master_fd,
+                in_use=1,
             )
+            self._session_reservations -= 1
             self._sessions[session_id] = session
-        self._enforce_session_limit()
         return session
 
     def _append_chunk(
@@ -744,6 +849,12 @@ class ShellTool(ToolBase):
                     break
                 time.sleep(0.005)
         completed = returncode is not None
+        if completed:
+            # O processo pode terminar antes das threads leitoras consumirem o
+            # tail ainda bufferizado nos pipes. Aguarda um pequeno orçamento
+            # compartilhado antes do snapshot final, que monta o resultado
+            # "completed"; sem isso ele pode perder stdout/stderr.
+            self._join_reader_threads(session, timeout=0.5)
         full_stdout, full_stderr = self._snapshot_session_output(session)
         payload = {
             "command": session.command,
@@ -791,6 +902,18 @@ class ShellTool(ToolBase):
             self._cleanup_session(session.session_id)
         return result
 
+    @staticmethod
+    def _join_reader_threads(session: CommandSession, *, timeout: float) -> None:
+        """Aguarda readers com orçamento total, sem bloquear por thread."""
+        deadline = time.perf_counter() + max(0.0, timeout)
+        for thread in session.reader_threads:
+            if not thread.is_alive():
+                continue
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                break
+            thread.join(timeout=remaining)
+
     def _truncate_consumed_chunks(self, session: CommandSession) -> None:
         """Remove chunks já consumidos para liberar memória."""
         # Trunca cada stream independentemente, não pelo min comum.
@@ -833,7 +956,10 @@ class ShellTool(ToolBase):
             session = self._sessions.pop(session_id, None)
         if session is None:
             return
-        # Join reader threads to ensure they finish before cleanup
+        self._cleanup_detached_session_resources(session)
+
+    def _cleanup_detached_session_resources(self, session: CommandSession) -> None:
+        """Finaliza readers e recursos de uma sessão já removida do registro."""
         for thread in session.reader_threads:
             if thread.is_alive():
                 thread.join(timeout=1.0)
@@ -848,12 +974,25 @@ class ShellTool(ToolBase):
                 session.process.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 _kill_process_group(session.process)
+                try:
+                    session.process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
         if session.tty_master_fd is not None:
             try:
                 os.close(session.tty_master_fd)
             except OSError:
                 pass
             session.tty_master_fd = None
+        if not any(thread.is_alive() for thread in session.reader_threads):
+            for stream_name in ("stdin", "stdout", "stderr"):
+                stream = getattr(session.process, stream_name, None)
+                if stream is None:
+                    continue
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
 
     def _write_to_session(self, session: CommandSession, chars: str) -> None:
         """Escreve dados no canal de entrada da sessão."""

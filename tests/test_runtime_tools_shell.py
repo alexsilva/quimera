@@ -1,5 +1,7 @@
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -7,6 +9,7 @@ import pytest
 
 from quimera.config import ConfigManager
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.sandbox.bwrap import SandboxError
 from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicyError
@@ -30,6 +33,22 @@ def test_shell_tool_run_basic(config):
         assert "duration_ms" in result.data
         assert result.data["command"] == "echo hello"
         assert result.data["stdout"] == "hello\n"
+
+
+def test_run_shell_nonzero_exit_preserves_process_diagnostics(config):
+    """Exit code não-zero mantém stderr e metadados no conteúdo da tool."""
+    tool = ShellTool(config)
+    call = ToolCall(name="run_shell", arguments={"command": "probe"})
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout="", stderr="falha real\n", returncode=7)
+
+        result = tool.run_shell(call)
+
+    assert result.ok is False
+    assert result.error is None
+    assert result.exit_code == 7
+    assert "exit_code: 7" in result.content
+    assert "stderr:\nfalha real\n" in result.content
 
 
 def test_run_shell_uses_default_timeout_when_omitted(tmp_path):
@@ -328,6 +347,27 @@ def test_exec_command_completes_and_returns_payload(tmp_path):
     assert "stdout:\nhello\n" in result.content
 
 
+def test_exec_command_completed_result_includes_full_buffered_stdout(tmp_path):
+    """Processo concluído não perde o tail que ainda estava nos pipes."""
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    expected = "".join(f"{value}\n" for value in range(1, 20001))
+
+    result = _poll_until_completed(
+        tool,
+        tool.exec_command(
+            ToolCall(
+                name="exec_command",
+                arguments={"cmd": "seq 1 20000", "yield_time_ms": 10},
+            )
+        ),
+        yield_time_ms=500,
+    )
+
+    assert result.ok is True
+    assert result.data["status"] == "completed"
+    assert result.data["stdout"] == expected
+
+
 def test_exec_command_supports_polling_running_process(tmp_path):
     """Verifica que Test exec command supports polling running process."""
     tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
@@ -574,6 +614,86 @@ def test_close_command_session_waits_after_kill(config):
     process.kill.assert_called_once()
     assert process.wait.call_count == 2
 
+
+def test_cleanup_session_resources_waits_after_kill_and_closes_streams(config):
+    """Cleanup direto recolhe o processo forçado e fecha todos os pipes."""
+    tool = ShellTool(config)
+    process = MagicMock()
+    process.poll.return_value = None
+    process.wait.side_effect = [shell_module.subprocess.TimeoutExpired("cmd", 1), None]
+    session = CommandSession(
+        session_id=1,
+        process=process,
+        command="sleep",
+        cwd=Path("/tmp"),
+        started_at=0.0,
+    )
+
+    tool._cleanup_session_resources(session, terminate=True)
+
+    process.terminate.assert_called_once()
+    process.kill.assert_called_once()
+    assert process.wait.call_count == 2
+    process.stdin.close.assert_called_once()
+    process.stdout.close.assert_called_once()
+    process.stderr.close.assert_called_once()
+
+
+def test_cleanup_session_resources_does_not_close_streams_with_active_reader(config):
+    """Não fecha pipe por baixo de uma reader ainda bloqueada em leitura."""
+    tool = ShellTool(config)
+    process = MagicMock()
+    process.poll.return_value = 0
+    reader = MagicMock()
+    reader.is_alive.return_value = True
+    session = CommandSession(
+        session_id=1,
+        process=process,
+        command="done",
+        cwd=Path("/tmp"),
+        started_at=0.0,
+        reader_threads=[reader],
+    )
+
+    tool._cleanup_session_resources(session)
+
+    process.stdin.close.assert_not_called()
+    process.stdout.close.assert_not_called()
+    process.stderr.close.assert_not_called()
+
+
+def test_close_command_session_waits_reader_tail_before_draining(config):
+    """Fechamento explícito espera a reader entregar o tail antes do último drain."""
+    tool = ShellTool(config)
+    process = MagicMock()
+    process.poll.return_value = 0
+    process.stdin = None
+    session = CommandSession(
+        session_id=1,
+        process=process,
+        command="seq 1 20000",
+        cwd=Path("/tmp"),
+        started_at=0.0,
+    )
+
+    def late_reader() -> None:
+        time.sleep(0.05)
+        with session.lock:
+            tool._append_chunk(session, "stdout_buffer", "stdout_history", "_stdout_total", "tail\n")
+
+    reader = threading.Thread(target=late_reader, daemon=True)
+    session.reader_threads.append(reader)
+    tool._sessions[1] = session
+    reader.start()
+
+    closed = tool.close_command_session(
+        ToolCall(name="close_command_session", arguments={"session_id": 1})
+    )
+
+    assert closed.ok is True
+    assert closed.data["stdout"] == "tail\n"
+
+
 def test_truncate_consumed_chunks_releases_stdout_without_stderr(config):
     """Verifica que Test truncate consumed chunks releases stdout without stderr."""
     tool = ShellTool(config)
@@ -635,55 +755,268 @@ def test_drain_session_output_returns_only_new_suffix(config):
     assert session.stdout_offset == len("done\n")
 
 
-def test_exec_command_enforces_session_limit_on_session_creation(tmp_path):
-    """Verifica que Test exec command enforces session limit on session creation."""
+def test_exec_command_reserves_session_slot_before_spawning(tmp_path):
+    """A capacidade é reservada antes de qualquer subprocesso ser iniciado."""
     tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     fake_process = MagicMock()
     fake_process.poll.return_value = None
 
-    with patch.object(tool, "_spawn_process", return_value=(fake_process, None)), patch.object(
+    def spawn_after_reservation(*args, **kwargs):
+        assert tool._session_reservations == 1
+        return fake_process, None
+
+    with patch.object(tool, "_spawn_process", side_effect=spawn_after_reservation), patch.object(
         tool, "_start_reader_threads"
     ), patch.object(tool, "_collect_session_result") as mock_collect, patch.object(
-        tool, "_enforce_session_limit", wraps=tool._enforce_session_limit
-    ) as mock_enforce:
+        tool, "_reserve_session_slot", wraps=tool._reserve_session_slot
+    ) as mock_reserve:
         mock_collect.return_value = MagicMock(ok=True, data={"status": "running"})
         tool.exec_command(ToolCall(name="exec_command", arguments={"cmd": "sleep 1"}))
 
-    mock_enforce.assert_called_once()
+    mock_reserve.assert_called_once()
+    assert tool._session_reservations == 0
 
 
-def test_create_session_evicts_oldest_without_holding_sessions_lock(tmp_path):
-    """Verifica que Test create session evicts oldest without holding sessions lock."""
+def test_exec_command_releases_reserved_slot_when_spawn_is_blocked(tmp_path):
+    """Falha de sandbox no spawn não pode consumir capacidade futura."""
     tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
-    first_process = MagicMock()
-    first_process.poll.return_value = None
-    original_cleanup_resources = tool._cleanup_session_resources
 
-    def checking_cleanup(session: CommandSession, *, terminate: bool = False) -> None:
+    with patch.object(
+        tool,
+        "_spawn_process",
+        side_effect=SandboxError("sandbox indisponível"),
+    ):
+        result = tool.exec_command(
+            ToolCall(name="exec_command", arguments={"cmd": "echo blocked"})
+        )
+
+    assert result.ok is False
+    assert result.error == "sandbox indisponível"
+    assert tool._session_reservations == 0
+
+
+def test_exec_command_releases_reserved_slot_when_spawn_raises(tmp_path):
+    """Erro inesperado no spawn libera a reserva antes de propagar a exceção."""
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+
+    with patch.object(tool, "_spawn_process", side_effect=OSError("spawn failed")):
+        with pytest.raises(OSError, match="spawn failed"):
+            tool.exec_command(
+                ToolCall(name="exec_command", arguments={"cmd": "echo failed"})
+            )
+
+    assert tool._session_reservations == 0
+
+
+def test_tty_spawn_failure_closes_allocated_pty_fds(tmp_path):
+    """Falha de Popen após openpty não pode vazar master/slave FDs."""
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+
+    with patch.object(tool, "_wrap_subprocess_cmd", side_effect=lambda _wd, cmd, **_kw: cmd), patch.object(
+        shell_module.pty,
+        "openpty",
+        return_value=(100, 101),
+    ), patch.object(
+        shell_module.subprocess,
+        "Popen",
+        side_effect=OSError("popen failed"),
+    ), patch.object(shell_module.os, "close") as close_fd:
+        with pytest.raises(OSError, match="popen failed"):
+            tool._spawn_process(
+                "echo failed",
+                tmp_path,
+                shell="/bin/bash",
+                login=False,
+                tty=True,
+                env={},
+            )
+
+    assert [call.args[0] for call in close_fd.call_args_list] == [100, 101]
+
+
+def _register_idle_session(tool: ShellTool, *, command: str, running: bool) -> CommandSession:
+    """Registra uma sessão como exec_command faria, já sem tool operando nela."""
+    process = MagicMock()
+    process.poll.return_value = None if running else 0
+    assert tool._reserve_session_slot() is True
+    session = tool._create_session(
+        process,
+        command=command,
+        cwd=Path("/tmp"),
+        tty=False,
+        tty_master_fd=None,
+    )
+    tool._release_session_use(session)
+    return session
+
+
+def test_reserve_session_slot_reclaims_oldest_idle_finished_session(tmp_path):
+    """Capacidade cheia libera só a sessão encerrada e ociosa mais antiga, fora do lock."""
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    reclaimed: list[int] = []
+
+    def checking_cleanup(session: CommandSession) -> None:
         assert not tool._sessions_lock.locked()
-        original_cleanup_resources(session, terminate=terminate)
+        reclaimed.append(session.session_id)
+
+    with patch.object(shell_module, "_MAX_SESSIONS", 3):
+        running = _register_idle_session(tool, command="server", running=True)
+        older = _register_idle_session(tool, command="old", running=False)
+        newer = _register_idle_session(tool, command="new", running=False)
+        running.started_at, older.started_at, newer.started_at = 0.0, 1.0, 2.0
+
+        with patch.object(tool, "_cleanup_detached_session_resources", side_effect=checking_cleanup):
+            assert tool._reserve_session_slot() is True
+
+    assert reclaimed == [older.session_id]
+    assert set(tool._sessions) == {running.session_id, newer.session_id}
+    running.process.terminate.assert_not_called()
+    tool._release_session_slot()
+
+
+def test_reserve_session_slot_keeps_running_and_in_use_sessions(tmp_path):
+    """Sessão em execução ou sendo lida por outra tool nunca é liberada."""
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+
+    with patch.object(shell_module, "_MAX_SESSIONS", 2):
+        running = _register_idle_session(tool, command="server", running=True)
+        busy = _register_idle_session(tool, command="busy", running=False)
+
+        with tool._session_in_use(busy.session_id):
+            assert tool._reserve_session_slot() is False
+            assert set(tool._sessions) == {running.session_id, busy.session_id}
+
+        assert tool._reserve_session_slot() is True
+
+    assert set(tool._sessions) == {running.session_id}
+    running.process.terminate.assert_not_called()
+    tool._release_session_slot()
+    assert tool._session_reservations == 0
+
+
+def test_exec_command_reports_capacity_error_listing_open_sessions(tmp_path):
+    """Sem sessão liberável, recusa antes do spawn, preserva a ativa e lista as abertas."""
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
 
     with patch.object(shell_module, "_MAX_SESSIONS", 1):
-        with patch.object(tool, "_cleanup_session_resources", side_effect=checking_cleanup) as mock_cleanup:
-            first = tool._create_session(
-                first_process,
-                command="first",
-                cwd=tmp_path,
-                tty=False,
-                tty_master_fd=None,
-            )
-            second = tool._create_session(
-                MagicMock(),
-                command="second",
-                cwd=tmp_path,
-                tty=False,
-                tty_master_fd=None,
+        first = _register_idle_session(tool, command="npm   run\ndev", running=True)
+        with patch.object(tool, "_spawn_process") as spawn_process:
+            second_result = tool.exec_command(
+                ToolCall(name="exec_command", arguments={"cmd": "second"})
             )
 
-    assert mock_cleanup.call_count == 1
-    cleanup_session = mock_cleanup.call_args.args[0]
-    assert cleanup_session.session_id == first.session_id
-    assert mock_cleanup.call_args.kwargs == {"terminate": True}
-    assert first.session_id not in tool._sessions
-    assert second.session_id in tool._sessions
-    first_process.terminate.assert_called_once()
+    assert second_result.ok is False
+    assert second_result.error.startswith("Limite de 1 sessões shell abertas atingido")
+    assert "close_command_session" in second_result.error
+    assert f"Sessões abertas: {first.session_id} (npm run dev)" in second_result.error
+    assert list(tool._sessions) == [first.session_id]
+    spawn_process.assert_not_called()
+    first.process.terminate.assert_not_called()
+
+
+def test_exec_command_reuses_capacity_of_finished_uncollected_sessions(tmp_path):
+    """Sessões que terminaram sem ninguém consultá-las não travam o exec_command."""
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+
+    with patch.object(shell_module, "_MAX_SESSIONS", 2):
+        forgotten = [
+            tool.exec_command(
+                ToolCall(name="exec_command", arguments={"cmd": "sleep 1", "yield_time_ms": 10})
+            )
+            for _ in range(2)
+        ]
+        assert [result.data["status"] for result in forgotten] == ["running", "running"]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and any(
+            session.process.poll() is None for session in list(tool._sessions.values())
+        ):
+            time.sleep(0.02)
+        assert len(tool._sessions) == 2
+
+        result = tool.exec_command(
+            ToolCall(name="exec_command", arguments={"cmd": "echo ok", "yield_time_ms": 1000})
+        )
+
+    assert result.ok is True
+    assert result.data["stdout"] == "ok\n"
+
+
+def test_exec_command_releases_session_use_after_collect(tmp_path):
+    """A sessão nova fica protegida durante a coleta e ociosa depois dela."""
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    fake_process = MagicMock()
+    fake_process.poll.return_value = None
+    in_use_during_collect: list[int] = []
+
+    def collect(session: CommandSession, **_kwargs):
+        in_use_during_collect.append(session.in_use)
+        return MagicMock(ok=True)
+
+    with patch.object(tool, "_spawn_process", return_value=(fake_process, None)), patch.object(
+        tool, "_start_reader_threads"
+    ), patch.object(tool, "_collect_session_result", side_effect=collect):
+        tool.exec_command(ToolCall(name="exec_command", arguments={"cmd": "sleep 1"}))
+
+    (session,) = tool._sessions.values()
+    assert in_use_during_collect == [1]
+    assert session.in_use == 0
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "spied"),
+    [
+        ("poll_command_session", {}, "_collect_session_result"),
+        ("write_stdin", {"chars": "x"}, "_collect_session_result"),
+        ("close_command_session", {}, "_drain_session_output"),
+    ],
+)
+def test_session_tools_mark_session_in_use(config, tool_name, arguments, spied):
+    """Tools que operam numa sessão a protegem da liberação por capacidade."""
+    tool = ShellTool(config)
+    process = MagicMock()
+    process.poll.return_value = 0
+    session = CommandSession(
+        session_id=1,
+        process=process,
+        command="done",
+        cwd=Path("/tmp"),
+        started_at=0.0,
+    )
+    tool._sessions[1] = session
+    in_use_seen: list[int] = []
+
+    def spy(*_args, **_kwargs):
+        in_use_seen.append(session.in_use)
+        return ("", "") if spied == "_drain_session_output" else MagicMock(ok=True)
+
+    with patch.object(tool, spied, side_effect=spy):
+        getattr(tool, tool_name)(
+            ToolCall(name=tool_name, arguments={"session_id": 1, **arguments})
+        )
+
+    assert in_use_seen == [1]
+    assert session.in_use == 0
+
+
+def test_session_slot_reservation_is_atomic_under_concurrency(tmp_path):
+    """Duas admissões simultâneas não podem reservar o mesmo último slot."""
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    barrier = threading.Barrier(3)
+    results: list[bool] = []
+
+    def reserve() -> None:
+        barrier.wait()
+        results.append(tool._reserve_session_slot())
+
+    with patch.object(shell_module, "_MAX_SESSIONS", 1):
+        threads = [threading.Thread(target=reserve) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=2)
+
+    assert sorted(results) == [False, True]
+    assert tool._session_reservations == 1
+    tool._release_session_slot()
+    assert tool._session_reservations == 0

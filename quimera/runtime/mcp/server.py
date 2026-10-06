@@ -1104,15 +1104,19 @@ class MCPServer:
         if result.ok:
             text = result.content or ""
         else:
-            error_str = str(result.error) if result.error else "Tool execution failed"
-            text = error_str
+            error_text = str(result.error) if result.error is not None else ""
+            diagnostic_parts = []
+            for part in (error_text, result.content or ""):
+                if part and part not in diagnostic_parts:
+                    diagnostic_parts.append(part)
+            text = "\n\n".join(diagnostic_parts) or "Tool execution failed"
 
         structured = {
             "ok": result.ok,
             "content": result.content,
         }
         if result.error is not None:
-            structured["error"] = result.error
+            structured["error"] = str(result.error)
         data = getattr(result, "data", None) or {}
         if data:
             structured["data"] = data
