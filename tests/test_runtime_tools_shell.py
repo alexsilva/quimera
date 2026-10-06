@@ -962,6 +962,31 @@ def test_exec_command_releases_session_use_after_collect(tmp_path):
     assert session.in_use == 0
 
 
+def test_exec_command_cleans_registered_session_when_reader_start_fails(tmp_path):
+    """Falha após registrar a sessão não deixa processo órfão sem session_id."""
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    process = MagicMock()
+    process.poll.return_value = None
+    process.wait.return_value = 0
+
+    with patch.object(tool, "_spawn_process", return_value=(process, None)), patch.object(
+        tool,
+        "_start_reader_threads",
+        side_effect=RuntimeError("reader start failed"),
+    ):
+        with pytest.raises(RuntimeError, match="reader start failed"):
+            tool.exec_command(
+                ToolCall(name="exec_command", arguments={"cmd": "sleep 5"})
+            )
+
+    assert tool._sessions == {}
+    assert tool._session_reservations == 0
+    process.terminate.assert_called_once()
+    process.stdin.close.assert_called_once()
+    process.stdout.close.assert_called_once()
+    process.stderr.close.assert_called_once()
+
+
 @pytest.mark.parametrize(
     ("tool_name", "arguments", "spied"),
     [

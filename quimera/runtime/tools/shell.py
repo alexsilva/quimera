@@ -382,6 +382,12 @@ class ShellTool(ToolBase):
                 include_session_id=True,
                 wait_for_completion=tty_enabled,
             )
+        except Exception:
+            # A sessão já foi registrada, mas o caller ainda não recebeu seu
+            # session_id. Qualquer falha daqui em diante precisa remover a
+            # sessão e encerrar o processo para não deixá-lo órfão/inacessível.
+            self._cleanup_session(session.session_id, terminate=True)
+            raise
         finally:
             self._release_session_use(session)
 
@@ -950,34 +956,48 @@ class ShellTool(ToolBase):
                 or session.stderr_offset < len(session.stderr_buffer)
             )
 
-    def _cleanup_session(self, session_id: int) -> None:
+    def _cleanup_session(self, session_id: int, *, terminate: bool = False) -> None:
         """Remove uma sessão concluída do registro interno."""
         with self._sessions_lock:
             session = self._sessions.pop(session_id, None)
         if session is None:
             return
-        self._cleanup_detached_session_resources(session)
+        self._cleanup_detached_session_resources(session, terminate=terminate)
 
-    def _cleanup_detached_session_resources(self, session: CommandSession) -> None:
+    def _cleanup_detached_session_resources(
+            self,
+            session: CommandSession,
+            *,
+            terminate: bool = False,
+    ) -> None:
         """Finaliza readers e recursos de uma sessão já removida do registro."""
+        if terminate:
+            self._terminate_session_process(session)
         for thread in session.reader_threads:
             if thread.is_alive():
                 thread.join(timeout=1.0)
         self._cleanup_session_resources(session)
 
     @staticmethod
-    def _cleanup_session_resources(session: CommandSession, *, terminate: bool = False) -> None:
-        """Libera recursos associados a uma sessão já removida do registro."""
-        if terminate and session.process.poll() is None:
-            _terminate_process_group(session.process)
+    def _terminate_session_process(session: CommandSession) -> None:
+        """Encerra o processo da sessão e aguarda sua coleta."""
+        if session.process.poll() is not None:
+            return
+        _terminate_process_group(session.process)
+        try:
+            session.process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            _kill_process_group(session.process)
             try:
                 session.process.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                _kill_process_group(session.process)
-                try:
-                    session.process.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    pass
+                pass
+
+    @staticmethod
+    def _cleanup_session_resources(session: CommandSession, *, terminate: bool = False) -> None:
+        """Libera recursos associados a uma sessão já removida do registro."""
+        if terminate:
+            ShellTool._terminate_session_process(session)
         if session.tty_master_fd is not None:
             try:
                 os.close(session.tty_master_fd)
