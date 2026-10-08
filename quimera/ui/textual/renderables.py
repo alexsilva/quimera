@@ -324,16 +324,20 @@ def _build_agent_live_body(
     thinking: bool = True,
     guide: bool = True,
     summary: str = "",
+    answer: bool = False,
 ):
     """Corpo do bloco transitório: pensamento em destaque e tools listadas abaixo.
 
     Mensagens de lifecycle (``thinking=False``) são status operacional e ficam
-    discretas, sem o marcador de pensamento. Toda linha passa pelo gutter fixo;
-    quando ``guide`` está ativo a coluna exibe ``│`` na cor do agente.
+    discretas, sem o marcador de pensamento. A resposta parcial (``answer``)
+    segue o layout do pensamento, mas sem itálico, para não se confundir com
+    ele. Toda linha passa pelo gutter fixo; quando ``guide`` está ativo a
+    coluna exibe ``│`` na cor do agente.
     """
     parts = []
     marker = _GUTTER_GUIDE if guide else ""
     marker_style = f"dim {style}"
+    text_style = "" if answer else "italic"
     text = str(content or "").strip()
     hidden_label = ""
     if text and thinking:
@@ -341,7 +345,7 @@ def _build_agent_live_body(
     if text:
         # Cauda truncada não passa por markdown: o documento parcial pode
         # começar no meio de um bloco e renderizar artefatos.
-        markdown_body = _live_markdown(text, "italic") if thinking and not hidden_label else None
+        markdown_body = _live_markdown(text, text_style) if thinking and not hidden_label else None
         if markdown_body is not None:
             # Gutter interno sem continuação: a guia contínua das linhas de
             # continuação vem do gutter externo, na coluna da guia do bloco.
@@ -350,7 +354,7 @@ def _build_agent_live_body(
             head = Text(no_wrap=False, overflow="fold")
             if thinking:
                 head.append(f"{_thinking_pulse_marker()} ", style=f"bold {style}")
-                head.append(text, style="italic")
+                head.append(text, style=text_style)
             else:
                 head.append("· ", style="dim")
                 head.append(text, style="dim")
@@ -880,6 +884,7 @@ def _render_event(event: TextualUiEvent):
         if isinstance(event.payload, dict):
             content = str(event.payload.get("content") or "")
             tools = event.payload.get("tools")
+            answer = bool(event.payload.get("answer"))
             transport = str(event.payload.get("transport") or "").strip()
             is_mcp_http = transport == "mcp_http"
             tool_total = (
@@ -906,6 +911,7 @@ def _render_event(event: TextualUiEvent):
         else:
             content = str(event.payload)
             tools = None
+            answer = False
             tool_total = 0
             tool_ok_count = 0
             tool_err_count = 0
@@ -932,6 +938,7 @@ def _render_event(event: TextualUiEvent):
                 content,
                 tools=tools,
                 summary=summary,
+                answer=answer,
             )
         if not content.strip():
             return None
@@ -1191,6 +1198,7 @@ def _build_stream_renderable(
     *,
     thinking: bool = True,
     summary: str = "",
+    answer: bool = False,
 ):
     """Monta o renderable dinâmico usado no streaming, com pensamento em destaque.
 
@@ -1205,6 +1213,7 @@ def _build_stream_renderable(
         thinking=thinking,
         guide=guide,
         summary=summary,
+        answer=answer,
     )
     if body is None:
         return None

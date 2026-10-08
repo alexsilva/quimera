@@ -844,9 +844,10 @@ class TerminalRenderer(RendererBase):
         parent_run_id: str = "",
         delegation_id: str = "",
         transport: str = "",
+        answer: bool = False,
     ) -> None:
         """Atualiza progresso transitório do agente sem acumular linhas."""
-        del parent_run_id, delegation_id, transport
+        del parent_run_id, delegation_id, transport, answer
         if not self._console or not agent:
             return
         clean_message = strip_ansi(str(message or "")).strip("\r\n")

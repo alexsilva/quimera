@@ -84,6 +84,30 @@ def test_parser_handles_tag_split_across_chunks():
     assert parser.last_thinking == "raciocínio dividido"
 
 
+def test_parser_publishes_answer_outside_thinking_progressively():
+    answers: list[str] = []
+    parser = ThinkingStreamParser(on_answer=answers.append)
+    parser.feed("<think>plano</th")
+    parser.feed("ink>Claro. O trabalho foi concentrado ")
+    first = parser.answer_text
+    parser.feed("na EXEC-013, seguindo o histórico de execução.")
+
+    assert answers, "a resposta parcial deve sair antes do fim do stream"
+    assert first and "plano" not in first and "<" not in first
+    assert answers[-1].startswith("Claro. O trabalho foi concentrado na EXEC-013")
+    assert parser.last_thinking == "plano"
+
+
+def test_parser_answer_never_contains_split_open_tag():
+    parser = ThinkingStreamParser(on_answer=lambda text: None)
+    parser.feed("resposta antes do bloco <thi")
+    assert "<thi" not in parser.answer_text
+    parser.feed("nk>ideia</think> e depois")
+
+    assert parser.answer_text == "resposta antes do bloco "
+    assert parser.last_thinking == "ideia"
+
+
 # ── AgentRunRegistry ─────────────────────────────────────────────────────
 
 
@@ -400,6 +424,59 @@ def test_gateway_delegation_skips_cli_semantic_chunks():
 
     renderer.update_agent_transient.assert_not_called()
     renderer.clear_agent_transient.assert_not_called()
+
+
+def test_gateway_chat_shows_partial_answer_while_api_agent_streams():
+    """A resposta de agentes de API aparece no transitório antes do fim do turno."""
+    from tests.test_agent_run_events import FakeAgentClient, RecordingSink, make_gateway
+
+    renderer = MagicMock()
+    seen_before_return = []
+
+    class StreamingClient(FakeAgentClient):
+        def call(self, agent, prompt, *, on_text_chunk=None, **kwargs):
+            on_text_chunk("<think>planejando</think>")
+            on_text_chunk("Claro. O trabalho foi concentrado na EXEC-013 ")
+            on_text_chunk("e no histórico de execução.")
+            seen_before_return.extend(renderer.update_agent_transient.call_args_list)
+            return "Claro. O trabalho foi concentrado na EXEC-013 e no histórico de execução."
+
+    gateway = make_gateway(StreamingClient(), sink=RecordingSink())
+    gateway._renderer = renderer
+
+    gateway.call("chatgpt", silent=False, show_output=True)
+
+    thinking = [c for c in seen_before_return if not c.kwargs.get("answer")]
+    answers = [c for c in seen_before_return if c.kwargs.get("answer")]
+    assert thinking and thinking[0].args == ("chatgpt", "planejando")
+    assert answers, "a resposta parcial deve chegar ao feed antes do retorno"
+    assert answers[-1].args[0] == "chatgpt"
+    assert answers[-1].args[1].startswith("Claro. O trabalho foi concentrado na EXEC-013")
+
+
+def test_gateway_hidden_delegate_does_not_expose_partial_answer():
+    """Delegação oculta mostra o raciocínio, mas a resposta fica com quem chamou."""
+    from tests.test_agent_run_events import FakeAgentClient, RecordingSink, make_gateway
+
+    renderer = MagicMock()
+    gateway = make_gateway(
+        FakeAgentClient(chunks=["<think>raciocínio visível</think>", "resposta reservada ao chamador"]),
+        sink=RecordingSink(),
+    )
+    gateway._renderer = renderer
+
+    gateway.call(
+        "codexcloud-gpt-5-6",
+        delegation={"delegation_id": "dlg-answer"},
+        delegation_only=True,
+        protocol_mode="delegation",
+        silent=False,
+        show_output=False,
+    )
+
+    for call in renderer.update_agent_transient.call_args_list:
+        assert not call.kwargs.get("answer")
+        assert "resposta reservada" not in str(call.args)
 
 
 def test_gateway_non_delegate_show_output_false_does_not_expose_thinking():

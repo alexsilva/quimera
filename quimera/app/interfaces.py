@@ -42,6 +42,7 @@ class IRenderer(Protocol):
         parent_run_id: str = ...,
         delegation_id: str = ...,
         transport: str = ...,
+        answer: bool = ...,
     ) -> None: ...
     def clear_agent_transient(
         self,

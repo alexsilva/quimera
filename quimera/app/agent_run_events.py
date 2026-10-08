@@ -22,6 +22,7 @@ class ThinkingStreamParser:
     Mantém o último bloco de raciocínio visto (parcial enquanto aberto, completo
     após fechar) e uma cauda limitada do stream bruto como fallback para agentes
     que não emitem tags de raciocínio (ex.: CLIs cujo stdout já é o raciocínio).
+    O texto fora dos blocos é a resposta parcial, entregue a ``on_answer``.
     """
 
     _OPEN_RE = re.compile(r"<think(?:ing)?>")
@@ -32,14 +33,17 @@ class ThinkingStreamParser:
         self,
         on_thinking: Callable[[str], None] | None = None,
         tail_limit: int = 400,
+        on_answer: Callable[[str], None] | None = None,
     ) -> None:
         self._on_thinking = on_thinking
+        self._on_answer = on_answer
         self._tail_limit = max(1, int(tail_limit))
         self._buffer = ""
         self._in_think = False
         self._thinking_text = ""
         self._last_thinking = ""
         self._stream_tail = ""
+        self._answer_text = ""
 
     @property
     def last_thinking(self) -> str:
@@ -51,18 +55,29 @@ class ThinkingStreamParser:
         """Cauda recente do stream bruto, limitada a tail_limit caracteres."""
         return self._stream_tail
 
+    @property
+    def answer_text(self) -> str:
+        """Texto recebido fora dos blocos de raciocínio até agora."""
+        return self._answer_text
+
     def feed(self, chunk_text: str) -> None:
         """Processa um novo pedaço de texto bruto do stream."""
         if not chunk_text:
             return
         self._stream_tail = (self._stream_tail + chunk_text)[-self._tail_limit:]
         self._buffer += chunk_text
+        answer_size = len(self._answer_text)
         while True:
             if not self._in_think:
                 match = self._OPEN_RE.search(self._buffer)
                 if not match:
+                    # A cauda retida pode ser o começo de uma tag dividida
+                    # entre chunks; só o que vem antes dela já é resposta.
+                    if len(self._buffer) > self._TAIL_KEEP:
+                        self._answer_text += self._buffer[:-self._TAIL_KEEP]
                     self._buffer = self._buffer[-self._TAIL_KEEP:]
-                    return
+                    break
+                self._answer_text += self._buffer[:match.start()]
                 self._in_think = True
                 self._buffer = self._buffer[match.end():]
                 self._thinking_text = ""
@@ -72,12 +87,14 @@ class ThinkingStreamParser:
                 self._thinking_text += self._buffer[:-self._TAIL_KEEP] if len(self._buffer) > self._TAIL_KEEP else ""
                 self._buffer = self._buffer[-self._TAIL_KEEP:]
                 self._publish()
-                return
+                break
             self._thinking_text += self._buffer[:match.start()]
             self._buffer = self._buffer[match.end():]
             self._in_think = False
             self._publish()
             self._thinking_text = ""
+        if len(self._answer_text) > answer_size:
+            self._publish_answer()
 
     def _publish(self) -> None:
         text = self._thinking_text.strip()
@@ -86,6 +103,11 @@ class ThinkingStreamParser:
         self._last_thinking = text
         if self._on_thinking is not None:
             self._on_thinking(text)
+
+    def _publish_answer(self) -> None:
+        text = self._answer_text.strip()
+        if text and self._on_answer is not None:
+            self._on_answer(text)
 
 
 def _event_status(kind: str, explicit: str = "") -> str:

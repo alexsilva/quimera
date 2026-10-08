@@ -67,14 +67,19 @@ class _ThinkingStreamRelay:
 
     Espelha o comportamento de agentes CLI, cujo stdout bruto (incluindo o
     raciocínio do modelo) já aparece no feed transitório enquanto o turno roda.
+    Com ``show_answer``, a resposta parcial também aparece ali até a mensagem
+    final, que continua sendo entregue de uma vez, substituí-la.
     """
 
-    def __init__(self, renderer, agent, *, publish=None) -> None:
+    def __init__(self, renderer, agent, *, publish=None, show_answer=False) -> None:
         self._renderer = renderer
         self._agent = agent
         self._publish_callback = publish
         self._published = False
-        self._parser = ThinkingStreamParser(on_thinking=self._publish)
+        self._parser = ThinkingStreamParser(
+            on_thinking=self._publish,
+            on_answer=self._publish_answer if show_answer else None,
+        )
 
     @property
     def published(self) -> bool:
@@ -92,6 +97,10 @@ class _ThinkingStreamRelay:
                 self._publish_callback(text)
             else:
                 self._renderer.update_agent_transient(self._agent, text)
+
+    def _publish_answer(self, text: str) -> None:
+        if self._renderer is not None:
+            self._renderer.update_agent_transient(self._agent, text, answer=True)
 
 
 def _is_user_cancelled(agent_client) -> bool:
@@ -334,6 +343,8 @@ class AgentGateway:
                     if relay_hidden_delegate
                     else None
                 ),
+                # Com a saída oculta, quem chamou apresenta a resposta final.
+                show_answer=show_output,
             )
             if not silent
             and visibility_name != "quiet"

@@ -708,8 +708,12 @@ class TextualRenderer(RendererBase):
         parent_run_id: str = "",
         delegation_id: str = "",
         transport: str = "",
+        answer: bool = False,
     ) -> None:
-        """Exibe progresso transitório como linha de status."""
+        """Exibe progresso transitório como linha de status.
+
+        ``answer`` marca a resposta parcial do agente, que não é raciocínio.
+        """
         extra = {
             key: value
             for key, value in {
@@ -718,6 +722,7 @@ class TextualRenderer(RendererBase):
                 "parent_run_id": str(parent_run_id or "").strip(),
                 "delegation_id": str(delegation_id or "").strip(),
                 "transport": str(transport or "").strip(),
+                "answer": bool(answer),
             }.items()
             if value
         }

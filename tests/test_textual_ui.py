@@ -1883,6 +1883,42 @@ def test_textual_thinking_plain_text_preserves_line_breaks():
     assert "linha dois" in output
 
 
+def test_textual_live_answer_is_not_rendered_as_thinking():
+    # A resposta parcial de agentes de API ocupa o mesmo bloco transitório,
+    # mas sem o itálico que identifica o raciocínio.
+    def styled(event):
+        console = Console(record=True, width=80, force_terminal=True, color_system="standard")
+        console.print(_render_event(event))
+        return console.export_text(styles=True)
+
+    thinking = _thinking_update_event("linha um\nlinha dois")
+    answer = _thinking_update_event("linha um\nlinha dois")
+    answer.payload["answer"] = True
+
+    assert "\x1b[3m" in styled(thinking)
+    assert "\x1b[3m" not in styled(answer)
+    assert "linha dois" in styled(answer)
+
+    renderables._live_markdown_cache.clear()
+    markdown_answer = _thinking_update_event("**Resumo**\n\n- item")
+    markdown_answer.payload["answer"] = True
+    assert _find_markdown(_render_event(markdown_answer)).style == ""
+
+
+def test_textual_renderer_marks_answer_transient():
+    bridge = TextualUiBridge()
+    events = []
+    bridge.emit = events.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.update_agent_transient("chatgpt", "pensando")
+    renderer.update_agent_transient("chatgpt", "resposta parcial", answer=True)
+
+    assert "answer" not in events[0].payload
+    assert events[1].payload["answer"] is True
+    assert events[1].payload["content"] == "resposta parcial"
+
+
 def test_textual_thinking_markdown_skips_oversized_content():
     text = "**bloco** " + "a" * renderables._LIVE_MARKDOWN_MAX_CHARS
     renderable = _render_event(_thinking_update_event(text))
