@@ -144,3 +144,64 @@ def test_restore_agent_routing_orquestrador_exige_outro_agente():
     )
     assert pool.orchestrator_agent is None
     assert pool.frozen_agent is None
+
+
+class TestBackgroundDelegateFailureReceipt:
+    """O delegate_fn de background converte 'no response' em falha estruturada."""
+
+    @staticmethod
+    def _make_services(bg):
+        task_services = MagicMock()
+        task_services._create_background_dispatch_services.return_value = bg
+        dispatch_services = MagicMock(name="primary-dispatch")
+        return task_services, dispatch_services
+
+    def test_none_vira_delegation_dispatch_error_com_recibo(self):
+        from quimera.runtime.errors import DelegationDispatchError
+
+        receipt = {
+            "error_kind": "process_died",
+            "exit_code": -9,
+            "signal": "SIGKILL",
+            "duration_s": 12.0,
+        }
+        bg = MagicMock()
+        bg.delegate.return_value = None
+        bg.consume_last_run_failure.return_value = receipt
+        task_services, dispatch_services = self._make_services(bg)
+
+        fn = wiring._make_background_delegate_fn(task_services, dispatch_services)
+        with pytest.raises(DelegationDispatchError) as excinfo:
+            fn("codex")
+
+        assert excinfo.value.receipt == receipt
+        message = str(excinfo.value)
+        assert "process_died" in message
+        assert "exit=-9/SIGKILL" in message
+        bg.close.assert_called_once()
+
+    def test_none_sem_recibo_mantem_mensagem_legada(self):
+        from quimera.runtime.errors import DelegationDispatchError
+
+        bg = MagicMock()
+        bg.delegate.return_value = None
+        bg.consume_last_run_failure.return_value = None
+        task_services, dispatch_services = self._make_services(bg)
+
+        fn = wiring._make_background_delegate_fn(task_services, dispatch_services)
+        with pytest.raises(DelegationDispatchError) as excinfo:
+            fn("codex")
+
+        assert excinfo.value.receipt == {}
+        assert "returned no response" in str(excinfo.value)
+
+    def test_resposta_valida_nao_levanta(self):
+        bg = MagicMock()
+        bg.delegate.return_value = "resposta"
+        task_services, dispatch_services = self._make_services(bg)
+
+        fn = wiring._make_background_delegate_fn(task_services, dispatch_services)
+
+        assert fn("codex") == "resposta"
+        bg.consume_last_run_failure.assert_not_called()
+        bg.close.assert_called_once()

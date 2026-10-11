@@ -393,11 +393,26 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='tasks',
-        description='Cria uma task pelo mesmo fluxo do comando /task. Retorna task_id, job_id, agente atribuído, tipo e status; acompanhe o resultado com list_tasks usando o ID.',
+        description='Cria uma task pelo mesmo fluxo do comando /task (action=create, padrão). '
+                    'Retorna task_id, job_id, agente atribuído, tipo e status; acompanhe o '
+                    'resultado com list_tasks usando o ID. Com action=cancel, cancela uma '
+                    'delegação em execução identificada por task_id — permitido apenas ao agente '
+                    'que delegou (ou ao humano); a task transiciona para status cancelled com '
+                    'recibo do ocorrido.',
         parameters={'type': 'object',
  'properties': {'description': {'type': 'string',
-                                'description': 'Descrição completa da task a executar.'}},
- 'required': ['description']},
+                                'description': 'Descrição completa da task a executar '
+                                               '(obrigatória com action=create).'},
+                'action': {'type': 'string', 'enum': ['create', 'cancel'],
+                           'description': "Padrão 'create'. Use 'cancel' para abortar uma "
+                                          'delegação em execução.'},
+                'task_id': {'type': 'integer',
+                            'description': 'ID da task de delegação a cancelar '
+                                           '(obrigatório com action=cancel).'},
+                'reason': {'type': 'string',
+                           'description': 'Motivo opcional do cancelamento, registrado no '
+                                          'recibo da task.'}},
+ 'required': []},
         output_schema={'type': 'object',
  'properties': {'ok': {'type': 'boolean'},
                 'content': {'type': 'string', 'description': 'JSON do recibo de criação'},
@@ -428,7 +443,8 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
  'properties': {'job_id': {'type': 'integer', 'description': 'Filtrar por job ID.'},
                 'status': {'type': 'string',
                            'description': 'Filtrar por status, como proposed, approved, '
-                                          'in_progress, completed, failed ou rejected.'},
+                                          'in_progress, completed, failed, cancelled ou '
+                                          'rejected.'},
                 'assigned_to': {'type': 'string', 'description': 'Filtrar por agente atribuído.'},
                 'id': {'type': 'integer', 'description': 'Filtrar por ID da task.'}},
  'required': []},
@@ -754,10 +770,14 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                                            'acompanhamento via list_tasks.'},
                 'data': {'type': 'object',
                          'description': 'IDs de rastreamento da delegação quando o banco de tasks '
-                                        'está configurado.',
+                                        'está configurado. Em falha, failure_receipt traz o '
+                                        'diagnóstico estruturado por tentativa (error_kind, '
+                                        'exit_code, signal, stderr_tail, duration_s) e a pressão '
+                                        'de memória do host no momento da falha.',
                          'properties': {'job_id': {'type': 'integer'},
                                         'task_id': {'type': 'integer'},
-                                        'task_status': {'type': 'string'}}},
+                                        'task_status': {'type': 'string'},
+                                        'failure_receipt': {'type': 'object'}}},
                 'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
  'required': ['ok', 'content']},
     ),

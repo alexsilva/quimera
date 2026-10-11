@@ -103,7 +103,9 @@ class AgentsCoverageTests(unittest.TestCase):
         with patch("subprocess.Popen", return_value=proc), patch(
                 "threading.Thread", side_effect=[stdout_thread, stderr_thread]
         ), patch("time.sleep"), patch(
-            "time.monotonic", side_effect=[100.0, 100.0, 101.0, 101.0]
+            # Valores extras cobrem run_started e a duração do recibo de falha.
+            "time.monotonic",
+            side_effect=[100.0, 100.0, 100.0, 101.0, 101.0, 101.5, 101.5, 101.5],
         ), patch(
             "quimera.agents.process_runner.terminate_process_group"
         ) as mock_terminate_pg:

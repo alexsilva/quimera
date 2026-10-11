@@ -339,3 +339,390 @@ class TestParidadeHttp:
         assert payload["status"] == "in_progress"
         row = _wait_task_status(db_path, payload["task_id"], "completed")
         assert row["result"] == "assíncrono via sse"
+
+
+class TestFailureReceipt:
+    """Falha de delegação produz recibo estruturado para o delegador."""
+
+    @staticmethod
+    def _failing_fn(receipt: dict):
+        from quimera.runtime.errors import DelegationDispatchError
+
+        def _fn(agent, **opts):
+            raise DelegationDispatchError(
+                f"Agent '{agent}' failed ({receipt.get('error_kind')})",
+                receipt=receipt,
+            )
+        return _fn
+
+    def test_sync_falha_anexa_failure_receipt_no_result(self, tools_com_db):
+        tools, db_path = tools_com_db
+        receipt = {
+            "error_kind": "process_died",
+            "exit_code": -9,
+            "signal": "SIGKILL",
+            "stderr_tail": "Killed",
+            "duration_s": 12.3,
+        }
+        tools.set_delegate_fn(self._failing_fn(receipt))
+
+        result = tools.delegate(_make_call())
+
+        assert result.ok is False
+        assert "process_died" in (result.error or "")
+        failure = result.data["failure_receipt"]
+        step = failure["steps"][0]
+        assert step["target_agent"] == "codex"
+        attempt = step["attempts"][0]
+        assert attempt["agent"] == "codex"
+        assert attempt["error_kind"] == "process_died"
+        assert attempt["exit_code"] == -9
+        assert attempt["signal"] == "SIGKILL"
+        assert attempt["stderr_tail"] == "Killed"
+
+    def test_falha_persiste_recibo_nas_notes_da_task(self, tools_com_db):
+        tools, db_path = tools_com_db
+        receipt = {"error_kind": "rate_limited", "retry_after": 30}
+        tools.set_delegate_fn(self._failing_fn(receipt))
+
+        result = tools.delegate(_make_call())
+
+        rows = task_api.list_tasks({"id": result.data["task_id"]}, db_path=db_path)
+        assert rows and rows[0]["status"] == "failed"
+        notes = json.loads(rows[0]["notes"])
+        assert notes["steps"][0]["attempts"][0]["error_kind"] == "rate_limited"
+
+    def test_fallback_registra_uma_tentativa_por_agente(self, tools_com_db):
+        tools, _ = tools_com_db
+        from quimera.runtime.errors import DelegationDispatchError
+
+        kinds = {"codex": "process_died", "gemini": "rate_limited"}
+
+        def _fn(agent, **opts):
+            raise DelegationDispatchError(
+                f"falhou {agent}", receipt={"error_kind": kinds[agent]},
+            )
+
+        tools.set_delegate_fn(_fn)
+        call = _make_call(args={
+            "target_agent": "codex",
+            "request": "faz algo",
+            "fallback_agents": ["gemini"],
+        })
+
+        result = tools.delegate(call)
+
+        assert result.ok is False
+        attempts = result.data["failure_receipt"]["steps"][0]["attempts"]
+        assert [a["error_kind"] for a in attempts] == ["process_died", "rate_limited"]
+        assert [a["agent"] for a in attempts] == ["codex", "gemini"]
+
+    def test_empty_response_sem_recibo_tem_error_kind_generico(self, tools_com_db):
+        tools, _ = tools_com_db
+        tools.set_delegate_fn(MagicMock(return_value=None))
+
+        result = tools.delegate(_make_call())
+
+        attempt = result.data["failure_receipt"]["steps"][0]["attempts"][0]
+        assert attempt["error_kind"] == "empty_response"
+
+    def test_async_persiste_recibo_na_task(self, tools_com_db):
+        tools, db_path = tools_com_db
+        receipt = {"error_kind": "wall_timeout", "duration_s": 601.0}
+        tools.set_delegate_fn(self._failing_fn(receipt))
+        call = _make_call(args={
+            "target_agent": "codex", "request": "faz algo", "wait": False,
+        })
+
+        result = tools.delegate(call)
+
+        assert result.ok is True
+        task_id = json.loads(result.content)["task_id"]
+        row = _wait_task_status(db_path, task_id, "failed")
+        notes = json.loads(row["notes"])
+        assert notes["steps"][0]["attempts"][0]["error_kind"] == "wall_timeout"
+
+
+class TestCancelamentoPeloDelegador:
+    """Delegações rastreadas podem ser canceladas por quem delegou."""
+
+    @staticmethod
+    def _blocking_fn(started: threading.Event, release: threading.Event, observed: dict):
+        def _fn(agent, **opts):
+            handle = opts.get("cancel_handle")
+            if handle is not None:
+                handle.register(lambda: observed.setdefault("handle_cancelled", True))
+            started.set()
+            release.wait(timeout=10)
+            return None if observed.get("handle_cancelled") else "resposta tardia"
+        return _fn
+
+    @staticmethod
+    def _task_tools(workspace):
+        from quimera.runtime.tools.tasks import TaskTools
+        return TaskTools(ToolRuntimeConfig(workspace=workspace))
+
+    @staticmethod
+    def _cancel_call(task_id: int, agent_name: str | None, reason: str | None = None) -> ToolCall:
+        metadata = {}
+        if agent_name is not None:
+            metadata["trusted_context"] = TrustedToolExecutionContext(
+                transport="http_mcp", run_id="r-cancel", agent_name=agent_name,
+            )
+        args: dict = {"action": "cancel", "task_id": task_id}
+        if reason:
+            args["reason"] = reason
+        return ToolCall(name="tasks", arguments=args, metadata=metadata)
+
+    def _start_async_delegation(self, tools, source_agent: str = "claude"):
+        started = threading.Event()
+        release = threading.Event()
+        observed: dict = {}
+        tools.set_delegate_fn(self._blocking_fn(started, release, observed))
+        metadata = {
+            "trusted_context": TrustedToolExecutionContext(
+                transport="http_mcp", run_id="r1", agent_name=source_agent,
+            ),
+        }
+        call = _make_call(
+            args={"target_agent": "codex", "request": "tarefa longa", "wait": False},
+            metadata=metadata,
+        )
+        result = tools.delegate(call)
+        assert result.ok is True
+        task_id = json.loads(result.content)["task_id"]
+        assert started.wait(timeout=5), "delegate_fn não iniciou"
+        return task_id, release, observed
+
+    def test_delegador_cancela_e_task_fica_cancelled(self, tools_com_db):
+        tools, db_path = tools_com_db
+        task_id, release, observed = self._start_async_delegation(tools)
+        task_tools = self._task_tools(tools.workspace)
+
+        result = task_tools.tasks(self._cancel_call(task_id, "claude", reason="mudei de plano"))
+
+        assert result.ok is True
+        assert result.data["status"] == "cancelling"
+        assert result.data["cancelled_by"] == "claude"
+        # O watcher propaga o cancel ao handle do step em ciclos de 50ms;
+        # espere a propagação antes de liberar o agente fake.
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not observed.get("handle_cancelled"):
+            time.sleep(0.02)
+        assert observed.get("handle_cancelled") is True
+        release.set()
+        row = _wait_task_status(db_path, task_id, "cancelled")
+        notes = json.loads(row["notes"])
+        assert notes["cancelled_by"] == "claude"
+        assert notes["cancel_reason"] == "mudei de plano"
+        assert "cancelada por claude" in row["result"]
+        job = task_api.list_jobs(db_path=db_path)[-1]
+        assert job["status"] == "cancelled"
+
+    def test_agente_alheio_nao_pode_cancelar(self, tools_com_db):
+        tools, db_path = tools_com_db
+        task_id, release, _ = self._start_async_delegation(tools, source_agent="claude")
+        task_tools = self._task_tools(tools.workspace)
+
+        result = task_tools.tasks(self._cancel_call(task_id, "gemini"))
+
+        assert result.ok is False
+        assert "apenas quem delegou" in (result.error or "")
+        release.set()
+        _wait_task_status(db_path, task_id, "completed")
+
+    def test_humano_sem_identidade_pode_cancelar(self, tools_com_db):
+        tools, db_path = tools_com_db
+        task_id, release, _ = self._start_async_delegation(tools)
+        task_tools = self._task_tools(tools.workspace)
+
+        result = task_tools.tasks(self._cancel_call(task_id, None))
+
+        assert result.ok is True
+        assert result.data["cancelled_by"] == "humano"
+        release.set()
+        _wait_task_status(db_path, task_id, "cancelled")
+
+    def test_cancelar_task_inexistente_ou_terminada_retorna_erro(self, tools_com_db):
+        tools, db_path = tools_com_db
+        tools.set_delegate_fn(MagicMock(return_value="ok"))
+        done = tools.delegate(_make_call())
+        task_tools = self._task_tools(tools.workspace)
+
+        result = task_tools.tasks(self._cancel_call(done.data["task_id"], "claude"))
+
+        assert result.ok is False
+        assert "não é uma delegação em execução" in (result.error or "")
+        assert "completed" in (result.error or "")
+
+    def test_transicao_cancelled_valida_somente_de_in_progress(self):
+        from quimera.domain.task_states import can_transition
+
+        assert can_transition("in_progress", "cancelled") is True
+        assert can_transition("completed", "cancelled") is False
+        assert can_transition("cancelled", "in_progress") is False
+
+
+class TestCancelamentoCorridasEAutorizacao:
+    """Casos adversariais da revisão: corrida, autorização e propagação."""
+
+    _blocking_fn = staticmethod(TestCancelamentoPeloDelegador._blocking_fn)
+    _task_tools = staticmethod(TestCancelamentoPeloDelegador._task_tools)
+    _cancel_call = staticmethod(TestCancelamentoPeloDelegador._cancel_call)
+
+    def _start(self, tools, source_agent: str | None = "claude"):
+        started = threading.Event()
+        release = threading.Event()
+        observed: dict = {}
+        tools.set_delegate_fn(self._blocking_fn(started, release, observed))
+        metadata = {}
+        if source_agent is not None:
+            metadata["trusted_context"] = TrustedToolExecutionContext(
+                transport="http_mcp", run_id="r1", agent_name=source_agent,
+            )
+        call = _make_call(
+            args={"target_agent": "codex", "request": "tarefa longa", "wait": False},
+            metadata=metadata,
+        )
+        result = tools.delegate(call)
+        assert result.ok is True
+        task_id = json.loads(result.content)["task_id"]
+        assert started.wait(timeout=5)
+        return task_id, release, observed
+
+    def test_cancel_apos_finalizacao_e_rejeitado(self, tools_com_db):
+        """Entry finalizada rejeita cancelamento tardio (corrida fechada)."""
+        from quimera.runtime.tools.delegate import get_active_delegation
+
+        tools, db_path = tools_com_db
+        task_id, release, _ = self._start(tools)
+        entry = get_active_delegation(task_id)
+        assert entry is not None
+        # Simula a corrida: finalização vence antes de o cancel chegar.
+        assert entry.mark_finalized() is False
+        task_tools = self._task_tools(tools.workspace)
+
+        result = task_tools.tasks(self._cancel_call(task_id, "claude"))
+
+        assert result.ok is False
+        assert "já foi finalizada" in (result.error or "")
+        assert entry.cancelled is False
+        release.set()
+
+    def test_request_cancel_apos_mark_finalized_retorna_finalized(self):
+        from quimera.runtime.tools.delegate import ActiveDelegationEntry
+
+        entry = ActiveDelegationEntry(1, source_agent="claude", targets=("codex",))
+        assert entry.mark_finalized() is False
+        assert entry.request_cancel("claude") == "finalized"
+        assert entry.cancelled is False
+
+    def test_delegacao_sem_dono_nao_pode_ser_cancelada_por_agente(self, tools_com_db):
+        """source_agent vazio: só o humano cancela — agente identificado é rejeitado."""
+        tools, db_path = tools_com_db
+        task_id, release, _ = self._start(tools, source_agent=None)
+        task_tools = self._task_tools(tools.workspace)
+
+        result = task_tools.tasks(self._cancel_call(task_id, "gemini"))
+
+        assert result.ok is False
+        assert "apenas quem delegou" in (result.error or "")
+        release.set()
+        _wait_task_status(db_path, task_id, "completed")
+
+    def test_cancel_http_sem_identidade_e_rejeitado(self, tools_com_db):
+        """Via HTTP MCP, omitir o header de identidade não concede privilégio."""
+        tools, db_path = tools_com_db
+        task_id, release, _ = self._start(tools)
+        task_tools = self._task_tools(tools.workspace)
+        call = ToolCall(
+            name="tasks",
+            arguments={"action": "cancel", "task_id": task_id},
+            metadata={
+                "trusted_context": TrustedToolExecutionContext(
+                    transport="http_mcp", run_id="r-anon", agent_name=None,
+                ),
+            },
+        )
+
+        result = task_tools.tasks(call)
+
+        assert result.ok is False
+        assert "requer identidade" in (result.error or "")
+        release.set()
+        _wait_task_status(db_path, task_id, "completed")
+
+    def test_cancel_do_job_marca_completed_at(self, tools_com_db):
+        tools, db_path = tools_com_db
+        task_id, release, _ = self._start(tools)
+        task_tools = self._task_tools(tools.workspace)
+
+        assert task_tools.tasks(self._cancel_call(task_id, "claude")).ok is True
+        release.set()
+        _wait_task_status(db_path, task_id, "cancelled")
+        job = task_api.list_jobs(db_path=db_path)[-1]
+        assert job["status"] == "cancelled"
+        assert job["completed_at"] is not None
+
+    def test_http_sse_propaga_cancel_da_request_ao_handle(self, tools_com_db):
+        """notifications/cancelled do MCP chega ao cancel_handle no caminho SSE."""
+        from unittest.mock import MagicMock as _MagicMock
+
+        tools, db_path = tools_com_db
+        started = threading.Event()
+        release = threading.Event()
+        observed: dict = {}
+        tools.set_delegate_fn(self._blocking_fn(started, release, observed))
+        mcp_cancel = threading.Event()
+        call = _make_call(
+            args={"target_agent": "codex", "request": "tarefa longa"},
+            metadata={
+                "trusted_context": TrustedToolExecutionContext(
+                    transport="http_mcp", run_id="r-sse", agent_name="claude",
+                ),
+                "_mcp_state": {"sse_queue": _MagicMock()},
+                "_mcp_cancel_event": mcp_cancel,
+            },
+        )
+        holder: dict = {}
+
+        def _run():
+            holder["result"] = tools.delegate(call)
+
+        worker = threading.Thread(target=_run, daemon=True)
+        worker.start()
+        assert started.wait(timeout=5)
+
+        mcp_cancel.set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not observed.get("handle_cancelled"):
+            time.sleep(0.02)
+        assert observed.get("handle_cancelled") is True
+        release.set()
+        worker.join(timeout=5)
+        assert holder["result"].ok is False
+
+    def test_falha_no_start_da_thread_nao_vaza_registry(self, tools_com_db):
+        """Thread.start com erro desfaz o registro e marca a task como failed."""
+        from unittest.mock import patch
+        from quimera.runtime.tools.delegate import get_active_delegation
+
+        tools, db_path = tools_com_db
+        tools.set_delegate_fn(MagicMock(return_value="nunca roda"))
+        thread_mock = MagicMock()
+        thread_mock.start.side_effect = RuntimeError("can't start new thread")
+        call = _make_call(args={
+            "target_agent": "codex", "request": "faz algo", "wait": False,
+        })
+
+        with patch(
+            "quimera.runtime.tools.delegate.threading.Thread",
+            return_value=thread_mock,
+        ):
+            result = tools.delegate(call)
+
+        assert result.ok is False
+        assert "failed to start delegate thread" in (result.error or "")
+        rows = task_api.list_tasks({"status": "failed"}, db_path=db_path)
+        assert rows and "failed to start delegate thread" in rows[-1]["result"]
+        assert get_active_delegation(rows[-1]["id"]) is None

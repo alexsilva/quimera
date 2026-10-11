@@ -311,7 +311,7 @@ def test_codexcloud_thinking_reaches_feed_via_delegate_step():
         }
         return gateway.call(agent, **gateway_options)
 
-    selected, result, error = DelegateTools._execute_single_step(
+    selected, result, error, _attempts = DelegateTools._execute_single_step(
         {
             "target_agent": "codexcloud-gpt-5-6",
             "request": "investigue o feed",

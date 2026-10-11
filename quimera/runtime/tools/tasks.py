@@ -92,7 +92,15 @@ class TaskTools(ToolBase):
         return None
 
     def tasks(self, call: ToolCall) -> ToolResult:
-        """Cria uma task pelo mesmo protocolo usado pelo comando /task."""
+        """Cria uma task (padrão) ou cancela uma delegação em execução.
+
+        action="cancel" permite ao agente que delegou (ou ao humano) abortar
+        uma delegação rastreada como task — o alvo é terminado e a task
+        transiciona para o status 'cancelled' com recibo do que aconteceu.
+        """
+        action = str(call.arguments.get("action") or "create").strip().lower()
+        if action == "cancel":
+            return self._cancel_delegation(call)
         if not callable(self._create_task_fn):
             return ToolResult(
                 ok=False,
@@ -125,6 +133,107 @@ class TaskTools(ToolBase):
             )
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
+
+    @staticmethod
+    def _normalize_agent_identity(agent_name: str | None) -> str:
+        """Normaliza o nome de um agente para comparação (mesma regra do delegate)."""
+        if agent_name is None:
+            return ""
+        return str(agent_name).strip().lower().lstrip("/")
+
+    @staticmethod
+    def _get_transport(call: ToolCall) -> str:
+        """Extrai o transporte do contexto confiável no metadata do ToolCall."""
+        ctx = call.metadata.get("trusted_context", {})
+        if isinstance(ctx, TrustedToolExecutionContext):
+            return ctx.transport
+        if isinstance(ctx, dict):
+            return str(ctx.get("transport", "native_tool_call"))
+        return "native_tool_call"
+
+    def _cancel_delegation(self, call: ToolCall) -> ToolResult:
+        """Cancela uma delegação ativa, se o solicitante for quem delegou."""
+        from .delegate import get_active_delegation
+
+        task_id = call.arguments.get("task_id")
+        if not isinstance(task_id, int) or isinstance(task_id, bool):
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="action='cancel' requer 'task_id' inteiro",
+            )
+        requested_by = self._normalize_agent_identity(self._get_calling_agent(call))
+        entry = get_active_delegation(task_id)
+        if entry is None:
+            status_hint = ""
+            try:
+                rows = _list_tasks({"id": task_id}, db_path=self.workspace.tasks_db)
+                if rows:
+                    status_hint = f" (status atual: {rows[0].get('status')})"
+            except Exception:  # noqa: BLE001 - hint é best-effort
+                pass
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=(
+                    f"task {task_id} não é uma delegação em execução neste "
+                    f"processo{status_hint}"
+                ),
+            )
+        # Quem pode cancelar: o agente que delegou, ou o humano. Agente
+        # identificado precisa ser exatamente o source_agent — inclusive
+        # quando a delegação não tem dono registrado (nesse caso só o humano
+        # cancela). Ausência de identidade só conta como humano fora do HTTP:
+        # no transporte HTTP o nome vem de header do cliente, e omiti-lo não
+        # pode conceder privilégio.
+        if requested_by:
+            if requested_by != entry.source_agent:
+                owner = entry.source_agent or "o humano"
+                return ToolResult(
+                    ok=False,
+                    tool_name=call.name,
+                    error=(
+                        f"apenas quem delegou ({owner}) pode cancelar a "
+                        f"task {task_id}"
+                    ),
+                )
+        elif self._get_transport(call) == "http_mcp":
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=(
+                    "cancelamento via HTTP MCP requer identidade de agente "
+                    "(trusted_context.agent_name)"
+                ),
+            )
+        reason = call.arguments.get("reason")
+        reason = str(reason).strip() if isinstance(reason, str) else None
+        outcome = entry.request_cancel(requested_by or "humano", reason)
+        if outcome == "finalized":
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=(
+                    f"task {task_id} já foi finalizada; nada a cancelar "
+                    "(consulte list_tasks para o desfecho)"
+                ),
+            )
+        payload = {
+            "task_id": task_id,
+            "status": "cancelling" if outcome == "cancelled" else "already_cancelling",
+            "cancelled_by": entry.cancelled_by,
+            "targets": list(entry.targets),
+            "hint": (
+                f"o cancelamento é assíncrono; acompanhe com list_tasks "
+                f"{{\"id\": {task_id}}} até o status 'cancelled'"
+            ),
+        }
+        return ToolResult(
+            ok=True,
+            tool_name=call.name,
+            content=json.dumps(payload, ensure_ascii=False),
+            data=payload,
+        )
 
     def _resolve_job_id(self, raw_job_id, *, allow_recent_fallback: bool = False) -> int | None:
         """Resolve job id."""
@@ -274,7 +383,15 @@ class TaskToolsValidator(ValidatableTool):
     """Validação de policy para as ferramentas de tasks."""
 
     def _validate_tasks(self, call: ToolCall) -> None:
-        """Exige uma descrição textual não vazia para criar a task."""
+        """Valida criação (description) ou cancelamento (task_id) conforme action."""
+        action = str(call.arguments.get("action") or "create").strip().lower()
+        if action == "cancel":
+            task_id = call.arguments.get("task_id")
+            if not isinstance(task_id, int) or isinstance(task_id, bool):
+                raise ToolPolicyError("tasks com action='cancel' requer 'task_id' inteiro")
+            return
+        if action != "create":
+            raise ToolPolicyError("tasks.action deve ser 'create' ou 'cancel'")
         description = call.arguments.get("description")
         if not isinstance(description, str) or not description.strip():
             raise ToolPolicyError("tasks requer 'description' não vazia")

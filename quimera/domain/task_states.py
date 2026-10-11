@@ -22,6 +22,7 @@ class TaskStatus(str, enum.Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     REJECTED = "rejected"
+    CANCELLED = "cancelled"
 
 
 # Tabela de transições válidas entre estados de task
@@ -34,6 +35,7 @@ VALID_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
         TaskStatus.COMPLETED,
         TaskStatus.FAILED,
         TaskStatus.PENDING,
+        TaskStatus.CANCELLED,
     }),
     TaskStatus.PENDING_REVIEW: frozenset({TaskStatus.REVIEWING}),
     TaskStatus.REVIEWING: frozenset({
@@ -45,6 +47,7 @@ VALID_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.COMPLETED: frozenset(),
     TaskStatus.FAILED: frozenset(),
     TaskStatus.REJECTED: frozenset(),
+    TaskStatus.CANCELLED: frozenset(),
 }
 
 

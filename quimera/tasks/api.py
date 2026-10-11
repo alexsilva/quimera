@@ -177,6 +177,17 @@ def fail_task(task_id, reason=None, db_path=None):
     return transition_task(task_id, TaskStatus.FAILED, result=reason, notes=reason, db_path=db_path)
 
 
+def cancel_task(task_id, reason=None, notes=None, db_path=None):
+    """Marca uma task como CANCELLED validando a transição via state machine."""
+    return transition_task(
+        task_id,
+        TaskStatus.CANCELLED,
+        result=reason,
+        notes=notes if notes is not None else reason,
+        db_path=db_path,
+    )
+
+
 def submit_for_review(task_id, result=None, db_path=None):
     """Submete uma task para review (PENDING_REVIEW)."""
     return _repository(db_path).submit_for_review(task_id, result=result)
@@ -208,7 +219,8 @@ def drop_db(db_path):
 __all__ = [
     "init_db", "add_job", "list_jobs",
     "create_task", "propose_task", "approve_task", "reject_task", "list_tasks",
-    "claim_task", "release_agent_tasks", "update_task", "complete_task", "fail_task", "get_job", "update_job_status",
+    "claim_task", "release_agent_tasks", "update_task", "complete_task", "fail_task", "cancel_task",
+    "get_job", "update_job_status",
     "submit_for_review", "claim_review_task", "requeue_task_after_review",
     "transition_task",
 ]

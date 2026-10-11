@@ -85,9 +85,12 @@ TOOL_SCHEMA: dict[str, dict] = {
     },
     "tasks": {
         "name": "tasks",
-        "description": "Cria uma task como o comando /task e retorna dados para acompanhamento",
+        "description": "Cria uma task como o comando /task (action=create, padrão) ou cancela uma delegação em execução (action=cancel; apenas quem delegou)",
         "parameters": {
-            "description": {"type": "str", "description": "Descrição da task", "required": True},
+            "description": {"type": "str", "description": "Descrição da task (action=create)", "required": False},
+            "action": {"type": "str", "description": "create (padrão) ou cancel", "required": False},
+            "task_id": {"type": "int", "description": "Task de delegação a cancelar (action=cancel)", "required": False},
+            "reason": {"type": "str", "description": "Motivo do cancelamento", "required": False},
         },
     },
     "list_tasks": {
@@ -95,7 +98,8 @@ TOOL_SCHEMA: dict[str, dict] = {
         "description": "Lista tarefas de um job ou todas",
         "parameters": {
             "job_id": {"type": "int", "description": "Filtrar por job ID", "required": False},
-            "status": {"type": "str", "description": "pending|in_progress|completed|failed|proposed|approved|rejected",
+            "status": {"type": "str",
+                       "description": "pending|in_progress|completed|failed|cancelled|proposed|approved|rejected",
                        "required": False},
         },
     },

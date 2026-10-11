@@ -590,6 +590,10 @@ def test_executor_delegate_dispatches_with_delegation_mode(tmp_path):
     assert kwargs["delegation"]["context"] == "arquivo quimera/runtime/executor.py"
     assert kwargs["delegation"]["delegation_id"].startswith("dlg-")
     assert kwargs["delegation"]["chain"] == ["codex"]
+    # Delegação rastreada é cancelável: o handle propaga o cancelamento do
+    # delegador (tasks action=cancel) até o AgentClient do dispatch.
+    from quimera.runtime.tools.delegate import _DelegateStepCancelHandle
+    assert isinstance(kwargs["cancel_handle"], _DelegateStepCancelHandle)
     assert kwargs == {
         "delegation": kwargs["delegation"],
         "delegation_only": True,
@@ -603,6 +607,7 @@ def test_executor_delegate_dispatches_with_delegation_mode(tmp_path):
         "max_retries": 3,
         "from_agent": None,
         "progress_callback": None,
+        "cancel_handle": kwargs["cancel_handle"],
     }
 
 

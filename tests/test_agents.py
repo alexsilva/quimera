@@ -992,10 +992,14 @@ def test_agent_client_run_timeout(renderer):
 
             with patch("time.time", return_value=500.0):
                 with patch("time.monotonic") as mock_monotonic:
-                    # 1. _last_stdout_time = 100.0 (ProcessRunner.__init__)
-                    # 2. start_time = 100.0 (watch)
-                    # 3. now = 101.0 => elapsed=1 e idle=1.0 > 0.1
-                    mock_monotonic.side_effect = [100.0, 100.0, 101.0]
+                    # 1. run_started = 100.0 (recibo de falha)
+                    # 2. _last_stdout_time = 100.0 (ProcessRunner.__init__)
+                    # 3. start_time = 100.0 (watch)
+                    # 4. now = 101.0 => elapsed=1 e idle=1.0 > 0.1
+                    # 5+. duração do recibo em _record_watch_termination
+                    mock_monotonic.side_effect = [
+                        100.0, 100.0, 100.0, 101.0, 101.5, 101.5, 101.5, 101.5,
+                    ]
                     with patch("time.sleep"):
                         result = client.run(["slow"], silent=False)
                         assert result is None
@@ -4557,3 +4561,112 @@ def test_call_api_passes_configured_model_request_budget(renderer):
         assert client._call_api("test-agent", profile, "prompt") == "ok"
 
     assert driver_cls.call_args.kwargs["max_model_requests"] == 23
+
+
+def test_agent_client_run_records_process_died_failure(renderer):
+    """Exit != 0 registra recibo estruturado com exit code, sinal e stderr."""
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = []
+        mock_proc.stderr = ["Killed\n"]
+        mock_proc.returncode = -9
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["codex", "exec"], silent=True, agent="codex")
+
+        assert result is None
+        failure = client.last_run_failure
+        assert failure["error_kind"] == "process_died"
+        assert failure["exit_code"] == -9
+        assert failure["signal"] == "SIGKILL"
+        assert "Killed" in failure["stderr_tail"]
+        assert failure["agent"] == "codex"
+        assert failure["duration_s"] >= 0
+
+
+def test_agent_client_run_records_empty_response_failure(renderer):
+    """Exit 0 sem stdout registra empty_response."""
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = []
+        mock_proc.stderr = []
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["echo", "hi"], silent=True)
+
+        assert result is None
+        assert client.last_run_failure["error_kind"] == "empty_response"
+
+
+def test_agent_client_run_success_limpa_failure_anterior(renderer):
+    """Sucesso não deixa recibo de falha de execuções anteriores."""
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = []
+        mock_proc.stderr = []
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+        client.run(["false"], silent=True)
+        assert client.last_run_failure is not None
+
+        mock_proc_ok = MagicMock()
+        mock_proc_ok.stdout = ["ok\n"]
+        mock_proc_ok.stderr = []
+        mock_proc_ok.returncode = 0
+        mock_popen.return_value = mock_proc_ok
+        assert client.run(["echo", "hi"], silent=True) == "ok"
+        assert client.last_run_failure is None
+
+
+def test_agent_client_consume_last_run_failure_limpa_slot(renderer):
+    """consume_last_run_failure retorna o recibo e esvazia o slot."""
+    client = AgentClient(renderer)
+    client._record_run_failure("rate_limited", "429", agent="codex", retry_after=30)
+
+    failure = client.consume_last_run_failure()
+
+    assert failure["error_kind"] == "rate_limited"
+    assert failure["retry_after"] == 30
+    assert client.consume_last_run_failure() is None
+
+
+def test_agent_client_call_api_fatal_registra_recibo(renderer):
+    """FatalAPIError registra last_run_failure antes de propagar."""
+    from quimera.runtime.drivers.openai_compat import FatalAPIError
+
+    client = AgentClient(renderer, idle_timeout=60)
+    mock_driver = MagicMock()
+    mock_driver.run.side_effect = FatalAPIError("Erro fatal: falha de autenticação na API.")
+
+    with patch("quimera.profiles.get", return_value=_make_api_profile()):
+        with patch.object(client, "_api_drivers", {"test-agent": mock_driver}):
+            with pytest.raises(FatalAPIError):
+                client.call("test-agent", "prompt")
+
+    failure = client.last_run_failure
+    assert failure["error_kind"] == "api_fatal"
+    assert "autenticação" in failure["message"]
+    assert failure["agent"] == "test-agent"
+
+
+def test_agent_client_call_api_rate_limit_registra_recibo(renderer):
+    """TransientAPIError com rate limit registra recibo com retry_after."""
+    from quimera.runtime.drivers.openai_compat import TransientAPIError
+
+    client = AgentClient(renderer, idle_timeout=60)
+    mock_driver = MagicMock()
+    mock_driver.run.side_effect = TransientAPIError(
+        "rate limited", rate_limited=True, retry_after=30.0,
+    )
+
+    with patch("quimera.profiles.get", return_value=_make_api_profile()):
+        with patch.object(client, "_api_drivers", {"test-agent": mock_driver}):
+            assert client.call("test-agent", "prompt") is None
+
+    failure = client.last_run_failure
+    assert failure["error_kind"] == "rate_limited"
+    assert failure["retry_after"] == 30.0

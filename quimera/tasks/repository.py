@@ -241,10 +241,10 @@ class TaskRepository:
         started_at_sql = ""
         completed_at_sql = ""
         params: list = [status_text, now]
-        if status_text in {"active", "in_progress", "completed", "failed", "rejected"}:
+        if status_text in {"active", "in_progress", "completed", "failed", "rejected", "cancelled"}:
             started_at_sql = ", started_at = COALESCE(started_at, ?)"
             params.append(now)
-        if status_text in {"completed", "failed", "rejected"}:
+        if status_text in {"completed", "failed", "rejected", "cancelled"}:
             completed_at_sql = ", completed_at = COALESCE(completed_at, ?)"
             params.append(now)
         params.append(job_id)
@@ -489,6 +489,7 @@ class TaskRepository:
                 TaskStatus.COMPLETED.value,
                 TaskStatus.FAILED.value,
                 TaskStatus.REJECTED.value,
+                TaskStatus.CANCELLED.value,
             ):
                 completed_at_sql = ", completed_at = ?"
             params: list = [status, result, notes, now]
@@ -753,6 +754,7 @@ class TaskRepository:
                 TaskStatus.COMPLETED,
                 TaskStatus.FAILED,
                 TaskStatus.REJECTED,
+                TaskStatus.CANCELLED,
             ):
                 fields["completed_at"] = now
             if result is not _UNSET:

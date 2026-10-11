@@ -14,15 +14,17 @@ from ..config import (
     DEFAULT_DELEGATE_MAX_REQUEST_CHARS,
     ToolRuntimeConfig,
 )
+from ..errors import DelegationDispatchError
 from ..models import ToolCall, ToolResult
 from ..policy import ToolPolicyError
 from ...prompt_kinds import PromptKind
 from ...tasks.api import (
     add_job,
+    cancel_task,
     complete_task,
     create_task,
-    fail_task,
     get_job,
+    transition_task,
     update_job_status,
 )
 from ..approval import TrustedToolExecutionContext
@@ -70,7 +72,7 @@ class _DelegateStepCancelHandle:
 
 
 def _watch_request_cancellation(
-    cancel_event: threading.Event | None,
+    cancel_event,
     cancel_handles: list[_DelegateStepCancelHandle],
     done_event: threading.Event,
 ) -> threading.Thread | None:
@@ -92,6 +94,130 @@ def _watch_request_cancellation(
     )
     watcher.start()
     return watcher
+
+
+class _CancelSignal(Protocol):
+    """Qualquer objeto consultável por is_set() — Event ou agregado."""
+
+    def is_set(self) -> bool: ...
+
+
+class _AnyCancelSignal:
+    """Agrega sinais de cancelamento heterogêneos sob a interface is_set()."""
+
+    def __init__(self, *events) -> None:
+        self._events = tuple(event for event in events if event is not None)
+
+    def is_set(self) -> bool:
+        return any(event.is_set() for event in self._events)
+
+
+class ActiveDelegationEntry:
+    """Delegação em execução neste processo, cancelável pelo delegador.
+
+    Cancelamento e finalização disputam o mesmo lock: ou o cancel entra antes
+    de a execução gravar o desfecho (e a task vira cancelled), ou a finalização
+    vence e cancelamentos posteriores são rejeitados — nunca os dois.
+    """
+
+    def __init__(
+        self,
+        task_id: int,
+        *,
+        job_id: int | None = None,
+        source_agent: str = "",
+        targets: tuple[str, ...] = (),
+    ) -> None:
+        self.task_id = task_id
+        self.job_id = job_id
+        self.source_agent = source_agent
+        self.targets = targets
+        self.started_at = time.monotonic()
+        self.cancel_event = threading.Event()
+        self.cancelled_by: str | None = None
+        self.cancel_reason: str | None = None
+        self._lock = threading.Lock()
+        self._finalized = False
+
+    @property
+    def cancelled(self) -> bool:
+        return self.cancel_event.is_set()
+
+    def request_cancel(self, requested_by: str, reason: str | None = None) -> str:
+        """Tenta cancelar; retorna 'cancelled', 'already_cancelling' ou 'finalized'."""
+        with self._lock:
+            if self._finalized:
+                return "finalized"
+            if self.cancel_event.is_set():
+                return "already_cancelling"
+            self.cancelled_by = requested_by
+            self.cancel_reason = (reason or "").strip() or None
+            self.cancel_event.set()
+            return "cancelled"
+
+    def mark_finalized(self) -> bool:
+        """Fecha a janela de cancelamento; retorna True se a entry foi cancelada."""
+        with self._lock:
+            self._finalized = True
+            return self.cancel_event.is_set()
+
+
+_ACTIVE_DELEGATIONS: dict[int, ActiveDelegationEntry] = {}
+_ACTIVE_DELEGATIONS_LOCK = threading.Lock()
+
+
+def _register_active_delegation(
+    task_id: int,
+    *,
+    job_id: int | None,
+    source_agent: str,
+    targets: tuple[str, ...],
+) -> ActiveDelegationEntry:
+    """Registra uma delegação rastreada como cancelável no processo atual."""
+    entry = ActiveDelegationEntry(
+        task_id, job_id=job_id, source_agent=source_agent, targets=targets,
+    )
+    with _ACTIVE_DELEGATIONS_LOCK:
+        _ACTIVE_DELEGATIONS[task_id] = entry
+    return entry
+
+
+def _unregister_active_delegation(task_id: int) -> None:
+    with _ACTIVE_DELEGATIONS_LOCK:
+        _ACTIVE_DELEGATIONS.pop(task_id, None)
+
+
+def get_active_delegation(task_id: int) -> ActiveDelegationEntry | None:
+    """Retorna a delegação ativa com esse task_id, se executando neste processo."""
+    with _ACTIVE_DELEGATIONS_LOCK:
+        return _ACTIVE_DELEGATIONS.get(task_id)
+
+
+def _host_memory_snapshot() -> dict | None:
+    """Captura pressão de memória do host no momento da falha (best-effort).
+
+    Neste host Android, exit -9 + MemAvailable baixo distingue LMK de crash.
+    """
+    try:
+        fields = {}
+        with open("/proc/meminfo", encoding="ascii") as handle:
+            for line in handle:
+                key, _, rest = line.partition(":")
+                if key in ("MemTotal", "MemAvailable", "SwapFree", "SwapTotal"):
+                    fields[key] = int(rest.strip().split()[0])
+                if len(fields) == 4:
+                    break
+        if not fields:
+            return None
+        snapshot = {
+            "mem_total_mb": round(fields.get("MemTotal", 0) / 1024),
+            "mem_available_mb": round(fields.get("MemAvailable", 0) / 1024),
+        }
+        if fields.get("SwapTotal"):
+            snapshot["swap_free_mb"] = round(fields.get("SwapFree", 0) / 1024)
+        return snapshot
+    except OSError:
+        return None
 
 
 class _DelegateFnProto(Protocol):
@@ -384,15 +510,69 @@ class DelegateTools(ToolBase):
         return task_id, job_snapshot
 
     def _finalize_tracking(
-        self, job_id: int, task_id: int, result: ToolResult, db_path: str,
+        self,
+        job_id: int,
+        task_id: int,
+        result: ToolResult,
+        db_path: str,
+        cancel_entry: ActiveDelegationEntry | None = None,
     ) -> None:
-        """Grava o desfecho da delegação na task/job de acompanhamento."""
+        """Grava o desfecho da delegação na task/job de acompanhamento.
+
+        O recibo estruturado de falha (quando existir em result.data) é
+        persistido nas notes da task, para que o delegador possa diagnosticar
+        a causa via list_tasks mesmo em delegações assíncronas.
+        """
+        receipt = (
+            result.data.get("failure_receipt")
+            if isinstance(result.data, dict)
+            else None
+        )
+        # Fecha a janela de cancelamento ANTES de decidir o desfecho: um
+        # cancel concorrente ou entra aqui como cancelled, ou é rejeitado
+        # pelo request_cancel — nunca "cancelling" sobre task completed.
+        was_cancelled = (
+            cancel_entry.mark_finalized() if cancel_entry is not None else False
+        )
         try:
-            if result.ok:
+            if cancel_entry is not None and was_cancelled:
+                cancelled_by = cancel_entry.cancelled_by or "desconhecido"
+                reason = f"Delegação cancelada por {cancelled_by}"
+                if cancel_entry.cancel_reason:
+                    reason += f": {cancel_entry.cancel_reason}"
+                cancel_receipt = dict(receipt) if isinstance(receipt, dict) else {}
+                cancel_receipt["cancelled_by"] = cancelled_by
+                if cancel_entry.cancel_reason:
+                    cancel_receipt["cancel_reason"] = cancel_entry.cancel_reason
+                cancel_receipt["duration_s"] = round(
+                    time.monotonic() - cancel_entry.started_at, 1
+                )
+                result.ok = False
+                result.error = reason
+                result.data["failure_receipt"] = cancel_receipt
+                cancel_task(
+                    task_id,
+                    reason=reason,
+                    notes=json.dumps(cancel_receipt, ensure_ascii=False),
+                    db_path=db_path,
+                )
+                update_job_status(job_id, "cancelled", db_path=db_path)
+            elif result.ok:
                 complete_task(task_id, result=result.content, db_path=db_path)
                 update_job_status(job_id, "completed", db_path=db_path)
             else:
-                fail_task(task_id, reason=result.error, db_path=db_path)
+                notes = (
+                    json.dumps(receipt, ensure_ascii=False)
+                    if isinstance(receipt, dict)
+                    else result.error
+                )
+                transition_task(
+                    task_id,
+                    "failed",
+                    result=result.error,
+                    notes=notes,
+                    db_path=db_path,
+                )
                 update_job_status(job_id, "failed", db_path=db_path)
         except Exception as exc:
             logger.warning(
@@ -443,29 +623,57 @@ class DelegateTools(ToolBase):
         _normalize = self._normalize_agent_identity
         _cleanup_cb = self._cleanup_callback
 
+        # A delegação assíncrona vira endereçável: o delegador (ou o humano)
+        # pode cancelá-la via tasks {action: "cancel", task_id}.
+        entry = _register_active_delegation(
+            task_id,
+            job_id=job_id,
+            source_agent=self._normalize_agent_identity(steps[0].get("source_agent")),
+            targets=tuple(step["target_agent"] for step in steps),
+        )
+
         def _run() -> None:
-            if parallel and len(steps) > 1:
-                result = self._execute_steps_parallel(
-                    steps,
-                    _fn,
-                    _progress_cb,
-                    _resolve_active,
-                    _normalize,
-                    cleanup_callback=_cleanup_cb,
+            try:
+                if parallel and len(steps) > 1:
+                    result = self._execute_steps_parallel(
+                        steps,
+                        _fn,
+                        _progress_cb,
+                        _resolve_active,
+                        _normalize,
+                        cleanup_callback=_cleanup_cb,
+                        cancel_checker=entry.cancel_event.is_set,
+                        request_cancel_event=entry.cancel_event,
+                    )
+                else:
+                    result = self._execute_steps_inner(
+                        steps,
+                        _fn,
+                        _progress_cb,
+                        _resolve_active,
+                        _normalize,
+                        cleanup_callback=_cleanup_cb,
+                        cancel_checker=entry.cancel_event.is_set,
+                        request_cancel_event=entry.cancel_event,
+                    )
+                self._finalize_tracking(
+                    job_id, task_id, result, db_path, cancel_entry=entry,
                 )
-            else:
-                result = self._execute_steps_inner(
-                    steps,
-                    _fn,
-                    _progress_cb,
-                    _resolve_active,
-                    _normalize,
-                    cleanup_callback=_cleanup_cb,
-                )
-            self._finalize_tracking(job_id, task_id, result, db_path)
+            finally:
+                _unregister_active_delegation(task_id)
 
         t = threading.Thread(target=_run, daemon=True, name=f"delegate-{task_id}")
-        t.start()
+        try:
+            t.start()
+        except Exception as exc:  # noqa: BLE001 - exaustão de threads do host
+            _unregister_active_delegation(task_id)
+            failed = ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=f"failed to start delegate thread: {exc}",
+            )
+            self._finalize_tracking(job_id, task_id, failed, db_path)
+            return failed
 
         payload = {
             "job_id": job_id,
@@ -491,11 +699,14 @@ class DelegateTools(ToolBase):
         call: ToolCall,
         steps: list[dict],
         parallel: bool = False,
+        cancel_checker: Callable[[], bool] | None = None,
+        request_cancel_event: _CancelSignal | None = None,
     ) -> ToolResult:
         """Executa delegate via HTTP MCP.
 
         Com SSE: executa inline na thread pool (bloqueante, com tracking) — o
-        resultado chega ao cliente via SSE quando a thread pool completar.
+        resultado chega ao cliente via SSE quando a thread pool completar, e o
+        cancelamento da request (notifications/cancelled) é propagado.
         Sem SSE: delegação assíncrona idêntica a wait=false — job/task no
         banco, execução em background e {job_id, task_id} imediato p/ polling.
         """
@@ -504,7 +715,14 @@ class DelegateTools(ToolBase):
 
         if sse_available:
             _bg_fn = self._background_delegate_fn or self._delegate_fn
-            return self._execute_tracked_sync(call, steps, parallel, _bg_fn)
+            return self._execute_tracked_sync(
+                call,
+                steps,
+                parallel,
+                _bg_fn,
+                cancel_checker=cancel_checker,
+                request_cancel_event=request_cancel_event,
+            )
 
         return self._delegate_async(call, steps, parallel)
 
@@ -563,18 +781,24 @@ class DelegateTools(ToolBase):
         cleanup_callback: Callable[[str], None] | None = None,
         cancel_checker: Callable[[], bool] | None = None,
         cancel_handle: _DelegateStepCancelHandle | None = None,
-    ) -> tuple[str | None, str | None, str | None]:
-        """Executa um único step. Retorna (selected_agent, result_str, error_str)."""
+    ) -> tuple[str | None, str | None, str | None, list[dict]]:
+        """Executa um único step.
+
+        Retorna (selected_agent, result_str, error_str, attempts), onde
+        attempts carrega o diagnóstico estruturado de cada tentativa que
+        falhou (agente, error_kind, exit code, stderr, duração...).
+        """
         attempt_targets = [step["target_agent"], *step["fallback_agents"]]
         step_result = None
         last_error = None
         selected_agent = None
         normalized_target_agent = ""
+        attempts: list[dict] = []
         source_agent = str(step.get("source_agent") or "").strip() or None
         delegation_id = str(step.get("delegation_id") or "").strip() or DelegateTools._new_delegation_id()
         for target_agent in attempt_targets:
             if callable(cancel_checker) and cancel_checker():
-                return None, None, "Execução cancelada pelo usuário"
+                return None, None, "Execução cancelada pelo usuário", attempts
             normalized_target_agent = normalize_agent_fn(target_agent)
             delegation = {
                 "task": step["request"],
@@ -613,8 +837,14 @@ class DelegateTools(ToolBase):
                 result = delegate_fn(normalized_target_agent, **delegate_options)
             except Exception as dispatch_error:
                 if callable(cancel_checker) and cancel_checker():
-                    return None, None, "Execução cancelada pelo usuário"
+                    return None, None, "Execução cancelada pelo usuário", attempts
                 last_error = str(dispatch_error)
+                attempt_record: dict = {"agent": target_agent}
+                if isinstance(dispatch_error, DelegationDispatchError):
+                    attempt_record.update(dispatch_error.receipt)
+                attempt_record.setdefault("error_kind", "dispatch_error")
+                attempt_record.setdefault("message", last_error)
+                attempts.append(attempt_record)
                 logger.warning(
                     "delegate: dispatch to '%s' failed: %s",
                     target_agent, last_error,
@@ -622,8 +852,15 @@ class DelegateTools(ToolBase):
                 continue
             if result is None:
                 if callable(cancel_checker) and cancel_checker():
-                    return None, None, "Execução cancelada pelo usuário"
+                    return None, None, "Execução cancelada pelo usuário", attempts
                 last_error = f"Agent '{target_agent}' returned no response"
+                attempts.append(
+                    {
+                        "agent": target_agent,
+                        "error_kind": "empty_response",
+                        "message": last_error,
+                    }
+                )
                 logger.warning(
                     "delegate: dispatch to '%s' returned no response",
                     target_agent,
@@ -655,9 +892,33 @@ class DelegateTools(ToolBase):
                 if last_error
                 else f"No response from any target. Tried: {', '.join(attempt_targets)}"
             )
-            return None, None, error_detail
+            return None, None, error_detail, attempts
 
-        return selected_agent, step_result, None
+        return selected_agent, step_result, None, attempts
+
+    @staticmethod
+    def _build_failure_receipt(
+        failures: list[tuple[int, dict, str | None, list[dict]]],
+    ) -> dict | None:
+        """Monta o recibo estruturado de falha a partir dos steps que falharam."""
+        steps_out: list[dict] = []
+        for step_index, step, error, attempts in failures:
+            item: dict = {
+                "step": step_index,
+                "target_agent": step.get("target_agent"),
+            }
+            if error:
+                item["error"] = error
+            if attempts:
+                item["attempts"] = attempts
+            steps_out.append(item)
+        if not steps_out:
+            return None
+        receipt: dict = {"steps": steps_out}
+        host = _host_memory_snapshot()
+        if host:
+            receipt["host"] = host
+        return receipt
 
     @staticmethod
     def _execute_steps_inner(
@@ -668,13 +929,13 @@ class DelegateTools(ToolBase):
         normalize_agent_fn: Callable[[str | None], str],
         cleanup_callback: Callable[[str], None] | None = None,
         cancel_checker: Callable[[], bool] | None = None,
-        request_cancel_event: threading.Event | None = None,
+        request_cancel_event: _CancelSignal | None = None,
     ) -> ToolResult:
         """Loop sequencial de execução dos steps — reusado síncrono e assíncrono."""
         tool_name = "delegate"
         try:
             step_outputs: list[str] = []
-            for step in steps:
+            for step_index, step in enumerate(steps):
                 if callable(cancel_checker) and cancel_checker():
                     return ToolResult(
                         ok=False,
@@ -713,7 +974,7 @@ class DelegateTools(ToolBase):
                     step_done,
                 )
                 try:
-                    selected_agent, step_result, error = DelegateTools._execute_single_step(
+                    selected_agent, step_result, error, attempts = DelegateTools._execute_single_step(
                         step, delegate_fn, progress_callback, normalize_agent_fn,
                         cleanup_callback, cancel_checker, cancel_handle,
                     )
@@ -723,7 +984,13 @@ class DelegateTools(ToolBase):
                         watcher.join(timeout=0.1)
 
                 if step_result is None:
-                    return ToolResult(ok=False, tool_name=tool_name, error=error)
+                    result = ToolResult(ok=False, tool_name=tool_name, error=error)
+                    receipt = DelegateTools._build_failure_receipt(
+                        [(step_index, step, error, attempts)]
+                    )
+                    if receipt is not None:
+                        result.data["failure_receipt"] = receipt
+                    return result
 
                 if len(steps) == 1:
                     step_outputs.append(step_result)
@@ -748,7 +1015,7 @@ class DelegateTools(ToolBase):
         normalize_agent_fn: Callable[[str | None], str],
         cleanup_callback: Callable[[str], None] | None = None,
         cancel_checker: Callable[[], bool] | None = None,
-        request_cancel_event: threading.Event | None = None,
+        request_cancel_event: _CancelSignal | None = None,
     ) -> ToolResult:
         """Execução paralela de steps — cada step roda em thread própria."""
         tool_name = "delegate"
@@ -781,8 +1048,8 @@ class DelegateTools(ToolBase):
                         ),
                     )
 
-        results: list[tuple[str | None, str | None, str | None]] = [
-            (None, None, None)
+        results: list[tuple[str | None, str | None, str | None, list[dict]]] = [
+            (None, None, None, [])
         ] * n
         results_lock = threading.Lock()
         timed_out_indexes: set[int] = set()
@@ -826,6 +1093,16 @@ class DelegateTools(ToolBase):
                             None,
                             None,
                             f"Delegação paralela excedeu o limite de {timeout_seconds}s",
+                            [
+                                {
+                                    "agent": steps[index]["target_agent"],
+                                    "error_kind": "timeout",
+                                    "message": (
+                                        "delegação paralela excedeu o limite de "
+                                        f"{timeout_seconds}s"
+                                    ),
+                                }
+                            ],
                         )
                     timeout_cancelled.set()
                     cancel_handles[index].cancel()
@@ -860,25 +1137,35 @@ class DelegateTools(ToolBase):
 
         errors = [
             (i, err)
-            for i, (_, _, err) in enumerate(result_snapshot)
+            for i, (_, _, err, _) in enumerate(result_snapshot)
             if err is not None
         ]
         if errors:
             error_msg = "; ".join(f"step[{i}]: {e}" for i, e in errors)
             completed = [
                 f"[{selected or steps[i]['target_agent']}] {result}"
-                for i, (selected, result, _) in enumerate(result_snapshot)
+                for i, (selected, result, _, _) in enumerate(result_snapshot)
                 if result is not None
             ]
-            return ToolResult(
+            failed_result = ToolResult(
                 ok=False,
                 tool_name=tool_name,
                 content="\n\n".join(completed),
                 error=error_msg,
             )
+            receipt = DelegateTools._build_failure_receipt(
+                [
+                    (i, steps[i], err, attempts)
+                    for i, (_, _, err, attempts) in enumerate(result_snapshot)
+                    if err is not None
+                ]
+            )
+            if receipt is not None:
+                failed_result.data["failure_receipt"] = receipt
+            return failed_result
 
         step_outputs: list[str] = []
-        for i, (selected_agent, step_result, _) in enumerate(result_snapshot):
+        for i, (selected_agent, step_result, _, _) in enumerate(result_snapshot):
             if step_result is None:
                 continue
             if n == 1:
@@ -896,7 +1183,7 @@ class DelegateTools(ToolBase):
         parallel: bool,
         delegate_fn: _DelegateFnProto,
         cancel_checker: Callable[[], bool] | None = None,
-        request_cancel_event: threading.Event | None = None,
+        request_cancel_event: _CancelSignal | None = None,
     ) -> ToolResult:
         """Executa steps bloqueando o chamador, com a delegação registrada como task.
 
@@ -908,6 +1195,7 @@ class DelegateTools(ToolBase):
         """
         db_path = self._get_db_path()
         tracking: tuple[int, int] | None = None
+        entry: ActiveDelegationEntry | None = None
         if db_path:
             try:
                 job_id = add_job(
@@ -917,38 +1205,68 @@ class DelegateTools(ToolBase):
                 )
                 task_id, _snapshot = self._insert_tracking_task(job_id, steps, db_path)
                 tracking = (job_id, task_id)
+                entry = _register_active_delegation(
+                    task_id,
+                    job_id=job_id,
+                    source_agent=self._normalize_agent_identity(
+                        steps[0].get("source_agent")
+                    ),
+                    targets=tuple(step["target_agent"] for step in steps),
+                )
             except Exception as exc:
                 logger.warning("delegate tracking: failed to create job/task: %s", exc)
 
-        if parallel and len(steps) > 1:
-            result = self._execute_steps_parallel(
-                steps,
-                delegate_fn,
-                self._progress_callback_for(call),
-                self._resolve_active_agents,
-                self._normalize_agent_identity,
-                cleanup_callback=self._cleanup_callback,
-                cancel_checker=cancel_checker,
-                request_cancel_event=request_cancel_event,
+        effective_cancel_event = request_cancel_event
+        effective_cancel_checker = cancel_checker
+        if entry is not None:
+            effective_cancel_event = _AnyCancelSignal(
+                request_cancel_event, entry.cancel_event,
             )
-        else:
-            result = self._execute_steps_inner(
-                steps,
-                delegate_fn,
-                self._progress_callback_for(call),
-                self._resolve_active_agents,
-                self._normalize_agent_identity,
-                cleanup_callback=self._cleanup_callback,
-                cancel_checker=cancel_checker,
-                request_cancel_event=request_cancel_event,
-            )
+
+            def effective_cancel_checker() -> bool:
+                return bool(
+                    (callable(cancel_checker) and cancel_checker())
+                    or entry.cancel_event.is_set()
+                )
+
+        try:
+            if parallel and len(steps) > 1:
+                result = self._execute_steps_parallel(
+                    steps,
+                    delegate_fn,
+                    self._progress_callback_for(call),
+                    self._resolve_active_agents,
+                    self._normalize_agent_identity,
+                    cleanup_callback=self._cleanup_callback,
+                    cancel_checker=effective_cancel_checker,
+                    request_cancel_event=effective_cancel_event,
+                )
+            else:
+                result = self._execute_steps_inner(
+                    steps,
+                    delegate_fn,
+                    self._progress_callback_for(call),
+                    self._resolve_active_agents,
+                    self._normalize_agent_identity,
+                    cleanup_callback=self._cleanup_callback,
+                    cancel_checker=effective_cancel_checker,
+                    request_cancel_event=effective_cancel_event,
+                )
+        finally:
+            if tracking is not None:
+                _unregister_active_delegation(tracking[1])
 
         if tracking is not None:
             job_id, task_id = tracking
-            self._finalize_tracking(job_id, task_id, result, db_path)
+            self._finalize_tracking(
+                job_id, task_id, result, db_path, cancel_entry=entry,
+            )
             result.data["job_id"] = job_id
             result.data["task_id"] = task_id
-            result.data["task_status"] = "completed" if result.ok else "failed"
+            if entry is not None and entry.cancelled:
+                result.data["task_status"] = "cancelled"
+            else:
+                result.data["task_status"] = "completed" if result.ok else "failed"
             if result.ok:
                 footer = (
                     f"[delegação registrada como task {task_id} (job {job_id}); "
@@ -1271,12 +1589,6 @@ class DelegateTools(ToolBase):
                 truncation_warnings,
             )
 
-        if transport == "http_mcp":
-            return self._attach_truncation_warnings(
-                self._delegate_http_async(call, steps, parallel),
-                truncation_warnings,
-            )
-
         raw_cancel_event = call.metadata.get("_mcp_cancel_event")
         request_cancel_event = (
             raw_cancel_event
@@ -1288,6 +1600,18 @@ class DelegateTools(ToolBase):
             return bool(
                 (request_cancel_event is not None and request_cancel_event.is_set())
                 or (callable(self._cancel_checker) and self._cancel_checker())
+            )
+
+        if transport == "http_mcp":
+            return self._attach_truncation_warnings(
+                self._delegate_http_async(
+                    call,
+                    steps,
+                    parallel,
+                    cancel_checker=request_cancelled,
+                    request_cancel_event=request_cancel_event,
+                ),
+                truncation_warnings,
             )
 
         return self._attach_truncation_warnings(

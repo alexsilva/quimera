@@ -60,6 +60,19 @@ class ToolPolicyViolationError(ToolError):
         super().__init__(message, metadata=metadata)
 
 
+class DelegationDispatchError(RuntimeError):
+    """Falha de despacho de uma delegação, com recibo estruturado da causa.
+
+    ``receipt`` carrega o diagnóstico coletado na fronteira do AgentClient
+    (error_kind, exit_code, signal, stderr_tail, duration_s, ...), para que o
+    delegador receba a causa real em vez de apenas "no response".
+    """
+
+    def __init__(self, message: str, *, receipt: dict | None = None):
+        super().__init__(message)
+        self.receipt = dict(receipt) if receipt else {}
+
+
 # Mapeamento de tipos para facilitar roteamento
 TOOL_ERROR_TYPES = {
     "validation": ToolValidationError,

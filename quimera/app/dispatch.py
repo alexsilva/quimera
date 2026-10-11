@@ -635,6 +635,14 @@ class AppDispatchServices:
             if redisplay_prompt is not None:
                 redisplay_prompt(clear_first=False)
 
+    def consume_last_run_failure(self) -> dict | None:
+        """Retorna e limpa o diagnóstico estruturado da última falha do client."""
+        agent_client = self._get_agent_client()
+        consume = getattr(agent_client, "consume_last_run_failure", None)
+        if callable(consume):
+            return consume()
+        return None
+
     def close(self) -> None:
         """Libera recursos do agent client dedicado quando houver override."""
         agent_client = self._agent_client_override

@@ -313,7 +313,7 @@ class TestNonSSEPath:
             patch("quimera.runtime.tools.delegate.add_job", return_value=job_id),
             patch("quimera.runtime.tools.delegate.create_task", return_value=task_id),
             patch("quimera.runtime.tools.delegate.complete_task") as mock_complete,
-            patch("quimera.runtime.tools.delegate.fail_task") as mock_fail,
+            patch("quimera.runtime.tools.delegate.transition_task") as mock_fail,
             patch("quimera.runtime.tools.delegate.update_job_status") as mock_update_job,
         ):
             result = delegation_tools._delegate_http_async(call, STEPS)
@@ -327,7 +327,7 @@ class TestNonSSEPath:
             assert mock_update_job.call_args_list[1].kwargs == {"db_path": str(db_path)}
 
     def test_non_sse_background_thread_falha_task(self, delegation_tools, tmp_path):
-        """Dispatch retorna None (falha silenciosa) → fail_task e update_job_status(failed) chamados."""
+        """Dispatch retorna None (falha silenciosa) → transition_task(failed) e update_job_status(failed) chamados."""
         db_path = delegation_tools.workspace.tasks_db
         from quimera.tasks import api as task_mod
         import time
@@ -349,7 +349,7 @@ class TestNonSSEPath:
             patch("quimera.runtime.tools.delegate.add_job", return_value=job_id),
             patch("quimera.runtime.tools.delegate.create_task", return_value=task_id),
             patch("quimera.runtime.tools.delegate.complete_task") as mock_complete,
-            patch("quimera.runtime.tools.delegate.fail_task") as mock_fail,
+            patch("quimera.runtime.tools.delegate.transition_task") as mock_fail,
             patch("quimera.runtime.tools.delegate.update_job_status") as mock_update_job,
         ):
             result = delegation_tools._delegate_http_async(call, STEPS)
@@ -365,7 +365,7 @@ class TestNonSSEPath:
     @patch("quimera.runtime.tools.delegate.add_job", return_value=42)
     @patch("quimera.runtime.tools.delegate.create_task", return_value=99)
     @patch("quimera.runtime.tools.delegate.complete_task")
-    @patch("quimera.runtime.tools.delegate.fail_task")
+    @patch("quimera.runtime.tools.delegate.transition_task")
     @patch("quimera.runtime.tools.delegate.update_job_status")
     def test_non_sse_usa_background_delegate_fn_quando_disponivel(
         self, mock_update, mock_fail, mock_complete, mock_create, mock_add,
@@ -408,7 +408,7 @@ class TestNonSSEPath:
     @patch("quimera.runtime.tools.delegate.add_job", return_value=42)
     @patch("quimera.runtime.tools.delegate.create_task", return_value=99)
     @patch("quimera.runtime.tools.delegate.complete_task")
-    @patch("quimera.runtime.tools.delegate.fail_task")
+    @patch("quimera.runtime.tools.delegate.transition_task")
     @patch("quimera.runtime.tools.delegate.update_job_status")
     def test_non_sse_cancel_checker_nao_interrompe_background_thread(
         self, mock_update, mock_fail, mock_complete, mock_create, mock_add,

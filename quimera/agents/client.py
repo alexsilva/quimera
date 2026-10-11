@@ -200,6 +200,9 @@ class AgentClient:
         )
         self.last_spy_turn_detail: dict | None = None
         self._pending_summary_render: tuple | None = None
+        # Diagnóstico estruturado da última execução que falhou (run/_call_api):
+        # consumido pela camada de delegate para compor o recibo de falha.
+        self.last_run_failure: dict | None = None
         self.rate_limit_detected = False
         self.rate_limit_detected_at: float | None = None
         self.rate_limit_retry_after: float | None = None
@@ -287,6 +290,83 @@ class AgentClient:
         if error_kind == "agent_invalid_output":
             return f"[erro] agente {subject} não retornou saída válida"
         return message
+
+    _RUN_FAILURE_STDERR_TAIL_CHARS = 1500
+
+    def _record_run_failure(
+        self,
+        kind: str,
+        message: str = "",
+        *,
+        agent: str | None = None,
+        command: str | None = None,
+        exit_code: int | None = None,
+        signal_name: str | None = None,
+        stderr_tail: str = "",
+        started_at: float | None = None,
+        retry_after: float | None = None,
+    ) -> None:
+        """Registra o diagnóstico estruturado da falha corrente da execução.
+
+        Mantém apenas a última falha: o consumidor (delegate) lê e limpa o slot
+        logo após cada tentativa, antes de qualquer fallback reutilizar o client.
+        """
+        failure: dict = {"error_kind": kind}
+        if message:
+            failure["message"] = str(message)
+        if agent:
+            failure["agent"] = str(agent)
+        if command:
+            failure["command"] = str(command)
+        if exit_code is not None:
+            failure["exit_code"] = int(exit_code)
+        if signal_name:
+            failure["signal"] = str(signal_name)
+        tail = str(stderr_tail or "").strip()
+        if tail:
+            failure["stderr_tail"] = tail[-self._RUN_FAILURE_STDERR_TAIL_CHARS:]
+        if started_at is not None:
+            failure["duration_s"] = round(time.monotonic() - started_at, 1)
+        if retry_after is not None:
+            failure["retry_after"] = retry_after
+        self.last_run_failure = failure
+
+    def consume_last_run_failure(self) -> dict | None:
+        """Retorna e limpa o diagnóstico da última falha de execução."""
+        failure = self.last_run_failure
+        self.last_run_failure = None
+        return failure
+
+    def _record_watch_termination(
+        self, termination, *, agent, command, started_at, result_holder,
+    ) -> None:
+        """Registra desfechos anormais do watchdog do subprocess, se houver."""
+        kinds = {
+            ProcessRunner.CANCELLED: ("cancelled", "execução cancelada"),
+            ProcessRunner.RATE_LIMIT: ("rate_limited", "rate limit do provedor"),
+            ProcessRunner.TIMEOUT: (
+                "idle_timeout", f"sem stdout por {self.idle_timeout}s",
+            ),
+            ProcessRunner.WALL_TIMEOUT: (
+                "wall_timeout", "limite total de execução excedido",
+            ),
+        }
+        entry = kinds.get(termination)
+        if entry is None:
+            return
+        kind, message = entry
+        stderr_tail = "".join(
+            _filter_stderr_lines(agent, list(result_holder["stderr"]))
+        )
+        self._record_run_failure(
+            kind,
+            message,
+            agent=agent,
+            command=command,
+            stderr_tail=stderr_tail,
+            started_at=started_at,
+            retry_after=self.rate_limit_retry_after if kind == "rate_limited" else None,
+        )
 
     def _show_muted(self, message: str) -> None:
         reporter = self.muted_reporter
@@ -832,10 +912,21 @@ class AgentClient:
                 agent or (cmd[0] if cmd else "?"),
                 self._running_agent or "?",
             )
+            self._record_run_failure(
+                "client_busy",
+                f"client ocupado com '{self._running_agent or '?'}'",
+                agent=agent, command=cmd[0] if cmd else None,
+            )
             return None
+        run_started = time.monotonic()
+        self.last_run_failure = None
         if self._cancel_event.is_set():
             self._user_cancelled = True
             self._show_cancelled_once()
+            self._record_run_failure(
+                "cancelled", "cancelado antes de iniciar",
+                agent=agent, command=cmd[0] if cmd else None,
+            )
             return None
         self._user_cancelled = False
         self.rate_limit_detected = False
@@ -852,6 +943,10 @@ class AgentClient:
             self._running_agent = None
             self._stop_esc_monitor()
             self._show_error(f"[sandbox] {exc}")
+            self._record_run_failure(
+                "spawn_failed", f"sandbox: {exc}",
+                agent=agent, command=cmd[0] if cmd else None, started_at=run_started,
+            )
             return None
         if _primed_proc is not None and _primed_proc.poll() is None:
             proc = _primed_proc
@@ -871,6 +966,10 @@ class AgentClient:
                 self._running_agent = None
                 self._stop_esc_monitor()
                 self._show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
+                self._record_run_failure(
+                    "spawn_failed", str(exc),
+                    agent=agent, command=cmd[0] if cmd else None, started_at=run_started,
+                )
                 return None
         self._current_proc = proc
         if self.process_supervisor is not None:
@@ -947,6 +1046,10 @@ class AgentClient:
             self._running_agent = None
             self._stop_esc_monitor()
             self._show_error(f"[erro] falha ao enviar input para {cmd[0]}: {exc}")
+            self._record_run_failure(
+                "agent_comm", f"falha ao enviar input: {exc}",
+                agent=agent, command=cmd[0] if cmd else None, started_at=run_started,
+            )
             try:
                 proc.terminate()
             except OSError:
@@ -998,6 +1101,10 @@ class AgentClient:
                 termination = runner.watch(on_tick=_on_tick_silent)
                 self.rate_limit_detected = runner.rate_limit_detected
                 self.rate_limit_detected_at = runner.rate_limit_detected_at
+                self._record_watch_termination(
+                    termination, agent=agent, command=cmd[0] if cmd else None,
+                    started_at=run_started, result_holder=result_holder,
+                )
 
                 if termination == ProcessRunner.CANCELLED:
                     self.cancel_active_work()
@@ -1085,6 +1192,10 @@ class AgentClient:
                     self.renderer.clear_agent_transient(agent or cmd[0])
                     self.rate_limit_detected = runner.rate_limit_detected
                     self.rate_limit_detected_at = runner.rate_limit_detected_at
+                    self._record_watch_termination(
+                        termination, agent=agent, command=cmd[0] if cmd else None,
+                        started_at=run_started, result_holder=result_holder,
+                    )
 
                     if termination == ProcessRunner.CANCELLED:
                         self.cancel_active_work()
@@ -1129,6 +1240,11 @@ class AgentClient:
                     command_name=cmd[0],
                     error_kind="agent_comm",
                 )
+                self._record_run_failure(
+                    "agent_comm", str(result_holder["error"]),
+                    agent=agent, command=cmd[0] if cmd else None,
+                    started_at=run_started,
+                )
                 return None
 
             output = self._get_capped_stdout(result_holder).strip()
@@ -1162,7 +1278,13 @@ class AgentClient:
 
         if proc.returncode != 0:
             if self._is_expected_termination_return_code(proc.returncode):
+                self._record_run_failure(
+                    "cancelled", "processo terminado por cancelamento",
+                    agent=agent, command=cmd[0] if cmd else None,
+                    exit_code=proc.returncode, started_at=run_started,
+                )
                 return None
+            signal_name = None
             if proc.returncode < 0:
                 signal_number = -proc.returncode
                 try:
@@ -1188,6 +1310,13 @@ class AgentClient:
                 error_kind="agent_exit",
                 return_code=proc.returncode,
             )
+            self._record_run_failure(
+                "process_died",
+                f"processo retornou código {proc.returncode}",
+                agent=agent, command=cmd[0] if cmd else None,
+                exit_code=proc.returncode, signal_name=signal_name,
+                stderr_tail=error, started_at=run_started,
+            )
             if error and (silent or agent):
                 tail = "\n".join(error.splitlines()[-5:])
                 if self._is_tool_call_text(tail):
@@ -1197,6 +1326,13 @@ class AgentClient:
             return None
 
         if not output:
+            self._record_run_failure(
+                "invalid_output" if error else "empty_response",
+                "saída vazia com stderr" if error else "saída vazia",
+                agent=agent, command=cmd[0] if cmd else None,
+                exit_code=proc.returncode, stderr_tail=error,
+                started_at=run_started,
+            )
             if error:
                 self._show_error(
                     "",
@@ -1578,9 +1714,14 @@ class AgentClient:
         run_id: str | None = None,
     ):
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
+        api_started = time.monotonic()
+        self.last_run_failure = None
         connection = self._resolve_profile_connection(profile)
         if not isinstance(connection, OpenAIConnection):
             self._show_error(f"[erro] conexão inválida para driver de API: {agent}")
+            self._record_run_failure(
+                "spawn_failed", "conexão inválida para driver de API", agent=agent,
+            )
             return None
         signature = self._api_connection_signature(connection)
         cached_signature = self._api_driver_signatures.get(agent)
@@ -1608,6 +1749,11 @@ class AgentClient:
                         self._show_error(
                             f"[erro] variável de ambiente '{api_key_env}' não definida para {agent}"
                         )
+                        self._record_run_failure(
+                            "spawn_failed",
+                            f"variável de ambiente '{api_key_env}' não definida",
+                            agent=agent,
+                        )
                         return None
             self._api_drivers[agent] = create_api_driver(
                 provider,
@@ -1634,6 +1780,9 @@ class AgentClient:
         if self._cancel_event.is_set():
             self._user_cancelled = True
             self._show_cancelled_once()
+            self._record_run_failure(
+                "cancelled", "cancelado antes de iniciar", agent=agent,
+            )
             return None
         self.rate_limit_detected = False
         self.rate_limit_detected_at = None
@@ -1843,6 +1992,10 @@ class AgentClient:
                                 # thread pode drenar o transporte em background sem
                                 # afetar o próximo turno.
                                 self.invalidate_api_driver(agent)
+                                self._record_run_failure(
+                                    "cancelled", "execução cancelada",
+                                    agent=agent, started_at=api_started,
+                                )
                                 return None
                         # Wall-clock timeout mantém o contrato conservador: nesse
                         # caso, no client primário ou com tool já iniciada, aguardamos
@@ -1867,6 +2020,11 @@ class AgentClient:
                         continue
 
                 if timed_out:
+                    self._record_run_failure(
+                        "wall_timeout",
+                        f"wall-clock timeout após {max_execution_seconds:g}s em driver API",
+                        agent=agent, started_at=api_started,
+                    )
                     return None
 
                 if api_cancel_event.is_set():
@@ -1877,6 +2035,10 @@ class AgentClient:
                     self._user_cancelled = True
                     self._show_cancelled_once()
                     self.invalidate_api_driver(agent)
+                    self._record_run_failure(
+                        "cancelled", "execução cancelada",
+                        agent=agent, started_at=api_started,
+                    )
                     return None
 
                 if result_holder["error"]:
@@ -1896,10 +2058,23 @@ class AgentClient:
                             "Falha temporária ao comunicar com o provedor."
                         )
                         self._show_error(f"[erro] {_name}: {user_message}")
+                        self._record_run_failure(
+                            "rate_limited" if error.rate_limited else "api_error",
+                            user_message,
+                            agent=agent, command=_name, started_at=api_started,
+                            retry_after=error.retry_after if error.rate_limited else None,
+                        )
                         return None
                     if isinstance(error, (_FatalAPIError, _APIExecutionError)):
                         # A camada de dispatch é a única responsável por exibir
                         # erros não-retryable, evitando mensagens duplicadas.
+                        # O recibo fica registrado aqui porque o dispatch
+                        # converte o fatal em None após desistir dos retries.
+                        self._record_run_failure(
+                            "api_fatal",
+                            getattr(error, "user_message", None) or str(error),
+                            agent=agent, started_at=api_started,
+                        )
                         raise error
                     if _is_rate_limit_signal(str(error)):
                         self.rate_limit_detected = True
@@ -1919,8 +2094,17 @@ class AgentClient:
                     self._show_error(
                         f"[erro] {_name}: falha inesperada na comunicação com o provedor."
                     )
+                    self._record_run_failure(
+                        "api_error", str(error),
+                        agent=agent, command=_name, started_at=api_started,
+                    )
                     return None
 
+                if result_holder["result"] is None:
+                    self._record_run_failure(
+                        "empty_response", "driver de API não retornou resposta",
+                        agent=agent, started_at=api_started,
+                    )
                 return result_holder["result"]
         finally:
             if effective_tool_executor is not None:
