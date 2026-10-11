@@ -57,7 +57,16 @@ class FakeAgentClient:
 
 
 class FakeActivityAgentClient(FakeAgentClient):
-    def call_with_run_activity(self, agent, prompt, *, run_activity_callback=None, **kwargs):
+    def call_with_run_activity(
+        self,
+        agent,
+        prompt,
+        *,
+        run_activity_callback=None,
+        run_id=None,
+        **kwargs,
+    ):
+        del run_id
         if run_activity_callback is not None:
             run_activity_callback(
                 {
@@ -67,6 +76,25 @@ class FakeActivityAgentClient(FakeAgentClient):
                     "status": "running",
                 }
             )
+        return self.call(agent, prompt, **kwargs)
+
+
+class RunIdCapturingAgentClient(FakeAgentClient):
+    def __init__(self):
+        super().__init__()
+        self.received_run_id = None
+
+    def call_with_run_activity(
+        self,
+        agent,
+        prompt,
+        *,
+        run_activity_callback=None,
+        run_id=None,
+        **kwargs,
+    ):
+        del run_activity_callback
+        self.received_run_id = run_id
         return self.call(agent, prompt, **kwargs)
 
 
@@ -117,6 +145,19 @@ def test_agent_gateway_emits_normalized_run_events_for_silent_task_path():
     assert sink.events[0].transport == "task"
     assert sink.events[1].text == "contexto do agente"
     assert sink.events[2].text == "resposta final"
+
+
+def test_agent_gateway_passes_event_run_id_to_agent_client():
+    """O mesmo ID observado nos eventos escopa as tools do backend."""
+    sink = RecordingSink()
+    client = RunIdCapturingAgentClient()
+    gateway = make_gateway(client, sink=sink)
+
+    result = gateway.call("codex")
+
+    assert result == "resposta final"
+    assert client.received_run_id == sink.events[0].run_id
+    assert client.received_run_id.startswith("agentrun:")
 
 
 def test_agent_gateway_uses_null_sink_without_changing_behavior():

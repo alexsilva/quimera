@@ -184,6 +184,7 @@ class AgentClient:
         self._cancel_notice_state = {"shown": False}
         self._call_lock = threading.RLock()
         self._run_activity_callback = None
+        self._run_activity_run_id: str | None = None
         self._agent_running = False
         self._running_agent = None
         self._current_proc = None
@@ -1403,16 +1404,20 @@ class AgentClient:
         prompt: PromptText,
         *,
         run_activity_callback=None,
+        run_id: str | None = None,
         **kwargs,
     ):
         """Executa uma chamada associando observabilidade de tools ao run atual."""
         with self._call_lock:
-            previous = self._run_activity_callback
+            previous_callback = self._run_activity_callback
+            previous_run_id = self._run_activity_run_id
             self._run_activity_callback = run_activity_callback
+            self._run_activity_run_id = str(run_id) if run_id else None
             try:
                 return self.call(agent, prompt, **kwargs)
             finally:
-                self._run_activity_callback = previous
+                self._run_activity_callback = previous_callback
+                self._run_activity_run_id = previous_run_id
 
     def _call_impl(
         self,
@@ -1428,6 +1433,7 @@ class AgentClient:
     ):
         """Resolve o comando do agente e delega a execução."""
         run_activity_callback = self._run_activity_callback
+        run_id = self._run_activity_run_id
         profile = profiles.get(agent)
         if profile is None:
             self._show_error(f"[erro] agente desconhecido: {agent}")
@@ -1447,7 +1453,8 @@ class AgentClient:
                 progress_callback=progress_callback,
                 from_agent=from_agent,
                 run_activity_callback=run_activity_callback,
-        )
+                run_id=run_id,
+            )
         self._spy_output_presenter.set_turn_runtime("cli")
         cmd, prompt_as_arg, output_format = self._resolve_profile_cli_attrs(profile, connection)
         extra_env = dict(connection.env or {}) if isinstance(connection, CliConnection) else {}
@@ -1473,6 +1480,10 @@ class AgentClient:
             extra_env["QUIMERA_MCP_AGENT_NAME"] = str(agent)
             if from_agent:
                 extra_env["QUIMERA_MCP_PARENT_AGENT"] = str(from_agent)
+            if run_id:
+                # Identidade criada pelo AgentGateway; o proxy MCP a envia no
+                # prelude autenticado, sem confiar em metadata do tool call.
+                extra_env["QUIMERA_MCP_RUN_ID"] = str(run_id)
         tool_config = getattr(self.tool_executor, "config", None)
         if getattr(tool_config, "allow_ask_user", True) is False:
             current = str(extra_env.get("QUIMERA_MCP_DISABLED_TOOLS") or "")
@@ -1564,6 +1575,7 @@ class AgentClient:
         progress_callback=None,
         from_agent=None,
         run_activity_callback=None,
+        run_id: str | None = None,
     ):
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
         connection = self._resolve_profile_connection(profile)
@@ -1762,6 +1774,7 @@ class AgentClient:
                             tool_executor=effective_tool_executor,
                             agent_name=agent,
                             parent_agent=from_agent,
+                            run_id=run_id,
                             session_id=self.session_id,
                             base_dir=self.evidence_base_dir,
                             quiet=quiet,

@@ -39,6 +39,13 @@ from quimera.runtime.config import (
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
 from quimera.runtime.tool_metadata import ToolRisk, get_tool_metadata
+from quimera.runtime.tool_deferral import (
+    DEFERRAL_OVERRIDE_STATE_KEY,
+    DEFERRAL_STATE_KEY,
+    TOOL_SEARCH_TOOL_NAME,
+    build_exposed_schemas,
+    is_mcp_tool_deferral_enabled,
+)
 from quimera.runtime.drivers.tool_schemas import resolve_tool_schemas
 from quimera.version import __version__
 from quimera.workspace import Workspace
@@ -117,6 +124,12 @@ def _proxy_stdio_to_socket(
             approval_scope = (os.environ.get("QUIMERA_MCP_APPROVAL_SCOPE") or "").strip()
             if approval_scope:
                 auth_payload["quimera_approval_scope"] = approval_scope
+            run_id = (os.environ.get("QUIMERA_MCP_RUN_ID") or "").strip()
+            if run_id:
+                auth_payload["quimera_run_id"] = run_id
+            tool_deferral = (os.environ.get("QUIMERA_MCP_TOOL_DEFERRAL") or "").strip()
+            if tool_deferral:
+                auth_payload[DEFERRAL_OVERRIDE_STATE_KEY] = tool_deferral
             resolved_agent_name = (
                 str(agent_name or "").strip()
                 or (os.environ.get("QUIMERA_MCP_AGENT_NAME") or "").strip()
@@ -727,6 +740,23 @@ class MCPServer:
             if schema.get("function", {}).get("name") not in disabled_tools
         ]
 
+    def _tool_deferral_active(self, state: dict | None) -> bool:
+        """Deferral de schemas para esta conexão (config "all" ou prelude "on")."""
+        config = getattr(self._executor, "config", None)
+        return is_mcp_tool_deferral_enabled(config, state)
+
+    def _notify_tools_list_changed(self, out: IO) -> None:
+        """Avisa o cliente que o tools/list mudou após um tool_search."""
+        try:
+            self._write(
+                {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"},
+                out,
+            )
+        except (OSError, ValueError):
+            _logger.debug(
+                "MCP list_changed descartado (socket indisponível)", exc_info=True
+            )
+
     def _handle_tools_list(self, msg_id: Any, params: dict, state: dict | None = None) -> dict:
         schemas = resolve_tool_schemas(self._executor)
         if self._allowed_tools is not None:
@@ -736,6 +766,11 @@ class MCPServer:
                 if schema.get("function", {}).get("name") in self._allowed_tools
             ]
         schemas = self._filter_schemas_for_state(schemas, state)
+        if self._tool_deferral_active(state):
+            # Filtro de apresentação: tools diferidas continuam aceitas pelo
+            # tools/call; tool_search habilita nomes no estado da conexão.
+            enabled = (state or {}).get(DEFERRAL_STATE_KEY) or ()
+            schemas = build_exposed_schemas(schemas, enabled)
         tools = [_openai_schema_to_mcp(s) for s in schemas]
         cursor = params.get("cursor")
         page = 0
@@ -1101,6 +1136,13 @@ class MCPServer:
             error=str(result.error or "") if not result.ok else "",
         )
 
+        if result.ok and tool_name == TOOL_SEARCH_TOOL_NAME:
+            # O handler já gravou as habilitações no estado da conexão; o
+            # aviso faz clientes como o Claude Code refazerem o tools/list.
+            state = getattr(call["out"], "_mcp_state", None)
+            if self._tool_deferral_active(state):
+                self._notify_tools_list_changed(call["out"])
+
         if result.ok:
             text = result.content or ""
         else:
@@ -1350,12 +1392,20 @@ class MCPServer:
                 approval_scope = prelude.get("quimera_approval_scope")
                 if approval_scope:
                     conn_state["quimera_approval_scope"] = approval_scope
+                run_id = prelude.get("quimera_run_id")
+                if run_id:
+                    # O prelude só chega aqui após autenticação do socket.
+                    # Campos homônimos em params/_meta nunca alimentam o estado.
+                    conn_state["trusted_run_id"] = str(run_id)
                 agent_name = prelude.get("quimera_agent_name")
                 if agent_name:
                     conn_state["agent_name"] = str(agent_name)
                 parent_agent_name = prelude.get("quimera_parent_agent")
                 if parent_agent_name:
                     conn_state["parent_agent"] = str(parent_agent_name)
+                tool_deferral = prelude.get(DEFERRAL_OVERRIDE_STATE_KEY)
+                if tool_deferral:
+                    conn_state[DEFERRAL_OVERRIDE_STATE_KEY] = str(tool_deferral)
                 if conn_state:
                     setattr(out, "_mcp_state", conn_state)
                 setattr(

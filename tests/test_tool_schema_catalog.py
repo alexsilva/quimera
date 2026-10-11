@@ -16,7 +16,7 @@ from quimera.runtime.tools import memory as memory_tools
 from quimera.runtime.tools import todo as todo_tools
 
 _EXPECTED_SCHEMA_FINGERPRINT = (
-    "a6feca8705fe18920192b18b400b7dd62e47db29e7529ee13e2b1167b19f37e7"
+    "999cd0b6ce139ec13da2a927519549a1b4bf5eb8a489a32e096929ba9cf8edb9"
 )
 
 
@@ -33,7 +33,7 @@ def _fingerprint(schemas: list[dict]) -> str:
 def test_catalog_materializes_the_public_schema_without_contract_changes():
     """A representação tipada não pode alterar o contrato publicado."""
     assert materialize_tool_schemas() == TOOL_SCHEMAS
-    assert len(TOOL_SPECS) == len(TOOL_SCHEMAS) == 57
+    assert len(TOOL_SPECS) == len(TOOL_SCHEMAS) == 58
     assert _fingerprint(TOOL_SCHEMAS) == _EXPECTED_SCHEMA_FINGERPRINT
 
 
@@ -66,6 +66,16 @@ def test_shell_tool_descriptions_distinguish_sync_and_persistent_execution():
     assert "acompanhamento por polling" in descriptions["exec_command"]
 
 
+def test_mutating_tool_descriptions_explain_read_before_edit():
+    descriptions = {
+        schema["function"]["name"]: schema["function"]["description"]
+        for schema in TOOL_SCHEMAS
+    }
+
+    for name in ("write_file", "replace_text", "apply_patch", "remove_file"):
+        assert "read_file" in descriptions[name]
+
+
 def test_schema_and_registry_are_one_to_one():
     """Cada schema publicado deve ter handler no registry e vice-versa."""
     root = Path(tempfile.mkdtemp())
@@ -74,7 +84,7 @@ def test_schema_and_registry_are_one_to_one():
     schema_names = {item["function"]["name"] for item in TOOL_SCHEMAS}
 
     assert registry_names == schema_names
-    assert len(registry_names) == 57
+    assert len(registry_names) == 58
 
 
 def test_explicit_tool_name_lists_match_registered_handlers():

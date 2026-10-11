@@ -14,6 +14,16 @@ def test_config_post_init_default_read_roots():
     config = ToolRuntimeConfig(workspace=workspace)
     assert config.allowed_read_roots == []
     assert config.read_roots() == (workspace.cwd,)
+    assert config.read_before_edit == "enforce"
+
+
+@pytest.mark.parametrize("value", ["", "warning", "ENFORCE", None, True])
+def test_read_before_edit_rejects_unknown_mode(tmp_path, value):
+    with pytest.raises(ValueError, match="read_before_edit"):
+        ToolRuntimeConfig(
+            workspace=Workspace(tmp_path),
+            read_before_edit=value,
+        )
 
 
 def test_config_post_init_custom_read_roots(tmp_path):

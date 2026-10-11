@@ -191,6 +191,35 @@ class TestToolsCall:
         assert call_arg.name == "read_file"
         assert call_arg.arguments == {"path": "foo.py"}
 
+    def test_tools_call_nao_pode_sobrescrever_trusted_run_id(self):
+        """Metadata do cliente não substitui a identidade confiável da conexão."""
+        executor = _make_executor(tool_names=["read_file"])
+        server = _make_server(executor)
+        out = io.StringIO()
+        setattr(out, "_mcp_state", {
+            "transport": "internal_mcp",
+            "trusted_run_id": "agentrun:trusted",
+        })
+        request = {
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {
+                "name": "read_file",
+                "arguments": {"path": "README.md"},
+                "_meta": {"run_id": "agentrun:spoofed"},
+            },
+        }
+
+        server.serve(
+            stdin=io.StringIO(json.dumps(request) + "\n"),
+            stdout=out,
+        )
+
+        call: ToolCall = executor.execute.call_args.args[0]
+        assert call.metadata["trusted_context"].run_id == "agentrun:trusted"
+        assert call.metadata["_mcp_state"]["trusted_run_id"] == "agentrun:trusted"
+
     def test_failed_tool_without_error_preserves_content_and_exit_code(self):
         """Falha de processo mantém diagnóstico quando ToolResult.error é None."""
         content = "exit_code: 7\n\nstderr:\nfalha real"
@@ -1186,6 +1215,47 @@ class TestSocketAuth:
         responses = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
         assert responses[0]["result"] == {}
         assert captured_state["agent_name"] == "codex-gpt-5-6-sol"
+
+    def test_proxy_vincula_run_id_autenticado_ao_estado_da_conexao(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """O run do gateway atravessa o prelude autenticado do proxy."""
+        sock_path = str(tmp_path / "mcp_proxy_run.sock")
+        captured_state = {}
+
+        class CapturingMCPServer(MCPServer):
+            def serve(self, stdin=None, stdout=None):
+                captured_state.update(getattr(stdout, "_mcp_state", {}) or {})
+                return super().serve(stdin=stdin, stdout=stdout)
+
+        server = CapturingMCPServer(_make_executor(), auth_token="abc")
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+        monkeypatch.setenv("QUIMERA_MCP_RUN_ID", "agentrun:trusted")
+
+        request_line = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 44,
+            "method": "ping",
+        }) + "\n"
+        out = io.StringIO()
+
+        _proxy_stdio_to_socket(
+            sock_path,
+            token="abc",
+            stdin=io.StringIO(request_line),
+            stdout=out,
+        )
+
+        [response] = [
+            json.loads(line)
+            for line in out.getvalue().splitlines()
+            if line.strip()
+        ]
+        assert response["result"] == {}
+        assert captured_state["trusted_run_id"] == "agentrun:trusted"
 
     def test_conexao_com_tool_desabilitada_remove_tool_do_tools_list(self, tmp_path):
         """Conexão MCP com tool desabilitada não deve anunciar essa tool."""

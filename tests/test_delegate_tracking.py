@@ -65,6 +65,16 @@ def _wait_task_status(db_path: str, task_id: int, status: str, timeout: float = 
     raise AssertionError(f"task {task_id} não atingiu status '{status}' em {timeout}s")
 
 
+def _wait_job_status(db_path: str, job_id: int, status: str, timeout: float = 5.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        job = task_api.get_job(job_id, db_path=db_path)
+        if job and job["status"] == status:
+            return job
+        time.sleep(0.05)
+    raise AssertionError(f"job {job_id} não atingiu status '{status}' em {timeout}s")
+
+
 class TestSyncTracking:
     """wait=true (padrão): delegação bloqueante registrada como task."""
 
@@ -178,7 +188,7 @@ class TestWaitFalse:
         liberar.set()
         row = _wait_task_status(db_path, payload["task_id"], "completed")
         assert row["result"] == "resultado tardio"
-        job = task_api.get_job(payload["job_id"], db_path=db_path)
+        job = _wait_job_status(db_path, payload["job_id"], "completed")
         assert job["status"] == "completed"
 
     def test_wait_false_usa_background_delegate_fn(self, tools_com_db):

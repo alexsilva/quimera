@@ -25,6 +25,11 @@ DEFAULT_DELEGATE_TIMEOUT_SECONDS = 3600
 # O cliente MCP (ex.: Codex) deve expirar sempre DEPOIS do servidor, para que
 # o erro estruturado venha do servidor e nunca do cliente abandonando a chamada.
 DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS = 2 * DEFAULT_DELEGATE_TIMEOUT_SECONDS
+READ_BEFORE_EDIT_MODES = frozenset({"enforce", "warn", "off"})
+# Deferral de schemas de tools: "api" ativa nos drivers que montam a própria
+# requisição (openai-compat e cloud); "all" estende às conexões MCP, cujos
+# clientes precisam honrar notifications/tools/list_changed.
+TOOL_DEFERRAL_MODES = frozenset({"off", "api", "all"})
 
 
 @dataclass(slots=True)
@@ -46,6 +51,8 @@ class ToolRuntimeConfig:
     require_approval_for_mutations: bool = True
     require_approval_for_task_creation: bool = True
     allow_ask_user: bool = True
+    read_before_edit: str = "enforce"
+    tool_deferral: str = "api"
     delegation_budget_per_run: int = 8
     workspace_policy: WorkspacePolicy | None = None
     allowed_read_roots: list[Path] = field(default_factory=list)
@@ -136,6 +143,12 @@ class ToolRuntimeConfig:
             value = getattr(self, name)
             if type(value) is not int or value < 1:
                 raise ValueError(f"{name} deve ser um inteiro positivo")
+        if self.read_before_edit not in READ_BEFORE_EDIT_MODES:
+            allowed = ", ".join(sorted(READ_BEFORE_EDIT_MODES))
+            raise ValueError(f"read_before_edit deve ser um de: {allowed}")
+        if self.tool_deferral not in TOOL_DEFERRAL_MODES:
+            allowed = ", ".join(sorted(TOOL_DEFERRAL_MODES))
+            raise ValueError(f"tool_deferral deve ser um de: {allowed}")
         self.allowed_read_roots = [Path(path).resolve() for path in self.allowed_read_roots]
 
     def read_roots(self) -> tuple[Path, ...]:

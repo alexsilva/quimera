@@ -498,6 +498,7 @@ class AgentGateway:
                     agent,
                     prompt,
                     run_activity_callback=_on_run_activity,
+                    run_id=run_id,
                     **call_kwargs,
                 )
             else:

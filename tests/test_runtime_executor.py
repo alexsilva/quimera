@@ -277,6 +277,10 @@ def test_executor_remove_file_approval(executor_with_approval, approved, tmp_pat
     """remove_file é negado quando aprovação falha e executa quando aprovada."""
     executor_with_approval.approval_handler.approve.return_value = approved
     (tmp_path / "x.txt").write_text("x")
+    read = executor_with_approval.execute(
+        ToolCall(name="read_file", arguments={"path": "x.txt"})
+    )
+    assert read.ok is True
     call = ToolCall(name="remove_file", arguments={"path": "x.txt", "dry_run": False})
     result = executor_with_approval.execute(call)
     if approved:
@@ -292,6 +296,10 @@ def test_executor_remove_file_no_approval_config_skips_handler(executor_no_appro
     """Com require_approval_for_mutations=False o handler não é consultado."""
     executor_no_approval.approval_handler.approve.return_value = False
     (tmp_path / "x.txt").write_text("x")
+    read = executor_no_approval.execute(
+        ToolCall(name="read_file", arguments={"path": "x.txt"})
+    )
+    assert read.ok is True
     call = ToolCall(name="remove_file", arguments={"path": "x.txt", "dry_run": False})
     result = executor_no_approval.execute(call)
     assert result.ok is True
@@ -307,6 +315,8 @@ def test_executor_allows_mcp_tool_with_propagated_task_scope(tmp_path):
     )
 
     (tmp_path / "x.txt").write_text("x")
+    read = executor.execute(ToolCall(name="read_file", arguments={"path": "x.txt"}))
+    assert read.ok is True
     call = ToolCall(
         name="remove_file",
         arguments={"path": "x.txt", "dry_run": False},

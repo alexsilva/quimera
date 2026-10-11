@@ -19,6 +19,7 @@ from .tools import interaction as interaction_tools
 from .tools import mcp_clients as mcp_clients_tools
 from .tools import memory as memory_tools
 from .tools import patch as patch_tools
+from .tools import search as search_tools
 from .tools import shell as shell_tools
 from .tools import state as state_tools
 from .tools import tasks as tasks_tools
@@ -110,6 +111,7 @@ class ToolExecutor:
         self._task_tools = None
         self._browser_tools = None
         self._host_tools = None
+        self._search_tools = None
         self._register_builtin_tools()
 
     @staticmethod
@@ -146,6 +148,10 @@ class ToolExecutor:
         git.register(self.registry, self.policy, self.config)
         self._host_tools = host_tools.register(self.registry, self.policy, self.config)
         mcp_clients_tools.register(self.registry, self.policy, self.config)
+        # A tool de descoberta resolve o catálogo real deste executor (forks
+        # incluídos: _register_builtin_tools roda por instância).
+        self._search_tools = search_tools.register(self.registry, self.policy, self.config)
+        self._search_tools.set_executor(self)
 
     def fork_for_concurrent_run(self) -> "ToolExecutor":
         """Cria um executor isolado para uma execução concorrente.

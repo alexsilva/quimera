@@ -1931,9 +1931,14 @@ def test_agent_client_call_api_driver(renderer):
             mock_driver_cls.return_value = mock_driver
 
             with patch.object(client, "_api_drivers", {}):
-                result = client.call("test-agent", "prompt")
+                result = client.call_with_run_activity(
+                    "test-agent",
+                    "prompt",
+                    run_id="agentrun:client-test",
+                )
             assert result == "api response"
             mock_driver_cls.assert_called()
+            assert mock_driver.run.call_args.kwargs["run_id"] == "agentrun:client-test"
 
 
 def test_agent_client_api_tools_emit_one_turn_summary(renderer):
@@ -2584,12 +2589,17 @@ def test_agent_client_call_dynamic_opencode_base_passes_env_for_cli_to_run(rende
 
         with patch("quimera.profiles.get", return_value=profile), patch.object(client, "run") as mock_run:
             mock_run.return_value = "ok"
-            result = client.call("opencode-dyn-call-test", "prompt")
+            result = client.call_with_run_activity(
+                "opencode-dyn-call-test",
+                "prompt",
+                run_id="agentrun:cli-test",
+            )
 
         assert result == "ok"
         called_kwargs = mock_run.call_args.kwargs
         assert called_kwargs["extra_env"]["BASE_ENV"] == "1"
         assert called_kwargs["extra_env"]["PYTHONPATH"] == mcp_proxy_pythonpath()
+        assert called_kwargs["extra_env"]["QUIMERA_MCP_RUN_ID"] == "agentrun:cli-test"
 
         config_raw = called_kwargs["extra_env"].get("OPENCODE_CONFIG_CONTENT")
         assert config_raw is not None

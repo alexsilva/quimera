@@ -86,10 +86,10 @@ um resultado sem evento de início ainda gera evidência com o mesmo ID.
 | `read_file` | Lê arquivo com intervalo opcional de linhas. |
 | `grep_search` | Busca padrão de texto em arquivos. |
 | `inspect_symbols` | Lista classes, funções e métodos de um arquivo Python via AST, sem executar código. |
-| `write_file` | Cria ou sobrescreve arquivo; para mudanças parciais, prefira patch. |
-| `apply_patch` | Aplica patch textual estruturado no workspace. |
-| `replace_text` | Substitui texto literal em um arquivo dentro do workspace. |
-| `remove_file` | Remove arquivo com confirmação por `dry_run=False`. |
+| `write_file` | Cria arquivo; overwrite de arquivo existente exige `read_file` prévio e `replace_existing=true`. |
+| `apply_patch` | Aplica patch textual; Update/Delete exigem `read_file` prévio. |
+| `replace_text` | Substitui texto literal após `read_file` no mesmo run. |
+| `remove_file` | Remove arquivo após leitura, com confirmação por `dry_run=False`. |
 | `run_shell` | Executa comando shell simples no workspace. |
 | `exec_command` | Executa comando com sessão persistente e polling incremental. |
 | `write_stdin` | Escreve no stdin de sessão aberta por `exec_command`. |
@@ -110,6 +110,21 @@ um resultado sem evento de início ainda gera evidência com o mesmo ID.
 | `update_shared_state` | Atualiza o shared state da sessão. |
 | `ask_user` | Faz uma pergunta ao usuário humano e aguarda resposta. |
 | `delegate` | Delega tarefa para outro agente do pool Quimera. |
+| `tool_search` | Habilita ferramentas diferidas sob demanda (ver seção abaixo). |
+
+### Deferral de schemas e `tool_search`
+
+O catálogo completo (~57 tools) custa dezenas de milhares de caracteres por requisição e degrada a seleção de ferramenta em modelos de contexto curto. Com deferral ativo, o agente recebe apenas o **conjunto essencial** com schema completo (`read_file`, `list_files`, `grep_search`, `write_file`, `replace_text`, `apply_patch`, `run_shell`, `ask_user`) mais a tool `tool_search`, cuja descrição carrega um catálogo de uma linha por ferramenta diferida. Ao chamar `tool_search` (por `names` exatos e/ou `query`), o agente recebe os schemas completos e as tools ficam habilitadas para os próximos passos.
+
+Modos via `ToolRuntimeConfig.tool_deferral`:
+
+- `off` — comportamento histórico, catálogo completo em toda requisição.
+- `api` (padrão) — ativo nos drivers que montam a própria requisição (`openai_compat` e drivers cloud, que herdam o mesmo loop de tool calling). O set de habilitadas é local ao run; o hop seguinte à chamada de `tool_search` já envia os schemas habilitados.
+- `all` — estende às conexões MCP: `tools/list` devolve a visão filtrada, o estado da conexão acumula habilitações e o servidor emite `notifications/tools/list_changed` após cada `tool_search` bem-sucedido. Exige cliente que refaça o `tools/list` (o Claude Code honra a notificação; verifique outros CLIs antes de ativar).
+
+Override por conexão MCP: o prelude autenticado aceita `quimera_tool_deferral: "on"|"off"` (env `QUIMERA_MCP_TOOL_DEFERRAL` no proxy stdio), permitindo testar o deferral num único agente CLI sem mudar o modo global.
+
+O deferral é **filtro de apresentação, não fronteira de segurança**: allowlist, denylist, policy e capabilities continuam aplicadas antes do filtro, e uma tool diferida continua executável por nome via `tools/call`. Em modos com `allowed_tools` (ex.: debate) que não incluam `tool_search`, o deferral se desativa sozinho e a visão volta ao catálogo filtrado completo.
 
 ## Política de segurança
 
@@ -121,6 +136,32 @@ O runtime usa `ToolRuntimeConfig` para definir:
 - exigência de aprovação para mutações;
 - allowlist de comandos shell comuns;
 - denylist para padrões perigosos como `rm -rf`, `sudo`, `shutdown`, `mkfs`, `dd` e permissões recursivas arriscadas.
+
+### Leitura antes de editar
+
+Por padrão, `read_before_edit="enforce"` impede que um agente altere conteúdo
+que não observou no run atual. Uma chamada bem-sucedida de `read_file`, mesmo
+com intervalo parcial ou conteúdo truncado, registra o fingerprint do arquivo
+no escopo confiável do `run_id`; `grep_search` não conta como leitura.
+
+`replace_text`, overwrite e append de `write_file` sobre arquivo existente,
+remoção efetiva e operações Update ou Delete de `apply_patch` consultam esse
+registro. Se não houver leitura, a
+tool retorna `data.reason="not_read"`. Se tamanho, timestamps ou identidade do
+arquivo mudaram desde a leitura — por exemplo, após edição de outro agente — a
+tool retorna `data.reason="stale"` e exige nova leitura. Edições próprias
+atualizam o fingerprint, permitindo uma sequência de alterações no mesmo run.
+O `apply_patch` verifica todas as leituras antes de executar a primeira
+operação, evitando aplicar parcialmente um Add antes de descobrir um Update
+não autorizado.
+
+Criação de arquivo novo (incluindo append que cria o arquivo), dry-run de
+`remove_file` e Add File de patch são isentos. Os modos alternativos `warn` e `off` permitem rollout ou
+diagnóstico; `warn` executa a operação e inclui o aviso no resultado. O ledger
+é thread-safe e limitado por LRU, mas não substitui file locking: ele reduz a
+janela de corrida ao instante entre a checagem e a escrita. Mutações feitas por
+shell (`sed`, redirecionamento etc.) continuam fora desse mecanismo e seguem a
+policy/aprovação própria do shell.
 
 ## Aprovação
 

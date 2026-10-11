@@ -12,7 +12,9 @@ from quimera.runtime.tools.files import FileTools, set_staging_root
 def config(tmp_path):
     root = tmp_path / "workspace"
     root.mkdir()
-    return ToolRuntimeConfig(workspace=Workspace(root))
+    # Estes testes isolam a semântica histórica de cada operação. O contrato
+    # enforce/warn/off e a integração entre leitura e escrita têm suíte própria.
+    return ToolRuntimeConfig(workspace=Workspace(root), read_before_edit="off")
 
 
 @pytest.fixture

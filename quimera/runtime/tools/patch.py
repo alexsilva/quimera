@@ -8,6 +8,11 @@ from pathlib import Path
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
 from ..policy import ToolPolicyError
+from ..read_ledger import (
+    evaluate_read_guard,
+    get_read_ledger,
+    ledger_scope_from_call,
+)
 from .base import ToolBase, ValidatableTool
 from .files import get_staging_root
 
@@ -119,6 +124,46 @@ class PatchTool(ToolBase):
         if not isinstance(config, ToolRuntimeConfig):
             raise TypeError(f"config deve ser ToolRuntimeConfig, não {type(config).__name__}")
         super().__init__(config)
+        self._read_ledger = get_read_ledger()
+
+    def _precheck_prior_reads(
+        self,
+        call: ToolCall,
+        ops: list[AddFileOp | DeleteFileOp | UpdateFileOp],
+    ) -> tuple[ToolResult | None, list[str]]:
+        """Valida todas as leituras antes que a primeira operação seja aplicada."""
+        if self.config.read_before_edit == "off":
+            return None, []
+
+        warnings: list[str] = []
+        for op in ops:
+            if isinstance(op, AddFileOp):
+                continue
+            guarded_paths = [(op.path, self._resolve(op.path))]
+            if isinstance(op, UpdateFileOp) and op.move_to:
+                move_target = self._resolve(op.move_to)
+                if move_target != guarded_paths[0][1] and move_target.exists():
+                    # Move to sobrescreve o destino quando ele já existe; esse
+                    # conteúdo também precisa ter sido observado no run.
+                    guarded_paths.append((op.move_to, move_target))
+            for display_path, path in guarded_paths:
+                decision = evaluate_read_guard(
+                    call, path, display_path=display_path,
+                )
+                if decision.allowed:
+                    continue
+                if self.config.read_before_edit == "warn":
+                    warning = f"[aviso read-before-edit] {decision.message}"
+                    if warning not in warnings:
+                        warnings.append(warning)
+                    continue
+                return ToolResult(
+                    ok=False,
+                    tool_name=call.name,
+                    error=decision.message,
+                    data=decision.data,
+                ), []
+        return None, warnings
 
     def _resolve(self, raw_path: str) -> Path:
         """Resolve um path relativo dentro do workspace ou staging."""
@@ -214,6 +259,9 @@ class PatchTool(ToolBase):
 
         try:
             ops = _parse_patch(raw_patch)
+            blocked, warnings = self._precheck_prior_reads(call, ops)
+            if blocked is not None:
+                return blocked
             changed: list[str] = []
             for op in ops:
                 if isinstance(op, AddFileOp):
@@ -223,6 +271,7 @@ class PatchTool(ToolBase):
                     if not dry_run:
                         path.parent.mkdir(parents=True, exist_ok=True)
                         path.write_text(op.content, encoding="utf-8")
+                        self._read_ledger.record(ledger_scope_from_call(call), path)
                     changed.append(op.path)
                 elif isinstance(op, DeleteFileOp):
                     path = self._resolve(op.path)
@@ -230,18 +279,30 @@ class PatchTool(ToolBase):
                         raise PatchApplyError(f"Arquivo não existe: {op.path}")
                     if not dry_run:
                         path.unlink()
+                        self._read_ledger.forget(ledger_scope_from_call(call), path)
                     changed.append(op.path)
                 else:
                     path = self._resolve(op.path)
                     target = self._apply_update(path, op, dry_run=dry_run)
+                    if not dry_run:
+                        if target != path:
+                            self._read_ledger.forget(ledger_scope_from_call(call), path)
+                        self._read_ledger.record(ledger_scope_from_call(call), target)
                     changed.append(self._display_path(target))
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
+        content = (
+            "[dry-run] Patch validado com sucesso."
+            if dry_run
+            else "Patch aplicado com sucesso."
+        )
+        if warnings:
+            content = "\n".join([*warnings, content])
         return ToolResult(
             ok=True,
             tool_name=call.name,
-            content="[dry-run] Patch validado com sucesso." if dry_run else "Patch aplicado com sucesso.",
+            content=content,
             data={"changed_files": changed, "dry_run": dry_run},
         )
 

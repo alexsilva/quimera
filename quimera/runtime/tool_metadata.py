@@ -91,6 +91,11 @@ TOOL_METADATA: dict[str, ToolMetadata] = {
         ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
     ),
 
+    # Descoberta de tools diferidas.
+    "tool_search": _meta(
+        ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
+    ),
+
     # Files/workspace.
     "list_files": _meta(
         ToolRisk.READ,

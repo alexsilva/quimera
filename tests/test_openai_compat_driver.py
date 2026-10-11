@@ -167,6 +167,7 @@ def test_schema_names_match_registered_tools():
         "exec_command", "write_stdin", "poll_command_session", "close_command_session", "tasks", "list_tasks", "list_jobs",
         "get_job", "memory_save", "memory_retrieve", "memory_delete", "memory_list_namespaces", "remove_file", "web_search", "web_fetch", "http_request", "delegate",
         "todo_write", "todo_list", "list_agents", "ask_user", "update_shared_state",
+        "tool_search",
         "browser_start", "browser_status", "browser_close", "browser_navigate",
         "browser_snapshot", "browser_click", "browser_type", "browser_press",
         "browser_mouse", "browser_wait", "browser_evaluate", "browser_screenshot",
@@ -1253,6 +1254,30 @@ def test_execute_tool_success():
     assert called_with.call_id == "c1"
 
 
+def test_execute_tool_includes_gateway_run_id_in_trusted_context():
+    """Tools nativas recebem a identidade estável da execução do agente."""
+    driver, _ = _make_driver()
+    mock_executor = MagicMock()
+    mock_executor.execute.return_value = ToolResult(
+        ok=True,
+        tool_name="read_file",
+        content="conteúdo",
+    )
+
+    tc = {"id": "c-run", "name": "read_file", "arguments": {"path": "app.py"}}
+    driver._execute_tool(
+        tc,
+        mock_executor,
+        agent_name="opencode",
+        run_id="agentrun:stable",
+    )
+
+    called_with: ToolCall = mock_executor.execute.call_args.args[0]
+    trusted_context = called_with.metadata["trusted_context"]
+    assert trusted_context.agent_name == "opencode"
+    assert trusted_context.run_id == "agentrun:stable"
+
+
 def test_execute_tool_forwards_progress_callback():
     """Tool calls nativas devem propagar o callback de progresso para o executor."""
     driver, _ = _make_driver()
@@ -1347,6 +1372,7 @@ def test_run_tools_system_prompt_keeps_user_role_for_real_request_only():
         "apply_patch",
         "grep_search",
         "inspect_symbols",
+        "tool_search",
         "run_shell",
         "exec_command",
         "write_stdin",
@@ -1427,6 +1453,10 @@ def test_run_tool_loop_one_hop():
     result = driver.run(_prompt("leia o arquivo x.py"), tool_executor=mock_executor)
     assert result == "Arquivo lido com sucesso."
     assert mock_executor.execute.call_count == 1
+    executed_call: ToolCall = mock_executor.execute.call_args.args[0]
+    assert executed_call.metadata["trusted_context"].run_id.startswith(
+        "native-openai:"
+    )
     assert mock_client.chat.completions.create.call_count == 2
 
 
@@ -1483,6 +1513,7 @@ def test_run_parallelizes_safe_tool_batch_and_preserves_protocol_order(tmp_path)
                 "scope": executor.get_thread_approval_scope(),
                 "approval_cancel": executor.get_thread_approval_cancel_event(),
                 "tool_cancel": call.metadata.get("_mcp_cancel_event"),
+                "run_id": call.metadata["trusted_context"].run_id,
             }
             time.sleep(0.12 if call.call_id == "call_slow" else 0.02)
             return ToolResult(
@@ -1505,6 +1536,7 @@ def test_run_parallelizes_safe_tool_batch_and_preserves_protocol_order(tmp_path)
             result = driver.run(
                 _prompt("leia os dois arquivos"),
                 tool_executor=executor,
+                run_id="agentrun:parallel-test",
                 cancel_event=approval_cancel_event,
                 on_tool_call=on_tool_call,
                 on_tool_result=lambda item: completions.append(
@@ -1524,11 +1556,13 @@ def test_run_parallelizes_safe_tool_batch_and_preserves_protocol_order(tmp_path)
             "scope": "run:parallel-test",
             "approval_cancel": approval_cancel_event,
             "tool_cancel": approval_cancel_event,
+            "run_id": "agentrun:parallel-test",
         },
         "call_fast": {
             "scope": "run:parallel-test",
             "approval_cancel": approval_cancel_event,
             "tool_cancel": approval_cancel_event,
+            "run_id": "agentrun:parallel-test",
         },
     }
     tool_messages = [

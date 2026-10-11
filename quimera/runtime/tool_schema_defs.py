@@ -21,7 +21,7 @@ TOOL_SCHEMA: dict[str, dict] = {
     },
     "write_file": {
         "name": "write_file",
-        "description": "Cria um arquivo novo ou reescreve um arquivo inteiro quando isso for realmente necessário",
+        "description": "Cria arquivo novo; para reescrever um existente, requer read_file prévio no mesmo run",
         "parameters": {
             "path": {"type": "str", "description": "Caminho absoluto do arquivo", "required": True},
             "content": {"type": "str", "description": "Conteúdo a escrever", "required": True},
@@ -32,7 +32,7 @@ TOOL_SCHEMA: dict[str, dict] = {
     },
     "apply_patch": {
         "name": "apply_patch",
-        "description": "Aplica um patch textual estruturado. Ferramenta preferida para alterações parciais em arquivos existentes",
+        "description": "Aplica patch estruturado; Update/Delete requerem read_file prévio no mesmo run",
         "parameters": {
             "patch": {"type": "str", "description": "Patch no formato *** Begin Patch ... *** End Patch",
                       "required": True}

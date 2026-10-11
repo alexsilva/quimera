@@ -272,6 +272,12 @@ Ferramentas suportadas pelo runtime (expostas via MCP e, quando disponível, pel
 - web: `web_search`, `web_fetch`
 - **cross-MCP**: `delegate` — delega tarefas a outro agente no pool (disponível apenas quando MCP está ativo); cada delegação executa em `AgentClient` isolado, com cancelamento propagado do fluxo principal
 
+As tools de edição aplicam leitura antes de mutação por padrão: `read_file`
+registra o estado do arquivo no `run_id`, e alterações posteriores são
+bloqueadas quando o arquivo não foi lido ou mudou desde a leitura. Criações,
+append e previews não destrutivos são isentos. Consulte
+[MCP e ferramentas](docs/guia/mcp-e-ferramentas.md#leitura-antes-de-editar).
+
 ## Persistência e diretórios
 
 Base global:

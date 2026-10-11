@@ -14,6 +14,7 @@ import math
 import re
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -33,6 +34,11 @@ from ..tool_hops import (
     get_max_tool_hops,
 )
 from .tool_schemas import resolve_tool_schemas
+from ..tool_deferral import (
+    TOOL_SEARCH_TOOL_NAME,
+    build_exposed_schemas,
+    is_api_tool_deferral_enabled,
+)
 from .prompt_adapter import (
     _build_openai_messages_from_prompt,
     _build_tool_system_prompt,
@@ -1030,6 +1036,7 @@ class ToolCallingDriver:
         *,
         agent_name: str | None,
         parent_agent: str | None,
+        run_id: str | None,
         progress_callback,
         cancel_event,
         begin_tool_execution,
@@ -1082,6 +1089,7 @@ class ToolCallingDriver:
                 tool_executor,
                 agent_name=agent_name,
                 parent_agent=parent_agent,
+                run_id=run_id,
                 progress_callback=progress_callback,
                 cancel_event=cancel_event,
             )
@@ -1101,6 +1109,7 @@ class ToolCallingDriver:
         hop: int,
         agent_name: str | None,
         parent_agent: str | None,
+        run_id: str | None,
         progress_callback,
         cancel_event,
         begin_tool_execution,
@@ -1149,6 +1158,7 @@ class ToolCallingDriver:
                     tool_executor,
                     agent_name=agent_name,
                     parent_agent=parent_agent,
+                    run_id=run_id,
                     progress_callback=progress_callback,
                     cancel_event=cancel_event,
                     begin_tool_execution=begin_tool_execution,
@@ -1193,6 +1203,7 @@ class ToolCallingDriver:
                         tool_executor,
                         agent_name=agent_name,
                         parent_agent=parent_agent,
+                        run_id=run_id,
                         progress_callback=progress_callback,
                         cancel_event=cancel_event,
                         begin_tool_execution=begin_tool_execution,
@@ -1235,6 +1246,7 @@ class ToolCallingDriver:
                         tool_executor,
                         agent_name=agent_name,
                         parent_agent=parent_agent,
+                        run_id=run_id,
                         progress_callback=progress_callback,
                         cancel_event=cancel_event,
                         begin_tool_execution=begin_tool_execution,
@@ -1279,6 +1291,7 @@ class ToolCallingDriver:
             tool_executor=None,
             agent_name: str | None = None,
             parent_agent: str | None = None,
+            run_id: str | None = None,
             session_id: str | None = None,
             base_dir: str | Path | None = None,
             on_tool_call=None,
@@ -1307,6 +1320,17 @@ class ToolCallingDriver:
             Texto final da resposta do modelo, ou None em caso de falha.
         """
         tools = resolve_tool_schemas(tool_executor) if tool_executor is not None else []
+        # AgentGateway fornece o ID observado pela sessão. Entradas diretas
+        # (como o REPL do driver) ainda recebem um escopo novo por invocation,
+        # evitando que uma leitura de turno anterior autorize a próxima.
+        run_id = run_id or f"native-openai:{uuid.uuid4()}"
+        # Deferral de schemas: expõe só o conjunto essencial + tool_search; as
+        # habilitadas via tool_search entram no array do hop seguinte. O set é
+        # local ao run — sem estado global, cada execução tem o próprio escopo.
+        deferral_enabled = bool(tools) and is_api_tool_deferral_enabled(
+            getattr(tool_executor, "config", None)
+        )
+        enabled_deferred_tools: set[str] = set()
         # Tratamento rápido de cancelamento cooperativo antes de iniciar
         if cancel_event is not None and cancel_event.is_set():
             return None
@@ -1328,7 +1352,12 @@ class ToolCallingDriver:
             )
             tool_system_message = None
             if tools:
-                tool_names = [t["function"]["name"] for t in tools]
+                initial_tools_view = (
+                    build_exposed_schemas(tools, enabled_deferred_tools)
+                    if deferral_enabled
+                    else tools
+                )
+                tool_names = [t["function"]["name"] for t in initial_tools_view]
                 config = getattr(tool_executor, "config", None)
                 workspace = getattr(config, "workspace", None)
                 workspace_root = workspace.cwd if workspace is not None else None
@@ -1353,7 +1382,12 @@ class ToolCallingDriver:
                         return None
 
                     final_without_tools = bool(tools) and hop == tool_request_limit
-                    request_tools = [] if final_without_tools else tools
+                    if final_without_tools:
+                        request_tools = []
+                    elif deferral_enabled:
+                        request_tools = build_exposed_schemas(tools, enabled_deferred_tools)
+                    else:
+                        request_tools = tools
 
                     guidance_text = ""
                     if final_without_tools:
@@ -1500,6 +1534,7 @@ class ToolCallingDriver:
                         hop=hop,
                         agent_name=agent_name,
                         parent_agent=parent_agent,
+                        run_id=run_id,
                         progress_callback=progress_callback,
                         cancel_event=cancel_event,
                         begin_tool_execution=begin_tool_execution,
@@ -1513,6 +1548,16 @@ class ToolCallingDriver:
                     # O histórico segue a ordem original das tool calls, como
                     # exigem Chat Completions, Responses e Messages APIs.
                     for tc, result in zip(tool_calls, tool_results):
+                        if (
+                            deferral_enabled
+                            and tc["name"] == TOOL_SEARCH_TOOL_NAME
+                            and result.ok
+                            and isinstance(result.data, dict)
+                        ):
+                            newly_enabled = result.data.get("enabled_tools") or ()
+                            enabled_deferred_tools.update(
+                                str(name) for name in newly_enabled
+                            )
                         payload = result.to_prompt_payload(self._loop_budget.max_tool_result_chars)
                         signature = (tc["name"], _canonical_call_arguments(tc))
                         previous_hop = executed_call_hops.get(signature)
@@ -1723,6 +1768,7 @@ class ToolCallingDriver:
         tool_executor,
         agent_name: str | None = None,
         parent_agent: str | None = None,
+        run_id: str | None = None,
         progress_callback=None,
         cancel_event=None,
     ) -> ToolResult:
@@ -1733,6 +1779,7 @@ class ToolCallingDriver:
         trusted_context = TrustedToolExecutionContext(
             agent_name=agent_name,
             parent_agent=parent_agent,
+            run_id=run_id,
             transport=self._transport_name,
             server_origin=self._server_origin,
         )

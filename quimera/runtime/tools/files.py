@@ -12,10 +12,17 @@ from pathlib import Path
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
 from ..policy import ToolPolicyError, is_path_inside
+from ..read_ledger import (
+    FileFingerprint,
+    evaluate_read_guard,
+    get_read_ledger,
+    ledger_scope_from_call,
+)
 from .base import ToolBase, ValidatableTool
 
 _logger = logging.getLogger("quimera.staging")
 _thread_local = threading.local()
+_WRITE_FILE_MODES = frozenset({"overwrite", "append", "create"})
 _FILE_TOOL_NAMES = [
     "list_files",
     "read_file",
@@ -99,6 +106,37 @@ class FileTools(ToolBase):
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de FileTools."""
         super().__init__(config)
+        self._read_ledger = get_read_ledger()
+
+    def _require_prior_read(
+        self,
+        call: ToolCall,
+        path: Path,
+        display_path: str,
+    ) -> tuple[ToolResult | None, str]:
+        """Aplica enforce/warn/off e devolve erro ou aviso para o sucesso."""
+        mode = self.config.read_before_edit
+        if mode == "off":
+            return None, ""
+
+        decision = evaluate_read_guard(call, path, display_path=display_path)
+        if decision.allowed:
+            return None, ""
+        if mode == "warn":
+            return None, f"[aviso read-before-edit] {decision.message}"
+        return ToolResult(
+            ok=False,
+            tool_name=call.name,
+            error=decision.message,
+            data=decision.data,
+        ), ""
+
+    @staticmethod
+    def _content_with_warning(content: str, warning: str) -> str:
+        return f"{warning}\n{content}" if warning else content
+
+    def _record_current_file(self, call: ToolCall, path: Path) -> None:
+        self._read_ledger.record(ledger_scope_from_call(call), path)
 
     def _is_allowed_path(self, path: Path) -> bool:
         """Retorna True quando o path está em staging ou em algum root permitido."""
@@ -203,7 +241,20 @@ class FileTools(ToolBase):
         else:
             path = self._resolve(raw_path)
 
-        text = path.read_text(encoding="utf-8")
+        with path.open("r", encoding="utf-8") as fh:
+            before = FileFingerprint.from_stat(os.fstat(fh.fileno()))
+            text = fh.read()
+            after = FileFingerprint.from_stat(os.fstat(fh.fileno()))
+        if before != after:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=(
+                    f"read_file: '{raw_path}' mudou durante a leitura. "
+                    "Releia o arquivo antes de editar."
+                ),
+                data={"path": str(path), "reason": "changed_during_read"},
+            )
         all_lines = text.splitlines(keepends=True)
         total_lines = len(all_lines)
         selected_start_line = 1 if total_lines else 0
@@ -231,6 +282,11 @@ class FileTools(ToolBase):
 
         truncated = len(text) > self.config.max_file_read_chars
         text = text[: self.config.max_file_read_chars]
+        self._read_ledger.record(
+            ledger_scope_from_call(call),
+            path,
+            fingerprint=after,
+        )
         return ToolResult(
             ok=True,
             tool_name=call.name,
@@ -248,8 +304,13 @@ class FileTools(ToolBase):
     def write_file(self, call: ToolCall) -> ToolResult:
         """Escreve conteúdo em um arquivo com modos overwrite, append ou create."""
         path = self._resolve_mutable_path(call.arguments["path"])
-        path.parent.mkdir(parents=True, exist_ok=True)
         mode = str(call.arguments.get("mode", "overwrite"))
+        if mode not in _WRITE_FILE_MODES:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=f"write_file: mode inválido: {mode!r} (use overwrite, append ou create)",
+            )
         content = str(call.arguments["content"])
         replace_existing = bool(call.arguments.get("replace_existing", False))
         if mode == "create" and path.exists():
@@ -263,12 +324,25 @@ class FileTools(ToolBase):
                     "para edições parciais use apply_patch"
                 ),
             )
+        warning = ""
+        if mode in ("overwrite", "append") and path.exists():
+            blocked, warning = self._require_prior_read(
+                call, path, str(call.arguments["path"]),
+            )
+            if blocked is not None:
+                return blocked
+        path.parent.mkdir(parents=True, exist_ok=True)
         if mode == "append":
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(content)
         else:
             path.write_text(content, encoding="utf-8")
-        return ToolResult(ok=True, tool_name=call.name, content=f"Arquivo salvo: {path}")
+        self._record_current_file(call, path)
+        return ToolResult(
+            ok=True,
+            tool_name=call.name,
+            content=self._content_with_warning(f"Arquivo salvo: {path}", warning),
+        )
 
     def replace_text(self, call: ToolCall) -> ToolResult:
         """Substitui texto literal em um arquivo com contagem exata de ocorrências."""
@@ -282,6 +356,10 @@ class FileTools(ToolBase):
         expected_count = self._resolve_replace_count(call.arguments.get("count"))
         if not old:
             return ToolResult(ok=False, tool_name=call.name, error="replace_text requer 'old' não vazio")
+
+        blocked, warning = self._require_prior_read(call, path, raw_path)
+        if blocked is not None:
+            return blocked
 
         text = path.read_text(encoding="utf-8")
         actual_count = text.count(old)
@@ -298,10 +376,13 @@ class FileTools(ToolBase):
 
         updated = text.replace(old, new, expected_count)
         path.write_text(updated, encoding="utf-8")
+        self._record_current_file(call, path)
         return ToolResult(
             ok=True,
             tool_name=call.name,
-            content=f"Texto substituído em: {path}",
+            content=self._content_with_warning(
+                f"Texto substituído em: {path}", warning,
+            ),
             data={"path": str(path), "occurrences": actual_count},
         )
 
@@ -329,13 +410,25 @@ class FileTools(ToolBase):
                               error=f"Caminho não é um arquivo regular: {raw_path}")
 
         if dry_run:
+            read_hint = (
+                " Leia o arquivo com read_file antes de confirmar."
+                if self.config.read_before_edit != "off"
+                else ""
+            )
             return ToolResult(ok=True, tool_name=call.name,
-                              content=f"[dry-run] Removeria: {path}")
+                              content=f"[dry-run] Removeria: {path}.{read_hint}")
+
+        blocked, warning = self._require_prior_read(call, path, raw_path)
+        if blocked is not None:
+            return blocked
 
         try:
             path.unlink()
+            self._read_ledger.forget(ledger_scope_from_call(call), path)
             return ToolResult(ok=True, tool_name=call.name,
-                              content=f"Arquivo removido: {path}")
+                              content=self._content_with_warning(
+                                  f"Arquivo removido: {path}", warning,
+                              ))
         except OSError as exc:
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
@@ -570,6 +663,10 @@ class FileToolsValidator(ValidatableTool):
         if "content" not in call.arguments:
             raise ToolPolicyError("write_file requer 'content'")
         mode = str(call.arguments.get("mode", "overwrite"))
+        if mode not in _WRITE_FILE_MODES:
+            raise ToolPolicyError(
+                f"write_file: mode inválido: {mode!r} (use overwrite, append ou create)"
+            )
         replace_existing = bool(call.arguments.get("replace_existing", False))
         if mode == "overwrite" and path.exists() and not replace_existing:
             raise ToolPolicyError(
