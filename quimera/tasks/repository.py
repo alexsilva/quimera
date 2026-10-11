@@ -582,9 +582,21 @@ class TaskRepository:
             raise
 
     def complete_task(
-        self, task_id: int, result: str | None = None, reviewed_by: str | None = None
+        self,
+        task_id: int,
+        result: str | None = None,
+        reviewed_by: str | None = None,
+        *,
+        notes: str | None = None,
+        executed_by: str | None = None,
     ) -> bool:
-        """Conclui task respeitando state machine."""
+        """Conclui task respeitando state machine.
+
+        ``notes`` permite persistir um recibo no sucesso (ex.: delegação que
+        concluiu via fallback); omitido, preserva o comportamento de limpar as
+        notes. ``executed_by`` atualiza ``assigned_to`` quando o agente que de
+        fato executou difere do atribuído originalmente.
+        """
         conn = self._conn()
         cur = conn.cursor()
         try:
@@ -597,24 +609,22 @@ class TaskRepository:
                 return False
             job_id = row[1]
             now = self._now()
+            fields: dict = {
+                "status": TaskStatus.COMPLETED,
+                "result": result,
+                "notes": notes,
+                "completed_at": now,
+                "updated_at": now,
+            }
             if reviewed_by:
-                cur.execute(
-                    "UPDATE tasks SET status = ?, result = ?, reviewed_by = ?, notes = ?, completed_at = ?, updated_at = ? WHERE id = ?",
-                    (
-                        TaskStatus.COMPLETED,
-                        result,
-                        reviewed_by,
-                        None,
-                        now,
-                        now,
-                        task_id,
-                    ),
-                )
-            else:
-                cur.execute(
-                    "UPDATE tasks SET status = ?, result = ?, notes = ?, completed_at = ?, updated_at = ? WHERE id = ?",
-                    (TaskStatus.COMPLETED, result, None, now, now, task_id),
-                )
+                fields["reviewed_by"] = reviewed_by
+            if executed_by:
+                fields["assigned_to"] = executed_by
+            set_clause = ", ".join(f"{k} = ?" for k in fields)
+            cur.execute(
+                f"UPDATE tasks SET {set_clause} WHERE id = ?",
+                (*fields.values(), task_id),
+            )
             conn.commit()
             conn.close()
             self._publish(

@@ -167,9 +167,15 @@ def update_task(task_id, status, result=None, notes=None, db_path=None):
     return _repository(db_path).update_task(task_id, status, result=result, notes=notes)
 
 
-def complete_task(task_id, result=None, reviewed_by=None, db_path=None):
+def complete_task(task_id, result=None, reviewed_by=None, db_path=None, *, notes=None, executed_by=None):
     """Conclui uma task validando a transição para COMPLETED."""
-    return _repository(db_path).complete_task(task_id, result=result, reviewed_by=reviewed_by)
+    return _repository(db_path).complete_task(
+        task_id,
+        result=result,
+        reviewed_by=reviewed_by,
+        notes=notes,
+        executed_by=executed_by,
+    )
 
 
 def fail_task(task_id, reason=None, db_path=None):

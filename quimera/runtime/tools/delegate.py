@@ -521,10 +521,17 @@ class DelegateTools(ToolBase):
 
         O recibo estruturado de falha (quando existir em result.data) é
         persistido nas notes da task, para que o delegador possa diagnosticar
-        a causa via list_tasks mesmo em delegações assíncronas.
+        a causa via list_tasks mesmo em delegações assíncronas. No sucesso via
+        fallback, o recibo de fallback vai para as notes e assigned_to passa a
+        refletir o agente que de fato executou.
         """
         receipt = (
             result.data.get("failure_receipt")
+            if isinstance(result.data, dict)
+            else None
+        )
+        fallback_receipt = (
+            result.data.get("fallback_receipt")
             if isinstance(result.data, dict)
             else None
         )
@@ -541,6 +548,8 @@ class DelegateTools(ToolBase):
                 if cancel_entry.cancel_reason:
                     reason += f": {cancel_entry.cancel_reason}"
                 cancel_receipt = dict(receipt) if isinstance(receipt, dict) else {}
+                if isinstance(fallback_receipt, dict):
+                    cancel_receipt["fallback_receipt"] = fallback_receipt
                 cancel_receipt["cancelled_by"] = cancelled_by
                 if cancel_entry.cancel_reason:
                     cancel_receipt["cancel_reason"] = cancel_entry.cancel_reason
@@ -563,19 +572,33 @@ class DelegateTools(ToolBase):
                 )
                 update_job_status(job_id, "cancelled", db_path=db_path)
             elif result.ok:
+                success_notes = (
+                    json.dumps(fallback_receipt, ensure_ascii=False)
+                    if isinstance(fallback_receipt, dict)
+                    else None
+                )
+                executed_by = DelegateTools._fallback_executor(fallback_receipt)
                 self._persist_terminal_status(
                     task_id,
                     "completed",
                     db_path,
                     lambda: complete_task(
-                        task_id, result=result.content, db_path=db_path
+                        task_id,
+                        result=result.content,
+                        notes=success_notes,
+                        executed_by=executed_by,
+                        db_path=db_path,
                     ),
                 )
                 update_job_status(job_id, "completed", db_path=db_path)
             else:
+                notes_payload = dict(receipt) if isinstance(receipt, dict) else None
+                if isinstance(fallback_receipt, dict):
+                    notes_payload = notes_payload or {}
+                    notes_payload["fallback_receipt"] = fallback_receipt
                 notes = (
-                    json.dumps(receipt, ensure_ascii=False)
-                    if isinstance(receipt, dict)
+                    json.dumps(notes_payload, ensure_ascii=False)
+                    if isinstance(notes_payload, dict)
                     else result.error
                 )
                 self._persist_terminal_status(
@@ -970,6 +993,42 @@ class DelegateTools(ToolBase):
         return receipt
 
     @staticmethod
+    def _build_fallback_receipt(
+        successes: list[tuple[int, dict, str | None, list[dict]]],
+    ) -> dict | None:
+        """Monta o recibo de fallback: steps que sucederam após tentativas falhas.
+
+        Sem snapshot de host — o estado da máquina no momento do sucesso não
+        representa o momento das falhas e induziria diagnóstico errado.
+        """
+        steps_out: list[dict] = []
+        for step_index, step, selected_agent, attempts in successes:
+            if not attempts:
+                continue
+            steps_out.append(
+                {
+                    "step": step_index,
+                    "target_agent": step.get("target_agent"),
+                    "selected_agent": selected_agent,
+                    "attempts": attempts,
+                }
+            )
+        if not steps_out:
+            return None
+        return {"steps": steps_out}
+
+    @staticmethod
+    def _fallback_executor(receipt: dict | None) -> str | None:
+        """Agente que de fato executou o step 0, quando veio de fallback."""
+        if not isinstance(receipt, dict):
+            return None
+        for entry in receipt.get("steps", []):
+            if entry.get("step") == 0:
+                selected = entry.get("selected_agent")
+                return str(selected) if selected else None
+        return None
+
+    @staticmethod
     def _execute_steps_inner(
         steps: list[dict],
         delegate_fn: _DelegateFnProto,
@@ -982,15 +1041,26 @@ class DelegateTools(ToolBase):
     ) -> ToolResult:
         """Loop sequencial de execução dos steps — reusado síncrono e assíncrono."""
         tool_name = "delegate"
+        step_outputs: list[str] = []
+        successes: list[tuple[int, dict, str | None, list[dict]]] = []
+
+        def _with_fallback_receipt(result: ToolResult) -> ToolResult:
+            # Todo retorno terminal carrega os sucessos-via-fallback já obtidos,
+            # senão a evidência some em wait=false (o resultado não volta ao
+            # chamador, só a task).
+            receipt = DelegateTools._build_fallback_receipt(successes)
+            if receipt is not None:
+                result.data["fallback_receipt"] = receipt
+            return result
+
         try:
-            step_outputs: list[str] = []
             for step_index, step in enumerate(steps):
                 if callable(cancel_checker) and cancel_checker():
-                    return ToolResult(
+                    return _with_fallback_receipt(ToolResult(
                         ok=False,
                         tool_name=tool_name,
                         error="Execução cancelada pelo usuário",
-                    )
+                    ))
                 active_agents = resolve_active_agents_fn()
                 if active_agents:
                     invalid_targets: list[str] = []
@@ -1002,14 +1072,14 @@ class DelegateTools(ToolBase):
                     if invalid_targets:
                         invalid_label = ", ".join(dict.fromkeys(invalid_targets))
                         active_label = ", ".join(sorted(active_agents))
-                        return ToolResult(
+                        return _with_fallback_receipt(ToolResult(
                             ok=False,
                             tool_name=tool_name,
                             error=(
                                 f"Agents not active in current pool: {invalid_label}. "
                                 f"Active agents: {active_label}"
                             ),
-                        )
+                        ))
 
                 cancel_handle = (
                     _DelegateStepCancelHandle()
@@ -1039,21 +1109,24 @@ class DelegateTools(ToolBase):
                     )
                     if receipt is not None:
                         result.data["failure_receipt"] = receipt
-                    return result
+                    return _with_fallback_receipt(result)
 
+                successes.append((step_index, step, selected_agent, attempts))
                 if len(steps) == 1:
                     step_outputs.append(step_result)
                 else:
                     step_outputs.append(f"[{selected_agent}] {step_result}")
 
             content = "\n\n".join(step_outputs)
-            return ToolResult(ok=True, tool_name=tool_name, content=content)
+            return _with_fallback_receipt(
+                ToolResult(ok=True, tool_name=tool_name, content=content)
+            )
         except Exception as exc:
-            return ToolResult(
+            return _with_fallback_receipt(ToolResult(
                 ok=False,
                 tool_name=tool_name,
                 error=str(exc),
-            )
+            ))
 
     def _execute_steps_parallel(
         self,
@@ -1211,19 +1284,34 @@ class DelegateTools(ToolBase):
             )
             if receipt is not None:
                 failed_result.data["failure_receipt"] = receipt
+            fallback_receipt = DelegateTools._build_fallback_receipt(
+                [
+                    (i, steps[i], selected, attempts)
+                    for i, (selected, step_result, err, attempts) in enumerate(result_snapshot)
+                    if err is None and step_result is not None
+                ]
+            )
+            if fallback_receipt is not None:
+                failed_result.data["fallback_receipt"] = fallback_receipt
             return failed_result
 
         step_outputs: list[str] = []
-        for i, (selected_agent, step_result, _, _) in enumerate(result_snapshot):
+        successes: list[tuple[int, dict, str | None, list[dict]]] = []
+        for i, (selected_agent, step_result, _, attempts) in enumerate(result_snapshot):
             if step_result is None:
                 continue
+            successes.append((i, steps[i], selected_agent, attempts))
             if n == 1:
                 step_outputs.append(step_result)
             else:
                 label = selected_agent or steps[i]["target_agent"]
                 step_outputs.append(f"[{label}] {step_result}")
 
-        return ToolResult(ok=True, tool_name=tool_name, content="\n\n".join(step_outputs))
+        result = ToolResult(ok=True, tool_name=tool_name, content="\n\n".join(step_outputs))
+        fallback_receipt = DelegateTools._build_fallback_receipt(successes)
+        if fallback_receipt is not None:
+            result.data["fallback_receipt"] = fallback_receipt
+        return result
 
     def _execute_tracked_sync(
         self,

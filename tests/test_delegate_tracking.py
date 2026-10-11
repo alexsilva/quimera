@@ -443,6 +443,317 @@ class TestFailureReceipt:
         assert notes["steps"][0]["attempts"][0]["error_kind"] == "wall_timeout"
 
 
+class TestFallbackReceipt:
+    """Sucesso via fallback fica visível: recibo, notes e assigned_to.
+
+    Regressão do teste ao vivo de 2026-10-11: o alvo primário morto 3× por
+    SIGKILL sumia do registro quando o fallback completava — a task ficava
+    completed com assigned_to do agente errado e notes vazias.
+    """
+
+    @staticmethod
+    def _fn_falha_codex_responde_outros():
+        from quimera.runtime.errors import DelegationDispatchError
+
+        def _fn(agent, **_opts):
+            if agent == "codex":
+                raise DelegationDispatchError(
+                    "morreu", receipt={"error_kind": "process_died", "exit_code": -9},
+                )
+            return "feito pelo fallback"
+
+        return _fn
+
+    def test_sucesso_apos_fallback_anexa_fallback_receipt(self, tools_com_db):
+        tools, _ = tools_com_db
+        tools.set_delegate_fn(self._fn_falha_codex_responde_outros())
+        call = _make_call(args={
+            "target_agent": "codex",
+            "request": "faz algo",
+            "fallback_agents": ["gemini"],
+        })
+
+        result = tools.delegate(call)
+
+        assert result.ok is True
+        receipt = result.data["fallback_receipt"]
+        step = receipt["steps"][0]
+        assert step["target_agent"] == "codex"
+        assert step["selected_agent"] == "gemini"
+        assert step["attempts"][0]["error_kind"] == "process_died"
+        assert step["attempts"][0]["exit_code"] == -9
+        # Sem snapshot de host: o estado no sucesso não é o das falhas.
+        assert "host" not in receipt
+
+    def test_sucesso_apos_fallback_persiste_notes_e_assigned_to(self, tools_com_db):
+        tools, db_path = tools_com_db
+        tools.set_delegate_fn(self._fn_falha_codex_responde_outros())
+        call = _make_call(args={
+            "target_agent": "codex",
+            "request": "faz algo",
+            "fallback_agents": ["gemini"],
+        })
+
+        result = tools.delegate(call)
+
+        rows = task_api.list_tasks({"id": result.data["task_id"]}, db_path=db_path)
+        assert rows and rows[0]["status"] == "completed"
+        assert rows[0]["assigned_to"] == "gemini"
+        notes = json.loads(rows[0]["notes"])
+        assert notes["steps"][0]["selected_agent"] == "gemini"
+
+    def test_sucesso_direto_nao_anexa_recibo_nem_notes(self, tools_com_db):
+        tools, db_path = tools_com_db
+        tools.set_delegate_fn(MagicMock(return_value="direto"))
+
+        result = tools.delegate(_make_call())
+
+        assert result.ok is True
+        assert "fallback_receipt" not in result.data
+        rows = task_api.list_tasks({"id": result.data["task_id"]}, db_path=db_path)
+        assert rows[0]["assigned_to"] == "codex"
+        assert rows[0]["notes"] is None
+
+    def test_async_sucesso_apos_fallback_persiste_na_task(self, tools_com_db):
+        tools, db_path = tools_com_db
+        tools.set_delegate_fn(self._fn_falha_codex_responde_outros())
+        call = _make_call(args={
+            "target_agent": "codex",
+            "request": "faz algo",
+            "fallback_agents": ["gemini"],
+            "wait": False,
+        })
+
+        result = tools.delegate(call)
+
+        task_id = json.loads(result.content)["task_id"]
+        row = _wait_task_status(db_path, task_id, "completed")
+        assert row["assigned_to"] == "gemini"
+        notes = json.loads(row["notes"])
+        assert notes["steps"][0]["attempts"][0]["error_kind"] == "process_died"
+
+    def test_paralelo_sucesso_apos_fallback_anexa_recibo(self, tools_com_db):
+        tools, db_path = tools_com_db
+        tools.set_delegate_fn(self._fn_falha_codex_responde_outros())
+        call = _make_call(args={
+            "target_agent": "codex",
+            "request": "t1",
+            "fallback_agents": ["gemini"],
+            "steps": [{"target_agent": "claude", "request": "t2"}],
+            "parallel": True,
+        })
+
+        result = tools.delegate(call)
+
+        assert result.ok is True
+        steps = result.data["fallback_receipt"]["steps"]
+        assert len(steps) == 1
+        assert steps[0]["step"] == 0
+        assert steps[0]["selected_agent"] == "gemini"
+        rows = task_api.list_tasks({"id": result.data["task_id"]}, db_path=db_path)
+        assert rows[0]["assigned_to"] == "gemini"
+
+    def test_step_posterior_falha_mantem_recibos_de_falha_e_fallback(self, tools_com_db):
+        tools, _ = tools_com_db
+        from quimera.runtime.errors import DelegationDispatchError
+
+        def _fn(agent, **_opts):
+            if agent == "codex":
+                raise DelegationDispatchError(
+                    "morreu", receipt={"error_kind": "process_died"},
+                )
+            if agent == "claude":
+                raise DelegationDispatchError(
+                    "limite", receipt={"error_kind": "rate_limited"},
+                )
+            return "ok"
+
+        tools.set_delegate_fn(_fn)
+        call = _make_call(args={
+            "target_agent": "codex",
+            "request": "t1",
+            "fallback_agents": ["gemini"],
+            "steps": [{"target_agent": "claude", "request": "t2"}],
+        })
+
+        result = tools.delegate(call)
+
+        assert result.ok is False
+        failure = result.data["failure_receipt"]["steps"][0]
+        assert failure["step"] == 1
+        assert failure["attempts"][0]["error_kind"] == "rate_limited"
+        fallback = result.data["fallback_receipt"]["steps"][0]
+        assert fallback["step"] == 0
+        assert fallback["selected_agent"] == "gemini"
+
+    def test_complete_task_persiste_notes_e_executed_by(self, tools_com_db):
+        _, db_path = tools_com_db
+        job_id = task_api.add_job("job de teste", db_path=db_path)
+        task_id = task_api.create_task(
+            job_id, "tarefa", assigned_to="codex", status="in_progress",
+            db_path=db_path,
+        )
+
+        ok = task_api.complete_task(
+            task_id,
+            result="feito",
+            notes='{"origem": "fallback"}',
+            executed_by="gemini",
+            db_path=db_path,
+        )
+
+        assert ok is True
+        row = task_api.list_tasks({"id": task_id}, db_path=db_path)[0]
+        assert row["status"] == "completed"
+        assert row["assigned_to"] == "gemini"
+        assert json.loads(row["notes"]) == {"origem": "fallback"}
+
+    def test_complete_task_sem_notes_preserva_limpeza(self, tools_com_db):
+        _, db_path = tools_com_db
+        job_id = task_api.add_job("job de teste", db_path=db_path)
+        task_id = task_api.create_task(
+            job_id, "tarefa", assigned_to="codex", status="in_progress",
+            notes="rascunho", db_path=db_path,
+        )
+
+        assert task_api.complete_task(task_id, result="feito", db_path=db_path)
+        row = task_api.list_tasks({"id": task_id}, db_path=db_path)[0]
+        assert row["assigned_to"] == "codex"
+        assert row["notes"] is None
+
+    def test_complete_task_posicional_antigo_mantem_db_path(self, tools_com_db):
+        _, db_path = tools_com_db
+        job_id = task_api.add_job("job de teste", db_path=db_path)
+        task_id = task_api.create_task(
+            job_id, "tarefa", assigned_to="codex", status="in_progress",
+            db_path=db_path,
+        )
+
+        # Contrato pré-existente: db_path como quarto argumento posicional.
+        assert task_api.complete_task(task_id, "feito", None, db_path) is True
+        row = task_api.list_tasks({"id": task_id}, db_path=db_path)[0]
+        assert row["status"] == "completed"
+
+    def test_async_falha_parcial_persiste_ambos_recibos_nas_notes(self, tools_com_db):
+        tools, db_path = tools_com_db
+        from quimera.runtime.errors import DelegationDispatchError
+
+        def _fn(agent, **_opts):
+            if agent == "codex":
+                raise DelegationDispatchError(
+                    "morreu", receipt={"error_kind": "process_died"},
+                )
+            if agent == "claude":
+                raise DelegationDispatchError(
+                    "limite", receipt={"error_kind": "rate_limited"},
+                )
+            return "ok"
+
+        tools.set_delegate_fn(_fn)
+        call = _make_call(args={
+            "target_agent": "codex",
+            "request": "t1",
+            "fallback_agents": ["gemini"],
+            "steps": [{"target_agent": "claude", "request": "t2"}],
+            "wait": False,
+        })
+
+        result = tools.delegate(call)
+
+        task_id = json.loads(result.content)["task_id"]
+        row = _wait_task_status(db_path, task_id, "failed")
+        notes = json.loads(row["notes"])
+        assert notes["steps"][0]["attempts"][0]["error_kind"] == "rate_limited"
+        assert notes["fallback_receipt"]["steps"][0]["selected_agent"] == "gemini"
+
+    def test_cancel_entre_steps_preserva_recibo_de_fallback(self):
+        from quimera.runtime.errors import DelegationDispatchError
+
+        done_first = threading.Event()
+
+        def _fn(agent, **_opts):
+            if agent == "codex":
+                raise DelegationDispatchError(
+                    "morreu", receipt={"error_kind": "process_died"},
+                )
+            done_first.set()
+            return "ok do fallback"
+
+        steps = [
+            {"target_agent": "codex", "request": "t1", "context": "",
+             "fallback_agents": ["gemini"], "role": "", "access_list": []},
+            {"target_agent": "claude", "request": "t2", "context": "",
+             "fallback_agents": [], "role": "", "access_list": []},
+        ]
+
+        result = DelegateTools._execute_steps_inner(
+            steps, _fn, None, lambda: set(), lambda a: a or "",
+            cancel_checker=done_first.is_set,
+        )
+
+        assert result.ok is False
+        assert "cancelada" in (result.error or "")
+        assert result.data["fallback_receipt"]["steps"][0]["selected_agent"] == "gemini"
+
+    def test_cancelamento_apos_fallback_persiste_recibo_nas_notes(self, tools_com_db):
+        tools, db_path = tools_com_db
+        from quimera.runtime.errors import DelegationDispatchError
+        from quimera.runtime.tools.tasks import TaskTools
+
+        started = threading.Event()
+        release = threading.Event()
+        cancelled = threading.Event()
+
+        def _fn(agent, **opts):
+            if agent == "codex":
+                raise DelegationDispatchError(
+                    "morreu", receipt={"error_kind": "process_died"},
+                )
+            if agent == "gemini":
+                return "ok do fallback"
+            handle = opts.get("cancel_handle")
+            if handle is not None:
+                handle.register(cancelled.set)
+            started.set()
+            release.wait(timeout=10)
+            return None if cancelled.is_set() else "resposta tardia"
+
+        tools.set_delegate_fn(_fn)
+        metadata = {
+            "trusted_context": TrustedToolExecutionContext(
+                transport="http_mcp", run_id="r-fb", agent_name="claude",
+            ),
+        }
+        call = ToolCall(name="delegate", arguments={
+            "target_agent": "codex",
+            "request": "t1",
+            "fallback_agents": ["gemini"],
+            "steps": [{"target_agent": "sonnet", "request": "t2"}],
+            "wait": False,
+        }, metadata=metadata)
+        result = tools.delegate(call)
+        task_id = json.loads(result.content)["task_id"]
+        assert started.wait(timeout=5)
+
+        task_tools = TaskTools(ToolRuntimeConfig(workspace=tools.workspace))
+        cancel_call = ToolCall(
+            name="tasks",
+            arguments={"action": "cancel", "task_id": task_id},
+            metadata=metadata,
+        )
+        cancel_result = task_tools.tasks(cancel_call)
+        assert cancel_result.ok is True
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not cancelled.is_set():
+            time.sleep(0.02)
+        release.set()
+
+        row = _wait_task_status(db_path, task_id, "cancelled")
+        notes = json.loads(row["notes"])
+        assert notes["cancelled_by"] == "claude"
+        assert notes["fallback_receipt"]["steps"][0]["selected_agent"] == "gemini"
+
+
 class TestFinalizeContraEscritoresConcorrentes:
     """O desfecho da delegação vence escritores concorrentes da task.
 

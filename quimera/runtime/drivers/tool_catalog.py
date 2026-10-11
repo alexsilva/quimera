@@ -774,11 +774,15 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                                         'diagnóstico estruturado por tentativa (error_kind, '
                                         'exit_code, signal, stderr_tail — ou stdout_tail quando o '
                                         'stderr veio vazio —, duration_s) e a pressão '
-                                        'de memória do host no momento da falha.',
+                                        'de memória do host no momento da falha. Quando algum step '
+                                        'sucede após tentativas falhas, fallback_receipt traz essas '
+                                        'tentativas e o selected_agent que de fato respondeu (também '
+                                        'persistido nas notes e no assigned_to da task).',
                          'properties': {'job_id': {'type': 'integer'},
                                         'task_id': {'type': 'integer'},
                                         'task_status': {'type': 'string'},
-                                        'failure_receipt': {'type': 'object'}}},
+                                        'failure_receipt': {'type': 'object'},
+                                        'fallback_receipt': {'type': 'object'}}},
                 'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
  'required': ['ok', 'content']},
     ),
