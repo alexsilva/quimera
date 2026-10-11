@@ -443,6 +443,89 @@ class TestFailureReceipt:
         assert notes["steps"][0]["attempts"][0]["error_kind"] == "wall_timeout"
 
 
+class TestFinalizeContraEscritoresConcorrentes:
+    """O desfecho da delegação vence escritores concorrentes da task.
+
+    Regressão do teste ao vivo de 2026-10-11: o AgentFailureTracker removia o
+    agente do pool no meio da delegação e release_agent_tasks resetava a task
+    de rastreamento para pending; o finalize então perdia o recibo porque
+    pending→failed não é transição válida.
+    """
+
+    @staticmethod
+    def _failing_fn_com_efeito(receipt: dict, side_effect):
+        from quimera.runtime.errors import DelegationDispatchError
+
+        def _fn(agent, **opts):
+            side_effect()
+            raise DelegationDispatchError(
+                f"Agent '{agent}' failed ({receipt.get('error_kind')})",
+                receipt=receipt,
+            )
+        return _fn
+
+    def test_release_durante_delegacao_nao_orfana_task(self, tools_com_db):
+        tools, db_path = tools_com_db
+        receipt = {"error_kind": "process_died", "exit_code": -9, "signal": "SIGKILL"}
+        tools.set_delegate_fn(self._failing_fn_com_efeito(
+            receipt,
+            lambda: task_api.release_agent_tasks("codex", db_path=db_path),
+        ))
+
+        result = tools.delegate(_make_call())
+
+        rows = task_api.list_tasks({"id": result.data["task_id"]}, db_path=db_path)
+        assert rows and rows[0]["status"] == "failed"
+        assert rows[0]["assigned_to"] == "codex"
+        notes = json.loads(rows[0]["notes"])
+        assert notes["steps"][0]["attempts"][0]["error_kind"] == "process_died"
+        job = task_api.get_job(result.data["job_id"], db_path=db_path)
+        assert job["status"] == "failed"
+
+    @staticmethod
+    def _reset_tracking_task(db_path: str):
+        def _reset():
+            rows = task_api.list_tasks({"status": "in_progress"}, db_path=db_path)
+            assert rows, "task de rastreamento deveria estar in_progress"
+            task_api.transition_task(rows[0]["id"], "pending", db_path=db_path)
+        return _reset
+
+    def test_finalize_recupera_task_resetada_por_escritor_concorrente(self, tools_com_db):
+        tools, db_path = tools_com_db
+        receipt = {"error_kind": "process_died", "exit_code": -9}
+        tools.set_delegate_fn(self._failing_fn_com_efeito(
+            receipt, self._reset_tracking_task(db_path),
+        ))
+
+        result = tools.delegate(_make_call())
+
+        rows = task_api.list_tasks({"id": result.data["task_id"]}, db_path=db_path)
+        assert rows and rows[0]["status"] == "failed"
+        notes = json.loads(rows[0]["notes"])
+        assert notes["steps"][0]["attempts"][0]["error_kind"] == "process_died"
+        job = task_api.get_job(result.data["job_id"], db_path=db_path)
+        assert job["status"] == "failed"
+
+    def test_finalize_recupera_sucesso_resetado_por_escritor_concorrente(self, tools_com_db):
+        tools, db_path = tools_com_db
+        reset = self._reset_tracking_task(db_path)
+
+        def _fn(agent, **opts):
+            reset()
+            return "resposta do delegado"
+
+        tools.set_delegate_fn(_fn)
+
+        result = tools.delegate(_make_call())
+
+        assert result.ok is True
+        rows = task_api.list_tasks({"id": result.data["task_id"]}, db_path=db_path)
+        assert rows and rows[0]["status"] == "completed"
+        assert rows[0]["result"] == "resposta do delegado"
+        job = task_api.get_job(result.data["job_id"], db_path=db_path)
+        assert job["status"] == "completed"
+
+
 class TestCancelamentoPeloDelegador:
     """Delegações rastreadas podem ser canceladas por quem delegou."""
 

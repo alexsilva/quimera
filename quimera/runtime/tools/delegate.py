@@ -550,15 +550,27 @@ class DelegateTools(ToolBase):
                 result.ok = False
                 result.error = reason
                 result.data["failure_receipt"] = cancel_receipt
-                cancel_task(
+                self._persist_terminal_status(
                     task_id,
-                    reason=reason,
-                    notes=json.dumps(cancel_receipt, ensure_ascii=False),
-                    db_path=db_path,
+                    "cancelled",
+                    db_path,
+                    lambda: cancel_task(
+                        task_id,
+                        reason=reason,
+                        notes=json.dumps(cancel_receipt, ensure_ascii=False),
+                        db_path=db_path,
+                    ),
                 )
                 update_job_status(job_id, "cancelled", db_path=db_path)
             elif result.ok:
-                complete_task(task_id, result=result.content, db_path=db_path)
+                self._persist_terminal_status(
+                    task_id,
+                    "completed",
+                    db_path,
+                    lambda: complete_task(
+                        task_id, result=result.content, db_path=db_path
+                    ),
+                )
                 update_job_status(job_id, "completed", db_path=db_path)
             else:
                 notes = (
@@ -566,17 +578,54 @@ class DelegateTools(ToolBase):
                     if isinstance(receipt, dict)
                     else result.error
                 )
-                transition_task(
+                self._persist_terminal_status(
                     task_id,
                     "failed",
-                    result=result.error,
-                    notes=notes,
-                    db_path=db_path,
+                    db_path,
+                    lambda: transition_task(
+                        task_id,
+                        "failed",
+                        result=result.error,
+                        notes=notes,
+                        db_path=db_path,
+                    ),
                 )
                 update_job_status(job_id, "failed", db_path=db_path)
         except Exception as exc:
             logger.warning(
                 "delegate tracking: failed to update task/job %s: %s", task_id, exc
+            )
+
+    def _persist_terminal_status(
+        self,
+        task_id: int,
+        status: str,
+        db_path: str,
+        write: Callable[[], bool],
+    ) -> None:
+        """Grava o status terminal mesmo se outro escritor resetou a task.
+
+        Um escritor concorrente (ex.: release_agent_tasks ao remover um agente
+        do pool) pode devolver a task a pending entre a falha e o finalize;
+        pending→terminal não é transição válida, então re-entra em in_progress
+        e regrava — o desfecho da delegação carrega a causa real e deve vencer.
+        """
+        if write():
+            return
+        transition_task(task_id, "in_progress", db_path=db_path)
+        if write():
+            logger.warning(
+                "delegate tracking: task %s foi resetada por escritor concorrente; "
+                "status terminal %s regravado",
+                task_id,
+                status,
+            )
+        else:
+            logger.warning(
+                "delegate tracking: task %s recusou o status terminal %s; "
+                "recibo da delegação pode ter sido perdido",
+                task_id,
+                status,
             )
 
     # ── async path (wait=false e HTTP MCP sem SSE) ───────────────────────

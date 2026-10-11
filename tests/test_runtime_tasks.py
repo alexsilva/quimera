@@ -117,6 +117,34 @@ def test_release_agent_tasks_resets_only_pending_and_in_progress(db_path):
     assert by_id[completed_id]["assigned_to"] == "agent-x"
 
 
+def test_release_agent_tasks_preserves_delegate_tracking_tasks(db_path):
+    """Tasks de delegação (origin='delegate') não são resetadas pelo release.
+
+    O desfecho delas é gravado pelo finalize do delegate com o recibo da
+    falha; o release ao remover um agente do pool não pode orfaná-las.
+    """
+    job_id = tasks.add_job("job", db_path=db_path)
+    routed_id = tasks.create_task(
+        job_id, "routed", assigned_to="agent-x", status="in_progress", db_path=db_path
+    )
+    delegate_id = tasks.create_task(
+        job_id,
+        "delegacao",
+        assigned_to="agent-x",
+        status="in_progress",
+        origin="delegate",
+        db_path=db_path,
+    )
+
+    tasks.release_agent_tasks("agent-x", db_path=db_path)
+
+    by_id = {row["id"]: row for row in tasks.list_tasks({"job_id": job_id}, db_path=db_path)}
+    assert by_id[routed_id]["status"] == "pending"
+    assert by_id[routed_id]["assigned_to"] is None
+    assert by_id[delegate_id]["status"] == "in_progress"
+    assert by_id[delegate_id]["assigned_to"] == "agent-x"
+
+
 def test_requeue_task_returns_false_for_missing_task(db_path):
     """Verifica que requeue_task retorna False para task inexistente."""
     assert tasks.requeue_task(404, "codex", reason="falha", db_path=db_path) is False
@@ -328,6 +356,21 @@ def test_claim_task_respects_existing_assignment(db_path):
 
     assert tasks.claim_task("opencode-big-pickle", job_id=job_id, db_path=db_path) is None
     assert tasks.claim_task("opencode-north-mini-code-free", job_id=job_id, db_path=db_path) == task_id
+
+
+def test_claim_task_ignora_tasks_de_delegacao(db_path):
+    """Tasks origin='delegate' em pending nunca são reivindicáveis.
+
+    O ciclo de vida delas pertence ao finalize do delegate; um claim entre o
+    reset por escritor concorrente e a regravação do status terminal faria
+    outro agente executar uma delegação que não é dele.
+    """
+    job_id = tasks.add_job("job", db_path=db_path)
+    tasks.create_task(job_id, "delegacao", status="pending", origin="delegate", db_path=db_path)
+    routed_id = tasks.create_task(job_id, "roteavel", status="pending", db_path=db_path)
+
+    assert tasks.claim_task("codex", job_id=job_id, db_path=db_path) == routed_id
+    assert tasks.claim_task("codex", job_id=job_id, db_path=db_path) is None
 
 
 def test_complete_task_with_reviewed_by(db_path):

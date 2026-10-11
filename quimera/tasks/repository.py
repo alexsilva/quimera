@@ -378,14 +378,20 @@ class TaskRepository:
     # ── Tasks — escrita ───────────────────────────────────────────────
 
     def release_agent_tasks(self, agent_name: str) -> None:
-        """Libera tasks pendentes/em progresso de um agente para reatribuição."""
+        """Libera tasks pendentes/em progresso de um agente para reatribuição.
+
+        Tasks de rastreamento de delegação (origin='delegate') não são
+        roteáveis: o desfecho delas é gravado pelo finalize do delegate com a
+        causa real da falha; resetá-las aqui órfana o recibo e perde o status
+        terminal.
+        """
         conn = self._conn()
         cur = conn.cursor()
         try:
             cur.execute("BEGIN IMMEDIATE")
             cur.execute(
                 "UPDATE tasks SET assigned_to = NULL, status = ?, updated_at = ? "
-                "WHERE assigned_to = ? AND status IN (?, ?)",
+                "WHERE assigned_to = ? AND status IN (?, ?) AND origin != 'delegate'",
                 (
                     TaskStatus.PENDING,
                     self._now(),
@@ -801,7 +807,11 @@ class TaskRepository:
             raise
 
     def claim_task(self, agent_name: str, job_id: int | None = None) -> int | None:
-        """Reserva atomicamente uma task pending/approved para o agente."""
+        """Reserva atomicamente uma task pending/approved para o agente.
+
+        Tasks de rastreamento de delegação (origin='delegate') nunca são
+        reivindicáveis: o ciclo de vida delas pertence ao finalize do delegate.
+        """
         conn = self._conn()
         cur = conn.cursor()
         try:
@@ -814,6 +824,7 @@ class TaskRepository:
                 f"""
                 SELECT id, job_id FROM tasks AS candidate
                 WHERE candidate.status IN (?, ?)
+                  AND candidate.origin != 'delegate'
                   AND (candidate.assigned_to = ? OR candidate.assigned_to IS NULL)
                   {job_filter}
                   AND COALESCE(candidate.failed_agents, '') NOT LIKE ?
