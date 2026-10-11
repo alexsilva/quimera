@@ -1017,8 +1017,8 @@ def test_textual_feed_preserves_tool_history_and_marks_hidden_entries():
         model.apply(TextualUiEvent("tool_preview", f"$ tool-{index}", agent="codex"))
 
     payload = model.items[0].event.payload
-    assert payload["tools"][0] == "⋮ +2 ferramentas anteriores"
-    assert payload["tools"][1:] == [f"$ tool-{index}" for index in range(2, 14)]
+    assert payload["tools"][0] == "⋮ +9 ferramentas anteriores"
+    assert payload["tools"][1:] == [f"$ tool-{index}" for index in range(9, 14)]
     assert model._transient_tools_by_agent["codex"] == [
         f"$ tool-{index}" for index in range(14)
     ]

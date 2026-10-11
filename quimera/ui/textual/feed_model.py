@@ -102,6 +102,9 @@ class TextualFeedModel:
 
     _TRANSIENT_KINDS = {"stream_start", "stream_chunk", "stream_abort", "agent_update", "agent_lifecycle", "pending_input"}
     _MCP_HTTP_TOOL_MARKER = "◇"
+    # Máximo de linhas de tools visíveis no bloco transitório; o excedente
+    # colapsa na linha "⋮ +N ferramentas anteriores".
+    _MAX_VISIBLE_TOOL_LINES = 5
 
     _IGNORED_KINDS = {
         "prompt",
@@ -938,7 +941,7 @@ class TextualFeedModel:
                         "tool_duration_ms": stats["duration_ms"],
                     }
                 )
-        visible_tools = tool_lines[-12:]
+        visible_tools = tool_lines[-self._MAX_VISIBLE_TOOL_LINES:]
         hidden_count = len(tool_lines) - len(visible_tools)
         if hidden_count > 0:
             visible_tools = [
