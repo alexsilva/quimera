@@ -102,6 +102,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         from collections.abc import Iterable
         from textual.app import App, ComposeResult, SystemCommand
         from textual.containers import Horizontal, Vertical
+        from textual.css.query import NoMatches
         from textual.screen import Screen
         from textual.widgets import Input, Static
         from quimera.app.completion_dropdown import CompletionDropdown
@@ -387,13 +388,17 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     if self.active_agent == event.agent:
                         self.active_agent = None
 
-        def _update_agent_status_widget(self) -> None:
+        def _update_agent_status_widget(self) -> bool:
             if self._handling_bridge_batch:
                 self._bridge_batch_status_dirty = True
-                return
-            agent_status = self.query_one("#agent_status", Static)
+                return True
+            try:
+                agent_status = self.query_one("#agent_status", Static)
+            except NoMatches:
+                return False
             agent_status.display = False
             agent_status.update("")
+            return True
 
         def _update_breadcrumb(self) -> None:
             if self._handling_bridge_batch:
@@ -402,9 +407,15 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             chain = self._breadcrumb_chain
             if chain:
                 breadcrumb_text = " > ".join(chain[:5])
-                self.query_one("#breadcrumb", _BreadcrumbWidget).update(f"  {breadcrumb_text}")
+                try:
+                    self.query_one("#breadcrumb", _BreadcrumbWidget).update(f"  {breadcrumb_text}")
+                except NoMatches:
+                    return
             else:
-                self.query_one("#breadcrumb", _BreadcrumbWidget).update("")
+                try:
+                    self.query_one("#breadcrumb", _BreadcrumbWidget).update("")
+                except NoMatches:
+                    return
 
         def _clear_status_bar(self) -> None:
             self._active_tool_previews.clear()
@@ -416,7 +427,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if self._handling_bridge_batch:
                 self._bridge_batch_status_dirty = True
                 return
-            widget = self.query_one("#status_bar", Static)
+            try:
+                widget = self.query_one("#status_bar", Static)
+            except NoMatches:
+                return
             widget.display = False
             widget.update("")
             self._update_agent_status_widget()
@@ -425,7 +439,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if self._handling_bridge_batch:
                 self._bridge_batch_status_dirty = True
                 return
-            self._update_agent_status_widget()
+            if not self._update_agent_status_widget():
+                return
             info = bridge.active_agent_info()
             tools = tuple(self._active_tool_previews.items())
             state = (info, tools)
@@ -433,7 +448,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 return
             self._last_status_bar_state = state
             self._last_active_agent_info = info
-            widget = self.query_one("#status_bar", Static)
+            try:
+                widget = self.query_one("#status_bar", Static)
+            except NoMatches:
+                return
             widget.display = False
             widget.update("")
 
