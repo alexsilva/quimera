@@ -772,7 +772,8 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                          'description': 'IDs de rastreamento da delegação quando o banco de tasks '
                                         'está configurado. Em falha, failure_receipt traz o '
                                         'diagnóstico estruturado por tentativa (error_kind, '
-                                        'exit_code, signal, stderr_tail, duration_s) e a pressão '
+                                        'exit_code, signal, stderr_tail — ou stdout_tail quando o '
+                                        'stderr veio vazio —, duration_s) e a pressão '
                                         'de memória do host no momento da falha.',
                          'properties': {'job_id': {'type': 'integer'},
                                         'task_id': {'type': 'integer'},

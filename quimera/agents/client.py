@@ -303,6 +303,7 @@ class AgentClient:
         exit_code: int | None = None,
         signal_name: str | None = None,
         stderr_tail: str = "",
+        stdout_tail: str = "",
         started_at: float | None = None,
         retry_after: float | None = None,
     ) -> None:
@@ -310,6 +311,10 @@ class AgentClient:
 
         Mantém apenas a última falha: o consumidor (delegate) lê e limpa o slot
         logo após cada tentativa, antes de qualquer fallback reutilizar o client.
+
+        ``stdout_tail`` só entra no diagnóstico quando o stderr filtrado veio
+        vazio: CLIs como o opencode morrem com exit != 0 reportando o erro
+        fatal como evento JSON no stdout, sem escrever nada no stderr.
         """
         failure: dict = {"error_kind": kind}
         if message:
@@ -325,6 +330,10 @@ class AgentClient:
         tail = str(stderr_tail or "").strip()
         if tail:
             failure["stderr_tail"] = tail[-self._RUN_FAILURE_STDERR_TAIL_CHARS:]
+        else:
+            out_tail = str(stdout_tail or "").strip()
+            if out_tail:
+                failure["stdout_tail"] = out_tail[-self._RUN_FAILURE_STDERR_TAIL_CHARS:]
         if started_at is not None:
             failure["duration_s"] = round(time.monotonic() - started_at, 1)
         if retry_after is not None:
@@ -1315,7 +1324,8 @@ class AgentClient:
                 f"processo retornou código {proc.returncode}",
                 agent=agent, command=cmd[0] if cmd else None,
                 exit_code=proc.returncode, signal_name=signal_name,
-                stderr_tail=error, started_at=run_started,
+                stderr_tail=error, stdout_tail=output,
+                started_at=run_started,
             )
             if error and (silent or agent):
                 tail = "\n".join(error.splitlines()[-5:])

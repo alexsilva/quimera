@@ -4585,6 +4585,70 @@ def test_agent_client_run_records_process_died_failure(renderer):
         assert failure["duration_s"] >= 0
 
 
+def test_agent_client_run_process_died_sem_stderr_usa_stdout_tail(renderer):
+    """Morte com stderr vazio preserva a cauda do stdout no recibo.
+
+    CLIs como o opencode morrem com exit 1 reportando o erro fatal como
+    evento JSON no stdout, sem escrever nada no stderr.
+    """
+    client = AgentClient(renderer)
+    error_event = (
+        '{"type":"error","error":{"name":"UnknownError",'
+        '"data":{"message":"Unexpected server error."}}}\n'
+    )
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = [error_event]
+        mock_proc.stderr = []
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["opencode", "run"], silent=True, agent="opencode-x")
+
+        assert result is None
+        failure = client.last_run_failure
+        assert failure["error_kind"] == "process_died"
+        assert failure["exit_code"] == 1
+        assert "stderr_tail" not in failure
+        assert "Unexpected server error." in failure["stdout_tail"]
+
+
+def test_agent_client_run_stdout_tail_respeita_cap_de_chars(renderer):
+    """stdout_tail é cortado ao cap mantendo o sufixo (onde fica o erro)."""
+    client = AgentClient(renderer)
+    cap = AgentClient._RUN_FAILURE_STDERR_TAIL_CHARS
+    long_line = ("x" * (cap * 2)) + "FIM-DO-ERRO\n"
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = [long_line]
+        mock_proc.stderr = []
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+
+        assert client.run(["opencode", "run"], silent=True, agent="opencode-x") is None
+        tail = client.last_run_failure["stdout_tail"]
+        assert len(tail) == cap
+        assert tail.endswith("FIM-DO-ERRO")
+
+
+def test_agent_client_run_process_died_com_stderr_nao_inclui_stdout(renderer):
+    """Com stderr presente, o recibo não duplica a cauda do stdout."""
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = ["saida parcial\n"]
+        mock_proc.stderr = ["erro real no stderr\n"]
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["codex", "exec"], silent=True, agent="codex")
+
+        assert result is None
+        failure = client.last_run_failure
+        assert "erro real no stderr" in failure["stderr_tail"]
+        assert "stdout_tail" not in failure
+
+
 def test_agent_client_run_records_empty_response_failure(renderer):
     """Exit 0 sem stdout registra empty_response."""
     client = AgentClient(renderer)
