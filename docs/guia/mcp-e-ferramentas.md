@@ -122,7 +122,9 @@ Modos via `ToolRuntimeConfig.tool_deferral`:
 - `api` (padrão) — ativo nos drivers que montam a própria requisição (`openai_compat` e drivers cloud, que herdam o mesmo loop de tool calling). O set de habilitadas é local ao run; o hop seguinte à chamada de `tool_search` já envia os schemas habilitados.
 - `all` — estende às conexões MCP: `tools/list` devolve a visão filtrada, o estado da conexão acumula habilitações e o servidor emite `notifications/tools/list_changed` após cada `tool_search` bem-sucedido. Exige cliente que refaça o `tools/list` (o Claude Code honra a notificação; verifique outros CLIs antes de ativar).
 
-Override por conexão MCP: o prelude autenticado aceita `quimera_tool_deferral: "on"|"off"` (env `QUIMERA_MCP_TOOL_DEFERRAL` no proxy stdio), permitindo testar o deferral num único agente CLI sem mudar o modo global.
+Override por conexão MCP: o prelude autenticado aceita `quimera_tool_deferral: "on"|"off"` (env `QUIMERA_MCP_TOOL_DEFERRAL` no proxy stdio), permitindo testar o deferral num único agente CLI sem mudar o modo global. O override é exclusivo do socket; via HTTP vale o modo global da config.
+
+No transporte HTTP, a notificação `list_changed` só é emitida quando existe canal para entregá-la (socket ou sessão com SSE). Em POST com resposta JSON pura o servidor a suprime — o body do `tools/call` permanece um único objeto JSON — e o cliente deve refazer o `tools/list` após `tool_search`. As habilitações ficam no estado da sessão HTTP e persistem entre requests da mesma `MCP-Session-Id`.
 
 O deferral é **filtro de apresentação, não fronteira de segurança**: allowlist, denylist, policy e capabilities continuam aplicadas antes do filtro, e uma tool diferida continua executável por nome via `tools/call`. Em modos com `allowed_tools` (ex.: debate) que não incluam `tool_search`, o deferral se desativa sozinho e a visão volta ao catálogo filtrado completo.
 
@@ -162,6 +164,15 @@ diagnóstico; `warn` executa a operação e inclui o aviso no resultado. O ledge
 janela de corrida ao instante entre a checagem e a escrita. Mutações feitas por
 shell (`sed`, redirecionamento etc.) continuam fora desse mecanismo e seguem a
 policy/aprovação própria do shell.
+
+No MCP via HTTP, o escopo do ledger segue o `run_id` confiável da conexão:
+sessões (streamable com `MCP-Session-Id` ou SSE legado) mantêm o mesmo
+`run_id` entre requests, e agentes Quimera propagam o próprio run pelo header
+`X-Quimera-Run` — o ledger é compartilhado com os demais transportes do
+agente. Um POST stateless (sem sessão nem header) recebe `run_id` novo a cada
+request: sob `enforce`, o `read_file` de um request não habilita o
+`write_file` do seguinte. Clientes HTTP que editam arquivos devem usar sessão
+ou `X-Quimera-Run`.
 
 ## Aprovação
 

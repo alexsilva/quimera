@@ -1731,3 +1731,129 @@ class TestOAuthMetadata:
             assert resp.status == 404
         finally:
             httpd.shutdown()
+
+
+class TestToolSearchDeferralHTTP:
+    """tool_deferral=all sobre HTTP: resposta JSON pura deve ser um único objeto.
+
+    Regressão: a notificação ``list_changed`` pós-tool_search era escrita no
+    mesmo buffer da resposta em POSTs sem canal SSE, produzindo NDJSON num
+    body ``application/json`` (quebra cliente estrito).
+    """
+
+    def _real_executor(self, tmp_path) -> ToolExecutor:
+        config = ToolRuntimeConfig(workspace=Workspace(tmp_path))
+        config.tool_deferral = "all"
+        return ToolExecutor(config, MagicMock())
+
+    def _tool_search_body(self, msg_id: int) -> bytes:
+        return json.dumps({
+            "jsonrpc": "2.0", "id": msg_id, "method": "tools/call",
+            "params": {"name": "tool_search", "arguments": {"names": ["host_memory"]}},
+        }).encode("utf-8")
+
+    def test_tool_search_sem_sse_devolve_json_unico_sem_notificacao(self, tmp_path):
+        """POST /message sem sessão: nada de list_changed concatenado no body."""
+        httpd = _start_http_server(MCPServer(self._real_executor(tmp_path)))
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=self._tool_search_body(1),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status == 200
+            assert b"list_changed" not in resp.data
+            # json.loads rejeita "Extra data": NDJSON concatenado falharia aqui.
+            result_data = json.loads(resp.data)
+            assert result_data["id"] == 1
+            assert result_data["result"]["isError"] is False
+        finally:
+            httpd.shutdown()
+
+    def test_tool_search_streamable_mcp_persiste_habilitacao_na_sessao(self, tmp_path):
+        """POST /mcp com sessão: body único por request e habilitação durável."""
+        httpd = _start_http_server(MCPServer(self._real_executor(tmp_path)))
+        try:
+            init = _http_request(
+                httpd.host, httpd.port, "POST", "/mcp",
+                body=json.dumps({
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": {"name": "test"},
+                    },
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            assert init.status == 200
+            session_headers = {
+                "Content-Type": "application/json",
+                "MCP-Session-Id": init.header("MCP-Session-Id"),
+                "MCP-Protocol-Version": "2025-11-25",
+            }
+
+            before = _http_request(
+                httpd.host, httpd.port, "POST", "/mcp",
+                body=json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode("utf-8"),
+                headers=session_headers,
+            )
+            names = {t["name"] for t in json.loads(before.data)["result"]["tools"]}
+            assert "tool_search" in names
+            assert "host_memory" not in names
+
+            call = _http_request(
+                httpd.host, httpd.port, "POST", "/mcp",
+                body=self._tool_search_body(3),
+                headers=session_headers,
+            )
+            assert call.status == 200
+            assert b"list_changed" not in call.data
+            call_data = json.loads(call.data)
+            assert call_data["result"]["isError"] is False
+
+            # A habilitação fica no estado da sessão: o tools/list seguinte
+            # (request HTTP separado) já expõe a tool diferida.
+            after = _http_request(
+                httpd.host, httpd.port, "POST", "/mcp",
+                body=json.dumps({"jsonrpc": "2.0", "id": 4, "method": "tools/list"}).encode("utf-8"),
+                headers=session_headers,
+            )
+            names = {t["name"] for t in json.loads(after.data)["result"]["tools"]}
+            assert "host_memory" in names
+        finally:
+            httpd.shutdown()
+
+    def test_progress_token_sem_sse_nao_concatena_notificacao_no_body(self, tmp_path):
+        """POST /message com _meta.progressToken: progress é suprimido sem SSE."""
+        executor = _make_executor()
+
+        def _execute_with_progress(tool_call, progress_cb=None):
+            if progress_cb:
+                progress_cb("working")
+                progress_cb("almost done")
+            return ToolResult(ok=True, tool_name="read_file", content="done")
+
+        executor.execute.side_effect = _execute_with_progress
+        httpd = _start_http_server(_make_mcp_server(executor))
+        try:
+            body = json.dumps({
+                "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                "params": {
+                    "name": "read_file",
+                    "arguments": {"path": "foo.py"},
+                    "_meta": {"progressToken": "tok-http"},
+                },
+            }).encode("utf-8")
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status == 200
+            assert b"notifications/progress" not in resp.data
+            result_data = json.loads(resp.data)
+            assert result_data["id"] == 7
+            assert result_data["result"]["isError"] is False
+        finally:
+            httpd.shutdown()

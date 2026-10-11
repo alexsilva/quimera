@@ -151,6 +151,19 @@ def _set_mcp_state(out: Any, state: dict) -> None:
         pass
 
 
+class _JSONBodyOutput(StringIO):
+    """Buffer de resposta JSON pura (POST sem canal SSE).
+
+    Sem canal server→client, uma notificação escrita aqui seria concatenada
+    ao body ``application/json`` da resposta (NDJSON em corpo JSON único). O
+    ``MCPServer`` consulta ``supports_notifications`` antes de emitir
+    ``notifications/tools/list_changed``; o cliente stateless refaz o
+    ``tools/list`` por conta própria.
+    """
+
+    supports_notifications = False
+
+
 class _SSEQueueOutput:
     """Writable stream-like object that puts JSON-RPC objects into an SSE queue."""
 
@@ -755,7 +768,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             }
         self._apply_quimera_run_headers(state)
         self._apply_auth_context(state, auth)
-        out = StringIO()
+        out = _JSONBodyOutput()
         _set_mcp_state(out, state)
         try:
             mcp_server._mcp._process_message(msg, out=out, transport="http_mcp")
@@ -834,7 +847,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             out = _SSEQueueOutput(sse_queue)
             state["sse_queue"] = sse_queue
         else:
-            out = StringIO()
+            out = _JSONBodyOutput()
         if session_id:
             state["session_id"] = session_id
         state["http_profile"] = mcp_server._http_profile

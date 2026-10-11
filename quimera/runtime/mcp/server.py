@@ -802,6 +802,10 @@ class MCPServer:
             return self._err(msg_id, -32603, "MCP server is shutting down")
         meta = params.get("_meta") or {}
         progress_token = meta.get("progressToken") if isinstance(meta, dict) else None
+        if progress_token is not None and not getattr(out, "supports_notifications", True):
+            # Sem canal de notificação (resposta HTTP JSON pura), o progress
+            # seria concatenado como NDJSON no body da resposta do tools/call.
+            progress_token = None
         state = getattr(out, "_mcp_state", {}) or {}
         real_transport = str(state.get("transport") or "internal_mcp")
         session_id = state.get("session_id")
@@ -1139,9 +1143,15 @@ class MCPServer:
         if result.ok and tool_name == TOOL_SEARCH_TOOL_NAME:
             # O handler já gravou as habilitações no estado da conexão; o
             # aviso faz clientes como o Claude Code refazerem o tools/list.
-            state = getattr(call["out"], "_mcp_state", None)
-            if self._tool_deferral_active(state):
-                self._notify_tools_list_changed(call["out"])
+            # Saídas sem canal de notificação (resposta HTTP JSON pura) expõem
+            # supports_notifications=False: emitir ali concatenaria a
+            # notificação no body da resposta do tools/call.
+            out_stream = call["out"]
+            state = getattr(out_stream, "_mcp_state", None)
+            if self._tool_deferral_active(state) and getattr(
+                out_stream, "supports_notifications", True
+            ):
+                self._notify_tools_list_changed(out_stream)
 
         if result.ok:
             text = result.content or ""
