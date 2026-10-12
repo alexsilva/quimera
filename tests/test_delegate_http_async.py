@@ -892,7 +892,7 @@ class TestCallAgentAutoReferencia:
         result = tools.delegate(call)
 
         assert result.ok is False
-        assert result.error == "Execução cancelada pelo usuário"
+        assert result.error == "Execução cancelada"
         assert dispatched == ["codex"]
 
     def test_mcp_request_cancel_stops_sequential_delegate_and_fallbacks(self, tmp_path):
@@ -936,7 +936,7 @@ class TestCallAgentAutoReferencia:
         assert agent_cancelled.is_set()
         assert dispatched == ["codex"]
         assert result_holder[0].ok is False
-        assert result_holder[0].error == "Execução cancelada pelo usuário"
+        assert result_holder[0].error == "Execução cancelada"
 
 
     def test_parallel_delegate_timeout_cleans_up_and_preserves_completed_result(

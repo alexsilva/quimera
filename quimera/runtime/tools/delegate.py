@@ -556,6 +556,10 @@ class DelegateTools(ToolBase):
                 cancel_receipt["duration_s"] = round(
                     time.monotonic() - cancel_entry.started_at, 1
                 )
+                executed_by = (
+                    DelegateTools._fallback_executor(fallback_receipt)
+                    or DelegateTools._cancelled_executor(receipt)
+                )
                 result.ok = False
                 result.error = reason
                 result.data["failure_receipt"] = cancel_receipt
@@ -567,6 +571,7 @@ class DelegateTools(ToolBase):
                         task_id,
                         reason=reason,
                         notes=json.dumps(cancel_receipt, ensure_ascii=False),
+                        executed_by=executed_by,
                         db_path=db_path,
                     ),
                 )
@@ -868,9 +873,21 @@ class DelegateTools(ToolBase):
         attempts: list[dict] = []
         source_agent = str(step.get("source_agent") or "").strip() or None
         delegation_id = str(step.get("delegation_id") or "").strip() or DelegateTools._new_delegation_id()
+
+        def _cancelled_result(active_agent: str | None = None):
+            if active_agent:
+                attempts.append(
+                    {
+                        "agent": active_agent,
+                        "error_kind": "cancelled",
+                        "message": "execução cancelada pelo delegador",
+                    }
+                )
+            return active_agent, None, "Execução cancelada", attempts
+
         for target_agent in attempt_targets:
             if callable(cancel_checker) and cancel_checker():
-                return None, None, "Execução cancelada pelo usuário", attempts
+                return _cancelled_result()
             normalized_target_agent = normalize_agent_fn(target_agent)
             delegation = {
                 "task": step["request"],
@@ -909,7 +926,7 @@ class DelegateTools(ToolBase):
                 result = delegate_fn(normalized_target_agent, **delegate_options)
             except Exception as dispatch_error:
                 if callable(cancel_checker) and cancel_checker():
-                    return None, None, "Execução cancelada pelo usuário", attempts
+                    return _cancelled_result(target_agent)
                 last_error = str(dispatch_error)
                 attempt_record: dict = {"agent": target_agent}
                 if isinstance(dispatch_error, DelegationDispatchError):
@@ -924,7 +941,7 @@ class DelegateTools(ToolBase):
                 continue
             if result is None:
                 if callable(cancel_checker) and cancel_checker():
-                    return None, None, "Execução cancelada pelo usuário", attempts
+                    return _cancelled_result(target_agent)
                 last_error = f"Agent '{target_agent}' returned no response"
                 attempts.append(
                     {
@@ -1029,6 +1046,20 @@ class DelegateTools(ToolBase):
         return None
 
     @staticmethod
+    def _cancelled_executor(receipt: dict | None) -> str | None:
+        """Agente que estava executando o step 0 quando houve cancelamento."""
+        if not isinstance(receipt, dict):
+            return None
+        for entry in receipt.get("steps", []):
+            if entry.get("step") != 0:
+                continue
+            for attempt in reversed(entry.get("attempts", [])):
+                if attempt.get("error_kind") == "cancelled":
+                    agent = attempt.get("agent")
+                    return str(agent) if agent else None
+        return None
+
+    @staticmethod
     def _execute_steps_inner(
         steps: list[dict],
         delegate_fn: _DelegateFnProto,
@@ -1059,7 +1090,7 @@ class DelegateTools(ToolBase):
                     return _with_fallback_receipt(ToolResult(
                         ok=False,
                         tool_name=tool_name,
-                        error="Execução cancelada pelo usuário",
+                        error="Execução cancelada",
                     ))
                 active_agents = resolve_active_agents_fn()
                 if active_agents:

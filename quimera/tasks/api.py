@@ -183,13 +183,14 @@ def fail_task(task_id, reason=None, db_path=None):
     return transition_task(task_id, TaskStatus.FAILED, result=reason, notes=reason, db_path=db_path)
 
 
-def cancel_task(task_id, reason=None, notes=None, db_path=None):
+def cancel_task(task_id, reason=None, notes=None, db_path=None, *, executed_by=None):
     """Marca uma task como CANCELLED validando a transição via state machine."""
     return transition_task(
         task_id,
         TaskStatus.CANCELLED,
         result=reason,
         notes=notes if notes is not None else reason,
+        assigned_to=executed_by if executed_by is not None else _UNSET,
         db_path=db_path,
     )
 
@@ -204,7 +205,16 @@ def claim_review_task(agent_name, job_id=None, db_path=None):
     return _repository(db_path).claim_review_task(agent_name, job_id=job_id)
 
 
-def transition_task(task_id, to_status, result=_UNSET, notes=_UNSET, approved_by=_UNSET, db_path=None):
+def transition_task(
+    task_id,
+    to_status,
+    result=_UNSET,
+    notes=_UNSET,
+    approved_by=_UNSET,
+    db_path=None,
+    *,
+    assigned_to=_UNSET,
+):
     """Transiciona uma task validando a mudança de estado via state machine."""
     kwargs = {}
     if result is not _UNSET:
@@ -213,6 +223,8 @@ def transition_task(task_id, to_status, result=_UNSET, notes=_UNSET, approved_by
         kwargs["notes"] = notes
     if approved_by is not _UNSET:
         kwargs["approved_by"] = approved_by
+    if assigned_to is not _UNSET:
+        kwargs["assigned_to"] = assigned_to
     return _repository(db_path).transition_task(task_id, to_status, **kwargs)
 
 

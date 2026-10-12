@@ -753,6 +753,69 @@ class TestFallbackReceipt:
         assert notes["cancelled_by"] == "claude"
         assert notes["fallback_receipt"]["steps"][0]["selected_agent"] == "gemini"
 
+    def test_cancelamento_durante_fallback_registra_executor_ativo(self, tools_com_db):
+        """Regressão live 4: fallback cancelado não pode sumir do recibo/assigned_to."""
+        tools, db_path = tools_com_db
+        from quimera.runtime.errors import DelegationDispatchError
+        from quimera.runtime.tools.tasks import TaskTools
+
+        fallback_started = threading.Event()
+        fallback_cancelled = threading.Event()
+        release = threading.Event()
+
+        def _fn(agent, **opts):
+            if agent == "codex":
+                raise DelegationDispatchError(
+                    "morreu",
+                    receipt={"error_kind": "process_died", "exit_code": -9},
+                )
+            handle = opts.get("cancel_handle")
+            assert handle is not None
+            handle.register(fallback_cancelled.set)
+            fallback_started.set()
+            release.wait(timeout=10)
+            return None if fallback_cancelled.is_set() else "resposta tardia"
+
+        tools.set_delegate_fn(_fn)
+        metadata = {
+            "trusted_context": TrustedToolExecutionContext(
+                transport="http_mcp",
+                run_id="r-active-fallback",
+                agent_name="claude",
+            ),
+        }
+        result = tools.delegate(ToolCall(
+            name="delegate",
+            arguments={
+                "target_agent": "codex",
+                "request": "t1",
+                "fallback_agents": ["gemini"],
+                "wait": False,
+            },
+            metadata=metadata,
+        ))
+        task_id = json.loads(result.content)["task_id"]
+        assert fallback_started.wait(timeout=5)
+
+        task_tools = TaskTools(ToolRuntimeConfig(workspace=tools.workspace))
+        cancel_result = task_tools.tasks(ToolCall(
+            name="tasks",
+            arguments={"action": "cancel", "task_id": task_id},
+            metadata=metadata,
+        ))
+        assert cancel_result.ok is True
+        assert fallback_cancelled.wait(timeout=2)
+        release.set()
+
+        row = _wait_task_status(db_path, task_id, "cancelled")
+        notes = json.loads(row["notes"])
+        attempts = notes["steps"][0]["attempts"]
+        assert [attempt["agent"] for attempt in attempts] == ["codex", "gemini"]
+        assert attempts[-1]["error_kind"] == "cancelled"
+        assert notes["steps"][0]["error"] == "Execução cancelada"
+        assert notes["cancelled_by"] == "claude"
+        assert row["assigned_to"] == "gemini"
+
 
 class TestFinalizeContraEscritoresConcorrentes:
     """O desfecho da delegação vence escritores concorrentes da task.

@@ -747,6 +747,7 @@ class TaskRepository:
         result: str | None | object = _UNSET,
         notes: str | None | object = _UNSET,
         approved_by: str | None | object = _UNSET,
+        assigned_to: str | None | object = _UNSET,
     ) -> bool:
         """Transiciona task para ``to_status`` preservando campos omitidos."""
         conn = self._conn()
@@ -779,6 +780,8 @@ class TaskRepository:
                 fields["notes"] = notes
             if approved_by is not _UNSET:
                 fields["approved_by"] = approved_by
+            if assigned_to is not _UNSET:
+                fields["assigned_to"] = assigned_to
             set_clause = ", ".join(f"{k} = ?" for k in fields)
             cur.execute(
                 f"UPDATE tasks SET {set_clause} WHERE id = ?",
