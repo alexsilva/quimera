@@ -100,7 +100,7 @@ TOOL_SCHEMA: dict[str, dict] = {
     },
     "tasks_list": {
         "name": "tasks_list",
-        "description": "Lista tarefas de um job ou todas",
+        "description": "Lista tarefas; sem filtros, as do job atual",
         "parameters": {
             "job_id": {"type": "int", "description": "Filtrar por job ID", "required": False},
             "status": {"type": "str",
@@ -110,10 +110,11 @@ TOOL_SCHEMA: dict[str, dict] = {
     },
     "jobs_list": {
         "name": "jobs_list",
-        "description": "Lista todos os jobs ativos",
+        "description": "Lista jobs do mais recente ao mais antigo (padrão: 20)",
         "parameters": {
             "status": {"type": "str", "description": "planning|active|completed|failed", "required": False},
             "created_by": {"type": "str", "description": "Filtrar por criador", "required": False},
+            "limit": {"type": "int", "description": "Máximo de jobs devolvidos (padrão 20)", "required": False},
         },
     },
     "jobs_get": {

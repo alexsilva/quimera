@@ -31,6 +31,12 @@ from ...tasks.api import (
 from ._helpers import resolve_current_job_id
 from .base import ToolBase, ValidatableTool
 
+JOBS_LIST_DEFAULT_LIMIT = 20
+TASKS_LIST_FILTER_HINT = (
+    "tasks_list sem filtro lista o job atual, mas nenhum job atual está definido; "
+    "informe job_id, status, assigned_to ou id"
+)
+
 logger = logging.getLogger(__name__)
 
 _TASK_TOOL_NAMES = ["tasks_create", "tasks_list", "tasks_cancel"]
@@ -338,8 +344,17 @@ class TaskTools(
         return enriched
 
     def tasks_list(self, call: ToolCall) -> ToolResult:
-        """Lista tasks com filtros (job_id, status, assigned_to, id ou filters)."""
+        """Lista tasks com filtros (job_id, status, assigned_to, id ou filters).
+
+        Sem nenhum filtro, lista as tasks do job atual (``QUIMERA_CURRENT_JOB_ID``);
+        fora de um job a chamada sem filtro é recusada para não varrer o banco inteiro.
+        """
         filt = self._build_filters(call.arguments)
+        if not filt:
+            current_job_id = resolve_current_job_id()
+            if current_job_id is None:
+                return ToolResult(ok=False, tool_name=call.name, error=TASKS_LIST_FILTER_HINT)
+            filt = {"job_id": current_job_id}
         try:
             tasks = _list_tasks(filt, db_path=self.workspace.tasks_db)
             max_results = int(call.arguments.get("max_results", self.config.max_task_results))
@@ -375,15 +390,28 @@ class JobTools(ToolBase, tool_prefix="jobs"):
         return job_id
 
     def jobs_list(self, call: ToolCall) -> ToolResult:
-        """Lista jobs."""
+        """Lista jobs do mais recente ao mais antigo, no máximo ``limit`` (padrão 20).
+
+        O repositório devolve em ordem crescente de ``updated_at``; sem corte, uma
+        sessão longa devolve centenas de jobs e estoura o orçamento de qualquer modelo.
+        """
         filt = dict(call.arguments.get("filters", {}) or {})
         for key in ("status", "created_by"):
             value = call.arguments.get(key)
             if value is not None:
                 filt[key] = value
+        raw_limit = call.arguments.get("limit")
         try:
+            limit = JOBS_LIST_DEFAULT_LIMIT if raw_limit is None else max(1, int(raw_limit))
             jobs = _list_jobs(filt, db_path=self.workspace.tasks_db)
-            return ToolResult(ok=True, tool_name=call.name, content=json.dumps(jobs))
+            jobs.reverse()
+            truncated = len(jobs) > limit
+            return ToolResult(
+                ok=True,
+                tool_name=call.name,
+                content=json.dumps(jobs[:limit]),
+                truncated=truncated,
+            )
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
@@ -424,20 +452,23 @@ class TaskToolsValidator(ValidatableTool):
             raise ToolPolicyError("tasks_cancel requer 'task_id' inteiro")
 
     def _validate_tasks_list(self, call: ToolCall) -> None:
-        """Exige ao menos um filtro para evitar DoS por listagem sem limites."""
+        """Sem filtro só é aceito dentro de um job atual; evita varredura do banco inteiro."""
         filt = call.arguments.get("filters") or {}
         has_top_level_filter = any(
             call.arguments.get(k) is not None
             for k in ("job_id", "status", "assigned_to", "id")
         )
         has_dict_filter = isinstance(filt, dict) and bool(filt)
-        if not has_top_level_filter and not has_dict_filter:
-            raise ToolPolicyError(
-                "tasks_list exige ao menos um filtro (job_id, status, assigned_to, id ou filters)"
-            )
+        if not has_top_level_filter and not has_dict_filter and resolve_current_job_id() is None:
+            raise ToolPolicyError(TASKS_LIST_FILTER_HINT)
 
     def _validate_jobs_list(self, call: ToolCall) -> None:
-        """jobs_list não exige filtros obrigatórios."""
+        """Filtros são opcionais; ``limit``, quando informado, é inteiro positivo."""
+        limit = call.arguments.get("limit")
+        if limit is None:
+            return
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            raise ToolPolicyError("jobs_list requer 'limit' inteiro positivo")
 
     def _validate_jobs_get(self, call: ToolCall) -> None:
         """jobs_get não exige job_id obrigatório (usa fallback)."""

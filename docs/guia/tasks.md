@@ -86,9 +86,9 @@ Agentes com MCP podem chamar:
 
 - `tasks_create` para criar uma task pelo mesmo fluxo do `/task` (roteador + revisão por outro agente);
 - `tasks_delegate` para delegar a um agente escolhido, sem fila nem revisão;
-- `tasks_list` para filtrar tasks;
+- `tasks_list` para filtrar tasks (sem filtro, lista o job atual);
 - `tasks_cancel` para cancelar uma delegação em execução (só quem delegou, ou o humano);
-- `jobs_list` para listar jobs de sessão;
+- `jobs_list` para listar jobs de sessão, mais recentes primeiro (`limit` padrão 20);
 - `jobs_get` para detalhes de um job.
 
 No prompt, o Quimera injeta uma visão resumida das tasks abertas e resultados concluídos quando disponível.

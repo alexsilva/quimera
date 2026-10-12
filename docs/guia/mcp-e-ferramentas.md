@@ -98,9 +98,9 @@ um resultado sem evento de início ainda gera evidência com o mesmo ID.
 | `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_branch`, `git_checkout`, `git_fetch`, `git_push` | Operações git estruturadas no repositório do workspace. |
 | `browser_start`, `browser_navigate`, `browser_click`, `browser_type`, `browser_press`, `browser_mouse`, `browser_wait`, `browser_snapshot`, `browser_screenshot`, `browser_console`, `browser_network`, `browser_evaluate`, `browser_status`, `browser_close` | Automação de navegador (Chrome/Chromium via Playwright, extra `browser`); screenshots são salvos por sessão no diretório de artefatos do workspace. |
 | `tasks_create` | Cria uma task pelo fluxo do `/task`: o roteador escolhe o executor e outro agente revisa. |
-| `tasks_list` | Lista tasks com filtros. |
+| `tasks_list` | Lista tasks com filtros; sem filtro, lista o job atual. |
 | `tasks_cancel` | Cancela uma delegação em execução (apenas quem delegou, ou o humano). |
-| `jobs_list` | Lista jobs. |
+| `jobs_list` | Lista jobs, mais recentes primeiro; `limit` (padrão 20) e `truncated` indicam o corte. |
 | `jobs_get` | Obtém detalhes de job. |
 | `list_agents` | Lista os agentes ativos na sessão atual. |
 | `web_search` | Pesquisa web via DuckDuckGo Lite. |

@@ -1,6 +1,7 @@
 """Contratos da família ``tasks_*``/``jobs_*`` (um verbo por tool, sem nome legado)."""
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -90,8 +91,9 @@ def test_cancel_no_longer_inherits_task_creation_approval(executor):
         assert policy.requires_approval(ToolCall(name=name, arguments={})) is False, name
 
 
-def test_validators_are_split_per_verb(tmp_path):
+def test_validators_are_split_per_verb(tmp_path, monkeypatch):
     """Cada verbo valida só os próprios argumentos; não há ``action`` nem padrão silencioso."""
+    monkeypatch.delenv("QUIMERA_CURRENT_JOB_ID", raising=False)
     validator = TaskToolsValidator(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
 
     with pytest.raises(ToolPolicyError, match="tasks_create requer 'description'"):
@@ -100,8 +102,11 @@ def test_validators_are_split_per_verb(tmp_path):
         validator.validate(ToolCall(name="tasks_cancel", arguments={"description": "x"}))
     with pytest.raises(ToolPolicyError, match="tasks_cancel requer 'task_id' inteiro"):
         validator.validate(ToolCall(name="tasks_cancel", arguments={"task_id": True}))
-    with pytest.raises(ToolPolicyError, match="tasks_list exige ao menos um filtro"):
+    with pytest.raises(ToolPolicyError, match="tasks_list sem filtro lista o job atual"):
         validator.validate(ToolCall(name="tasks_list", arguments={}))
+    monkeypatch.setenv("QUIMERA_CURRENT_JOB_ID", "366")
+    validator.validate(ToolCall(name="tasks_list", arguments={}))
+    monkeypatch.delenv("QUIMERA_CURRENT_JOB_ID")
 
     validator.validate(ToolCall(name="tasks_create", arguments={"description": "rodar testes"}))
     validator.validate(ToolCall(name="tasks_cancel", arguments={"task_id": 3}))
@@ -167,3 +172,59 @@ def test_prose_surfaces_do_not_cite_legacy_tool_names():
         text = (root / relative).read_text(encoding="utf-8")
         hits = [m.group(0) for m in _LEGACY_IN_PROSE.finditer(text)]
         assert not hits, (relative, hits)
+
+
+def test_tasks_list_without_filters_defaults_to_current_job(tmp_path, monkeypatch):
+    """Sem filtro, ``tasks_list`` lista o job atual; fora de um job, recusa com dica (live test 2026-10-12)."""
+    tools = TaskTools(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    seen: dict[str, dict] = {}
+
+    def fake_list_tasks(filt, db_path=None):
+        seen["filt"] = dict(filt)
+        return []
+
+    monkeypatch.setattr(tasks_tools, "_list_tasks", fake_list_tasks)
+    monkeypatch.setenv("QUIMERA_CURRENT_JOB_ID", "366")
+
+    result = tools.tasks_list(ToolCall(name="tasks_list", arguments={}))
+
+    assert result.ok is True
+    assert seen["filt"] == {"job_id": 366}
+
+    result = tools.tasks_list(ToolCall(name="tasks_list", arguments={"status": "completed"}))
+    assert seen["filt"] == {"status": "completed"}, "filtro explícito não ganha job_id implícito"
+
+    monkeypatch.delenv("QUIMERA_CURRENT_JOB_ID")
+    seen.clear()
+    result = tools.tasks_list(ToolCall(name="tasks_list", arguments={}))
+
+    assert result.ok is False
+    assert "nenhum job atual está definido" in result.error
+    assert not seen, "sem job atual e sem filtro o banco não é consultado"
+
+
+def test_jobs_list_returns_newest_first_and_caps_by_limit(tmp_path, monkeypatch):
+    """``jobs_list`` devolve do mais recente ao mais antigo, no máximo ``limit`` (padrão 20)."""
+    job_tools = JobTools(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    rows = [{"id": i} for i in range(1, 31)]  # repositório: updated_at ASC
+    monkeypatch.setattr(tasks_tools, "_list_jobs", lambda filt, db_path=None: list(rows))
+
+    result = job_tools.jobs_list(ToolCall(name="jobs_list", arguments={}))
+
+    assert result.ok is True
+    assert [job["id"] for job in json.loads(result.content)] == list(range(30, 10, -1))
+    assert result.truncated is True
+
+    result = job_tools.jobs_list(ToolCall(name="jobs_list", arguments={"limit": 50}))
+    assert len(json.loads(result.content)) == 30
+    assert result.truncated is False
+
+    result = job_tools.jobs_list(ToolCall(name="jobs_list", arguments={"limit": 1}))
+    assert [job["id"] for job in json.loads(result.content)] == [30]
+
+    validator = TaskToolsValidator(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    for bad in (0, -1, True, "5"):
+        with pytest.raises(ToolPolicyError, match="jobs_list requer 'limit' inteiro positivo"):
+            validator.validate(ToolCall(name="jobs_list", arguments={"limit": bad}))
+    validator.validate(ToolCall(name="jobs_list", arguments={"limit": 5}))
+    validator.validate(ToolCall(name="jobs_list", arguments={}))

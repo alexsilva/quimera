@@ -134,9 +134,9 @@ def test_find_duplicate_task(tools):
 
 
 @patch("quimera.runtime.tools.tasks._list_tasks")
-def test_list_tasks_error(mock_list, tools):
-    """Verifica que tasks_list trata exceção do banco."""
-    # Line 69-70 coverage
+def test_list_tasks_error(mock_list, tools, monkeypatch):
+    """Verifica que tasks_list trata exceção do banco (sem filtro cai no job atual)."""
+    monkeypatch.setenv("QUIMERA_CURRENT_JOB_ID", "7")
     mock_list.side_effect = Exception("Boom")
     call = ToolCall(name="tasks_list", arguments={})
     result = tools.tasks_list(call)

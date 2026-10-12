@@ -512,7 +512,8 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='tasks_list',
-        description='Lista tarefas com filtros opcionais do job atual ou de qualquer job. '
+        description='Lista tarefas. Sem filtros devolve as tasks do job atual; use job_id '
+                    'para outro job e status, assigned_to ou id para refinar. '
                     'Tasks de delegação em execução (origin=delegate, status=in_progress) '
                     "incluem o campo 'live' com o último raciocínio (thinking) do agente "
                     'delegado — útil para acompanhar uma delegação com wait=false.',
@@ -566,16 +567,23 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='jobs_list',
-        description='Lista jobs de sessão disponíveis.',
+        description='Lista jobs de sessão do mais recente ao mais antigo, no máximo limit '
+                    '(padrão 20); truncated=true indica que há mais. Use status ou '
+                    'created_by para filtrar e jobs_get para um job específico.',
         parameters={'type': 'object',
  'properties': {'status': {'type': 'string',
                            'description': 'Filtrar por status, como planning, active, completed ou '
                                           'failed.'},
-                'created_by': {'type': 'string', 'description': 'Filtrar por criador do job.'}},
+                'created_by': {'type': 'string', 'description': 'Filtrar por criador do job.'},
+                'limit': {'type': 'integer',
+                          'description': 'Máximo de jobs devolvidos, do mais recente ao mais '
+                                         'antigo. Padrão: 20.'}},
  'required': []},
         output_schema={'type': 'object',
  'properties': {'ok': {'type': 'boolean'},
-                'content': {'type': 'string', 'description': 'JSON array of JobRecord objects'},
+                'content': {'type': 'string',
+                            'description': 'JSON array of JobRecord objects, mais recente primeiro'},
+                'truncated': {'type': 'boolean'},
                 'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
  'required': ['ok', 'content']},
     ),
