@@ -63,6 +63,7 @@ class ChatLifecycle:
         )
         self._submission_futures: dict[int, tuple[object, str, bool]] = {}
         self._active_submission_ids: set[str] = set()
+        self._queued_submission_ids: set[str] = set()
         self._cancelled_submission_ids: set[str] = set()
         self._running_submission_ids: set[str] = set()
         self._submission_lock = threading.RLock()
@@ -85,12 +86,18 @@ class ChatLifecycle:
                 return None
             if normalized in {"completed", "failed"}:
                 self._active_submission_ids.discard(submission_id)
+                self._queued_submission_ids.discard(submission_id)
                 self._cancelled_submission_ids.discard(submission_id)
             elif normalized == "cancelled":
                 self._active_submission_ids.discard(submission_id)
+                self._queued_submission_ids.discard(submission_id)
                 self._cancelled_submission_ids.add(submission_id)
             else:
                 self._active_submission_ids.add(submission_id)
+                if normalized in {"queued", "starting"}:
+                    self._queued_submission_ids.add(submission_id)
+                elif normalized == "running":
+                    self._queued_submission_ids.discard(submission_id)
         if getattr(
             self._renderer, "supports_submission_status", False
         ) is not True:
@@ -186,8 +193,18 @@ class ChatLifecycle:
             agent_client._show_cancelled_once()
         with self._submission_lock:
             active_submission_ids = list(self._active_submission_ids)
-            futures = list(self._submission_futures.values())
-        for submission_id in active_submission_ids:
+            queued_submission_ids = set(self._queued_submission_ids)
+            cancelled_submission_ids = {
+                submission_id
+                for submission_id in active_submission_ids
+                if submission_id not in queued_submission_ids
+            }
+            futures = [
+                item
+                for item in self._submission_futures.values()
+                if item[1] in cancelled_submission_ids
+            ]
+        for submission_id in cancelled_submission_ids:
             self.update_submission_status(submission_id, "cancelled")
         for future, _submission_id, _slot_reserved in futures:
             future.cancel()

@@ -293,6 +293,28 @@ def test_chat_lifecycle_cancels_accepted_submission_before_executor_submit():
     assert renderer.transitions[-1][1] == "cancelled"
 
 
+def test_chat_lifecycle_interrupt_preserves_submission_already_queued():
+    """Ctrl+C cancela trabalho atual sem descartar o próximo prompt da fila."""
+    renderer = _SubmissionRenderer()
+    lifecycle = _make_lifecycle(Mock(), renderer, Mock())
+    queued_future = Mock()
+    submission_id = "submission:queued-next"
+    lifecycle.register_submission(submission_id)
+    lifecycle.update_submission_status(submission_id, "queued")
+    lifecycle._submission_futures[id(queued_future)] = (
+        queued_future,
+        submission_id,
+        True,
+    )
+
+    lifecycle.handle_local_interrupt()
+
+    queued_future.cancel.assert_not_called()
+    assert submission_id in lifecycle._active_submission_ids
+    assert submission_id in lifecycle._queued_submission_ids
+    assert submission_id not in lifecycle._cancelled_submission_ids
+
+
 def test_running_submission_stays_cancelled_after_owner_cancel_state_is_reset():
     """Prompt novo não pode transformar uma submission antiga cancelada em completed."""
 
