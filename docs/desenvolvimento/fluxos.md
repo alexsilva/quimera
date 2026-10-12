@@ -84,7 +84,7 @@ agente chama tools/call
 ## Delegation entre agentes
 
 ```text
-agente A chama delegate
+agente A chama tasks_delegate
   -> ferramenta resolve agente B no pool
   -> dispatch de background cria AgentClient isolado por chamada
      (cancel_event próprio; herda pause_idle_if e process_supervisor

@@ -214,7 +214,7 @@ def test_mcp_delegation_cli_calls_delegate_via_mcp(tmp_path):
         )
         assert completed.returncode == 0, completed.stderr
         assert "MCP conectado" in completed.stdout
-        assert "MCP tool_call: delegate" in completed.stdout
+        assert "MCP tool_call: tasks_delegate" in completed.stdout
         assert "MCP tool_result: OK" in completed.stdout
         assert "delegado para fake-openai" in completed.stdout
     finally:

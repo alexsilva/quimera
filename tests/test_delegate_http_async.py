@@ -41,7 +41,7 @@ def _make_call(
     args: dict | None = None,
 ) -> ToolCall:
     return ToolCall(
-        name="delegate",
+        name="tasks_delegate",
         arguments=args or {"target_agent": "codex", "request": "faz algo"},
         metadata=metadata or {},
     )
@@ -215,7 +215,7 @@ class TestNonSSEPath:
     Quando sse_queue não está disponível, a chamada cria um job/task
     no SQLite, retorna {job_id, task_id, status} imediatamente e o
     agente executa em uma threading.Thread daemon. O cliente faz
-    polling via get_job/list_tasks para obter o resultado.
+    polling via jobs_get/tasks_list para obter o resultado.
     """
 
     @patch("quimera.runtime.tools.delegate.get_job", return_value={"status": "active", "started_at": "2026-06-11 20:23:11"})
@@ -831,7 +831,7 @@ class TestCallAgentAutoReferencia:
             metadata={"calling_agent": "deepseek"},
             args={"target_agent": "deepseek", "request": "faz algo"},
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is False
         assert "cannot delegate to itself" in result.error
 
@@ -854,7 +854,7 @@ class TestCallAgentAutoReferencia:
             args={"target_agent": "codex", "request": "revisar"},
         )
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         assert result.ok is True
         assert captured[0][0] == "codex"
@@ -889,7 +889,7 @@ class TestCallAgentAutoReferencia:
             },
         )
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         assert result.ok is False
         assert result.error == "Execução cancelada"
@@ -923,7 +923,7 @@ class TestCallAgentAutoReferencia:
         )
         result_holder: list[ToolResult] = []
         worker = threading.Thread(
-            target=lambda: result_holder.append(tools.delegate(call)),
+            target=lambda: result_holder.append(tools.tasks_delegate(call)),
             daemon=True,
         )
 
@@ -1101,7 +1101,7 @@ class TestCallAgentAutoReferencia:
             metadata={"calling_agent": "codex"},
             args={"target_agent": "CODEX", "request": "faz algo"},
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is False
         assert "cannot delegate to itself" in result.error
 
@@ -1112,7 +1112,7 @@ class TestCallAgentAutoReferencia:
             metadata={"calling_agent": "deepseek"},
             args={"target_agent": "codex", "request": "faz algo"},
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is True
 
     def test_sem_calling_agent_nao_bloqueia(self, tmp_path):
@@ -1122,7 +1122,7 @@ class TestCallAgentAutoReferencia:
             metadata={},
             args={"target_agent": "codex", "request": "faz algo"},
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is True
 
     def test_filtra_self_de_fallback_agents(self, tmp_path):
@@ -1146,7 +1146,7 @@ class TestCallAgentAutoReferencia:
                 "fallback_agents": ["deepseek", "claude"],
             },
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is True
         # deepseek filtrado dos fallbacks; dispatch ocorreu para codex
         assert dispatched == ["codex"]
@@ -1164,7 +1164,7 @@ class TestCallAgentAutoReferencia:
                 ],
             },
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is False
         assert "cannot delegate to itself" in result.error
 
@@ -1195,7 +1195,7 @@ class TestCallAgentAutoReferencia:
                 ],
             },
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is True
         # step 1 → codex, step 2 → claude (deepseek filtrado dos fallbacks)
         assert dispatched == ["codex", "claude"]
@@ -1207,7 +1207,7 @@ class TestCallAgentAutoReferencia:
             metadata={"calling_agent": "deepseek"},
             args={"target_agent": "/deepseek", "request": "faz algo"},
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is False
         assert "cannot delegate to itself" in result.error
 
@@ -1226,7 +1226,7 @@ class TestCallAgentAutoReferencia:
             metadata={"trusted_context": ctx},
             args={"target_agent": "deepseek", "request": "faz algo"},
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is False
         assert "cannot delegate to itself" in result.error
 
@@ -1251,7 +1251,7 @@ class TestCallAgentAutoReferencia:
                 "fallback_agents": ["deepseek", "/deepseek", "  deepseek  "],
             },
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is True
         assert dispatched == ["codex"]
 
@@ -1282,7 +1282,7 @@ class TestCallAgentAutoReferencia:
                 ],
             },
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is True
         assert dispatched == ["codex", "claude"]
 
@@ -1293,7 +1293,7 @@ class TestCallAgentAutoReferencia:
             metadata={"calling_agent": "/CODEX"},
             args={"target_agent": "codex", "request": "faz algo"},
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is False
         assert "cannot delegate to itself" in result.error
 
@@ -1322,7 +1322,7 @@ class TestOrchestratorRedelegationGuard:
             metadata={"trusted_context": ctx},
             args={"target_agent": "opencode", "request": "refatorar"},
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is False
         assert "cannot re-delegate" in result.error
 
@@ -1338,7 +1338,7 @@ class TestOrchestratorRedelegationGuard:
             metadata={"trusted_context": ctx},
             args={"target_agent": "opencode", "request": "refatorar"},
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is True
 
     def test_permite_agente_cujo_parent_nao_e_o_orquestrador(self, tmp_path):
@@ -1353,7 +1353,7 @@ class TestOrchestratorRedelegationGuard:
             metadata={"trusted_context": ctx},
             args={"target_agent": "opencode", "request": "revisar"},
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is True
 
     def test_orquestrador_pode_delegar(self, tmp_path):
@@ -1367,7 +1367,7 @@ class TestOrchestratorRedelegationGuard:
             metadata={"trusted_context": ctx},
             args={"target_agent": "codex", "request": "escrever testes"},
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is True
 
 
@@ -1498,7 +1498,7 @@ def test_delegate_deduplicates_target_and_fallback_aliases(tmp_path):
     tools = DelegateTools(config)
     tools.set_delegate_fn(dispatch)
     tools.set_active_agents_provider(lambda: ["codex", "claude"])
-    result = tools.delegate(_make_call(args={
+    result = tools.tasks_delegate(_make_call(args={
         "target_agent": "codex",
         "request": "faz algo",
         "fallback_agents": ["/codex", "claude", "/claude", "CLAUDE"],
@@ -1514,7 +1514,7 @@ def test_delegate_rejects_non_boolean_parallel(tmp_path):
     tools.set_delegate_fn(MagicMock(return_value="ok"))
     tools.set_active_agents_provider(lambda: ["codex", "claude"])
 
-    result = tools.delegate(_make_call(args={
+    result = tools.tasks_delegate(_make_call(args={
         "target_agent": "codex",
         "request": "faz algo",
         "parallel": "false",

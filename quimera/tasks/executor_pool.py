@@ -637,7 +637,7 @@ class TaskExecutorPool:
             return None
         # Drivers de API executam tools neste executor. Sem a fiação de
         # delegação do executor primário, um agente delegado por API não
-        # enxerga `delegate`/`tasks` (live teste 4, 2026-10-12: claudecloud-sonnet
+        # enxerga `tasks_delegate`/`tasks_create` (live teste 4, 2026-10-12: claudecloud-sonnet
         # delegado não encontrou a tool), enquanto CLIs a têm via MCP.
         primary_wiring = getattr(
             getattr(chat_agent_client, "tool_executor", None), "_wiring", None

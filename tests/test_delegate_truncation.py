@@ -37,7 +37,7 @@ def delegation_tools(tmp_path, dispatch_fn):
 
 
 def _make_call(args: dict) -> ToolCall:
-    return ToolCall(name="delegate", arguments=args, metadata={})
+    return ToolCall(name="tasks_delegate", arguments=args, metadata={})
 
 
 class TestTruncateDelegateText:
@@ -59,7 +59,7 @@ class TestTruncateDelegateText:
             original, MAX_REQUEST, "request",
         )
         assert len(text) == MAX_REQUEST
-        assert "truncado pela tool delegate" in text
+        assert "truncado pela tool tasks_delegate" in text
         assert str(MAX_REQUEST + 500) in text
         assert warning is not None
         assert "request" in warning
@@ -74,7 +74,7 @@ class TestDelegateRequestTruncation:
             "target_agent": "codex",
             "request": "r" * (MAX_REQUEST + 500),
         })
-        result = delegation_tools.delegate(call)
+        result = delegation_tools.tasks_delegate(call)
         assert result.ok
         assert "Aviso de truncamento" in result.content
         assert "resultado do agente" in result.content
@@ -87,10 +87,10 @@ class TestDelegateRequestTruncation:
             "target_agent": "codex",
             "request": "r" * (MAX_REQUEST + 500),
         })
-        delegation_tools.delegate(call)
+        delegation_tools.tasks_delegate(call)
         delegation = dispatch_fn.call_args.kwargs["delegation"]
         assert len(delegation["task"]) == MAX_REQUEST
-        assert "truncado pela tool delegate" in delegation["task"]
+        assert "truncado pela tool tasks_delegate" in delegation["task"]
 
     def test_context_longo_gera_aviso(self, delegation_tools, dispatch_fn):
         call = _make_call({
@@ -98,7 +98,7 @@ class TestDelegateRequestTruncation:
             "request": "faz algo",
             "context": "c" * (MAX_CONTEXT + 1),
         })
-        result = delegation_tools.delegate(call)
+        result = delegation_tools.tasks_delegate(call)
         assert result.ok
         warnings = result.data.get("truncation_warnings")
         assert warnings and "context" in warnings[0]
@@ -111,7 +111,7 @@ class TestDelegateRequestTruncation:
             "request": "faz algo",
             "context": "contexto curto",
         })
-        result = delegation_tools.delegate(call)
+        result = delegation_tools.tasks_delegate(call)
         assert result.ok
         assert result.content.startswith("resultado do agente")
         assert "truncado" not in result.content
@@ -133,7 +133,7 @@ class TestDelegateStepsTruncation:
                 },
             ],
         })
-        result = delegation_tools.delegate(call)
+        result = delegation_tools.tasks_delegate(call)
         assert result.ok
         warnings = result.data.get("truncation_warnings")
         assert warnings and len(warnings) == 2

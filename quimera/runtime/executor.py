@@ -75,7 +75,7 @@ class ToolExecutorWiring:
             if value is not None:
                 getattr(executor, setter_name)(value)
 
-    # Subconjunto que torna delegate/tasks/list_agents operáveis. Fica fora
+    # Subconjunto que torna tasks_delegate/tasks_create/list_agents operáveis. Fica fora
     # tudo que é escopo do chat (cancel_checker, ask_user, preview/progress),
     # que não pode vazar para um executor isolado.
     _DELEGATION_SETTERS: ClassVar[tuple[tuple[str, str], ...]] = (
@@ -93,7 +93,7 @@ class ToolExecutorWiring:
 
         Drivers de API (claudecloud, codexcloud) executam tools no executor
         do próprio AgentClient. Um delegado criado com executor nu não enxerga
-        ``delegate``/``tasks`` — ao contrário dos CLIs, que chegam ao executor
+        ``tasks_delegate``/``tasks_create`` — ao contrário dos CLIs, que chegam ao executor
         primário pelo servidor MCP compartilhado — e não consegue subdelegar.
         """
         for attribute, setter_name in self._DELEGATION_SETTERS:
@@ -321,16 +321,16 @@ class ToolExecutor:
         self._delegate_tools.set_delegate_fn(fn)
 
     def set_task_create_fn(self, fn) -> None:
-        """Injeta o serviço de criação usado pela tool tasks."""
+        """Injeta o serviço de criação usado pela tool tasks_create."""
         self._wiring.task_create_fn = fn
         self._task_tools.set_create_task_fn(fn)
 
     def is_tasks_available(self) -> bool:
-        """Indica se a tool tasks está ligada ao serviço da aplicação."""
+        """Indica se a tool tasks_create está ligada ao serviço da aplicação."""
         return self._task_tools.is_tasks_available()
 
     def set_delegation_run_lookup(self, fn) -> None:
-        """Injeta lookup do run ao vivo de delegações para o list_tasks.
+        """Injeta lookup do run ao vivo de delegações para o tasks_list.
 
         Assinatura esperada: fn(delegation_id: str) -> dict | None
         """
@@ -368,16 +368,16 @@ class ToolExecutor:
         self._host_tools._set_cancel_checker(fn)
 
     def set_agent_cleanup_callback(self, fn) -> None:
-        """Injeta callback para limpeza do estado de render após delegate.
+        """Injeta callback para limpeza do estado de render após tasks_delegate.
 
         Assinatura esperada: fn(agent_name: str) -> None
-        Chamado após cada step de delegate para limpar streams transitórios.
+        Chamado após cada step de tasks_delegate para limpar streams transitórios.
         """
         self._wiring.agent_cleanup_callback = fn
         self._delegate_tools.set_cleanup_callback(fn)
 
     def is_delegate_available(self) -> bool:
-        """Indica se a tool delegate está operável no contexto atual."""
+        """Indica se a tool tasks_delegate está operável no contexto atual."""
         return self._delegate_tools.is_delegate_available()
 
     def set_ask_user_fn(self, fn) -> None:

@@ -83,18 +83,23 @@ TOOL_SCHEMA: dict[str, dict] = {
             "session_id": {"type": "int", "description": "ID da sessão", "required": True},
         },
     },
-    "tasks": {
-        "name": "tasks",
-        "description": "Cria uma task como o comando /task (action=create, padrão) ou cancela uma delegação em execução (action=cancel; apenas quem delegou)",
+    "tasks_create": {
+        "name": "tasks_create",
+        "description": "Cria uma task como o comando /task: o roteador escolhe o executor e outro agente revisa",
         "parameters": {
-            "description": {"type": "str", "description": "Descrição da task (action=create)", "required": False},
-            "action": {"type": "str", "description": "create (padrão) ou cancel", "required": False},
-            "task_id": {"type": "int", "description": "Task de delegação a cancelar (action=cancel)", "required": False},
+            "description": {"type": "str", "description": "Descrição da task", "required": True},
+        },
+    },
+    "tasks_cancel": {
+        "name": "tasks_cancel",
+        "description": "Cancela uma delegação em execução (apenas quem delegou, ou o humano)",
+        "parameters": {
+            "task_id": {"type": "int", "description": "Task de delegação a cancelar", "required": True},
             "reason": {"type": "str", "description": "Motivo do cancelamento", "required": False},
         },
     },
-    "list_tasks": {
-        "name": "list_tasks",
+    "tasks_list": {
+        "name": "tasks_list",
         "description": "Lista tarefas de um job ou todas",
         "parameters": {
             "job_id": {"type": "int", "description": "Filtrar por job ID", "required": False},
@@ -103,16 +108,16 @@ TOOL_SCHEMA: dict[str, dict] = {
                        "required": False},
         },
     },
-    "list_jobs": {
-        "name": "list_jobs",
+    "jobs_list": {
+        "name": "jobs_list",
         "description": "Lista todos os jobs ativos",
         "parameters": {
             "status": {"type": "str", "description": "planning|active|completed|failed", "required": False},
             "created_by": {"type": "str", "description": "Filtrar por criador", "required": False},
         },
     },
-    "get_job": {
-        "name": "get_job",
+    "jobs_get": {
+        "name": "jobs_get",
         "description": "Consulta detalhes de um job específico. O job_id pode ser omitido se a variável de ambiente QUIMERA_CURRENT_JOB_ID estiver definida.",
         "parameters": {
             "job_id": {"type": "int", "description": "ID do job (opcional se QUIMERA_CURRENT_JOB_ID definida)",

@@ -52,7 +52,7 @@ Há dois caminhos de execução, cada um com limite próprio em
 - **agentes MCP/CLI**: requisições `tools/call` simultâneas são submetidas ao
   pool do servidor e podem progredir em paralelo, inclusive pela mesma conexão.
   O pool tem `mcp_tool_pool_workers` workers (padrão: 4) e é compartilhado por
-  todos os agentes conectados à sessão. `delegate` aguarda o agente filho em um
+  todos os agentes conectados à sessão. `tasks_delegate` aguarda o agente filho em um
   pool separado, para não ocupar os workers de que as tools do filho precisam;
 - **backends nativos de API** (`openai_compat`, Codex Cloud e Claude Cloud):
   quando um turno do modelo contém várias tool calls, runs adjacentes marcadas
@@ -97,9 +97,11 @@ um resultado sem evento de início ainda gera evidência com o mesmo ID.
 | `close_command_session` | Fecha sessão persistente de comando. |
 | `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_branch`, `git_checkout`, `git_fetch`, `git_push` | Operações git estruturadas no repositório do workspace. |
 | `browser_start`, `browser_navigate`, `browser_click`, `browser_type`, `browser_press`, `browser_mouse`, `browser_wait`, `browser_snapshot`, `browser_screenshot`, `browser_console`, `browser_network`, `browser_evaluate`, `browser_status`, `browser_close` | Automação de navegador (Chrome/Chromium via Playwright, extra `browser`); screenshots são salvos por sessão no diretório de artefatos do workspace. |
-| `list_tasks` | Lista tasks com filtros. |
-| `list_jobs` | Lista jobs. |
-| `get_job` | Obtém detalhes de job. |
+| `tasks_create` | Cria uma task pelo fluxo do `/task`: o roteador escolhe o executor e outro agente revisa. |
+| `tasks_list` | Lista tasks com filtros. |
+| `tasks_cancel` | Cancela uma delegação em execução (apenas quem delegou, ou o humano). |
+| `jobs_list` | Lista jobs. |
+| `jobs_get` | Obtém detalhes de job. |
 | `list_agents` | Lista os agentes ativos na sessão atual. |
 | `web_search` | Pesquisa web via DuckDuckGo Lite. |
 | `web_fetch` | Busca URL e extrai texto. |
@@ -109,7 +111,7 @@ um resultado sem evento de início ainda gera evidência com o mesmo ID.
 | `memory_retrieve` | Recupera memória do workspace por namespace, key, prefixo ou tags. |
 | `update_shared_state` | Atualiza o shared state da sessão. |
 | `ask_user` | Faz uma pergunta ao usuário humano e aguarda resposta. |
-| `delegate` | Delega tarefa para outro agente do pool Quimera. |
+| `tasks_delegate` | Delega tarefa a um agente escolhido pelo chamador, sem fila nem revisão. |
 | `tool_search` | Habilita ferramentas diferidas sob demanda (ver seção abaixo). |
 
 ### Deferral de schemas e `tool_search`
@@ -178,9 +180,9 @@ ou `X-Quimera-Run`.
 
 Ferramentas de mutação podem exigir aprovação. Na app interativa, `/approve` libera a próxima mutação e `/approve-all` muda o comportamento para autoaprovação. Em execução não interativa ou MCP standalone, o handler de aprovação pode ser configurado pelo runtime.
 
-## Cross-MCP e `delegate`
+## Cross-MCP e `tasks_delegate`
 
-A ferramenta `delegate` permite que um agente delegue uma tarefa a outro agente do pool. Ela é útil para dividir trabalho por especialidade: arquitetura para Gemini/Claude, edição para Codex/OpenCode, revisão para agentes fortes em review. O resultado entra no fluxo da sessão e pode ser usado como evidência ou contexto para a resposta final.
+A ferramenta `tasks_delegate` permite que um agente delegue uma tarefa a outro agente do pool. Ela é útil para dividir trabalho por especialidade: arquitetura para Gemini/Claude, edição para Codex/OpenCode, revisão para agentes fortes em review. O resultado entra no fluxo da sessão e pode ser usado como evidência ou contexto para a resposta final.
 
 Cada delegação executa em um `AgentClient` isolado criado por chamada (dispatch de background), com cancel_event próprio: o agente delegado nunca interfere na execução ativa do agente que delegou, e delegações concorrentes não corrompem estado uma da outra. Cancelar o fluxo principal (ESC/Ctrl+C) também cancela as delegações em andamento. O client isolado herda o comportamento de pausa de idle timeout durante tools longas e o supervisor de processos da sessão, garantindo que subprocessos delegados sejam encerrados no shutdown.
 
@@ -231,7 +233,7 @@ O escopo concedido pode **restringir** o perfil de tools abaixo do configurado e
 | `mcp` | Herda o perfil configurado no servidor (padrão). |
 | `mcp:read-local` | Leitura local, sem acesso à rede. |
 | `mcp:read` | Leitura local + `web_search`/`web_fetch`. |
-| `mcp:agent` | Leitura, `replace_text`, git e `delegate`. |
+| `mcp:agent` | Leitura, `replace_text`, git e `tasks_delegate`. |
 | `mcp:all` | Todas as tools publicadas pelo transporte. |
 
 As tools fora do escopo desaparecem de `tools/list` e são recusadas em `tools/call`.
@@ -320,10 +322,10 @@ quimera --mcp-http --mcp-port 9095 --mcp-http-allow-tools agent
 ```
 
 O conjunto `agent` publica apenas:
-- `list_files`, `read_file`, `grep_search`, `inspect_symbols`, `list_tasks`, `list_jobs`, `get_job`, `memory_retrieve`, `todo_list` (somente leitura local)
+- `list_files`, `read_file`, `grep_search`, `inspect_symbols`, `tasks_list`, `jobs_list`, `jobs_get`, `memory_retrieve`, `todo_list` (somente leitura local)
 - `git_status`, `git_log`, `git_diff`, `git_branch`, `git_fetch` (git somente leitura)
 - `web_search`, `web_fetch` (leitura de rede)
-- `delegate`, `list_agents` (delegação para agentes do pool)
+- `tasks_create`, `tasks_delegate`, `tasks_cancel`, `list_agents` (tasks e delegação para agentes do pool)
 - `replace_text`, `memory_save` e git de mutação (`git_add`, `git_commit`, `git_checkout`, `git_push`), sujeitos a aprovação
 
 Ferramentas de escrita ampla e shell (`run_shell`, `write_file`, `apply_patch`, `remove_file`, `exec_command`) **não são expostas** por esse conjunto.

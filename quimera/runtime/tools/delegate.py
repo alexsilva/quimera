@@ -32,7 +32,7 @@ from .base import ToolBase, ValidatableTool
 
 logger = logging.getLogger(__name__)
 
-_DELEGATE_TOOL_NAMES = ["delegate", "list_agents"]
+_DELEGATE_TOOL_NAMES = ["tasks_delegate", "list_agents"]
 _DELEGATE_ROLES = frozenset({"planner", "executor", "reviewer", "verifier", "synthesizer"})
 _DELEGATE_TIMEOUT_CANCEL_JOIN_SECONDS = 2.0
 
@@ -322,7 +322,7 @@ class DelegateTools(ToolBase):
         return False
 
     def is_delegate_available(self) -> bool:
-        """Indica se a tool delegate está operável no contexto atual."""
+        """Indica se a tool tasks_delegate está operável no contexto atual."""
         return callable(self._delegate_fn)
 
     @staticmethod
@@ -521,7 +521,7 @@ class DelegateTools(ToolBase):
 
         O recibo estruturado de falha (quando existir em result.data) é
         persistido nas notes da task, para que o delegador possa diagnosticar
-        a causa via list_tasks mesmo em delegações assíncronas. No sucesso via
+        a causa via tasks_list mesmo em delegações assíncronas. No sucesso via
         fallback, o recibo de fallback vai para as notes e assigned_to passa a
         refletir o agente que de fato executou.
         """
@@ -667,7 +667,7 @@ class DelegateTools(ToolBase):
         """Registra a delegação como job/task e executa em background thread.
 
         Retorna imediatamente {job_id, task_id, status: in_progress} para o
-        chamador acompanhar via list_tasks/get_job; o resultado final é
+        chamador acompanhar via tasks_list/jobs_get; o resultado final é
         persistido na task (completed/failed). Usado por wait=false em
         qualquer transporte e sempre por HTTP MCP sem SSE, que não sustenta
         uma chamada bloqueante longa.
@@ -701,7 +701,7 @@ class DelegateTools(ToolBase):
         _cleanup_cb = self._cleanup_callback
 
         # A delegação assíncrona vira endereçável: o delegador (ou o humano)
-        # pode cancelá-la via tasks {action: "cancel", task_id}.
+        # pode cancelá-la via tasks_cancel {task_id}.
         entry = _register_active_delegation(
             task_id,
             job_id=job_id,
@@ -760,7 +760,7 @@ class DelegateTools(ToolBase):
             "task_status": "in_progress",
             "started_at": job_snapshot.get("started_at"),
             "hint": (
-                f"acompanhe com list_tasks {{\"id\": {task_id}}}; "
+                f"acompanhe com tasks_list {{\"id\": {task_id}}}; "
                 "o resultado final é salvo na task"
             ),
         }
@@ -1071,7 +1071,7 @@ class DelegateTools(ToolBase):
         request_cancel_event: _CancelSignal | None = None,
     ) -> ToolResult:
         """Loop sequencial de execução dos steps — reusado síncrono e assíncrono."""
-        tool_name = "delegate"
+        tool_name = "tasks_delegate"
         step_outputs: list[str] = []
         successes: list[tuple[int, dict, str | None, list[dict]]] = []
 
@@ -1171,7 +1171,7 @@ class DelegateTools(ToolBase):
         request_cancel_event: _CancelSignal | None = None,
     ) -> ToolResult:
         """Execução paralela de steps — cada step roda em thread própria."""
-        tool_name = "delegate"
+        tool_name = "tasks_delegate"
         n = len(steps)
         timeout_cancelled = threading.Event()
 
@@ -1438,7 +1438,7 @@ class DelegateTools(ToolBase):
             if result.ok:
                 footer = (
                     f"[delegação registrada como task {task_id} (job {job_id}); "
-                    "resultado persistido — consultável via list_tasks]"
+                    "resultado persistido — consultável via tasks_list]"
                 )
                 result.content = f"{result.content}\n\n{footer}" if result.content else footer
         return result
@@ -1455,7 +1455,7 @@ class DelegateTools(ToolBase):
             return value, None
         original_len = len(value)
         marker = (
-            f"\n...[truncado pela tool delegate: {label} original tinha "
+            f"\n...[truncado pela tool tasks_delegate: {label} original tinha "
             f"{original_len} caracteres, limite {max_chars}]"
         )
         truncated = value[: max(0, max_chars - len(marker))] + marker
@@ -1476,7 +1476,7 @@ class DelegateTools(ToolBase):
             result.content = f"{notice}\n\n{result.content}" if result.content else notice
         return result
 
-    def delegate(self, call: ToolCall) -> ToolResult:
+    def tasks_delegate(self, call: ToolCall) -> ToolResult:
         """Despacha uma tarefa para outro agente Quimera via MCP tool."""
         if not self.is_delegate_available():
             return ToolResult(
@@ -1816,8 +1816,8 @@ class DelegateToolsValidator(ValidatableTool):
             if not isinstance(item, str) or not item.strip():
                 raise ToolPolicyError(f"{field_name}[{idx}] deve ser string não vazia")
 
-    def _validate_delegate(self, call: ToolCall) -> None:
-        """Valida delegate: bloqueia campos reservados e exige target_agent/request."""
+    def _validate_tasks_delegate(self, call: ToolCall) -> None:
+        """Valida tasks_delegate: bloqueia campos reservados e exige target_agent/request."""
         reserved = {
             "allowlisted",
             "approval_budget",
@@ -1829,43 +1829,43 @@ class DelegateToolsValidator(ValidatableTool):
         present_reserved = sorted(reserved.intersection(call.arguments))
         if present_reserved:
             raise ToolPolicyError(
-                "delegate recebeu campos reservados não confiáveis: "
+                "tasks_delegate recebeu campos reservados não confiáveis: "
                 + ", ".join(present_reserved)
             )
         target_agent = call.arguments.get("target_agent")
         request = call.arguments.get("request")
         if not isinstance(target_agent, str) or not target_agent.strip():
-            raise ToolPolicyError("delegate requer 'target_agent' não vazio")
+            raise ToolPolicyError("tasks_delegate requer 'target_agent' não vazio")
         if not isinstance(request, str) or not request.strip():
-            raise ToolPolicyError("delegate requer 'request' não vazia")
+            raise ToolPolicyError("tasks_delegate requer 'request' não vazia")
         context = call.arguments.get("context")
         if context is not None and not isinstance(context, str):
-            raise ToolPolicyError("delegate.context deve ser string quando fornecido")
-        self._validate_role(call.arguments.get("role"), "delegate.role")
-        self._validate_access_list(call.arguments.get("access_list"), "delegate.access_list")
+            raise ToolPolicyError("tasks_delegate.context deve ser string quando fornecido")
+        self._validate_role(call.arguments.get("role"), "tasks_delegate.role")
+        self._validate_access_list(call.arguments.get("access_list"), "tasks_delegate.access_list")
         fallback_agents = call.arguments.get("fallback_agents", [])
         if fallback_agents is not None and not isinstance(fallback_agents, list):
-            raise ToolPolicyError("delegate.fallback_agents deve ser uma lista")
+            raise ToolPolicyError("tasks_delegate.fallback_agents deve ser uma lista")
         wait = call.arguments.get("wait")
         if wait is not None and not isinstance(wait, bool):
-            raise ToolPolicyError("delegate.wait deve ser booleano quando fornecido")
+            raise ToolPolicyError("tasks_delegate.wait deve ser booleano quando fornecido")
         steps = call.arguments.get("steps")
         if steps is not None:
             if not isinstance(steps, list):
-                raise ToolPolicyError("delegate.steps deve ser uma lista")
+                raise ToolPolicyError("tasks_delegate.steps deve ser uma lista")
             for i, step in enumerate(steps):
                 if not isinstance(step, dict):
-                    raise ToolPolicyError(f"delegate.steps[{i}] deve ser um objeto")
+                    raise ToolPolicyError(f"tasks_delegate.steps[{i}] deve ser um objeto")
                 step_target = step.get("target_agent")
                 step_request = step.get("request")
                 if not isinstance(step_target, str) or not step_target.strip():
-                    raise ToolPolicyError(f"delegate.steps[{i}].target_agent não pode ser vazio")
+                    raise ToolPolicyError(f"tasks_delegate.steps[{i}].target_agent não pode ser vazio")
                 if not isinstance(step_request, str) or not step_request.strip():
-                    raise ToolPolicyError(f"delegate.steps[{i}].request não pode ser vazio")
-                self._validate_role(step.get("role"), f"delegate.steps[{i}].role")
+                    raise ToolPolicyError(f"tasks_delegate.steps[{i}].request não pode ser vazio")
+                self._validate_role(step.get("role"), f"tasks_delegate.steps[{i}].role")
                 self._validate_access_list(
                     step.get("access_list"),
-                    f"delegate.steps[{i}].access_list",
+                    f"tasks_delegate.steps[{i}].access_list",
                 )
 
     def _validate_list_agents(self, call: ToolCall) -> None:

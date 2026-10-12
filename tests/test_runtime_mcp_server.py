@@ -365,13 +365,13 @@ class TestToolsCall:
             "id": 11,
             "method": "tools/call",
             "params": {
-                "name": "tasks",
+                "name": "tasks_create",
                 "arguments": {"description": "não deve executar"},
             },
         })
 
         assert resp["error"]["code"] == -32602
-        assert resp["error"]["message"] == "Unknown tool: tasks"
+        assert resp["error"]["message"] == "Unknown tool: tasks_create"
 
     def test_shutdown_signals_running_tool_before_waiting(self):
         executor = _make_executor(tool_names=["read_file"])

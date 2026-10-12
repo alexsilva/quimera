@@ -571,7 +571,7 @@ def test_executor_delegate_dispatches_with_delegation_mode(tmp_path):
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={
                 "target_agent": "codex",
                 "request": "ajuste de bug",
@@ -591,7 +591,7 @@ def test_executor_delegate_dispatches_with_delegation_mode(tmp_path):
     assert kwargs["delegation"]["delegation_id"].startswith("dlg-")
     assert kwargs["delegation"]["chain"] == ["codex"]
     # Delegação rastreada é cancelável: o handle propaga o cancelamento do
-    # delegador (tasks action=cancel) até o AgentClient do dispatch.
+    # delegador (tasks_cancel) até o AgentClient do dispatch.
     from quimera.runtime.tools.delegate import _DelegateStepCancelHandle
     assert isinstance(kwargs["cancel_handle"], _DelegateStepCancelHandle)
     assert kwargs == {
@@ -616,7 +616,7 @@ def test_executor_delegate_fails_when_dispatch_not_injected(tmp_path):
     executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
 
     result = executor.execute(
-        ToolCall(name="delegate", arguments={"target_agent": "codex", "request": "x"})
+        ToolCall(name="tasks_delegate", arguments={"target_agent": "codex", "request": "x"})
     )
 
     assert result.ok is False
@@ -626,7 +626,7 @@ def test_executor_delegate_fails_when_dispatch_not_injected(tmp_path):
 def test_executor_delegate_internal_would_not_require_human_approval(tmp_path):
     """delegate interno passa por policy/broker, mas é auto-aprovado dentro do budget."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
-    call = ToolCall(name="delegate", arguments={"target_agent": "codex", "request": "x"})
+    call = ToolCall(name="tasks_delegate", arguments={"target_agent": "codex", "request": "x"})
 
     assert executor.would_require_approval(call) is False
 
@@ -634,7 +634,7 @@ def test_executor_delegate_internal_would_not_require_human_approval(tmp_path):
 def test_policy_phase_methods_for_delegate(tmp_path):
     """delegate agora passa por policy/approval broker como risco de delegação."""
     policy = ToolPolicy(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
-    delegate = ToolCall(name="delegate", arguments={"target_agent": "codex", "request": "x"})
+    delegate = ToolCall(name="tasks_delegate", arguments={"target_agent": "codex", "request": "x"})
     read_file = ToolCall(name="read_file", arguments={"path": "x.txt"})
 
     assert policy.requires_validation(delegate) is True
@@ -653,7 +653,7 @@ def test_executor_delegate_goes_through_broker_without_human_prompt_when_interna
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={"target_agent": "codex", "request": "x", "context": "ctx"},
         )
     )
@@ -674,7 +674,7 @@ def test_executor_delegate_rejects_non_string_context(tmp_path):
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={"target_agent": "codex", "request": "x", "context": {"invalid": True}},
         )
     )
@@ -701,7 +701,7 @@ def test_executor_delegate_uses_fallback_agents_sequentially(tmp_path):
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={
                 "target_agent": "codex",
                 "request": "x",
@@ -729,7 +729,7 @@ def test_executor_delegate_supports_multiple_sequential_delegations(tmp_path):
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={
                 "target_agent": "codex",
                 "request": "task-1",
@@ -760,7 +760,7 @@ def test_executor_delegate_propagates_role_and_access_list(tmp_path):
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={
                 "target_agent": "codex",
                 "request": "implemente",
@@ -801,7 +801,7 @@ def test_executor_delegate_fallback_inherits_role_and_access_list(tmp_path):
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={
                 "target_agent": "codex",
                 "request": "implemente",
@@ -826,7 +826,7 @@ def test_executor_delegate_rejects_agents_outside_active_pool(tmp_path):
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={
                 "target_agent": "opencode-big-pickle",
                 "request": "x",
@@ -860,7 +860,7 @@ def test_executor_delegate_rejects_inactive_agent_between_delegation_steps(tmp_p
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={
                 "target_agent": "codex",
                 "request": "task-1",
@@ -889,7 +889,7 @@ def test_executor_delegate_preserves_detailed_request_within_limits(tmp_path):
     detailed_context = "c" * 12_000
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={
                 "target_agent": "codex",
                 "request": detailed_task,

@@ -31,7 +31,7 @@ from quimera.tasks import api as task_api
 
 def _make_call(args: dict | None = None, metadata: dict | None = None) -> ToolCall:
     return ToolCall(
-        name="delegate",
+        name="tasks_delegate",
         arguments=args or {"target_agent": "codex", "request": "faz algo"},
         metadata=metadata or {},
     )
@@ -82,7 +82,7 @@ class TestSyncTracking:
         tools, db_path = tools_com_db
         tools.set_delegate_fn(MagicMock(return_value="resposta do agente"))
 
-        result = tools.delegate(_make_call())
+        result = tools.tasks_delegate(_make_call())
 
         assert result.ok is True
         assert result.content.startswith("resposta do agente")
@@ -103,7 +103,7 @@ class TestSyncTracking:
         tools, db_path = tools_com_db
         tools.set_delegate_fn(MagicMock(return_value=None))
 
-        result = tools.delegate(_make_call())
+        result = tools.tasks_delegate(_make_call())
 
         assert result.ok is False
         rows = task_api.list_tasks({"id": result.data["task_id"]}, db_path=db_path)
@@ -114,7 +114,7 @@ class TestSyncTracking:
     def test_sync_sem_db_preserva_comportamento(self, tools_sem_db):
         tools_sem_db.set_delegate_fn(MagicMock(return_value="resposta pura"))
 
-        result = tools_sem_db.delegate(_make_call())
+        result = tools_sem_db.tasks_delegate(_make_call())
 
         assert result.ok is True
         assert result.content == "resposta pura"
@@ -133,7 +133,7 @@ class TestSyncTracking:
             "parallel": True,
         })
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         assert result.ok is True
         assert "[codex] r1" in result.content
@@ -151,7 +151,7 @@ class TestSyncTracking:
         tools._get_db_path = lambda: str(tmp_path)
         tools.set_delegate_fn(MagicMock(return_value="ok mesmo sem tracking"))
 
-        result = tools.delegate(_make_call())
+        result = tools.tasks_delegate(_make_call())
 
         assert result.ok is True
         assert result.content == "ok mesmo sem tracking"
@@ -175,13 +175,13 @@ class TestWaitFalse:
             "target_agent": "codex", "request": "faz algo", "wait": False,
         })
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         assert result.ok is True
         payload = json.loads(result.content)
         assert payload["status"] == "in_progress"
         assert payload["task_status"] == "in_progress"
-        assert "list_tasks" in payload["hint"]
+        assert "tasks_list" in payload["hint"]
         rows = task_api.list_tasks({"id": payload["task_id"]}, db_path=db_path)
         assert rows and rows[0]["status"] == "in_progress"
 
@@ -201,7 +201,7 @@ class TestWaitFalse:
             "target_agent": "codex", "request": "faz algo", "wait": False,
         })
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         assert result.ok is True
         task_id = json.loads(result.content)["task_id"]
@@ -224,7 +224,7 @@ class TestWaitFalse:
             "wait": False,
         })
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         assert result.ok is True
         task_id = json.loads(result.content)["task_id"]
@@ -238,7 +238,7 @@ class TestWaitFalse:
             "target_agent": "codex", "request": "faz algo", "wait": False,
         })
 
-        result = tools_sem_db.delegate(call)
+        result = tools_sem_db.tasks_delegate(call)
 
         assert result.ok is False
         assert "db_path not configured" in (result.error or "")
@@ -249,7 +249,7 @@ class TestWaitFalse:
             "target_agent": "codex", "request": "faz algo", "wait": "sim",
         })
 
-        result = tools_sem_db.delegate(call)
+        result = tools_sem_db.tasks_delegate(call)
 
         assert result.ok is False
         assert "'wait' must be a boolean" in (result.error or "")
@@ -271,8 +271,8 @@ class TestParidadeHttp:
         tools, db_path = tools_com_db
         tools.set_delegate_fn(MagicMock(return_value="via http"))
 
-        result_http = tools.delegate(self._http_call())
-        result_native = tools.delegate(_make_call(args={
+        result_http = tools.tasks_delegate(self._http_call())
+        result_native = tools.tasks_delegate(_make_call(args={
             "target_agent": "codex", "request": "faz algo", "wait": False,
         }))
 
@@ -303,7 +303,7 @@ class TestParidadeHttp:
             "parallel": True,
         })
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         assert result.ok is True
         task_id = json.loads(result.content)["task_id"]
@@ -316,7 +316,7 @@ class TestParidadeHttp:
         tools, db_path = tools_com_db
         tools.set_delegate_fn(MagicMock(return_value="inline via sse"))
 
-        result = tools.delegate(self._http_call(sse=True))
+        result = tools.tasks_delegate(self._http_call(sse=True))
 
         assert result.ok is True
         assert result.content.startswith("inline via sse")
@@ -332,7 +332,7 @@ class TestParidadeHttp:
             sse=True,
         )
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         assert result.ok is True
         payload = json.loads(result.content)
@@ -366,7 +366,7 @@ class TestFailureReceipt:
         }
         tools.set_delegate_fn(self._failing_fn(receipt))
 
-        result = tools.delegate(_make_call())
+        result = tools.tasks_delegate(_make_call())
 
         assert result.ok is False
         assert "process_died" in (result.error or "")
@@ -385,7 +385,7 @@ class TestFailureReceipt:
         receipt = {"error_kind": "rate_limited", "retry_after": 30}
         tools.set_delegate_fn(self._failing_fn(receipt))
 
-        result = tools.delegate(_make_call())
+        result = tools.tasks_delegate(_make_call())
 
         rows = task_api.list_tasks({"id": result.data["task_id"]}, db_path=db_path)
         assert rows and rows[0]["status"] == "failed"
@@ -410,7 +410,7 @@ class TestFailureReceipt:
             "fallback_agents": ["gemini"],
         })
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         assert result.ok is False
         attempts = result.data["failure_receipt"]["steps"][0]["attempts"]
@@ -421,7 +421,7 @@ class TestFailureReceipt:
         tools, _ = tools_com_db
         tools.set_delegate_fn(MagicMock(return_value=None))
 
-        result = tools.delegate(_make_call())
+        result = tools.tasks_delegate(_make_call())
 
         attempt = result.data["failure_receipt"]["steps"][0]["attempts"][0]
         assert attempt["error_kind"] == "empty_response"
@@ -434,7 +434,7 @@ class TestFailureReceipt:
             "target_agent": "codex", "request": "faz algo", "wait": False,
         })
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         assert result.ok is True
         task_id = json.loads(result.content)["task_id"]
@@ -473,7 +473,7 @@ class TestFallbackReceipt:
             "fallback_agents": ["gemini"],
         })
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         assert result.ok is True
         receipt = result.data["fallback_receipt"]
@@ -494,7 +494,7 @@ class TestFallbackReceipt:
             "fallback_agents": ["gemini"],
         })
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         rows = task_api.list_tasks({"id": result.data["task_id"]}, db_path=db_path)
         assert rows and rows[0]["status"] == "completed"
@@ -506,7 +506,7 @@ class TestFallbackReceipt:
         tools, db_path = tools_com_db
         tools.set_delegate_fn(MagicMock(return_value="direto"))
 
-        result = tools.delegate(_make_call())
+        result = tools.tasks_delegate(_make_call())
 
         assert result.ok is True
         assert "fallback_receipt" not in result.data
@@ -524,7 +524,7 @@ class TestFallbackReceipt:
             "wait": False,
         })
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         task_id = json.loads(result.content)["task_id"]
         row = _wait_task_status(db_path, task_id, "completed")
@@ -543,7 +543,7 @@ class TestFallbackReceipt:
             "parallel": True,
         })
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         assert result.ok is True
         steps = result.data["fallback_receipt"]["steps"]
@@ -576,7 +576,7 @@ class TestFallbackReceipt:
             "steps": [{"target_agent": "claude", "request": "t2"}],
         })
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         assert result.ok is False
         failure = result.data["failure_receipt"]["steps"][0]
@@ -658,7 +658,7 @@ class TestFallbackReceipt:
             "wait": False,
         })
 
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
 
         task_id = json.loads(result.content)["task_id"]
         row = _wait_task_status(db_path, task_id, "failed")
@@ -724,24 +724,24 @@ class TestFallbackReceipt:
                 transport="http_mcp", run_id="r-fb", agent_name="claude",
             ),
         }
-        call = ToolCall(name="delegate", arguments={
+        call = ToolCall(name="tasks_delegate", arguments={
             "target_agent": "codex",
             "request": "t1",
             "fallback_agents": ["gemini"],
             "steps": [{"target_agent": "sonnet", "request": "t2"}],
             "wait": False,
         }, metadata=metadata)
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         task_id = json.loads(result.content)["task_id"]
         assert started.wait(timeout=5)
 
         task_tools = TaskTools(ToolRuntimeConfig(workspace=tools.workspace))
         cancel_call = ToolCall(
-            name="tasks",
-            arguments={"action": "cancel", "task_id": task_id},
+            name="tasks_cancel",
+            arguments={"task_id": task_id},
             metadata=metadata,
         )
-        cancel_result = task_tools.tasks(cancel_call)
+        cancel_result = task_tools.tasks_cancel(cancel_call)
         assert cancel_result.ok is True
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline and not cancelled.is_set():
@@ -784,8 +784,8 @@ class TestFallbackReceipt:
                 agent_name="claude",
             ),
         }
-        result = tools.delegate(ToolCall(
-            name="delegate",
+        result = tools.tasks_delegate(ToolCall(
+            name="tasks_delegate",
             arguments={
                 "target_agent": "codex",
                 "request": "t1",
@@ -798,9 +798,9 @@ class TestFallbackReceipt:
         assert fallback_started.wait(timeout=5)
 
         task_tools = TaskTools(ToolRuntimeConfig(workspace=tools.workspace))
-        cancel_result = task_tools.tasks(ToolCall(
-            name="tasks",
-            arguments={"action": "cancel", "task_id": task_id},
+        cancel_result = task_tools.tasks_cancel(ToolCall(
+            name="tasks_cancel",
+            arguments={"task_id": task_id},
             metadata=metadata,
         ))
         assert cancel_result.ok is True
@@ -846,7 +846,7 @@ class TestFinalizeContraEscritoresConcorrentes:
             lambda: task_api.release_agent_tasks("codex", db_path=db_path),
         ))
 
-        result = tools.delegate(_make_call())
+        result = tools.tasks_delegate(_make_call())
 
         rows = task_api.list_tasks({"id": result.data["task_id"]}, db_path=db_path)
         assert rows and rows[0]["status"] == "failed"
@@ -871,7 +871,7 @@ class TestFinalizeContraEscritoresConcorrentes:
             receipt, self._reset_tracking_task(db_path),
         ))
 
-        result = tools.delegate(_make_call())
+        result = tools.tasks_delegate(_make_call())
 
         rows = task_api.list_tasks({"id": result.data["task_id"]}, db_path=db_path)
         assert rows and rows[0]["status"] == "failed"
@@ -890,7 +890,7 @@ class TestFinalizeContraEscritoresConcorrentes:
 
         tools.set_delegate_fn(_fn)
 
-        result = tools.delegate(_make_call())
+        result = tools.tasks_delegate(_make_call())
 
         assert result.ok is True
         rows = task_api.list_tasks({"id": result.data["task_id"]}, db_path=db_path)
@@ -926,10 +926,10 @@ class TestCancelamentoPeloDelegador:
             metadata["trusted_context"] = TrustedToolExecutionContext(
                 transport="http_mcp", run_id="r-cancel", agent_name=agent_name,
             )
-        args: dict = {"action": "cancel", "task_id": task_id}
+        args: dict = {"task_id": task_id}
         if reason:
             args["reason"] = reason
-        return ToolCall(name="tasks", arguments=args, metadata=metadata)
+        return ToolCall(name="tasks_cancel", arguments=args, metadata=metadata)
 
     def _start_async_delegation(self, tools, source_agent: str = "claude"):
         started = threading.Event()
@@ -945,7 +945,7 @@ class TestCancelamentoPeloDelegador:
             args={"target_agent": "codex", "request": "tarefa longa", "wait": False},
             metadata=metadata,
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is True
         task_id = json.loads(result.content)["task_id"]
         assert started.wait(timeout=5), "delegate_fn não iniciou"
@@ -956,7 +956,7 @@ class TestCancelamentoPeloDelegador:
         task_id, release, observed = self._start_async_delegation(tools)
         task_tools = self._task_tools(tools.workspace)
 
-        result = task_tools.tasks(self._cancel_call(task_id, "claude", reason="mudei de plano"))
+        result = task_tools.tasks_cancel(self._cancel_call(task_id, "claude", reason="mudei de plano"))
 
         assert result.ok is True
         assert result.data["status"] == "cancelling"
@@ -981,7 +981,7 @@ class TestCancelamentoPeloDelegador:
         task_id, release, _ = self._start_async_delegation(tools, source_agent="claude")
         task_tools = self._task_tools(tools.workspace)
 
-        result = task_tools.tasks(self._cancel_call(task_id, "gemini"))
+        result = task_tools.tasks_cancel(self._cancel_call(task_id, "gemini"))
 
         assert result.ok is False
         assert "apenas quem delegou" in (result.error or "")
@@ -993,7 +993,7 @@ class TestCancelamentoPeloDelegador:
         task_id, release, _ = self._start_async_delegation(tools)
         task_tools = self._task_tools(tools.workspace)
 
-        result = task_tools.tasks(self._cancel_call(task_id, None))
+        result = task_tools.tasks_cancel(self._cancel_call(task_id, None))
 
         assert result.ok is True
         assert result.data["cancelled_by"] == "humano"
@@ -1003,10 +1003,10 @@ class TestCancelamentoPeloDelegador:
     def test_cancelar_task_inexistente_ou_terminada_retorna_erro(self, tools_com_db):
         tools, db_path = tools_com_db
         tools.set_delegate_fn(MagicMock(return_value="ok"))
-        done = tools.delegate(_make_call())
+        done = tools.tasks_delegate(_make_call())
         task_tools = self._task_tools(tools.workspace)
 
-        result = task_tools.tasks(self._cancel_call(done.data["task_id"], "claude"))
+        result = task_tools.tasks_cancel(self._cancel_call(done.data["task_id"], "claude"))
 
         assert result.ok is False
         assert "não é uma delegação em execução" in (result.error or "")
@@ -1041,7 +1041,7 @@ class TestCancelamentoCorridasEAutorizacao:
             args={"target_agent": "codex", "request": "tarefa longa", "wait": False},
             metadata=metadata,
         )
-        result = tools.delegate(call)
+        result = tools.tasks_delegate(call)
         assert result.ok is True
         task_id = json.loads(result.content)["task_id"]
         assert started.wait(timeout=5)
@@ -1059,7 +1059,7 @@ class TestCancelamentoCorridasEAutorizacao:
         assert entry.mark_finalized() is False
         task_tools = self._task_tools(tools.workspace)
 
-        result = task_tools.tasks(self._cancel_call(task_id, "claude"))
+        result = task_tools.tasks_cancel(self._cancel_call(task_id, "claude"))
 
         assert result.ok is False
         assert "já foi finalizada" in (result.error or "")
@@ -1080,7 +1080,7 @@ class TestCancelamentoCorridasEAutorizacao:
         task_id, release, _ = self._start(tools, source_agent=None)
         task_tools = self._task_tools(tools.workspace)
 
-        result = task_tools.tasks(self._cancel_call(task_id, "gemini"))
+        result = task_tools.tasks_cancel(self._cancel_call(task_id, "gemini"))
 
         assert result.ok is False
         assert "apenas quem delegou" in (result.error or "")
@@ -1093,8 +1093,8 @@ class TestCancelamentoCorridasEAutorizacao:
         task_id, release, _ = self._start(tools)
         task_tools = self._task_tools(tools.workspace)
         call = ToolCall(
-            name="tasks",
-            arguments={"action": "cancel", "task_id": task_id},
+            name="tasks_cancel",
+            arguments={"task_id": task_id},
             metadata={
                 "trusted_context": TrustedToolExecutionContext(
                     transport="http_mcp", run_id="r-anon", agent_name=None,
@@ -1102,7 +1102,7 @@ class TestCancelamentoCorridasEAutorizacao:
             },
         )
 
-        result = task_tools.tasks(call)
+        result = task_tools.tasks_cancel(call)
 
         assert result.ok is False
         assert "requer identidade" in (result.error or "")
@@ -1114,7 +1114,7 @@ class TestCancelamentoCorridasEAutorizacao:
         task_id, release, _ = self._start(tools)
         task_tools = self._task_tools(tools.workspace)
 
-        assert task_tools.tasks(self._cancel_call(task_id, "claude")).ok is True
+        assert task_tools.tasks_cancel(self._cancel_call(task_id, "claude")).ok is True
         release.set()
         _wait_task_status(db_path, task_id, "cancelled")
         job = task_api.list_jobs(db_path=db_path)[-1]
@@ -1144,7 +1144,7 @@ class TestCancelamentoCorridasEAutorizacao:
         holder: dict = {}
 
         def _run():
-            holder["result"] = tools.delegate(call)
+            holder["result"] = tools.tasks_delegate(call)
 
         worker = threading.Thread(target=_run, daemon=True)
         worker.start()
@@ -1176,7 +1176,7 @@ class TestCancelamentoCorridasEAutorizacao:
             "quimera.runtime.tools.delegate.threading.Thread",
             return_value=thread_mock,
         ):
-            result = tools.delegate(call)
+            result = tools.tasks_delegate(call)
 
         assert result.ok is False
         assert "failed to start delegate thread" in (result.error or "")

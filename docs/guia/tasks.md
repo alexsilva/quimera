@@ -84,8 +84,11 @@ O histórico de agentes falhos fica na própria task, junto com contador de tent
 
 Agentes com MCP podem chamar:
 
-- `list_tasks` para filtrar tasks;
-- `list_jobs` para listar jobs de sessão;
-- `get_job` para detalhes de um job.
+- `tasks_create` para criar uma task pelo mesmo fluxo do `/task` (roteador + revisão por outro agente);
+- `tasks_delegate` para delegar a um agente escolhido, sem fila nem revisão;
+- `tasks_list` para filtrar tasks;
+- `tasks_cancel` para cancelar uma delegação em execução (só quem delegou, ou o humano);
+- `jobs_list` para listar jobs de sessão;
+- `jobs_get` para detalhes de um job.
 
 No prompt, o Quimera injeta uma visão resumida das tasks abertas e resultados concluídos quando disponível.

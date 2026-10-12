@@ -3648,7 +3648,7 @@ def test_textual_feed_replaces_delegate_preview_with_delegation_card():
     model.apply(
         TextualUiEvent(
             "tool_preview",
-            f"⚒ delegate opencode-big-pickle verifier {task} False",
+            f"⚒ tasks_delegate opencode-big-pickle verifier {task} False",
             agent="codex",
         )
     )

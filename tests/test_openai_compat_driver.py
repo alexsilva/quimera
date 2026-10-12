@@ -164,8 +164,8 @@ def test_schema_names_match_registered_tools():
     expected = {
         "list_files", "read_file", "write_file", "replace_text", "apply_patch", "grep_search",
         "inspect_symbols", "run_shell",
-        "exec_command", "write_stdin", "poll_command_session", "close_command_session", "tasks", "list_tasks", "list_jobs",
-        "get_job", "memory_save", "memory_retrieve", "memory_delete", "memory_list_namespaces", "remove_file", "web_search", "web_fetch", "http_request", "delegate",
+        "exec_command", "write_stdin", "poll_command_session", "close_command_session", "tasks_create", "tasks_delegate", "tasks_list", "tasks_cancel", "jobs_list",
+        "jobs_get", "memory_save", "memory_retrieve", "memory_delete", "memory_list_namespaces", "remove_file", "web_search", "web_fetch", "http_request",
         "todo_write", "todo_list", "list_agents", "ask_user", "update_shared_state",
         "tool_search",
         "browser_start", "browser_status", "browser_close", "browser_navigate",
@@ -184,7 +184,7 @@ def test_schema_names_match_registered_tools():
 
 def test_delegate_schema_mentions_existing_profiles():
     """Descrição do delegate deve orientar para perfis existentes, não exemplos obsoletos."""
-    schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "delegate")
+    schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "tasks_delegate")
     text = json.dumps(schema["function"], ensure_ascii=False)
 
     assert "list_agents" in text
@@ -192,7 +192,7 @@ def test_delegate_schema_mentions_existing_profiles():
 
 def test_delegate_schema_includes_role_and_access_list():
     """Schema do delegate expõe role/access_list na raiz e nos steps."""
-    schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "delegate")
+    schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "tasks_delegate")
     properties = schema["function"]["parameters"]["properties"]
     step_properties = properties["steps"]["items"]["properties"]
 
@@ -210,7 +210,7 @@ def test_resolve_tool_schemas_hides_task_tools_without_db():
     mock_executor.registry.names.return_value = [
         "list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
         "exec_command", "write_stdin", "close_command_session",
-        "list_tasks", "list_jobs", "get_job", "remove_file",
+        "tasks_list", "jobs_list", "jobs_get", "remove_file",
     ]
 
     actual = {s["function"]["name"] for s in resolve_tool_schemas(mock_executor)}
@@ -269,7 +269,7 @@ def test_resolve_tool_schemas_hides_delegate_when_not_bound():
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
 
     actual = {s["function"]["name"] for s in resolve_tool_schemas(mock_executor)}
-    assert "delegate" not in actual
+    assert "tasks_delegate" not in actual
     assert "list_agents" not in actual
 
 
@@ -288,8 +288,8 @@ def test_resolve_tool_schemas_hides_tasks_when_not_bound():
 
     actual = {schema["function"]["name"] for schema in resolve_tool_schemas(mock_executor)}
 
-    assert "tasks" not in actual
-    assert "list_tasks" in actual
+    assert "tasks_create" not in actual
+    assert "tasks_list" in actual
 
 
 def test_required_args_are_lists():
@@ -1386,7 +1386,7 @@ def test_run_tools_system_prompt_keeps_user_role_for_real_request_only():
         "web_search",
         "web_fetch",
         "http_request",
-        "delegate",
+        "tasks_delegate",
         "list_agents",
         "todo_write",
         "todo_list",

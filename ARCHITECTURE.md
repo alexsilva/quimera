@@ -287,11 +287,11 @@ O Quimera implementa o protocolo MCP (`2025-11-25`, com negociação para versõ
 | **MCPServer** | `runtime/mcp/server.py` | Servidor JSON-RPC 2.0 sobre stdio/socket/HTTP. Métodos principais: lifecycle, `ping`, tools, resources, prompts, completion e logging |
 | **ToolExecutor** | `runtime/executor.py` | Executa tools com validação de política, aprovação e resolução de aliases |
 | **ToolRegistry** | `runtime/registry.py` | Registro nome → handler (dict simples) |
-| **DelegateTools** | `runtime/tools/delegate.py` | Implementa `delegate` — delegação cross-MCP entre agentes |
+| **DelegateTools** | `runtime/tools/delegate.py` | Implementa `tasks_delegate` — delegação cross-MCP entre agentes |
 | **Proxy stdio→socket** | `runtime/mcp/server.py:_proxy_stdio_to_socket` | Ponte transparente entre stdio do agente e socket Unix do servidor |
 | **Profile MCP injection** | `profiles/{claude,codex,opencode}.py` | Cada profile injeta config MCP no formato nativo do agente |
 | **Tool schemas** | `runtime/drivers/tool_schemas.py` | Fonte única de schemas: `resolve_tool_schemas()` filtra por registro/política |
-| **Prompt templates** | `prompt.md`, `delegate_prompt.md`, `task_prompt.md`, `task_reviewer_prompt.md` | Um template por `PromptKind` (`chat`, `delegation`, `task_executor`, `task_reviewer`); blocos `<!-- IF:... -->` ativam seções condicionais. `delegate` e debate usam `delegation`, que não carrega o contexto da conversa humana |
+| **Prompt templates** | `prompt.md`, `delegate_prompt.md`, `task_prompt.md`, `task_reviewer_prompt.md` | Um template por `PromptKind` (`chat`, `delegation`, `task_executor`, `task_reviewer`); blocos `<!-- IF:... -->` ativam seções condicionais. `tasks_delegate` e debate usam `delegation`, que não carrega o contexto da conversa humana |
 | **Config bridge** | `app/core.py:configure_mcp_socket()` / `configure_mcp_http()` | Propaga socket/http endpoint e token para todos os profiles ativos |
 
 #### 3.9.2 Fluxo de Inicialização
@@ -326,7 +326,7 @@ O servidor valida com timeout de 5s. Token inválido → conexão fechada.
 
 #### 3.9.5 Cross-MCP (delegate)
 
-A ferramenta `delegate` é o mecanismo central de interoperabilidade entre agentes no pool:
+A ferramenta `tasks_delegate` é o mecanismo central de interoperabilidade entre agentes no pool:
 
 - **Disponibilidade**: verifica se `_delegate_fn` foi injetado pelo `ToolExecutor.set_delegate_fn()`.
 - **Parâmetros**: `target_agent` (obrigatório), `request` (obrigatório), `context`, `fallback_agents`, `steps`.
@@ -338,7 +338,7 @@ A ferramenta `delegate` é o mecanismo central de interoperabilidade entre agent
 
 #### 3.9.6 MCP-First Mode
 
-Agentes devem usar exclusivamente a tool `delegate` via MCP. Envelopes textuais legados foram removidos.
+Agentes devem usar exclusivamente a tool `tasks_delegate` via MCP. Envelopes textuais legados foram removidos.
 
 #### 3.9.7 Ferramentas Expostas via tools/list
 
@@ -346,7 +346,7 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 1. Registro no executor (intersecção com handlers registrados)
 2. Configuração (tools de task ocultas sem db_path)
 3. Política (tools bloqueadas removidas)
-4. Disponibilidade de `delegate` (oculta se fn não injetada)
+4. Disponibilidade de `tasks_delegate` (oculta se fn não injetada)
 
 ### 3.10 Módulos Raiz de Prompt
 
@@ -476,11 +476,11 @@ O Quimera suporta dois mecanismos de delegation:
 
 #### 6.4.1 Delegation via MCP (delegate) — Preferencial
 
-Quando o MCP está ativo (padrão), os agentes usam a tool `delegate` exposta via protocolo MCP. Definido em `runtime/tools/delegate.py`:
+Quando o MCP está ativo (padrão), os agentes usam a tool `tasks_delegate` exposta via protocolo MCP. Definido em `runtime/tools/delegate.py`:
 
 ```json
 {
-  "name": "delegate",
+  "name": "tasks_delegate",
   "arguments": {
     "target_agent": "codex",
     "request": "Implementar função de leitura",

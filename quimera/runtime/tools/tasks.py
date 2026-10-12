@@ -1,4 +1,17 @@
-"""Componentes de `quimera.runtime.tools.tasks`."""
+"""Componentes de `quimera.runtime.tools.tasks`.
+
+Família ``tasks_*`` — verbos sobre o recurso task:
+
+- ``tasks_create``: cria uma task pelo mesmo fluxo do comando ``/task`` (o
+  roteador escolhe o executor e outro agente revisa);
+- ``tasks_delegate``: delegação a um alvo explícito, sem fila nem revisão
+  (implementada em ``delegate.py``);
+- ``tasks_list``: lista tasks com filtros;
+- ``tasks_cancel``: cancela uma delegação em execução.
+
+Jobs são outro substantivo e têm família própria ``jobs_*`` (``jobs_list``,
+``jobs_get``), implementada aqui por ``JobTools``.
+"""
 from __future__ import annotations
 
 import json
@@ -20,7 +33,8 @@ from .base import ToolBase, ValidatableTool
 
 logger = logging.getLogger(__name__)
 
-_TASK_TOOL_NAMES = ["tasks", "list_tasks", "list_jobs", "get_job"]
+_TASK_TOOL_NAMES = ["tasks_create", "tasks_list", "tasks_cancel"]
+_JOB_TOOL_NAMES = ["jobs_list", "jobs_get"]
 _LIVE_THINKING_MAX_CHARS = 400
 
 
@@ -53,8 +67,16 @@ class _CreateTaskFn(Protocol):
         ...
 
 
-class TaskTools(ToolBase):
-    """Ferramentas de criação e consulta a tasks e jobs."""
+class TaskTools(
+    ToolBase,
+    tool_prefix="tasks",
+    tool_public_methods=(
+        "set_create_task_fn",
+        "set_delegation_run_lookup",
+        "is_tasks_available",
+    ),
+):
+    """Ferramentas ``tasks_create``, ``tasks_list`` e ``tasks_cancel``."""
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de TaskTools."""
@@ -91,28 +113,35 @@ class TaskTools(ToolBase):
             return str(name).strip() if name else None
         return None
 
-    def tasks(self, call: ToolCall) -> ToolResult:
-        """Cria uma task (padrão) ou cancela uma delegação em execução.
+    @staticmethod
+    def _get_transport(call: ToolCall) -> str:
+        """Extrai o transporte do contexto confiável no metadata do ToolCall."""
+        ctx = call.metadata.get("trusted_context", {})
+        if isinstance(ctx, TrustedToolExecutionContext):
+            return ctx.transport
+        if isinstance(ctx, dict):
+            return str(ctx.get("transport", "native_tool_call"))
+        return "native_tool_call"
 
-        action="cancel" permite ao agente que delegou (ou ao humano) abortar
-        uma delegação rastreada como task — o alvo é terminado e a task
-        transiciona para o status 'cancelled' com recibo do que aconteceu.
+    def tasks_create(self, call: ToolCall) -> ToolResult:
+        """Cria uma task pelo mesmo fluxo do comando /task.
+
+        O roteador escolhe o executor pelo effective_score e outro agente
+        revisa o resultado. Retorna o recibo com task_id para acompanhamento
+        via ``tasks_list``.
         """
-        action = str(call.arguments.get("action") or "create").strip().lower()
-        if action == "cancel":
-            return self._cancel_delegation(call)
         if not callable(self._create_task_fn):
             return ToolResult(
                 ok=False,
                 tool_name=call.name,
-                error="tasks is unavailable outside an active Quimera session",
+                error="tasks_create is unavailable outside an active Quimera session",
             )
         requested_by = self._get_calling_agent(call)
         if not requested_by:
             return ToolResult(
                 ok=False,
                 tool_name=call.name,
-                error="tasks requires a trusted agent identity",
+                error="tasks_create requires a trusted agent identity",
             )
         description = str(call.arguments.get("description") or "").strip()
         try:
@@ -122,7 +151,7 @@ class TaskTools(ToolBase):
             )
             data = receipt.as_dict()
             data["monitor_with"] = {
-                "tool": "list_tasks",
+                "tool": "tasks_list",
                 "arguments": {"id": data["task_id"]},
             }
             return ToolResult(
@@ -141,18 +170,14 @@ class TaskTools(ToolBase):
             return ""
         return str(agent_name).strip().lower().lstrip("/")
 
-    @staticmethod
-    def _get_transport(call: ToolCall) -> str:
-        """Extrai o transporte do contexto confiável no metadata do ToolCall."""
-        ctx = call.metadata.get("trusted_context", {})
-        if isinstance(ctx, TrustedToolExecutionContext):
-            return ctx.transport
-        if isinstance(ctx, dict):
-            return str(ctx.get("transport", "native_tool_call"))
-        return "native_tool_call"
+    def tasks_cancel(self, call: ToolCall) -> ToolResult:
+        """Cancela uma delegação em execução.
 
-    def _cancel_delegation(self, call: ToolCall) -> ToolResult:
-        """Cancela uma delegação ativa, se o solicitante for quem delegou."""
+        Permitido ao agente que delegou (``source_agent``) ou ao humano. O alvo
+        é terminado e a task transiciona para o status ``cancelled`` com recibo
+        do que aconteceu. A checagem de dono é proteção contra acidente e bug,
+        não barreira contra agente hostil: o token MCP é um por sessão.
+        """
         from .delegate import get_active_delegation
 
         task_id = call.arguments.get("task_id")
@@ -160,7 +185,7 @@ class TaskTools(ToolBase):
             return ToolResult(
                 ok=False,
                 tool_name=call.name,
-                error="action='cancel' requer 'task_id' inteiro",
+                error="tasks_cancel requer 'task_id' inteiro",
             )
         requested_by = self._normalize_agent_identity(self._get_calling_agent(call))
         entry = get_active_delegation(task_id)
@@ -215,7 +240,7 @@ class TaskTools(ToolBase):
                 tool_name=call.name,
                 error=(
                     f"task {task_id} já foi finalizada; nada a cancelar "
-                    "(consulte list_tasks para o desfecho)"
+                    "(consulte tasks_list para o desfecho)"
                 ),
             )
         payload = {
@@ -224,7 +249,7 @@ class TaskTools(ToolBase):
             "cancelled_by": entry.cancelled_by,
             "targets": list(entry.targets),
             "hint": (
-                f"o cancelamento é assíncrono; acompanhe com list_tasks "
+                f"o cancelamento é assíncrono; acompanhe com tasks_list "
                 f"{{\"id\": {task_id}}} até o status 'cancelled'"
             ),
         }
@@ -234,22 +259,6 @@ class TaskTools(ToolBase):
             content=json.dumps(payload, ensure_ascii=False),
             data=payload,
         )
-
-    def _resolve_job_id(self, raw_job_id, *, allow_recent_fallback: bool = False) -> int | None:
-        """Resolve job id."""
-        job_id = raw_job_id
-        if job_id is None:
-            job_id = resolve_current_job_id()
-        if job_id is None and allow_recent_fallback:
-            try:
-                recent_jobs = _list_jobs({"status": "planning"}, db_path=self.workspace.tasks_db)
-                if not recent_jobs:
-                    recent_jobs = _list_jobs({"status": "active"}, db_path=self.workspace.tasks_db)
-                if recent_jobs:
-                    job_id = recent_jobs[-1]["id"]
-            except Exception:
-                return None
-        return job_id
 
     @staticmethod
     def _normalize_text(value: str) -> str:
@@ -305,7 +314,7 @@ class TaskTools(ToolBase):
                 view = self._delegation_run_lookup(delegation_id)
             except Exception:
                 logger.warning(
-                    "list_tasks: delegation run lookup failed for %s", delegation_id, exc_info=True,
+                    "tasks_list: delegation run lookup failed for %s", delegation_id, exc_info=True,
                 )
                 continue
             if not isinstance(view, dict):
@@ -328,8 +337,8 @@ class TaskTools(ToolBase):
         enriched["live"] = live
         return enriched
 
-    def list_tasks(self, call: ToolCall) -> ToolResult:
-        """Lista tasks."""
+    def tasks_list(self, call: ToolCall) -> ToolResult:
+        """Lista tasks com filtros (job_id, status, assigned_to, id ou filters)."""
         filt = self._build_filters(call.arguments)
         try:
             tasks = _list_tasks(filt, db_path=self.workspace.tasks_db)
@@ -345,7 +354,27 @@ class TaskTools(ToolBase):
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
-    def list_jobs(self, call: ToolCall) -> ToolResult:
+
+class JobTools(ToolBase, tool_prefix="jobs"):
+    """Ferramentas ``jobs_list`` e ``jobs_get``."""
+
+    def _resolve_job_id(self, raw_job_id, *, allow_recent_fallback: bool = False) -> int | None:
+        """Resolve job id."""
+        job_id = raw_job_id
+        if job_id is None:
+            job_id = resolve_current_job_id()
+        if job_id is None and allow_recent_fallback:
+            try:
+                recent_jobs = _list_jobs({"status": "planning"}, db_path=self.workspace.tasks_db)
+                if not recent_jobs:
+                    recent_jobs = _list_jobs({"status": "active"}, db_path=self.workspace.tasks_db)
+                if recent_jobs:
+                    job_id = recent_jobs[-1]["id"]
+            except Exception:
+                return None
+        return job_id
+
+    def jobs_list(self, call: ToolCall) -> ToolResult:
         """Lista jobs."""
         filt = dict(call.arguments.get("filters", {}) or {})
         for key in ("status", "created_by"):
@@ -358,7 +387,7 @@ class TaskTools(ToolBase):
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
-    def get_job(self, call: ToolCall) -> ToolResult:
+    def jobs_get(self, call: ToolCall) -> ToolResult:
         """Retorna job."""
         job_id = self._resolve_job_id(call.arguments.get("job_id"), allow_recent_fallback=True)
         if job_id is None:
@@ -380,23 +409,21 @@ class TaskTools(ToolBase):
 
 
 class TaskToolsValidator(ValidatableTool):
-    """Validação de policy para as ferramentas de tasks."""
+    """Validação de policy para as famílias ``tasks_*`` e ``jobs_*``."""
 
-    def _validate_tasks(self, call: ToolCall) -> None:
-        """Valida criação (description) ou cancelamento (task_id) conforme action."""
-        action = str(call.arguments.get("action") or "create").strip().lower()
-        if action == "cancel":
-            task_id = call.arguments.get("task_id")
-            if not isinstance(task_id, int) or isinstance(task_id, bool):
-                raise ToolPolicyError("tasks com action='cancel' requer 'task_id' inteiro")
-            return
-        if action != "create":
-            raise ToolPolicyError("tasks.action deve ser 'create' ou 'cancel'")
+    def _validate_tasks_create(self, call: ToolCall) -> None:
+        """Exige description não vazia."""
         description = call.arguments.get("description")
         if not isinstance(description, str) or not description.strip():
-            raise ToolPolicyError("tasks requer 'description' não vazia")
+            raise ToolPolicyError("tasks_create requer 'description' não vazia")
 
-    def _validate_list_tasks(self, call: ToolCall) -> None:
+    def _validate_tasks_cancel(self, call: ToolCall) -> None:
+        """Exige task_id inteiro."""
+        task_id = call.arguments.get("task_id")
+        if not isinstance(task_id, int) or isinstance(task_id, bool):
+            raise ToolPolicyError("tasks_cancel requer 'task_id' inteiro")
+
+    def _validate_tasks_list(self, call: ToolCall) -> None:
         """Exige ao menos um filtro para evitar DoS por listagem sem limites."""
         filt = call.arguments.get("filters") or {}
         has_top_level_filter = any(
@@ -406,21 +433,28 @@ class TaskToolsValidator(ValidatableTool):
         has_dict_filter = isinstance(filt, dict) and bool(filt)
         if not has_top_level_filter and not has_dict_filter:
             raise ToolPolicyError(
-                "list_tasks exige ao menos um filtro (job_id, status, assigned_to, id ou filters)"
+                "tasks_list exige ao menos um filtro (job_id, status, assigned_to, id ou filters)"
             )
 
-    def _validate_list_jobs(self, call: ToolCall) -> None:
-        """list_jobs não exige filtros obrigatórios."""
+    def _validate_jobs_list(self, call: ToolCall) -> None:
+        """jobs_list não exige filtros obrigatórios."""
 
-    def _validate_get_job(self, call: ToolCall) -> None:
-        """get_job não exige job_id obrigatório (usa fallback)."""
+    def _validate_jobs_get(self, call: ToolCall) -> None:
+        """jobs_get não exige job_id obrigatório (usa fallback)."""
 
 
 def register(registry, policy, config) -> TaskTools:
-    """Registra todas as tools de tasks no registry e a validação na policy."""
+    """Registra as famílias tasks_*/jobs_* no registry e a validação na policy.
+
+    Retorna a instância de TaskTools para o executor injetar o serviço de
+    criação e o lookup de runs ao vivo.
+    """
     task_tools = TaskTools(config)
-    task_validator = TaskToolsValidator(config)
+    job_tools = JobTools(config)
+    validator = TaskToolsValidator(config)
     for name in _TASK_TOOL_NAMES:
         registry.register(name, getattr(task_tools, name))
-    policy.register_tool_validator(_TASK_TOOL_NAMES, task_validator)
+    for name in _JOB_TOOL_NAMES:
+        registry.register(name, getattr(job_tools, name))
+    policy.register_tool_validator([*_TASK_TOOL_NAMES, *_JOB_TOOL_NAMES], validator)
     return task_tools

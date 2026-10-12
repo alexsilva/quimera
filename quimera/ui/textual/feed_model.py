@@ -877,7 +877,7 @@ class TextualFeedModel:
             for line_index in range(len(lines) - 1, -1, -1):
                 line = lines[line_index]
                 subject = self._tool_preview_subject(line)
-                if self._tool_preview_tool_name(subject) != "delegate":
+                if self._tool_preview_tool_name(subject) != "tasks_delegate":
                     continue
                 matches_task = not task_prefix or task_prefix in line
                 candidates.append((matches_task, item_index, agent, line_index))

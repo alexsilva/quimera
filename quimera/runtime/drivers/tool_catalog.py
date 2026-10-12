@@ -392,27 +392,16 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
  'required': ['ok', 'content']},
     ),
     ToolSpec(
-        name='tasks',
-        description='Cria uma task pelo mesmo fluxo do comando /task (action=create, padrão). '
+        name='tasks_create',
+        description='Cria uma task pelo mesmo fluxo do comando /task: o roteador escolhe o '
+                    'executor pelo effective_score e outro agente revisa o resultado. Para '
+                    'escolher o alvo você mesmo, sem fila nem revisão, use tasks_delegate. '
                     'Retorna task_id, job_id, agente atribuído, tipo e status; acompanhe o '
-                    'resultado com list_tasks usando o ID. Com action=cancel, cancela uma '
-                    'delegação em execução identificada por task_id — permitido apenas ao agente '
-                    'que delegou (ou ao humano); a task transiciona para status cancelled com '
-                    'recibo do ocorrido.',
+                    'resultado com tasks_list usando o ID.',
         parameters={'type': 'object',
  'properties': {'description': {'type': 'string',
-                                'description': 'Descrição completa da task a executar '
-                                               '(obrigatória com action=create).'},
-                'action': {'type': 'string', 'enum': ['create', 'cancel'],
-                           'description': "Padrão 'create'. Use 'cancel' para abortar uma "
-                                          'delegação em execução.'},
-                'task_id': {'type': 'integer',
-                            'description': 'ID da task de delegação a cancelar '
-                                           '(obrigatório com action=cancel).'},
-                'reason': {'type': 'string',
-                           'description': 'Motivo opcional do cancelamento, registrado no '
-                                          'recibo da task.'}},
- 'required': []},
+                                'description': 'Descrição completa da task a executar.'}},
+ 'required': ['description']},
         output_schema={'type': 'object',
  'properties': {'ok': {'type': 'boolean'},
                 'content': {'type': 'string', 'description': 'JSON do recibo de criação'},
@@ -425,7 +414,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                                         'status': {'type': 'string'},
                                         'monitor_with': {'type': 'object',
                                                          'properties': {'tool': {'type': 'string',
-                                                                                 'enum': ['list_tasks']},
+                                                                                 'enum': ['tasks_list']},
                                                                         'arguments': {'type': 'object',
                                                                                       'properties': {'id': {'type': 'integer'}},
                                                                                       'required': ['id']}},
@@ -434,7 +423,95 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
  'required': ['ok', 'content']},
     ),
     ToolSpec(
-        name='list_tasks',
+        name='tasks_delegate',
+        description="Delega uma tarefa a um agente que você escolhe, sem fila nem revisão (para o fluxo roteado com revisão por outro agente, use tasks_create). Use quando precisar de especialidade específica, revisão independente, execução paralela ou fallback entre agentes existentes. Use 'list_agents' para descobrir agentes ativos, incluindo conexões registradas no workspace. Toda delegação é registrada como task no banco (job/task), acompanhável via 'tasks_list'/'jobs_get' em qualquer transporte; com wait=false a tool retorna imediatamente job_id/task_id e o resultado final fica salvo na task; 'tasks_cancel' aborta uma delegação em execução (apenas quem delegou).",
+        parameters={'type': 'object',
+ 'properties': {'target_agent': {'type': 'string',
+                                 'description': "Nome do agente obtido por 'list_agents'."},
+                'request': {'type': 'string',
+                            'description': (
+                                'Descrição clara do que o agente deve fazer. Máximo de '
+                                f'{DEFAULT_DELEGATE_MAX_REQUEST_CHARS} caracteres; acima disso o '
+                                'texto é truncado e um aviso é anexado ao resultado.'
+                            )},
+                'context': {'type': 'string',
+                            'description': (
+                                'Contexto adicional relevante (opcional). Máximo de '
+                                f'{DEFAULT_DELEGATE_MAX_CONTEXT_CHARS} caracteres; acima disso o '
+                                'texto é truncado e um aviso é anexado ao resultado.'
+                            )},
+                'role': {'type': 'string',
+                         'enum': ['planner', 'executor', 'reviewer', 'verifier', 'synthesizer'],
+                         'description': 'Papel opcional do agente nesta delegação. Valores: '
+                                        'planner, executor, reviewer, verifier, synthesizer.'},
+                'access_list': {'type': 'array',
+                                'description': 'Escopo declarado opcional de contexto '
+                                               'permitido/esperado para o agente.',
+                                'items': {'type': 'string'}},
+                'fallback_agents': {'type': 'array',
+                                    'description': 'Lista opcional de agentes de fallback, '
+                                                   'tentados em sequência se o agente alvo '
+                                                   'principal estiver indisponível/sem resposta.',
+                                    'items': {'type': 'string'}},
+                'steps': {'type': 'array',
+                          'description': 'Passos adicionais opcionais. Quando parallel=false '
+                                         '(padrão), executados em sequência. Quando parallel=true, '
+                                         'todos executados ao mesmo tempo. Cada item deve conter '
+                                         'target_agent, request e context opcional.',
+                          'items': {'type': 'object',
+                                    'properties': {'target_agent': {'type': 'string'},
+                                                   'request': {'type': 'string'},
+                                                   'context': {'type': 'string'},
+                                                   'role': {'type': 'string',
+                                                            'enum': ['planner',
+                                                                     'executor',
+                                                                     'reviewer',
+                                                                     'verifier',
+                                                                     'synthesizer']},
+                                                   'access_list': {'type': 'array',
+                                                                   'items': {'type': 'string'}},
+                                                   'fallback_agents': {'type': 'array',
+                                                                       'items': {'type': 'string'}}},
+                                    'required': ['target_agent', 'request']}},
+                'parallel': {'type': 'boolean',
+                             'description': 'Quando true, executa o target_agent principal e todos '
+                                            'os steps simultaneamente em paralelo. Padrão: false '
+                                            '(execução sequencial).'},
+                'wait': {'type': 'boolean',
+                         'description': 'Padrão: true — bloqueia até o(s) agente(s) responderem e '
+                                        'retorna a resposta. Quando false, registra a delegação '
+                                        'como task, retorna imediatamente job_id/task_id e executa '
+                                        'em background; acompanhe com tasks_list (o resultado '
+                                        'final é salvo na task). Via HTTP MCP sem SSE a delegação '
+                                        'é sempre assíncrona, equivalente a wait=false.'}},
+ 'required': ['target_agent', 'request']},
+        output_schema={'type': 'object',
+ 'properties': {'ok': {'type': 'boolean'},
+                'content': {'type': 'string',
+                            'description': 'Concatenated agent responses. Multi-step prefixed with '
+                                           "'[agent_name] response'. Com wait=false (ou HTTP MCP "
+                                           'sem SSE), JSON com job_id/task_id/status para '
+                                           'acompanhamento via tasks_list.'},
+                'data': {'type': 'object',
+                         'description': 'IDs de rastreamento da delegação quando o banco de tasks '
+                                        'está configurado. Em falha, failure_receipt traz o '
+                                        'diagnóstico estruturado por tentativa (error_kind, '
+                                        'exit_code, signal, stderr_tail — ou stdout_tail quando o '
+                                        'stderr veio vazio —, duration_s) e a pressão '
+                                        'de memória do host no momento da falha. Quando algum step '
+                                        'sucede após tentativas falhas, fallback_receipt traz essas '
+                                        'tentativas e o selected_agent que de fato respondeu (também '
+                                        'persistido nas notes e no assigned_to da task).',
+                         'properties': {'job_id': {'type': 'integer'},
+                                        'task_id': {'type': 'integer'},
+                                        'task_status': {'type': 'string'},
+                                        'failure_receipt': {'type': 'object'},
+                                        'fallback_receipt': {'type': 'object'}}},
+                'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
+ 'required': ['ok', 'content']},
+    ),
+    ToolSpec(
+        name='tasks_list',
         description='Lista tarefas com filtros opcionais do job atual ou de qualquer job. '
                     'Tasks de delegação em execução (origin=delegate, status=in_progress) '
                     "incluem o campo 'live' com o último raciocínio (thinking) do agente "
@@ -460,7 +537,35 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
  'required': ['ok', 'content']},
     ),
     ToolSpec(
-        name='list_jobs',
+        name='tasks_cancel',
+        description='Cancela uma delegação em execução identificada por task_id. Permitido '
+                    'apenas ao agente que delegou (ou ao humano); o alvo é terminado e a task '
+                    'transiciona para status cancelled com recibo do ocorrido. A checagem de '
+                    'dono protege contra acidente e bug, não contra agente hostil: o token MCP '
+                    'é um por sessão.',
+        parameters={'type': 'object',
+ 'properties': {'task_id': {'type': 'integer',
+                            'description': 'ID da task de delegação a cancelar.'},
+                'reason': {'type': 'string',
+                           'description': 'Motivo opcional do cancelamento, registrado no '
+                                          'recibo da task.'}},
+ 'required': ['task_id']},
+        output_schema={'type': 'object',
+ 'properties': {'ok': {'type': 'boolean'},
+                'content': {'type': 'string', 'description': 'JSON do recibo de cancelamento'},
+                'data': {'type': 'object',
+                         'properties': {'task_id': {'type': 'integer'},
+                                        'status': {'type': 'string',
+                                                   'enum': ['cancelling', 'already_cancelling']},
+                                        'cancelled_by': {'oneOf': [{'type': 'string'},
+                                                                   {'type': 'null'}]},
+                                        'targets': {'type': 'array', 'items': {'type': 'string'}},
+                                        'hint': {'type': 'string'}}},
+                'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
+ 'required': ['ok', 'content']},
+    ),
+    ToolSpec(
+        name='jobs_list',
         description='Lista jobs de sessão disponíveis.',
         parameters={'type': 'object',
  'properties': {'status': {'type': 'string',
@@ -475,7 +580,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
  'required': ['ok', 'content']},
     ),
     ToolSpec(
-        name='get_job',
+        name='jobs_get',
         description='Obtém detalhes de um job específico.',
         parameters={'type': 'object',
  'properties': {'job_id': {'type': 'integer',
@@ -695,94 +800,6 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         output_schema={'type': 'object',
  'properties': {'ok': {'type': 'boolean'},
                 'content': {'type': 'string'},
-                'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
- 'required': ['ok', 'content']},
-    ),
-    ToolSpec(
-        name='delegate',
-        description="Delega uma tarefa para outro agente. Use quando precisar de especialidade específica, revisão independente, execução paralela ou fallback entre agentes existentes. Use 'list_agents' para descobrir agentes ativos, incluindo conexões registradas no workspace. Toda delegação é registrada como task no banco (job/task), acompanhável via 'list_tasks'/'get_job' em qualquer transporte; com wait=false a tool retorna imediatamente job_id/task_id e o resultado final fica salvo na task.",
-        parameters={'type': 'object',
- 'properties': {'target_agent': {'type': 'string',
-                                 'description': "Nome do agente obtido por 'list_agents'."},
-                'request': {'type': 'string',
-                            'description': (
-                                'Descrição clara do que o agente deve fazer. Máximo de '
-                                f'{DEFAULT_DELEGATE_MAX_REQUEST_CHARS} caracteres; acima disso o '
-                                'texto é truncado e um aviso é anexado ao resultado.'
-                            )},
-                'context': {'type': 'string',
-                            'description': (
-                                'Contexto adicional relevante (opcional). Máximo de '
-                                f'{DEFAULT_DELEGATE_MAX_CONTEXT_CHARS} caracteres; acima disso o '
-                                'texto é truncado e um aviso é anexado ao resultado.'
-                            )},
-                'role': {'type': 'string',
-                         'enum': ['planner', 'executor', 'reviewer', 'verifier', 'synthesizer'],
-                         'description': 'Papel opcional do agente nesta delegação. Valores: '
-                                        'planner, executor, reviewer, verifier, synthesizer.'},
-                'access_list': {'type': 'array',
-                                'description': 'Escopo declarado opcional de contexto '
-                                               'permitido/esperado para o agente.',
-                                'items': {'type': 'string'}},
-                'fallback_agents': {'type': 'array',
-                                    'description': 'Lista opcional de agentes de fallback, '
-                                                   'tentados em sequência se o agente alvo '
-                                                   'principal estiver indisponível/sem resposta.',
-                                    'items': {'type': 'string'}},
-                'steps': {'type': 'array',
-                          'description': 'Passos adicionais opcionais. Quando parallel=false '
-                                         '(padrão), executados em sequência. Quando parallel=true, '
-                                         'todos executados ao mesmo tempo. Cada item deve conter '
-                                         'target_agent, request e context opcional.',
-                          'items': {'type': 'object',
-                                    'properties': {'target_agent': {'type': 'string'},
-                                                   'request': {'type': 'string'},
-                                                   'context': {'type': 'string'},
-                                                   'role': {'type': 'string',
-                                                            'enum': ['planner',
-                                                                     'executor',
-                                                                     'reviewer',
-                                                                     'verifier',
-                                                                     'synthesizer']},
-                                                   'access_list': {'type': 'array',
-                                                                   'items': {'type': 'string'}},
-                                                   'fallback_agents': {'type': 'array',
-                                                                       'items': {'type': 'string'}}},
-                                    'required': ['target_agent', 'request']}},
-                'parallel': {'type': 'boolean',
-                             'description': 'Quando true, executa o target_agent principal e todos '
-                                            'os steps simultaneamente em paralelo. Padrão: false '
-                                            '(execução sequencial).'},
-                'wait': {'type': 'boolean',
-                         'description': 'Padrão: true — bloqueia até o(s) agente(s) responderem e '
-                                        'retorna a resposta. Quando false, registra a delegação '
-                                        'como task, retorna imediatamente job_id/task_id e executa '
-                                        'em background; acompanhe com list_tasks (o resultado '
-                                        'final é salvo na task). Via HTTP MCP sem SSE a delegação '
-                                        'é sempre assíncrona, equivalente a wait=false.'}},
- 'required': ['target_agent', 'request']},
-        output_schema={'type': 'object',
- 'properties': {'ok': {'type': 'boolean'},
-                'content': {'type': 'string',
-                            'description': 'Concatenated agent responses. Multi-step prefixed with '
-                                           "'[agent_name] response'. Com wait=false (ou HTTP MCP "
-                                           'sem SSE), JSON com job_id/task_id/status para '
-                                           'acompanhamento via list_tasks.'},
-                'data': {'type': 'object',
-                         'description': 'IDs de rastreamento da delegação quando o banco de tasks '
-                                        'está configurado. Em falha, failure_receipt traz o '
-                                        'diagnóstico estruturado por tentativa (error_kind, '
-                                        'exit_code, signal, stderr_tail — ou stdout_tail quando o '
-                                        'stderr veio vazio —, duration_s) e a pressão '
-                                        'de memória do host no momento da falha. Quando algum step '
-                                        'sucede após tentativas falhas, fallback_receipt traz essas '
-                                        'tentativas e o selected_agent que de fato respondeu (também '
-                                        'persistido nas notes e no assigned_to da task).',
-                         'properties': {'job_id': {'type': 'integer'},
-                                        'task_id': {'type': 'integer'},
-                                        'task_status': {'type': 'string'},
-                                        'failure_receipt': {'type': 'object'},
-                                        'fallback_receipt': {'type': 'object'}}},
                 'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
  'required': ['ok', 'content']},
     ),

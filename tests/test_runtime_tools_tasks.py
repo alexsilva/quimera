@@ -10,7 +10,7 @@ from quimera.runtime.config import ToolRuntimeConfig
 from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicyError
-from quimera.runtime.tools.tasks import TaskTools, TaskToolsValidator
+from quimera.runtime.tools.tasks import JobTools, TaskTools, TaskToolsValidator
 from quimera.tasks.protocol import TaskCreationResult
 
 
@@ -22,6 +22,11 @@ def config():
 @pytest.fixture
 def tools(config):
     return TaskTools(config)
+
+
+@pytest.fixture
+def job_tools(config):
+    return JobTools(config)
 
 
 def test_tasks_creates_task_with_trusted_agent_and_monitor_receipt(tools):
@@ -39,7 +44,7 @@ def test_tasks_creates_task_with_trusted_agent_and_monitor_receipt(tools):
 
     tools.set_create_task_fn(create_task)
     call = ToolCall(
-        name="tasks",
+        name="tasks_create",
         arguments={"description": "corrigir o parser"},
         metadata={
             "trusted_context": TrustedToolExecutionContext(
@@ -48,22 +53,22 @@ def test_tasks_creates_task_with_trusted_agent_and_monitor_receipt(tools):
         },
     )
 
-    result = tools.tasks(call)
+    result = tools.tasks_create(call)
 
     assert result.ok is True
     assert calls == [("corrigir o parser", "claude-sonnet")]
     assert json.loads(result.content) == result.data
     assert result.data["task_id"] == 17
     assert result.data["monitor_with"] == {
-        "tool": "list_tasks",
+        "tool": "tasks_list",
         "arguments": {"id": 17},
     }
 
 
 def test_tasks_returns_unavailable_without_application_binding(tools):
     """Não cria task fora de uma sessão ligada ao domínio da aplicação."""
-    result = tools.tasks(
-        ToolCall(name="tasks", arguments={"description": "executar testes"}),
+    result = tools.tasks_create(
+        ToolCall(name="tasks_create", arguments={"description": "executar testes"}),
     )
 
     assert result.ok is False
@@ -74,8 +79,8 @@ def test_tasks_rejects_missing_trusted_agent_identity(tools):
     """Não cria task sem identidade confiável do agente solicitante."""
     tools.set_create_task_fn(lambda *_args, **_kwargs: None)
 
-    result = tools.tasks(
-        ToolCall(name="tasks", arguments={"description": "executar testes"}),
+    result = tools.tasks_create(
+        ToolCall(name="tasks_create", arguments={"description": "executar testes"}),
     )
 
     assert result.ok is False
@@ -87,33 +92,33 @@ def test_tasks_validator_rejects_empty_description(config):
     validator = TaskToolsValidator(config)
 
     with pytest.raises(ToolPolicyError, match="description"):
-        validator.validate(ToolCall(name="tasks", arguments={"description": " "}))
+        validator.validate(ToolCall(name="tasks_create", arguments={"description": " "}))
 
 
-def test_resolve_job_id_env(tools):
+def test_resolve_job_id_env(job_tools):
     """Verifica que _resolve_job_id lê QUIMERA_CURRENT_JOB_ID do ambiente."""
     # Line 27-28 coverage
     with patch.dict(os.environ, {"QUIMERA_CURRENT_JOB_ID": "123"}):
-        assert tools._resolve_job_id(None) == 123
+        assert job_tools._resolve_job_id(None) == 123
 
     with patch.dict(os.environ, {"QUIMERA_CURRENT_JOB_ID": "invalid"}):
-        assert tools._resolve_job_id(None) is None
+        assert job_tools._resolve_job_id(None) is None
 
 
 @patch("quimera.runtime.tools.tasks._list_jobs")
-def test_resolve_job_id_fallback(mock_list, tools):
+def test_resolve_job_id_fallback(mock_list, job_tools):
     """Verifica que _resolve_job_id faz fallback para o job mais recente."""
     # Line 30-37 coverage
     # Clear environment to ensure fallback is tested
     with patch.dict(os.environ, {}, clear=True):
         mock_list.side_effect = [[{"id": 10}], [{"id": 20}]]
-        assert tools._resolve_job_id(None, allow_recent_fallback=True) == 10
+        assert job_tools._resolve_job_id(None, allow_recent_fallback=True) == 10
 
         mock_list.side_effect = [[], [{"id": 20}]]
-        assert tools._resolve_job_id(None, allow_recent_fallback=True) == 20
+        assert job_tools._resolve_job_id(None, allow_recent_fallback=True) == 20
 
         mock_list.side_effect = Exception("db error")
-        assert tools._resolve_job_id(None, allow_recent_fallback=True) is None
+        assert job_tools._resolve_job_id(None, allow_recent_fallback=True) is None
 
 
 def test_find_duplicate_task(tools):
@@ -130,54 +135,54 @@ def test_find_duplicate_task(tools):
 
 @patch("quimera.runtime.tools.tasks._list_tasks")
 def test_list_tasks_error(mock_list, tools):
-    """Verifica que list_tasks trata exceção do banco."""
+    """Verifica que tasks_list trata exceção do banco."""
     # Line 69-70 coverage
     mock_list.side_effect = Exception("Boom")
-    call = ToolCall(name="list_tasks", arguments={})
-    result = tools.list_tasks(call)
+    call = ToolCall(name="tasks_list", arguments={})
+    result = tools.tasks_list(call)
     assert result.ok is False
     assert "Boom" in result.error
 
 
 @patch("quimera.runtime.tools.tasks._list_jobs")
-def test_list_jobs_error(mock_list, tools):
-    """Verifica que list_jobs trata exceção do banco."""
+def test_list_jobs_error(mock_list, job_tools):
+    """Verifica que jobs_list trata exceção do banco."""
     # Line 81-82 coverage
     mock_list.side_effect = Exception("Boom")
-    call = ToolCall(name="list_jobs", arguments={})
-    result = tools.list_jobs(call)
+    call = ToolCall(name="jobs_list", arguments={})
+    result = job_tools.jobs_list(call)
     assert result.ok is False
     assert "Boom" in result.error
 
 
 @patch("quimera.runtime.tools.tasks._get_job")
-def test_get_job_no_id(mock_get, tools):
-    """Verifica que get_job retorna erro quando job_id não é fornecido."""
+def test_get_job_no_id(mock_get, job_tools):
+    """Verifica que jobs_get retorna erro quando job_id não é fornecido."""
     # Line 87 coverage
-    call = ToolCall(name="get_job", arguments={})
+    call = ToolCall(name="jobs_get", arguments={})
     with patch.dict(os.environ, {}, clear=True):
-        with patch.object(tools, "_resolve_job_id", return_value=None):
-            result = tools.get_job(call)
+        with patch.object(job_tools, "_resolve_job_id", return_value=None):
+            result = job_tools.jobs_get(call)
             assert result.ok is False
             assert "job_id is required" in result.error
 
 
 @patch("quimera.runtime.tools.tasks._get_job")
-def test_get_job_error(mock_get, tools):
-    """Verifica que get_job trata exceção do banco."""
+def test_get_job_error(mock_get, job_tools):
+    """Verifica que jobs_get trata exceção do banco."""
     # Line 91-92 coverage
     mock_get.side_effect = Exception("Boom")
-    call = ToolCall(name="get_job", arguments={"job_id": 1})
-    result = tools.get_job(call)
+    call = ToolCall(name="jobs_get", arguments={"job_id": 1})
+    result = job_tools.jobs_get(call)
     assert result.ok is False
     assert "Boom" in result.error
 
 
-def test_get_job_null(tools):
-    """Verifica que get_job retorna 'null' quando job não existe."""
+def test_get_job_null(job_tools):
+    """Verifica que jobs_get retorna 'null' quando job não existe."""
     with patch("quimera.runtime.tools.tasks._get_job") as mock_get:
         mock_get.return_value = None
-        call = ToolCall(name="get_job", arguments={"job_id": 1})
-        result = tools.get_job(call)
+        call = ToolCall(name="jobs_get", arguments={"job_id": 1})
+        result = job_tools.jobs_get(call)
         assert result.ok is True
         assert result.content == "null"

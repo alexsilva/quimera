@@ -26,7 +26,7 @@ DEFERRAL_OVERRIDE_STATE_KEY = "quimera_tool_deferral"
 
 # Conjunto essencial sempre exposto com schema completo. Cobre o ciclo básico
 # ler/buscar/editar/executar/perguntar; todo o resto é descoberto via
-# tool_search (delegate, git_*, browser_*, host_*, web_*, tasks, memória...).
+# tool_search (tasks_*, jobs_*, git_*, browser_*, host_*, web_*, memória...).
 ESSENTIAL_TOOLS = frozenset({
     "read_file",
     "list_files",

@@ -35,7 +35,7 @@ resultado para review; o revisor é reservado separadamente e não pode ser o au
 da execução. Dependências incompletas impedem a reserva de tarefas dependentes.
 
 No caminho MCP, `tools/call` chega ao executor de ferramentas e à política de
-aprovação. A ferramenta `delegate` resolve outro agente e usa o dispatch de
+aprovação. A ferramenta `tasks_delegate` resolve outro agente e usa o dispatch de
 background. Conexões MCP externas publicam suas ferramentas no registry local.
 Os detalhes desses caminhos estão em [Fluxos de execução](fluxos.md).
 

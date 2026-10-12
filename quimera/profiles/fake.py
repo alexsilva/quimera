@@ -25,7 +25,7 @@ class FakeOpenAIMCPCliProfile(ExecutionProfile):
 
 
 class FakeMCPDelegateCliProfile(ExecutionProfile):
-    """Profile CLI fake que delega para outro agente via delegate no MCP."""
+    """Profile CLI fake que delega para outro agente via tasks_delegate no MCP."""
 
     def env_for_cli(self) -> dict:
         env = {"QUIMERA_FAKE_DELEGATE_TARGET": "fake-openai"}

@@ -50,14 +50,14 @@ class TestBuildExposedSchemas:
         search = exposed[-1]
         assert search["function"]["name"] == TOOL_SEARCH_TOOL_NAME
         # O catálogo das diferidas viaja na descrição do tool_search.
-        assert "delegate" in search["function"]["description"]
+        assert "tasks_delegate" in search["function"]["description"]
         assert "host_memory" in search["function"]["description"]
 
     def test_habilitadas_entram_na_visao_e_saem_do_catalogo(self):
-        exposed = build_exposed_schemas(list(TOOL_SCHEMAS), {"delegate"})
+        exposed = build_exposed_schemas(list(TOOL_SCHEMAS), {"tasks_delegate"})
         names = _schema_names(exposed)
 
-        assert "delegate" in names
+        assert "tasks_delegate" in names
         search = next(
             s for s in exposed if s["function"]["name"] == TOOL_SEARCH_TOOL_NAME
         )
@@ -89,13 +89,13 @@ class TestBuildExposedSchemas:
 class TestMatchDeferredSchemas:
     def test_nomes_exatos_e_desconhecidos(self):
         outcome = match_deferred_schemas(
-            list(TOOL_SCHEMAS), names=["delegate", "read_file", "nao_existe"]
+            list(TOOL_SCHEMAS), names=["tasks_delegate", "read_file", "nao_existe"]
         )
-        assert outcome["enabled"] == ["delegate"]
+        assert outcome["enabled"] == ["tasks_delegate"]
         assert outcome["already_available"] == ["read_file"]
         assert outcome["unknown"] == ["nao_existe"]
         assert {s["function"]["name"] for s in outcome["matched"]} == {
-            "delegate",
+            "tasks_delegate",
             "read_file",
         }
 
@@ -304,7 +304,7 @@ class TestMcpServerDeferral:
         names = {tool["name"] for tool in tools}
 
         assert TOOL_SEARCH_TOOL_NAME in names
-        assert "delegate" not in names
+        assert "tasks_delegate" not in names
         assert names - {TOOL_SEARCH_TOOL_NAME} <= ESSENTIAL_TOOLS
 
     def test_tools_list_modo_api_nao_afeta_mcp(self, tmp_path):

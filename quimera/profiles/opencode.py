@@ -117,7 +117,7 @@ class OpenCodeProfile(ExecutionProfile):
                     "enabled": True,
                     # O OpenCode aplica este timeout (ms, padrão 5000) às requests
                     # MCP, inclusive tools/call: a doc do SDK fala só em "fetching
-                    # tools", mas delegate com wait=true devolvia "MCP error -32001:
+                    # tools", mas tasks_delegate com wait=true devolvia "MCP error -32001:
                     # Request timed out" em 5 s, e o servidor tratava a desistência
                     # como cancelamento da delegação filha. Mesmo teto que o Codex
                     # recebe via tool_timeout_sec.

@@ -35,8 +35,8 @@ class TestInputBrokerCancelledRequests:
         cancelled.set()
         start = time.monotonic()
         result = broker.request_approval(
-            "delegate",
-            "delegate(alvo)",
+            "tasks_delegate",
+            "tasks_delegate(alvo)",
             source="agente-x",
             timeout=30.0,
             cancel_event=cancelled,
@@ -53,8 +53,8 @@ class TestInputBrokerCancelledRequests:
         def _request() -> None:
             results.append(
                 broker.request_approval(
-                    "delegate",
-                    "delegate(alvo)",
+                    "tasks_delegate",
+                    "tasks_delegate(alvo)",
                     source="agente-x",
                     timeout=30.0,
                     cancel_event=cancel_event,
@@ -115,7 +115,7 @@ class TestConsoleApprovalCancelledRun:
         manager = ApprovalManager(
             None, input_broker=fake_broker, cancel_event=cancelled
         )
-        result = manager.approve(tool_name="delegate", summary="delegate(alvo)")
+        result = manager.approve(tool_name="tasks_delegate", summary="tasks_delegate(alvo)")
         assert result is False
         fake_broker.request_approval.assert_not_called()
 
@@ -126,7 +126,7 @@ class TestConsoleApprovalCancelledRun:
         cancel_event = threading.Event()
         previous = manager.bind_cancel_event(cancel_event)
         try:
-            result = manager.approve(tool_name="delegate", summary="delegate(alvo)")
+            result = manager.approve(tool_name="tasks_delegate", summary="tasks_delegate(alvo)")
         finally:
             manager.bind_cancel_event(previous)
         assert result is True

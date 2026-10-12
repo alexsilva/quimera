@@ -78,16 +78,16 @@ class TestConcurrentToolsCall:
 
     def test_delegate_does_not_starve_child_tool_pool_at_limit_one(self):
         """Delegate espera o filho sem ocupar o único worker das tools MCP."""
-        executor = _make_executor(tool_names=["delegate", "read_file"])
+        executor = _make_executor(tool_names=["tasks_delegate", "read_file"])
         executor.config.mcp_tool_pool_workers = 1
         executor.config.delegation_budget_per_run = 1
         child_finished = threading.Event()
 
         def _execute(tool_call, progress_cb=None):
-            if tool_call.name == "delegate":
+            if tool_call.name == "tasks_delegate":
                 if not child_finished.wait(timeout=0.5):
                     raise TimeoutError("child tool starved")
-                return ToolResult(ok=True, tool_name="delegate", content="delegated")
+                return ToolResult(ok=True, tool_name="tasks_delegate", content="delegated")
             child_finished.set()
             return ToolResult(ok=True, tool_name="read_file", content="child")
 
@@ -99,7 +99,7 @@ class TestConcurrentToolsCall:
                 "jsonrpc": "2.0",
                 "id": "parent",
                 "method": "tools/call",
-                "params": {"name": "delegate", "arguments": {}},
+                "params": {"name": "tasks_delegate", "arguments": {}},
             },
             {
                 "jsonrpc": "2.0",
@@ -581,11 +581,11 @@ class TestBatchAsync:
 
     def test_batch_uses_per_tool_deadline_for_delegate(self):
         """Deadline longo de delegate não é cortado pelo timeout genérico."""
-        executor = _make_executor(tool_names=["delegate"])
+        executor = _make_executor(tool_names=["tasks_delegate"])
 
         def _execute(tool_call, progress_cb=None):
             time.sleep(0.12)
-            return ToolResult(ok=True, tool_name="delegate", content="done")
+            return ToolResult(ok=True, tool_name="tasks_delegate", content="done")
 
         executor.execute.side_effect = _execute
         server = _make_server(executor)
@@ -593,13 +593,13 @@ class TestBatchAsync:
             "jsonrpc": "2.0",
             "id": "delegate-long",
             "method": "tools/call",
-            "params": {"name": "delegate", "arguments": {}},
+            "params": {"name": "tasks_delegate", "arguments": {}},
         }]
 
         with patch.object(
             server,
             "_configured_tool_timeout",
-            side_effect=lambda name=None: 0.3 if name == "delegate" else 0.05,
+            side_effect=lambda name=None: 0.3 if name == "tasks_delegate" else 0.05,
         ):
             responses = _exchange(server, batch)
 
@@ -858,38 +858,38 @@ class TestTimeout:
 class TestDelegateTimeoutContract:
     """Delegado tem direito ao orçamento integral de processamento.
 
-    O teto do servidor para `delegate` deve ficar acima do deadline interno
+    O teto do servidor para `tasks_delegate` deve ficar acima do deadline interno
     da delegação (`delegate_parallel_timeout_seconds`), garantindo que o erro
     estruturado venha sempre do relógio interno — o servidor é só backstop.
     """
 
     def test_delegate_deadline_exceeds_parallel_timeout(self):
         """Teto do delegate fica acima do timeout interno; demais tools inalteradas."""
-        executor = _make_executor(tool_names=["delegate", "read_file"])
+        executor = _make_executor(tool_names=["tasks_delegate", "read_file"])
         executor.config.mcp_tool_timeout_seconds = 600
         executor.config.delegate_parallel_timeout_seconds = 3600
         server = _make_server(executor)
 
-        assert server._configured_tool_timeout("delegate") > 3600
+        assert server._configured_tool_timeout("tasks_delegate") > 3600
         assert server._configured_tool_timeout("read_file") == 600.0
         assert server._configured_tool_timeout() == 600.0
 
     def test_delegate_deadline_defaults_without_valid_config(self):
         """Executor de compatibilidade (config mockada) ainda garante o orçamento."""
-        executor = _make_executor(tool_names=["delegate"])
+        executor = _make_executor(tool_names=["tasks_delegate"])
         server = _make_server(executor)
 
-        assert server._configured_tool_timeout("delegate") >= 3600
+        assert server._configured_tool_timeout("tasks_delegate") >= 3600
 
     def test_call_deadline_fallback_uses_tool_name(self):
         """Chamadas antigas sem deadline_at derivam o teto correto por tool."""
-        executor = _make_executor(tool_names=["delegate", "read_file"])
+        executor = _make_executor(tool_names=["tasks_delegate", "read_file"])
         executor.config.mcp_tool_timeout_seconds = 600
         executor.config.delegate_parallel_timeout_seconds = 3600
         server = _make_server(executor)
 
         started = time.perf_counter()
-        delegate_call = {"started_at": started, "tool_name": "delegate"}
+        delegate_call = {"started_at": started, "tool_name": "tasks_delegate"}
         plain_call = {"started_at": started, "tool_name": "read_file"}
 
         assert server._call_deadline(delegate_call) - started > 3600

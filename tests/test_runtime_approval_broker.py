@@ -95,7 +95,7 @@ def test_delegate_internal_auto_approved_with_server_side_budget(tmp_path):
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={"target_agent": "codex", "request": "x"},
             metadata=_trusted(delegation_budget=1),
         )
@@ -130,7 +130,7 @@ def test_tasks_uses_dedicated_approval_flag_through_broker(tmp_path):
 
     result = executor.execute(
         ToolCall(
-            name="tasks",
+            name="tasks_create",
             arguments={"description": "documentar fluxo"},
             metadata=_trusted(),
         ),
@@ -151,7 +151,7 @@ def test_delegate_http_external_requires_user_approval(tmp_path):
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={"target_agent": "codex", "request": "x"},
             metadata=_trusted(transport="http_mcp", run_id="external-run"),
         )
@@ -303,7 +303,7 @@ def test_delegate_http_external_requires_approval_even_with_allowlisted_argument
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={"target_agent": "codex", "request": "x", "allowlisted": True},
             metadata=_trusted(transport="http_mcp", run_id="external-run"),
         )
@@ -318,10 +318,10 @@ def test_delegate_http_external_requires_approval_even_with_allowlisted_argument
 def test_http_mcp_cannot_spoof_internal_transport_via_meta():
     """Verifica que Test http mcp cannot spoof internal transport via meta."""
     executor = MagicMock()
-    executor.registry.names.return_value = ["delegate"]
+    executor.registry.names.return_value = ["tasks_delegate"]
     executor.config.mcp_tool_pool_workers = 4
     executor.config.delegation_budget_per_run = 8
-    executor.execute.return_value = ToolResult(ok=True, tool_name="delegate", content="ok")
+    executor.execute.return_value = ToolResult(ok=True, tool_name="tasks_delegate", content="ok")
     server = MCPServer(executor)
     out = io.StringIO()
 
@@ -331,7 +331,7 @@ def test_http_mcp_cannot_spoof_internal_transport_via_meta():
             "id": 1,
             "method": "tools/call",
             "params": {
-                "name": "delegate",
+                "name": "tasks_delegate",
                 "arguments": {"target_agent": "codex", "request": "x"},
                 "_meta": {"transport": "internal_mcp", "run_id": "evil", "approval_scope_id": "evil"},
             },
@@ -357,7 +357,7 @@ def test_http_mcp_allowlisted_argument_does_not_bypass_approval(tmp_path):
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={"target_agent": "codex", "request": "x", "allowlisted": True},
             metadata=_trusted(transport="http_mcp", run_id="external-run"),
         )
@@ -378,7 +378,7 @@ def test_caller_cannot_increase_approval_budget(tmp_path):
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={"target_agent": "codex", "request": "x", "approval_budget": 1000},
             metadata=_trusted(delegation_budget=1),
         )
@@ -397,7 +397,7 @@ def test_caller_cannot_pass_approval_scope_id_argument(tmp_path):
 
     result = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={"target_agent": "codex", "request": "x", "approval_scope_id": "evil"},
         )
     )
@@ -422,7 +422,7 @@ def test_delegation_budget_is_consumed_atomically_for_parallel_calls(tmp_path):
         barrier.wait()
         result = executor.execute(
             ToolCall(
-                name="delegate",
+                name="tasks_delegate",
                 arguments={"target_agent": "codex", "request": "x"},
                 metadata=_trusted(delegation_budget=1),
             )
@@ -847,7 +847,7 @@ def test_delegate_rejects_all_reserved_fields(tmp_path):
     for field in ("allowlisted", "approval_budget", "approval_scope_id", "transport", "run_id", "parent_run_id"):
         result = executor.execute(
             ToolCall(
-                name="delegate",
+                name="tasks_delegate",
                 arguments={"target_agent": "codex", "request": "x", field: "evil"},
             )
         )
@@ -929,7 +929,7 @@ def test_delegate_scope_limits_caller_and_target_agent(tmp_path):
             run_id="run-1",
             transport="internal_mcp",
             server_origin="tool_executor",
-            tool_name="delegate",
+            tool_name="tasks_delegate",
             agent_name="claude",
             target_agent_name="codex",
             risk=RiskLevel.DELEGATION,
@@ -940,14 +940,14 @@ def test_delegate_scope_limits_caller_and_target_agent(tmp_path):
 
     codex = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={"target_agent": "codex", "request": "x"},
             metadata=_trusted(run_id="run-1", agent_name="claude", delegation_budget=0),
         )
     )
     gemini = executor.execute(
         ToolCall(
-            name="delegate",
+            name="tasks_delegate",
             arguments={"target_agent": "gemini", "request": "x"},
             metadata=_trusted(run_id="run-1", agent_name="claude", delegation_budget=0),
         )

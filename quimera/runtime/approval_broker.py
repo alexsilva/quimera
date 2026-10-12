@@ -131,7 +131,7 @@ class ApprovalRequest:
         prefix = " → ".join(parts)
         target = (
             self.arguments.get("target_agent")
-            if self.tool_name == "delegate"
+            if self.tool_name == "tasks_delegate"
             else None
         )
         op = f"{self.tool_name}({target})" if target else self.tool_name
@@ -292,7 +292,7 @@ class ApprovalBroker:
         command = _extract_command(call)
         target_agent_name = (
             _clean(call.arguments.get("target_agent"))
-            if call.name == "delegate"
+            if call.name == "tasks_delegate"
             else None
         )
         effective_reason = reason or (
@@ -534,11 +534,11 @@ class ApprovalBroker:
             raise ValueError(
                 "ApprovalScope de mutação de arquivo requer path"
             )
-        if scope.tool_name == "delegate" and (
+        if scope.tool_name == "tasks_delegate" and (
             not scope.agent_name or not scope.target_agent_name
         ):
             raise ValueError(
-                "ApprovalScope de delegate requer agent_name "
+                "ApprovalScope de tasks_delegate requer agent_name "
                 "e target_agent_name"
             )
 

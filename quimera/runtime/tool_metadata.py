@@ -187,26 +187,41 @@ TOOL_METADATA: dict[str, ToolMetadata] = {
     ),
 
     # Tasks/todo.
-    "tasks": _meta(
+    "tasks_create": _meta(
         ToolRisk.WRITE,
         mutates=True,
         approval=ApprovalMode.TASK_CREATION,
         capabilities=("task_db", "tasks"),
         http_profiles=_AGENT,
     ),
-    "list_tasks": _meta(
+    "tasks_delegate": _meta(
+        ToolRisk.DELEGATION,
+        mutates=True,
+        approval=ApprovalMode.MUTATION,
+        capabilities=("delegate",),
+        http_profiles=_AGENT,
+    ),
+    "tasks_list": _meta(
         ToolRisk.READ,
         parallel_safe=True,
         capabilities=("task_db",),
         http_profiles=_READ_LOCAL,
     ),
-    "list_jobs": _meta(
+    # Cancelamento não passa por approval: a gate real é a checagem de dono
+    # (só quem delegou, ou o humano) feita pela própria tool.
+    "tasks_cancel": _meta(
+        ToolRisk.WRITE,
+        mutates=True,
+        capabilities=("task_db", "delegate"),
+        http_profiles=_AGENT,
+    ),
+    "jobs_list": _meta(
         ToolRisk.READ,
         parallel_safe=True,
         capabilities=("task_db",),
         http_profiles=_READ_LOCAL,
     ),
-    "get_job": _meta(
+    "jobs_get": _meta(
         ToolRisk.READ,
         parallel_safe=True,
         capabilities=("task_db",),
@@ -248,14 +263,7 @@ TOOL_METADATA: dict[str, ToolMetadata] = {
         ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
     ),
 
-    # Delegation/interactions/state.
-    "delegate": _meta(
-        ToolRisk.DELEGATION,
-        mutates=True,
-        approval=ApprovalMode.MUTATION,
-        capabilities=("delegate",),
-        http_profiles=_AGENT,
-    ),
+    # Agents/interactions/state.
     "list_agents": _meta(
         ToolRisk.READ,
         parallel_safe=True,

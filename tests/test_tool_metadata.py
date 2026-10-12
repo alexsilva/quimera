@@ -44,14 +44,14 @@ def test_parallel_safe_tools_are_explicit_and_read_only():
         "read_file",
         "grep_search",
         "web_search",
-        "list_tasks",
+        "tasks_list",
         "git_status",
         "host_process_sample",
     } <= parallel_safe
     assert parallel_safe.isdisjoint({
         "write_file",
         "run_shell",
-        "delegate",
+        "tasks_delegate",
         "ask_user",
         "browser_navigate",
         "memory_retrieve",
@@ -95,9 +95,10 @@ def test_unknown_tool_requires_approval_fail_closed(tmp_path: Path):
 
 
 def test_capability_metadata_preserves_multi_requirement_for_tasks():
-    assert TOOL_METADATA["tasks"].capabilities == ("task_db", "tasks")
-    assert TOOL_METADATA["list_tasks"].capabilities == ("task_db",)
-    assert TOOL_METADATA["delegate"].capabilities == ("delegate",)
+    assert TOOL_METADATA["tasks_create"].capabilities == ("task_db", "tasks")
+    assert TOOL_METADATA["tasks_list"].capabilities == ("task_db",)
+    assert TOOL_METADATA["tasks_delegate"].capabilities == ("delegate",)
+    assert TOOL_METADATA["tasks_cancel"].capabilities == ("task_db", "delegate")
 
 
 def test_read_only_modes_fail_closed_for_mutating_tools():

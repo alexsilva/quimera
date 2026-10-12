@@ -54,8 +54,8 @@ Exemplos de validação:
 - `remove_file` precisa de `dry_run=False` explícito;
 - shell não pode usar operadores encadeados perigosos como `&&`, `;` ou pipe;
 - comandos como `sudo`, `rm -rf` e `git push` são bloqueados ou tratados como risco forte;
-- `delegate` precisa de `target_agent` e `request` válidos;
-- `delegate` rejeita campos reservados controlados pelo caller, como `allowlisted`, `approval_budget`, `approval_scope_id`, `transport`, `run_id` e `parent_run_id`.
+- `tasks_delegate` precisa de `target_agent` e `request` válidos;
+- `tasks_delegate` rejeita campos reservados controlados pelo caller, como `allowlisted`, `approval_budget`, `approval_scope_id`, `transport`, `run_id` e `parent_run_id`.
 
 O `ToolPolicy` responde à pergunta: **“essa chamada é estruturalmente aceitável e não viola uma regra dura?”**
 
@@ -79,7 +79,7 @@ Ele classifica ferramentas em níveis de risco:
 |---|---|
 | `read` | `read_file`, `list_files`, `grep_search` |
 | `network` | `web_search`, `web_fetch` |
-| `delegation` | `delegate` |
+| `delegation` | `tasks_delegate` |
 | `write` | `write_file`, `apply_patch`, `todo_write`, `write_stdin` |
 | `shell` | `run_shell`, `exec_command` |
 | `destructive` | `remove_file` |
@@ -141,7 +141,7 @@ Ele permite aprovar, por exemplo:
 - uma ferramenta específica;
 - um path específico;
 - um agente chamador específico;
-- um alvo específico de `delegate`;
+- um alvo específico de `tasks_delegate`;
 - um risco específico;
 - tudo isso apenas dentro de um `run_id` e por pouco tempo.
 
@@ -155,21 +155,21 @@ Um escopo seguro precisa ter limites explícitos:
 - `remaining_uses` positivo;
 - `tool_name`, exceto em approve-all explicitamente marcado;
 - `path` para mutações de arquivo;
-- `agent_name` e `target_agent_name` para `delegate`.
+- `agent_name` e `target_agent_name` para `tasks_delegate`.
 
 Isso impede que “aprove uma vez” vire permissão global silenciosa.
 
-## Como `delegate` é tratado como `delegation`
+## Como `tasks_delegate` é tratado como `delegation`
 
-`delegate` permite que um agente chame outro agente. Isso é poderoso e, por isso, é classificado como risco `delegation`.
+`tasks_delegate` permite que um agente chame outro agente. Isso é poderoso e, por isso, é classificado como risco `delegation`.
 
 Regras principais:
 
-- `delegate` passa pelo `ToolPolicy`;
+- `tasks_delegate` passa pelo `ToolPolicy`;
 - campos reservados vindos de `arguments` são rejeitados;
 - delegações internas podem ser autoaprovadas dentro do orçamento do run;
 - delegações vindas de MCP HTTP são consideradas externas e exigem aprovação humana, salvo política server-side explícita;
-- escopos de aprovação para `delegate` precisam limitar chamador e alvo.
+- escopos de aprovação para `tasks_delegate` precisam limitar chamador e alvo.
 
 Exemplo: um escopo para `claude -> codex` não aprova automaticamente `claude -> gemini`.
 
@@ -185,7 +185,7 @@ Por isso:
 - chamadas `/message` sem sessão usam estado local temporário e não acumulam `_http_sessions`;
 - `transport` confiável é definido pelo servidor como `http_mcp`;
 - `_meta.transport = internal_mcp` enviado pelo cliente é ignorado;
-- `delegate` por HTTP externo exige aprovação, salvo configuração server-side explícita.
+- `tasks_delegate` por HTTP externo exige aprovação, salvo configuração server-side explícita.
 
 ## Por que `_meta`, `params` e `arguments` não são confiáveis
 
@@ -211,7 +211,7 @@ Por isso:
 
 - o servidor sobrescreve o transporte real;
 - budget vem do `ToolRuntimeConfig` ou de política server-side;
-- `allowlisted` e `approval_budget` em `arguments` são rejeitados para `delegate`;
+- `allowlisted` e `approval_budget` em `arguments` são rejeitados para `tasks_delegate`;
 - `approval_scope_id`, `run_id` e `parent_run_id` enviados pelo caller não são aceitos como contexto confiável;
 - o broker só consulta `TrustedToolExecutionContext` para decisões sensíveis.
 
@@ -225,10 +225,10 @@ Exemplo simplificado:
 delegation_budget_per_run = 3
 run_id = stdio:abc
 
-1ª delegate interna -> autoaprovada
-2ª delegate interna -> autoaprovada
-3ª delegate interna -> autoaprovada
-4ª delegate interna -> precisa aprovação ou é negada conforme handler
+1ª tasks_delegate interna -> autoaprovada
+2ª tasks_delegate interna -> autoaprovada
+3ª tasks_delegate interna -> autoaprovada
+4ª tasks_delegate interna -> precisa aprovação ou é negada conforme handler
 ```
 
 O consumo do budget é atômico: se cinco agentes tentarem delegar ao mesmo tempo e o budget for `1`, apenas uma chamada consome o orçamento.
@@ -297,7 +297,7 @@ O `audit_log` não substitui logs persistentes de produção, mas é a fonte ime
 Cenário: `claude` quer delegar uma edição para `codex`.
 
 ```text
-claude -> delegate(codex)
+claude -> tasks_delegate(codex)
 transport = internal_mcp
 run_id = stdio:...
 risk = delegation
@@ -309,14 +309,14 @@ Fluxo:
 2. `ApprovalManager` classifica como `delegation`.
 3. Como é interno, consulta o budget do run.
 4. Se ainda houver orçamento, autoaprova e registra `auto_approved`.
-5. A chamada segue para a ferramenta `delegate`.
+5. A chamada segue para a ferramenta `tasks_delegate`.
 
-### 2. Cliente HTTP tentando chamar `delegate`
+### 2. Cliente HTTP tentando chamar `tasks_delegate`
 
 Cenário: um cliente HTTP externo chama:
 
 ```json
-{"name": "delegate", "arguments": {"target_agent": "codex", "request": "analise"}}
+{"name": "tasks_delegate", "arguments": {"target_agent": "codex", "request": "analise"}}
 ```
 
 Fluxo:
@@ -351,7 +351,7 @@ Um escopo seguro pode representar:
 run_id = stdio:123
 transport = internal_mcp
 server_origin = mcp_stdio
-tool_name = delegate
+tool_name = tasks_delegate
 agent_name = claude
 target_agent_name = codex
 risk = delegation
@@ -362,16 +362,16 @@ expires_at = agora + 5 minutos
 Esse escopo aprova apenas:
 
 ```text
-claude -> delegate(codex)
+claude -> tasks_delegate(codex)
 ```
 
 Ele não aprova:
 
 ```text
-claude -> delegate(gemini)
-codex  -> delegate(claude)
-cliente HTTP -> delegate(codex)
-outro run -> delegate(codex)
+claude -> tasks_delegate(gemini)
+codex  -> tasks_delegate(claude)
+cliente HTTP -> tasks_delegate(codex)
+outro run -> tasks_delegate(codex)
 ```
 
 ### 5. Bloqueio de campos reservados
@@ -393,7 +393,7 @@ O `ToolPolicy` rejeita a chamada antes da aprovação, porque esses campos são 
 Mensagem esperada, em termos simples:
 
 ```text
-delegate recebeu campos reservados não confiáveis: allowlisted, approval_budget, transport
+tasks_delegate recebeu campos reservados não confiáveis: allowlisted, approval_budget, transport
 ```
 
 A regra evita que o próprio agente/cliente aumente budget, mude transporte ou tente se declarar allowlisted.

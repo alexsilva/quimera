@@ -919,7 +919,7 @@ class MCPServer:
                 return None
             return self._executor.execute(tool_call, _progress_callback)
 
-        pool = self._delegation_pool if tool_name == "delegate" else self._thread_pool
+        pool = self._delegation_pool if tool_name == "tasks_delegate" else self._thread_pool
         future = pool.submit(_execute_unless_cancelled)
 
         call_info = {
@@ -962,7 +962,7 @@ class MCPServer:
     def _configured_tool_timeout(self, tool_name: str | None = None) -> float:
         """Retorna timeout MCP válido, tolerando executors de compatibilidade.
 
-        ``delegate`` tem orçamento próprio: um delegado tem direito ao tempo
+        ``tasks_delegate`` tem orçamento próprio: um delegado tem direito ao tempo
         integral de processamento configurado em
         ``delegate_parallel_timeout_seconds``, e o teto do servidor fica acima
         dele para nunca matar uma delegação ativa antes do relógio interno.
@@ -971,7 +971,7 @@ class MCPServer:
         timeout = self._coerce_timeout(
             getattr(config, "mcp_tool_timeout_seconds", 600), 600.0
         )
-        if tool_name == "delegate":
+        if tool_name == "tasks_delegate":
             delegate_timeout = self._coerce_timeout(
                 getattr(
                     config,

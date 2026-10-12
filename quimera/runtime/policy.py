@@ -147,7 +147,7 @@ class ToolPolicy:
 
     def _validate_propose_task(self, call: ToolCall) -> None:
         """propose_task foi substituída pelos fluxos canônicos de criação."""
-        raise ToolPolicyError("propose_task foi desativada; use /task ou a tool tasks")
+        raise ToolPolicyError("propose_task foi desativada; use /task ou a tool tasks_create")
 
     def _validate_approve_task(self, call: ToolCall) -> None:
         """approve_task foi desativada no chat."""

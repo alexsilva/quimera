@@ -23,8 +23,9 @@ class TestExecutionMode(unittest.TestCase):
             "remove_file",
             "run_shell",
             "exec_command",
-            "delegate",
-            "tasks",
+            "tasks_create",
+            "tasks_delegate",
+            "tasks_cancel",
             "ask_user",
             "update_shared_state",
         ):

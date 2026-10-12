@@ -355,7 +355,7 @@ def test_prompt_omits_generic_delegation_contract_from_route_rules():
     prompt = builder.build(agent="codex", history=[{"role": "human", "content": "delegue"}])
 
     assert "Delegação padrão:" not in prompt
-    assert "tool estruturada `delegate`" not in prompt
+    assert "tool estruturada `tasks_delegate`" not in prompt
     assert "target_agent" not in prompt
     assert "fallback_agents" not in prompt
 
@@ -379,7 +379,7 @@ def test_orchestrator_prompt_requires_delegation_and_forbids_direct_execution():
     assert "não edite arquivos" in rules_block
     assert "não rode comandos nem testes" in rules_block
     assert "é obrigatório chamar ao menos um agente" in rules_block
-    assert "tool `delegate`" in rules_block
+    assert "tool `tasks_delegate`" in rules_block
     assert "target_agent" in rules_block
     assert "request" in rules_block
 
@@ -400,7 +400,7 @@ def test_orchestrator_prompt_does_not_assume_mcp_transport():
 
     rules_block = _extract_block(prompt, "rules")
     assert "MCP" not in rules_block
-    assert "tool `delegate`" in rules_block
+    assert "tool `tasks_delegate`" in rules_block
     assert "tool `ask_user`" in rules_block
 
 
@@ -423,7 +423,7 @@ def test_delegation_prompt_does_not_induce_redelegation_nor_assume_transport():
     rules_block = _extract_block(prompt, "delegation_rules")
     assert "[ACK:<DELEGATION_ID>]" in rules_block
     assert "Continue do ponto já avançado" in rules_block
-    assert "tool `delegate`" not in rules_block
+    assert "tool `tasks_delegate`" not in rules_block
     assert "Delegação padrão:" not in rules_block
     assert "target_agent" not in rules_block
     assert "fallback_agents" not in rules_block
@@ -456,7 +456,7 @@ def test_delegation_prompt_uses_dedicated_template_without_human_context():
         from_agent="codex",
         request_override="Compare o resultado com o contrato.",
         prompt_kind=PromptKind.DELEGATION,
-        # Mesmos parâmetros da tool `delegate`: o delegado nunca é o falante primário.
+        # Mesmos parâmetros da tool `tasks_delegate`: o delegado nunca é o falante primário.
         primary=False,
     )
 
@@ -616,7 +616,7 @@ def test_delegation_template_has_no_human_placeholders():
     assert "{recent_conversation}" not in template_text
     assert "{shared_state_json}" not in template_text
     assert "MCP" not in template_text
-    assert "`delegate`" not in template_text
+    assert "`tasks_delegate`" not in template_text
 
 
 def test_prompt_shared_state():

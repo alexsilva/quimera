@@ -177,7 +177,7 @@ class InteractionToolTests(unittest.TestCase):
 
     def test_get_job_without_job_id_is_allowed(self):
         """Verifica que Test get job without job id is allowed."""
-        self.policy.validate(self._call("get_job", {}))
+        self.policy.validate(self._call("jobs_get", {}))
 
     def test_propose_task_is_blocked_in_chat(self):
         """Verifica que Test propose task is blocked in chat."""
@@ -341,7 +341,7 @@ class ExecutorTests(unittest.TestCase):
         task_id = propose_task(job_id, "Task A", db_path=str(self.db_path))
         ex = self._executor()
 
-        result = ex.execute(ToolCall(name="list_tasks", arguments={"job_id": job_id, "status": "proposed"}))
+        result = ex.execute(ToolCall(name="tasks_list", arguments={"job_id": job_id, "status": "proposed"}))
 
         self.assertTrue(result.ok)
         payload = json.loads(result.content)
@@ -410,7 +410,7 @@ class ExecutorTests(unittest.TestCase):
         old_env = os.environ.get("QUIMERA_CURRENT_JOB_ID")
         os.environ["QUIMERA_CURRENT_JOB_ID"] = str(job_id)
         try:
-            result = ex.execute(ToolCall(name="get_job", arguments={}))
+            result = ex.execute(ToolCall(name="jobs_get", arguments={}))
         finally:
             if old_env is None:
                 os.environ.pop("QUIMERA_CURRENT_JOB_ID", None)
@@ -427,7 +427,7 @@ class ExecutorTests(unittest.TestCase):
         add_job("Execução", created_by="bia", db_path=str(self.db_path))
         ex = self._executor()
 
-        result = ex.execute(ToolCall(name="list_jobs", arguments={"created_by": "alex"}))
+        result = ex.execute(ToolCall(name="jobs_list", arguments={"created_by": "alex"}))
 
         self.assertTrue(result.ok)
         payload = json.loads(result.content)

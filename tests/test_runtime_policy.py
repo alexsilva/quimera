@@ -66,7 +66,7 @@ def test_policy_path_prefix_sibling_outside_workspace(tmp_path):
 def test_policy_requires_approval(policy):
     assert policy.requires_approval(ToolCall(name="write_file", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="apply_patch", arguments={})) is True
-    assert policy.requires_approval(ToolCall(name="tasks", arguments={})) is True
+    assert policy.requires_approval(ToolCall(name="tasks_create", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="read_file", arguments={})) is False
 
 
@@ -85,7 +85,7 @@ def test_tasks_uses_dedicated_creation_approval_flag(tmp_path):
     )
     policy = _make_policy(config)
 
-    assert policy.requires_approval(ToolCall(name="tasks", arguments={})) is False
+    assert policy.requires_approval(ToolCall(name="tasks_create", arguments={})) is False
 
 
 @pytest.mark.parametrize(
@@ -112,9 +112,9 @@ def test_policy_http_request_readonly_do_not_require_approval(policy, method):
 
 def test_policy_other_validations(policy):
     """Cobre os caminhos de pass-through do validate."""
-    policy.validate(ToolCall(name="list_tasks", arguments={"job_id": 1}))
-    policy.validate(ToolCall(name="list_jobs", arguments={}))
-    policy.validate(ToolCall(name="get_job", arguments={}))
+    policy.validate(ToolCall(name="tasks_list", arguments={"job_id": 1}))
+    policy.validate(ToolCall(name="jobs_list", arguments={}))
+    policy.validate(ToolCall(name="jobs_get", arguments={}))
     policy.validate(ToolCall(name="memory_retrieve", arguments={}))
     policy.validate(ToolCall(name="todo_list", arguments={}))
     policy.validate(
@@ -232,9 +232,9 @@ def test_policy_does_not_require_approval_for_read_tools(policy):
         "read_file",
         "list_files",
         "grep_search",
-        "list_tasks",
-        "list_jobs",
-        "get_job",
+        "tasks_list",
+        "jobs_list",
+        "jobs_get",
         "memory_save",
         "memory_retrieve",
         "todo_list",
@@ -507,26 +507,26 @@ _DELEGATE_INVALID = [
 @pytest.mark.parametrize("arguments", _DELEGATE_VALID)
 def test_policy_delegate_accepts_valid_payload(policy, arguments):
     """delegate com payload válido (mínimo, steps e role/access_list) passa."""
-    policy.validate(ToolCall(name="delegate", arguments=arguments))
+    policy.validate(ToolCall(name="tasks_delegate", arguments=arguments))
 
 
 @pytest.mark.parametrize(("arguments", "match"), _DELEGATE_INVALID)
 def test_policy_delegate_rejects_invalid_payload(policy, arguments, match):
     """delegate com payload inválido é rejeitado com a mensagem esperada."""
     with pytest.raises(ToolPolicyError, match=match):
-        policy.validate(ToolCall(name="delegate", arguments=arguments))
+        policy.validate(ToolCall(name="tasks_delegate", arguments=arguments))
 
 
 def test_policy_delegate_blocked_tools(policy):
     """delegate é bloqueado quando na lista blocked_tools."""
-    policy.blocked_tools = ["delegate"]
-    call = ToolCall(name="delegate", arguments={"target_agent": "codex", "request": "x"})
+    policy.blocked_tools = ["tasks_delegate"]
+    call = ToolCall(name="tasks_delegate", arguments={"target_agent": "codex", "request": "x"})
     with pytest.raises(ToolPolicyError, match="bloqueada pelo modo de execução ativo"):
         policy.validate(call)
 
 
 def test_policy_delegate_requires_approval(policy):
-    assert policy.requires_approval(ToolCall(name="delegate", arguments={})) is True
+    assert policy.requires_approval(ToolCall(name="tasks_delegate", arguments={})) is True
 
 
 def test_policy_blocked_tools(policy):

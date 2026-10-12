@@ -986,7 +986,7 @@ class TestToolsCallHTTP:
         """Verifica que Test agent profile adds call agent without dangerous write or shell tools."""
         tools = parse_http_allowed_tools("agent")
         assert tools == HTTP_AGENT_TOOLS
-        assert "delegate" in tools
+        assert "tasks_delegate" in tools
         assert "memory_save" in tools
         assert "replace_text" in tools
         assert "git_fetch" in tools
@@ -1026,13 +1026,13 @@ class TestToolsCallHTTP:
         """Verifica que Test profile allowlists filter http tools for external clients."""
         executor = _make_executor(tool_names=[
             "read_file", "grep_search", "inspect_symbols", "web_search", "web_fetch",
-            "memory_retrieve", "memory_save", "delegate", "run_shell", "write_file", "apply_patch",
+            "memory_retrieve", "memory_save", "tasks_delegate", "run_shell", "write_file", "apply_patch",
             "replace_text",
         ])
         cases = {
             "read-local": {"read_file", "grep_search", "inspect_symbols", "memory_retrieve"},
             "read": {"read_file", "grep_search", "inspect_symbols", "web_search", "web_fetch", "memory_retrieve"},
-            "agent": {"read_file", "grep_search", "inspect_symbols", "web_search", "web_fetch", "memory_retrieve", "memory_save", "delegate", "replace_text"},
+            "agent": {"read_file", "grep_search", "inspect_symbols", "web_search", "web_fetch", "memory_retrieve", "memory_save", "tasks_delegate", "replace_text"},
         }
         for profile, expected_subset in cases.items():
             httpd = MCP_HTTPServer(
@@ -1057,7 +1057,7 @@ class TestToolsCallHTTP:
                     assert "web_search" not in tool_names
                     assert "web_fetch" not in tool_names
                 if profile != "agent":
-                    assert "delegate" not in tool_names
+                    assert "tasks_delegate" not in tool_names
                     assert "replace_text" not in tool_names
                 assert "run_shell" not in tool_names
                 assert "write_file" not in tool_names

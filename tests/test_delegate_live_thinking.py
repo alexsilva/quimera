@@ -826,7 +826,7 @@ def test_silent_cli_delegate_tracks_tool_activity_before_process_finishes():
     assert result["value"] == "Fluxo validado"
 
 
-# ── TaskTools.list_tasks: campo live ─────────────────────────────────────
+# ── TaskTools.tasks_list: campo live ─────────────────────────────────────
 
 
 @pytest.fixture
@@ -864,7 +864,7 @@ def test_list_tasks_attaches_live_thinking_for_running_delegations(mock_list, ta
     }
     task_tools.set_delegation_run_lookup(views.get)
 
-    result = task_tools.list_tasks(ToolCall(name="list_tasks", arguments={"id": 7}))
+    result = task_tools.tasks_list(ToolCall(name="tasks_list", arguments={"id": 7}))
 
     assert result.ok is True
     tasks = json.loads(result.content)
@@ -890,7 +890,7 @@ def test_list_tasks_limits_live_thinking_excerpt_keeping_tail(mock_list, task_to
         else None
     )
 
-    result = task_tools.list_tasks(ToolCall(name="list_tasks", arguments={"id": 7}))
+    result = task_tools.tasks_list(ToolCall(name="tasks_list", arguments={"id": 7}))
 
     excerpt = json.loads(result.content)[0]["live"][0]["last_thinking"]
     assert excerpt.startswith("…")
@@ -908,7 +908,7 @@ def test_list_tasks_does_not_enrich_finished_or_foreign_tasks(mock_list, task_to
         lambda dlg: {"agent": "codex", "status": "running", "last_thinking": "x"}
     )
 
-    result = task_tools.list_tasks(ToolCall(name="list_tasks", arguments={"job_id": 3}))
+    result = task_tools.tasks_list(ToolCall(name="tasks_list", arguments={"job_id": 3}))
 
     tasks = json.loads(result.content)
     assert all("live" not in task for task in tasks)
@@ -925,7 +925,7 @@ def test_list_tasks_survives_lookup_failure_and_bad_body(mock_list, task_tools):
     ]
     task_tools.set_delegation_run_lookup(boom)
 
-    result = task_tools.list_tasks(ToolCall(name="list_tasks", arguments={"job_id": 3}))
+    result = task_tools.tasks_list(ToolCall(name="tasks_list", arguments={"job_id": 3}))
 
     assert result.ok is True
     assert all("live" not in task for task in json.loads(result.content))
@@ -935,7 +935,7 @@ def test_list_tasks_survives_lookup_failure_and_bad_body(mock_list, task_tools):
 def test_list_tasks_unchanged_without_injected_lookup(mock_list, task_tools):
     mock_list.return_value = [_delegate_task_row()]
 
-    result = task_tools.list_tasks(ToolCall(name="list_tasks", arguments={"id": 7}))
+    result = task_tools.tasks_list(ToolCall(name="tasks_list", arguments={"id": 7}))
 
     assert result.ok is True
     assert "live" not in json.loads(result.content)[0]

@@ -489,17 +489,17 @@ def run_mcp_delegate_cli_agent(args: argparse.Namespace) -> int:
         tools = mcp.tools_list()
         tool_names = {str(tool.get("name") or "") for tool in tools}
         print(f"MCP conectado: {server_info.get('name', 'desconhecido')} | tools={len(tools)}")
-        if "delegate" not in tool_names:
-            print("ERRO: MCP não expôs delegate.")
+        if "tasks_delegate" not in tool_names:
+            print("ERRO: MCP não expôs tasks_delegate.")
             return 2
-        print(f"MCP tool_call: delegate {json.dumps(arguments, ensure_ascii=False)}")
-        tool_result = mcp.tools_call("delegate", arguments)
+        print(f"MCP tool_call: tasks_delegate {json.dumps(arguments, ensure_ascii=False)}")
+        tool_result = mcp.tools_call("tasks_delegate", arguments)
         is_error = bool(tool_result.get("isError"))
         text = _mcp_content_to_text(tool_result.get("content"))
         print(f"MCP tool_result: {'ERRO' if is_error else 'OK'} {text[:2000]}")
         if is_error:
             return 1
-        print("Delegação finalizada via delegate.")
+        print("Delegação finalizada via tasks_delegate.")
         return 0
 
 
@@ -540,9 +540,9 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_cli.add_argument("prompt", nargs="*", help="Prompt opcional; se omitido, lê stdin.")
     mcp_cli.set_defaults(func=run_openai_mcp_cli_agent)
 
-    delegate_cli = sub.add_parser("mcp-delegate-cli", help="CLI fake: delega para outro agente via delegate no MCP.")
+    delegate_cli = sub.add_parser("mcp-delegate-cli", help="CLI fake: delega para outro agente via tasks_delegate no MCP.")
     delegate_cli.add_argument("prompt", nargs="*", help="Prompt opcional; se omitido, lê stdin.")
-    delegate_cli.add_argument("--target-agent", default="fake-openai", help="Agente alvo da tool delegate.")
+    delegate_cli.add_argument("--target-agent", default="fake-openai", help="Agente alvo da tool tasks_delegate.")
     delegate_cli.add_argument("--mcp-socket", default="", help="Socket MCP; fallback QUIMERA_FAKE_MCP_SOCKET.")
     delegate_cli.add_argument("--mcp-token", default="", help="Token MCP; fallback QUIMERA_FAKE_MCP_TOKEN.")
     delegate_cli.add_argument("--timeout", type=float, default=15.0)

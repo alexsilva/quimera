@@ -430,7 +430,7 @@ def test_build_tool_system_prompt_avoids_unavailable_tool_guidance():
 
 def test_build_tool_system_prompt_prefers_delegate_for_delegation():
     """Prompt curto não duplica instruções específicas de delegate."""
-    prompt = _build_tool_system_prompt(["read_file", "delegate"], "/tmp/workspace")
+    prompt = _build_tool_system_prompt(["read_file", "tasks_delegate"], "/tmp/workspace")
 
     assert "ferramentas disponíveis" in prompt
     assert "Para delegação entre agentes, use a tool `delegate`" not in prompt

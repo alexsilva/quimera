@@ -31,7 +31,7 @@ TASK_TYPE_GENERAL = TaskType.GENERAL
 TASK_TYPE_TEST_EXECUTION = TaskType.TEST_EXECUTION
 from quimera.runtime.tools.files import FileTools, set_staging_root  # noqa: E402
 from quimera.runtime.tools.shell import ShellTool  # noqa: E402
-from quimera.runtime.tools.tasks import TaskTools  # noqa: E402
+from quimera.runtime.tools.tasks import JobTools, TaskTools  # noqa: E402
 
 from tests.helpers import make_policy as _make_policy  # noqa: E402
 
@@ -374,9 +374,9 @@ class PolicyCoverageTests(unittest.TestCase):
 
     def test_policy_validation_paths_and_disabled_tools(self):
         """Verifica que Test policy validation paths and disabled tools."""
-        self.policy.validate(ToolCall(name="list_tasks", arguments={"job_id": 1}))
-        self.policy.validate(ToolCall(name="list_jobs", arguments={}))
-        self.policy.validate(ToolCall(name="get_job", arguments={}))
+        self.policy.validate(ToolCall(name="tasks_list", arguments={"job_id": 1}))
+        self.policy.validate(ToolCall(name="jobs_list", arguments={}))
+        self.policy.validate(ToolCall(name="jobs_get", arguments={}))
         self.policy.validate(ToolCall(name="list_files", arguments={"path": "."}))
         self.policy.validate(ToolCall(name="read_file", arguments={"path": "file.txt"}))
         self.policy.validate(ToolCall(name="write_file", arguments={"path": "out.txt", "content": "ok"}))
@@ -649,25 +649,26 @@ class TaskToolsCoverageTests(unittest.TestCase):
     def setUp(self):
         self.config = ToolRuntimeConfig(workspace=Workspace(Path("/tmp")))
         self.tools = TaskTools(self.config)
+        self.job_tools = JobTools(self.config)
 
     def test_resolve_job_id_and_duplicates(self):
         """Verifica que Test resolve job id and duplicates."""
         with patch.dict(os.environ, {"QUIMERA_CURRENT_JOB_ID": "123"}):
-            self.assertEqual(self.tools._resolve_job_id(None), 123)
+            self.assertEqual(self.job_tools._resolve_job_id(None), 123)
         with patch.dict(os.environ, {"QUIMERA_CURRENT_JOB_ID": "bad"}):
-            self.assertIsNone(self.tools._resolve_job_id(None))
+            self.assertIsNone(self.job_tools._resolve_job_id(None))
         with patch.dict(os.environ, {}, clear=True), patch(
                 "quimera.runtime.tools.tasks._list_jobs", side_effect=[[{"id": 10}], []]
         ):
-            self.assertEqual(self.tools._resolve_job_id(None, allow_recent_fallback=True), 10)
+            self.assertEqual(self.job_tools._resolve_job_id(None, allow_recent_fallback=True), 10)
         with patch.dict(os.environ, {}, clear=True), patch(
                 "quimera.runtime.tools.tasks._list_jobs", side_effect=[[], [{"id": 20}]]
         ):
-            self.assertEqual(self.tools._resolve_job_id(None, allow_recent_fallback=True), 20)
+            self.assertEqual(self.job_tools._resolve_job_id(None, allow_recent_fallback=True), 20)
         with patch.dict(os.environ, {}, clear=True), patch(
                 "quimera.runtime.tools.tasks._list_jobs", side_effect=RuntimeError("db down")
         ):
-            self.assertIsNone(self.tools._resolve_job_id(None, allow_recent_fallback=True))
+            self.assertIsNone(self.job_tools._resolve_job_id(None, allow_recent_fallback=True))
         with patch(
                 "quimera.runtime.tools.tasks._list_tasks",
                 side_effect=[[{"description": " TEST task "}], [], [], []],
@@ -679,29 +680,29 @@ class TaskToolsCoverageTests(unittest.TestCase):
     def test_list_jobs_tasks_and_get_job_paths(self):
         """Verifica que Test list jobs tasks and get job paths."""
         with patch("quimera.runtime.tools.tasks._list_tasks", return_value=[{"id": 1}]):
-            tasks = self.tools.list_tasks(ToolCall(name="list_tasks", arguments={"status": "approved"}))
+            tasks = self.tools.tasks_list(ToolCall(name="tasks_list", arguments={"status": "approved"}))
         self.assertEqual(json.loads(tasks.content), [{"id": 1}])
         with patch("quimera.runtime.tools.tasks._list_tasks", side_effect=RuntimeError("boom")):
-            failed_tasks = self.tools.list_tasks(ToolCall(name="list_tasks", arguments={}))
+            failed_tasks = self.tools.tasks_list(ToolCall(name="tasks_list", arguments={}))
         self.assertFalse(failed_tasks.ok)
         with patch("quimera.runtime.tools.tasks._list_jobs", return_value=[{"id": 2}]):
-            jobs = self.tools.list_jobs(ToolCall(name="list_jobs", arguments={"status": "planning"}))
+            jobs = self.job_tools.jobs_list(ToolCall(name="jobs_list", arguments={"status": "planning"}))
         self.assertEqual(json.loads(jobs.content), [{"id": 2}])
         with patch("quimera.runtime.tools.tasks._list_jobs", side_effect=RuntimeError("boom")):
-            failed_jobs = self.tools.list_jobs(ToolCall(name="list_jobs", arguments={}))
+            failed_jobs = self.job_tools.jobs_list(ToolCall(name="jobs_list", arguments={}))
         self.assertFalse(failed_jobs.ok)
-        with patch.object(self.tools, "_resolve_job_id", return_value=None):
-            missing_job = self.tools.get_job(ToolCall(name="get_job", arguments={}))
+        with patch.object(self.job_tools, "_resolve_job_id", return_value=None):
+            missing_job = self.job_tools.jobs_get(ToolCall(name="jobs_get", arguments={}))
         self.assertFalse(missing_job.ok)
-        with patch.object(self.tools, "_resolve_job_id", return_value=1), patch(
+        with patch.object(self.job_tools, "_resolve_job_id", return_value=1), patch(
                 "quimera.runtime.tools.tasks._get_job", return_value=None
         ):
-            null_job = self.tools.get_job(ToolCall(name="get_job", arguments={}))
+            null_job = self.job_tools.jobs_get(ToolCall(name="jobs_get", arguments={}))
         self.assertEqual(null_job.content, "null")
-        with patch.object(self.tools, "_resolve_job_id", return_value=1), patch(
+        with patch.object(self.job_tools, "_resolve_job_id", return_value=1), patch(
                 "quimera.runtime.tools.tasks._get_job", side_effect=RuntimeError("boom")
         ):
-            failed_job = self.tools.get_job(ToolCall(name="get_job", arguments={}))
+            failed_job = self.job_tools.jobs_get(ToolCall(name="jobs_get", arguments={}))
         self.assertFalse(failed_job.ok)
 
 

@@ -18,10 +18,10 @@ O Quimera coordena agentes (CLI e OpenAI-compatible), mantém estado compartilha
 - `quimera/runtime/mcp/server.py`: servidor MCP (Model Context Protocol) — expõe tools do runtime via JSON-RPC 2.0 sobre stdio/socket Unix.
 - `quimera/runtime/task_planning.py`: classificação de task e scoring de roteamento.
 - `quimera/runtime/tasks.py`: persistência de jobs/tasks em SQLite.
-- `quimera/runtime/tools/delegate.py`: `delegate` — delegação entre agentes via MCP (cross-MCP).
+- `quimera/runtime/tools/delegate.py`: `tasks_delegate` — delegação entre agentes via MCP (cross-MCP).
 - `quimera/profiles/`: catálogo de agentes e metadados de capacidade. Cada profile injeta configuração MCP no formato nativo do agente.
 - `quimera/ui/`: renderização terminal (temas, densidade, stream e resumo).
-- `quimera/prompt.md`: template do chat com o humano. `quimera/delegate_prompt.md`: template usado quando um agente delega para outro (`delegate`, debate), sem nome do humano, histórico ou contexto persistente. `quimera/task_prompt.md` / `quimera/task_reviewer_prompt.md`: templates de `/task`. Todos usam blocos condicionais `<!-- IF:... -->`.
+- `quimera/prompt.md`: template do chat com o humano. `quimera/delegate_prompt.md`: template usado quando um agente delega para outro (`tasks_delegate`, debate), sem nome do humano, histórico ou contexto persistente. `quimera/task_prompt.md` / `quimera/task_reviewer_prompt.md`: templates de `/task`. Todos usam blocos condicionais `<!-- IF:... -->`.
 
 ## Requisitos
 
@@ -153,7 +153,7 @@ O Quimera inclui agentes fake para validar o app sem provedores externos. Eles n
 
 - `fake-cli`: agente CLI local determinístico (`python -m quimera.devtools.fake_agents cli`).
 - `fake-openai`: profile OpenAI-compatible apontando para um servidor local fake com tool calling nativo.
-- `fake-cli-delegate`: agente CLI que usa MCP `delegate` para delegar ao `fake-openai`.
+- `fake-cli-delegate`: agente CLI que usa MCP `tasks_delegate` para delegar ao `fake-openai`.
 - `fake-openai-mcp-cli`: agente CLI que chama o backend OpenAI-compatible fake diretamente e executa tool calls via MCP do Quimera.
 
 Exemplo rápido:
@@ -200,7 +200,7 @@ O MCP HTTP é uma extensão externa opcional para clientes remotos. Ele usa uma 
 Ferramentas são executadas por chamadas estruturadas: MCP para agentes CLI/MCP-capazes e, quando o backend OpenAI-compatible oferece suporte nativo a tool calling, chamadas nativas do driver. Em ambos os caminhos, a execução concreta converge para `ToolExecutor.execute(ToolCall(...))`, com `ToolPolicy`, approval e `ToolRegistry` centralizando validação, permissão, auditoria e despacho para os handlers do runtime.
 
 O servidor MCP aceita `tools/call` concorrentes em um pool compartilhado por
-todos os agentes da sessão (`mcp_tool_pool_workers`, 4 por padrão); `delegate`
+todos os agentes da sessão (`mcp_tool_pool_workers`, 4 por padrão); `tasks_delegate`
 aguarda o agente filho em um pool separado. No harness nativo compartilhado por
 OpenAI-compatible, Codex Cloud e Claude Cloud, múltiplas calls read-only
 explicitamente seguras do mesmo turno também rodam em paralelo, até
@@ -211,15 +211,15 @@ aos workers, e os resultados voltam ao modelo na ordem em que foram
 solicitados. `tools/list` expõe as anotações MCP de leitura, destrutividade e
 open-world; elas não substituem a policy do servidor.
 
-A ferramenta `delegate` permite que qualquer agente MCP-capaz delegue trabalho a outro agente no pool da sessão (disponível apenas quando MCP está ativo).
+A ferramenta `tasks_delegate` permite que qualquer agente MCP-capaz delegue trabalho a outro agente no pool da sessão (disponível apenas quando MCP está ativo).
 
 ### Perfis embutidos
 
 | Perfil | Tools expostas | Uso recomendado |
 |---|---|---|
-| `read-local` | `list_files`, `read_file`, `grep_search`, `inspect_symbols`, `list_tasks`, `list_jobs`, `get_job`, `memory_retrieve`, `todo_list` + git somente leitura (`git_status`, `git_log`, `git_diff`, `git_branch`, `git_fetch`) | Exposição externa mais restrita, sem ferramentas com acesso à rede. |
+| `read-local` | `list_files`, `read_file`, `grep_search`, `inspect_symbols`, `tasks_list`, `jobs_list`, `jobs_get`, `memory_retrieve`, `todo_list` + git somente leitura (`git_status`, `git_log`, `git_diff`, `git_branch`, `git_fetch`) | Exposição externa mais restrita, sem ferramentas com acesso à rede. |
 | `read` | Tudo de `read-local` + `web_search`, `web_fetch` | Leitura com pesquisa/fetch web quando a rede é necessária. |
-| `agent` | Tudo de `read` + `delegate`, `list_agents`, `replace_text`, `memory_save` + git de mutação (`git_add`, `git_commit`, `git_checkout`, `git_push`, com aprovação) | Delegação entre agentes sem liberar `run_shell`, `exec_command`, `write_file`, `remove_file` ou `apply_patch`. |
+| `agent` | Tudo de `read` + `tasks_create`, `tasks_delegate`, `tasks_cancel`, `list_agents`, `replace_text`, `memory_save` + git de mutação (`git_add`, `git_commit`, `git_checkout`, `git_push`, com aprovação) | Delegação entre agentes sem liberar `run_shell`, `exec_command`, `write_file`, `remove_file` ou `apply_patch`. |
 | `all` | Sem filtro de allowlist | Apenas desenvolvimento local ou rede privada muito confiável. |
 
 ## Roteamento de tasks
@@ -266,11 +266,11 @@ Ferramentas suportadas pelo runtime (expostas via MCP e, quando disponível, pel
 - shell: `run_shell`, `exec_command`, `write_stdin`, `poll_command_session`, `close_command_session`
 - git: `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_branch`, `git_checkout`, `git_fetch`, `git_push`
 - navegador: família `browser_*` (start, navigate, click, type, snapshot, screenshot, console, network, evaluate, ...) — automação Chrome/Chromium via Playwright (extra `browser`), com screenshots salvos por sessão no diretório de artefatos do workspace
-- tasks/jobs/agentes: `list_tasks`, `list_jobs`, `get_job`, `list_agents`
+- tasks/jobs/agentes: `tasks_create`, `tasks_list`, `tasks_cancel`, `jobs_list`, `jobs_get`, `list_agents`
 - memória/estado: `memory_save`, `memory_retrieve`, `update_shared_state`, `todo_write`, `todo_list`
 - interação: `ask_user`
 - web: `web_search`, `web_fetch`
-- **cross-MCP**: `delegate` — delega tarefas a outro agente no pool (disponível apenas quando MCP está ativo); cada delegação executa em `AgentClient` isolado, com cancelamento propagado do fluxo principal
+- **cross-MCP**: `tasks_delegate` — delega tarefas a outro agente no pool (disponível apenas quando MCP está ativo); cada delegação executa em `AgentClient` isolado, com cancelamento propagado do fluxo principal
 
 As tools de edição aplicam leitura antes de mutação por padrão: `read_file`
 registra o estado do arquivo no `run_id`, e alterações posteriores são

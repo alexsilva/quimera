@@ -2,7 +2,7 @@
 
 O Quimera organiza os agentes por **Tiers** e **Especialidades**. Todos os agentes compartilham o mesmo servidor MCP da sessão, que expõe as ferramentas do runtime via protocolo MCP (`2025-11-25`).
 
-O sistema **Cross-MCP** permite que agentes deleguem tarefas entre si através da tool `delegate` — qualquer agente MCP-capaz pode chamar qualquer outro agente do pool, com suporte a fallback e cadeias de delegação (`steps`).
+O sistema **Cross-MCP** permite que agentes deleguem tarefas entre si através da tool `tasks_delegate` — qualquer agente MCP-capaz pode chamar qualquer outro agente do pool, com suporte a fallback e cadeias de delegação (`steps`).
 
 ## Tier 3: Orquestradores de Alto Nível
 

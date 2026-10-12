@@ -134,9 +134,9 @@ Gatilhos úteis:
 
 ### CLI que delega para um agente OpenAI via MCP
 
-O profile `fake-cli-delegate` valida o caminho entre dois agentes de execução diferentes: um agente CLI MCP-capaz recebe o socket/token MCP do Quimera por variáveis de ambiente, chama a tool `delegate` e delega para o agente OpenAI-compatible `fake-openai`. A partir daí, o agente OpenAI usa o driver `openai_compat`, emite tool calls nativas e passa pelo fluxo normal de aprovação/execução de ferramentas do runtime.
+O profile `fake-cli-delegate` valida o caminho entre dois agentes de execução diferentes: um agente CLI MCP-capaz recebe o socket/token MCP do Quimera por variáveis de ambiente, chama a tool `tasks_delegate` e delega para o agente OpenAI-compatible `fake-openai`. A partir daí, o agente OpenAI usa o driver `openai_compat`, emite tool calls nativas e passa pelo fluxo normal de aprovação/execução de ferramentas do runtime.
 
-O profile `fake-openai-mcp-cli` continua disponível para validar o caminho direto CLI -> OpenAI-compatible -> MCP, mas ele não exercita delegação entre agentes; para comprovar CLI -> `delegate` -> OpenAI, prefira `fake-cli-delegate`.
+O profile `fake-openai-mcp-cli` continua disponível para validar o caminho direto CLI -> OpenAI-compatible -> MCP, mas ele não exercita delegação entre agentes; para comprovar CLI -> `tasks_delegate` -> OpenAI, prefira `fake-cli-delegate`.
 
 Rode o app com MCP habilitado (padrão) e o agente CLI MCP. Não é necessário iniciar um servidor externo antes: `--test` sobe o backend fake em porta livre e aponta `fake-openai` para ele com override não persistente:
 
@@ -150,7 +150,7 @@ Prompt de smoke sugerido:
 Execute pwd via shell usando o agente OpenAI
 ```
 
-O output esperado deve conter, nessa ordem, `MCP conectado`, `MCP tool_call: delegate`, execução do `fake-openai`, aprovação/execução da ferramenta pedida pelo OpenAI e `MCP tool_result: OK`. Esse fluxo comprova que um CLI local consegue delegar para um agente OpenAI por `delegate`, e que o agente OpenAI executa ferramentas pelo runtime com a política normal de aprovação.
+O output esperado deve conter, nessa ordem, `MCP conectado`, `MCP tool_call: tasks_delegate`, execução do `fake-openai`, aprovação/execução da ferramenta pedida pelo OpenAI e `MCP tool_result: OK`. Esse fluxo comprova que um CLI local consegue delegar para um agente OpenAI por `tasks_delegate`, e que o agente OpenAI executa ferramentas pelo runtime com a política normal de aprovação.
 
 Também é possível executar o app inteiro com o agente OpenAI fake:
 

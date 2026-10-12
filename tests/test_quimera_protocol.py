@@ -5036,7 +5036,7 @@ class ProfileTests(unittest.TestCase):
         main = prompt_template._load()
 
         self.assertIn("<!-- IF:is_orchestrator -->", main)
-        self.assertIn("tool `delegate`", main)
+        self.assertIn("tool `tasks_delegate`", main)
         self.assertNotIn("via MCP", main)
         self.assertIn("target_agent", main)
         self.assertNotIn("não improvise", main)
