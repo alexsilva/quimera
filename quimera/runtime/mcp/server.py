@@ -1301,6 +1301,32 @@ class MCPServer:
                 self._cancel_events.pop(request_key, None)
             self._discard_pending_call(call)
 
+    def _close_command_sessions_for_output(self, out: IO) -> None:
+        """Encerra comandos persistentes pertencentes à conexão abortada."""
+        state = getattr(out, "_mcp_state", {}) or {}
+        run_id = str(state.get("trusted_run_id") or "").strip()
+        close_sessions = getattr(
+            self._executor,
+            "close_command_sessions_for_run",
+            None,
+        )
+        if not run_id or not callable(close_sessions):
+            return
+        try:
+            closed = close_sessions(run_id)
+            if closed:
+                _logger.debug(
+                    "MCP EOF: sessões de comando encerradas run_id=%s sessions=%s",
+                    run_id,
+                    closed,
+                )
+        except Exception:
+            _logger.warning(
+                "MCP EOF: falha ao encerrar sessões de comando run_id=%s",
+                run_id,
+                exc_info=True,
+            )
+
     def _force_expire_pending(self, calls: list[dict], out: IO) -> None:
         """Expira pendências travadas no shutdown, sem duplicar respostas."""
         for call in calls:
@@ -1747,6 +1773,10 @@ class MCPServer:
         should_cancel = cancel_pending_on_eof() if callable(cancel_pending_on_eof) else False
         if should_cancel:
             self._cancel_pending_for_output(out)
+            # Full-close durante tools ativas representa queda/cancelamento do
+            # CLI. No half-close normal, preserve sessões persistentes que o
+            # agente pode consultar depois em outro turno/conexão.
+            self._close_command_sessions_for_output(out)
         else:
             for worker in batch_workers:
                 worker.join()

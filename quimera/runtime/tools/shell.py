@@ -19,6 +19,7 @@ from quimera import process_factory as subprocess
 from quimera.environment import RuntimeSecrets, build_env_vars
 from quimera.sandbox.bwrap import SandboxError
 
+from ..approval import TrustedToolExecutionContext
 from . import files as file_tools
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
@@ -27,6 +28,9 @@ from .base import ToolBase, ValidatableTool
 
 
 _MAX_SESSIONS = 64  # limite de sessões simultâneas
+# Tombstones de runs abortados: um run_id só é esquecido depois de outros
+# _MAX_ABORTED_RUNS aborts, janela muito maior que qualquer corrida spawn/registro.
+_MAX_ABORTED_RUNS = 1024
 _DENYLIST_REGEX = re.compile(
     r"(?:^|\s)(?:"
     r"rm\s+-rf|"
@@ -89,6 +93,8 @@ class CommandSession:
     command: str
     cwd: Path
     started_at: float
+    owner_run_id: str | None = None
+    owner_agent: str | None = None
     stdout_buffer: str = ""
     stderr_buffer: str = ""
     stdout_history: str = ""
@@ -116,6 +122,20 @@ class ShellTool(ToolBase):
         self._next_session_id = random.SystemRandom().randint(100000, 999999999)
         self._sessions_lock = threading.Lock()
         self._session_reservations = 0
+        # Ordenado por inserção: o abort mais antigo sai quando o limite estoura.
+        self._aborted_run_ids: dict[str, None] = {}
+
+    def _remember_aborted_run_locked(self, run_id: str) -> None:
+        self._aborted_run_ids.pop(run_id, None)
+        self._aborted_run_ids[run_id] = None
+        while len(self._aborted_run_ids) > _MAX_ABORTED_RUNS:
+            self._aborted_run_ids.pop(next(iter(self._aborted_run_ids)))
+
+    def _is_command_run_aborted(self, run_id: str | None) -> bool:
+        if not run_id:
+            return False
+        with self._sessions_lock:
+            return run_id in self._aborted_run_ids
 
     def _reserve_session_slot(self) -> bool:
         """Reserva atomicamente capacidade antes de iniciar um subprocesso.
@@ -325,6 +345,16 @@ class ShellTool(ToolBase):
         shell = str(call.arguments.get("shell") or os.environ.get("SHELL") or "/bin/bash")
         login = bool(call.arguments.get("login", True))
         tty_enabled = bool(call.arguments.get("tty", False))
+        trusted_context = TrustedToolExecutionContext.from_trusted_metadata(call.metadata)
+        owner_run_id = str(trusted_context.run_id or "").strip() or None
+        owner_agent = str(trusted_context.agent_name or "").strip() or None
+
+        if self._is_command_run_aborted(owner_run_id):
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="Execução do run já foi encerrada",
+            )
 
         command = self._rewrite_command_for_local_venv(command, workdir)
         env = self._build_workspace_environment(workdir)
@@ -359,6 +389,8 @@ class ShellTool(ToolBase):
                 cwd=workdir,
                 tty=tty_enabled,
                 tty_master_fd=tty_master_fd,
+                owner_run_id=owner_run_id,
+                owner_agent=owner_agent,
             )
         except Exception:
             self._release_session_slot()
@@ -374,7 +406,8 @@ class ShellTool(ToolBase):
             self._cleanup_session_resources(provisional_session, terminate=True)
             raise
         try:
-            self._start_reader_threads(session)
+            if not self._start_reader_threads(session):
+                raise RuntimeError("Run encerrado antes de iniciar leitores da sessão")
             return self._collect_session_result(
                 session,
                 yield_time_ms=yield_time_ms,
@@ -685,6 +718,8 @@ class ShellTool(ToolBase):
             cwd: Path,
             tty: bool,
             tty_master_fd: int | None,
+            owner_run_id: str | None = None,
+            owner_agent: str | None = None,
     ) -> CommandSession:
         """Converte um slot reservado em sessão registrada, já marcada em uso.
 
@@ -696,6 +731,11 @@ class ShellTool(ToolBase):
         with self._sessions_lock:
             if self._session_reservations <= 0:
                 raise RuntimeError("Criação de sessão sem slot previamente reservado")
+            # O cancelamento pode acontecer depois do spawn e antes deste
+            # registro. O tombstone fecha essa janela sem manter o lock durante
+            # criação/terminação do subprocesso.
+            if owner_run_id and owner_run_id in self._aborted_run_ids:
+                raise RuntimeError("Run encerrado antes de registrar a sessão")
             session_id = _rand.randint(100000, 999999999)
             while session_id in self._sessions:
                 session_id = _rand.randint(100000, 999999999)
@@ -705,6 +745,8 @@ class ShellTool(ToolBase):
                 command=command,
                 cwd=cwd,
                 started_at=time.perf_counter(),
+                owner_run_id=owner_run_id,
+                owner_agent=owner_agent,
                 tty=tty,
                 tty_master_fd=tty_master_fd,
                 in_use=1,
@@ -712,6 +754,29 @@ class ShellTool(ToolBase):
             self._session_reservations -= 1
             self._sessions[session_id] = session
         return session
+
+    def close_command_sessions_for_run(self, run_id: str) -> list[int]:
+        """Encerra sessões persistentes pertencentes a um run confiável.
+
+        ``exec_command`` pode devolver enquanto o subprocesso continua rodando.
+        Quando a execução proprietária falha ou é cancelada, essas sessões não
+        podem sobreviver sob o processo principal do Quimera.
+        """
+        normalized_run_id = str(run_id or "").strip()
+        if not normalized_run_id:
+            return []
+        with self._sessions_lock:
+            self._remember_aborted_run_locked(normalized_run_id)
+            owned = [
+                session
+                for session in self._sessions.values()
+                if session.owner_run_id == normalized_run_id
+            ]
+            for session in owned:
+                self._sessions.pop(session.session_id, None)
+        for session in owned:
+            self._cleanup_detached_session_resources(session, terminate=True)
+        return [session.session_id for session in owned]
 
     def _append_chunk(
         self,
@@ -742,67 +807,80 @@ class ShellTool(ToolBase):
         session._stdout_total = len(session.stdout_history)
         session._stderr_total = len(session.stderr_history)
 
-    def _start_reader_threads(self, session: CommandSession) -> None:
-        """Inicia leitores assíncronos de stdout e stderr da sessão."""
-        if session.tty and session.tty_master_fd is not None:
-            def _tty_reader() -> None:
+    def _start_reader_threads(self, session: CommandSession) -> bool:
+        """Inicia leitores somente enquanto a sessão segue registrada."""
+        with self._sessions_lock:
+            if self._sessions.get(session.session_id) is not session:
+                return False
+
+            if session.tty and session.tty_master_fd is not None:
+                tty_master_fd = session.tty_master_fd
+
+                def _tty_reader() -> None:
+                    try:
+                        while True:
+                            try:
+                                chunk = os.read(tty_master_fd, 4096)
+                            except OSError:
+                                break
+                            if not chunk:
+                                break
+                            with session.lock:
+                                decoded = chunk.decode(errors="replace")
+                                self._append_chunk(
+                                    session,
+                                    "stdout_buffer",
+                                    "stdout_history",
+                                    "_stdout_total",
+                                    decoded,
+                                )
+                                self._reset_stream_counter(session)
+                    finally:
+                        # Só quem retira o fd da sessão o fecha: um close repetido
+                        # (cleanup/close_stdin concorrentes) poderia atingir um fd
+                        # já reaproveitado por outro open().
+                        self._close_tty_master_fd(session, expected_fd=tty_master_fd)
+
+                thread = threading.Thread(target=_tty_reader, daemon=True)
+                session.reader_threads.append(thread)
+                thread.start()
+                return True
+
+            def _reader(stream, buffer_attr: str, counter_attr: str) -> None:
                 try:
-                    while True:
-                        try:
-                            chunk = os.read(session.tty_master_fd, 4096)
-                        except OSError:
-                            break
-                        if not chunk:
-                            break
-                        with session.lock:
-                            decoded = chunk.decode(errors="replace")
-                            self._append_chunk(
-                                session,
-                                "stdout_buffer",
-                                "stdout_history",
-                                "_stdout_total",
-                                decoded,
-                            )
-                            self._reset_stream_counter(session)
+                    if stream is None:
+                        return
+                    try:
+                        for raw in iter(stream.readline, ""):
+                            with session.lock:
+                                history_attr = "stdout_history" if buffer_attr == "stdout_buffer" else "stderr_history"
+                                self._append_chunk(session, buffer_attr, history_attr, counter_attr, raw)
+                                self._reset_stream_counter(session)
+                    except (OSError, ValueError):
+                        # Cleanup concorrente pode fechar o stream após a thread
+                        # começar; esse é o término esperado do leitor.
+                        pass
                 finally:
-                    if session.tty_master_fd is not None:
+                    if stream is not None:
                         try:
-                            os.close(session.tty_master_fd)
-                        except OSError:
+                            stream.close()
+                        except (OSError, ValueError):
                             pass
-                        session.tty_master_fd = None
 
-            thread = threading.Thread(target=_tty_reader, daemon=True)
-            session.reader_threads.append(thread)
-            thread.start()
-            return
-
-        def _reader(stream, buffer_attr: str, counter_attr: str) -> None:
-            try:
-                if stream is None:
-                    return
-                for raw in iter(stream.readline, ""):
-                    with session.lock:
-                        history_attr = "stdout_history" if buffer_attr == "stdout_buffer" else "stderr_history"
-                        self._append_chunk(session, buffer_attr, history_attr, counter_attr, raw)
-                        self._reset_stream_counter(session)
-            finally:
-                if stream is not None:
-                    stream.close()
-
-        stdout_thread = threading.Thread(
-            target=_reader,
-            args=(session.process.stdout, "stdout_buffer", "_stdout_total"),
-            daemon=True,
-        )
-        stderr_thread = threading.Thread(
-            target=_reader,
-            args=(session.process.stderr, "stderr_buffer", "_stderr_total"),
-            daemon=True,
-        )
-        session.reader_threads.extend([stdout_thread, stderr_thread])
-        stdout_thread.start()
-        stderr_thread.start()
+            stdout_thread = threading.Thread(
+                target=_reader,
+                args=(session.process.stdout, "stdout_buffer", "_stdout_total"),
+                daemon=True,
+            )
+            stderr_thread = threading.Thread(
+                target=_reader,
+                args=(session.process.stderr, "stderr_buffer", "_stderr_total"),
+                daemon=True,
+            )
+            session.reader_threads.extend([stdout_thread, stderr_thread])
+            stdout_thread.start()
+            stderr_thread.start()
+            return True
 
     def _collect_session_result(
             self,
@@ -994,16 +1072,34 @@ class ShellTool(ToolBase):
                 pass
 
     @staticmethod
+    def _close_tty_master_fd(
+        session: CommandSession,
+        *,
+        expected_fd: int | None = None,
+    ) -> bool:
+        """Retira o fd master da sessão sob lock e o fecha uma única vez.
+
+        Reader, cleanup e close_stdin disputam o mesmo fd; sem a retirada
+        atômica, dois deles poderiam passar pela checagem e o segundo close
+        atingiria um fd já reaproveitado por outro open() do processo.
+        """
+        with session.lock:
+            fd = session.tty_master_fd
+            if fd is None or (expected_fd is not None and fd != expected_fd):
+                return False
+            session.tty_master_fd = None
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return True
+
+    @staticmethod
     def _cleanup_session_resources(session: CommandSession, *, terminate: bool = False) -> None:
         """Libera recursos associados a uma sessão já removida do registro."""
         if terminate:
             ShellTool._terminate_session_process(session)
-        if session.tty_master_fd is not None:
-            try:
-                os.close(session.tty_master_fd)
-            except OSError:
-                pass
-            session.tty_master_fd = None
+        ShellTool._close_tty_master_fd(session)
         if not any(thread.is_alive() for thread in session.reader_threads):
             for stream_name in ("stdin", "stdout", "stderr"):
                 stream = getattr(session.process, stream_name, None)
@@ -1029,12 +1125,7 @@ class ShellTool(ToolBase):
     def _close_session_stdin(self, session: CommandSession) -> None:
         """Fecha o canal de entrada da sessão."""
         if session.tty:
-            if session.tty_master_fd is not None:
-                try:
-                    os.close(session.tty_master_fd)
-                except OSError:
-                    pass
-                session.tty_master_fd = None
+            self._close_tty_master_fd(session)
             return
         if session.process.stdin and not session.process.stdin.closed:
             session.process.stdin.close()
@@ -1326,7 +1417,7 @@ class ShellToolValidator(ValidatableTool):
                 raise ToolPolicyError(f"Caminho fora do workspace: {arg}")
 
 
-def register(registry, policy, config) -> None:
+def register(registry, policy, config) -> ShellTool:
     """Registra todas as tools shell no registry e a validação na policy."""
     shell_tool = ShellTool(config)
     shell_validator = ShellToolValidator(config)
@@ -1340,3 +1431,4 @@ def register(registry, policy, config) -> None:
     for name in _SHELL_TOOL_NAMES:
         registry.register(name, getattr(shell_tool, name))
     policy.register_tool_validator(_SHELL_TOOL_NAMES, shell_validator)
+    return shell_tool

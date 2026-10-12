@@ -40,6 +40,33 @@ def _exchange(server, *msgs):
     return responses
 
 
+def test_mcp_abrupt_eof_closes_persistent_commands_owned_by_connection():
+    """A queda do CLI MCP limpa exec_command pelo run autenticado."""
+    executor = _make_executor()
+    executor.close_command_sessions_for_run.return_value = [123]
+    server = MCPServer(executor)
+    out = io.StringIO()
+    out._mcp_state = {"trusted_run_id": "agentrun:test"}
+    out._mcp_cancel_pending_on_eof = lambda: True
+
+    server.serve(stdin=io.StringIO(""), stdout=out)
+
+    executor.close_command_sessions_for_run.assert_called_once_with("agentrun:test")
+
+
+def test_mcp_normal_eof_preserves_persistent_commands():
+    """Half-close normal mantém a semântica persistente de exec_command."""
+    executor = _make_executor()
+    server = MCPServer(executor)
+    out = io.StringIO()
+    out._mcp_state = {"trusted_run_id": "agentrun:test"}
+    out._mcp_cancel_pending_on_eof = lambda: False
+
+    server.serve(stdin=io.StringIO(""), stdout=out)
+
+    executor.close_command_sessions_for_run.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # _openai_schema_to_mcp
 # ---------------------------------------------------------------------------

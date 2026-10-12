@@ -306,6 +306,26 @@ class AgentGateway:
             "from_agent": from_agent,
         }
 
+        def _close_failed_run_command_sessions() -> None:
+            """Limpa comandos persistentes somente quando o run não concluiu."""
+            tool_executor = getattr(agent_client, "tool_executor", None)
+            close_sessions = getattr(
+                tool_executor,
+                "close_command_sessions_for_run",
+                None,
+            )
+            if not callable(close_sessions):
+                return
+            try:
+                close_sessions(run_id)
+            except Exception:
+                logger.warning(
+                    "falha ao encerrar sessões de comando agent=%s run_id=%s",
+                    agent,
+                    run_id,
+                    exc_info=True,
+                )
+
         def _run_event(kind: str, *, text: str = "", metadata: dict | None = None) -> AgentRunEvent:
             return AgentRunEvent(
                 kind,
@@ -518,7 +538,14 @@ class AgentGateway:
                 self._agent_run_sink.emit(_run_event("failed", metadata=fail_metadata))
             finally:
                 _finish_hidden_delegate_relay()
+                _close_failed_run_command_sessions()
             raise
+
+        # Uma resposta bem-sucedida pode deliberadamente deixar uma sessão
+        # persistente para polling posterior. Só o caminho abortado perde a
+        # propriedade do recurso e precisa de limpeza automática.
+        if not result or _is_user_cancelled(agent_client):
+            _close_failed_run_command_sessions()
 
         try:
             if _stream_buffer or result:

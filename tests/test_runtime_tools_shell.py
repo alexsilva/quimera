@@ -8,6 +8,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from quimera.config import ConfigManager
+from quimera.runtime.approval_broker import TrustedToolExecutionContext
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.sandbox.bwrap import SandboxError
 from quimera.workspace import Workspace
@@ -404,6 +405,188 @@ def test_exec_command_supports_polling_running_process(tmp_path):
     assert finished.data["diff"] == [{"op": "replace", "text": "start\ndone\n"}]
     assert f"session_id: {session_id}" in finished.content
     assert "status: completed" in finished.content
+
+
+def test_close_command_sessions_for_run_terminates_only_owned_processes(tmp_path):
+    """Abort/cancelamento de um run não deixa exec_command órfão nem mata outro run."""
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+
+    def start(run_id: str):
+        return tool.exec_command(
+            ToolCall(
+                name="exec_command",
+                arguments={"cmd": "sleep 30", "yield_time_ms": 10},
+                metadata={
+                    "trusted_context": TrustedToolExecutionContext(
+                        agent_name="delegado",
+                        run_id=run_id,
+                    ),
+                },
+            )
+        )
+
+    first = start("run-owned")
+    second = start("run-other")
+    first_id = first.data["session_id"]
+    second_id = second.data["session_id"]
+    first_process = tool._sessions[first_id].process
+    second_process = tool._sessions[second_id].process
+    try:
+        assert tool._sessions[first_id].owner_run_id == "run-owned"
+        assert tool._sessions[first_id].owner_agent == "delegado"
+
+        closed = tool.close_command_sessions_for_run("run-owned")
+
+        assert closed == [first_id]
+        assert first_id not in tool._sessions
+        assert first_process.poll() is not None
+        assert second_id in tool._sessions
+        assert second_process.poll() is None
+    finally:
+        tool.close_command_sessions_for_run("run-other")
+
+
+def test_aborted_run_cannot_register_session_after_cleanup_race(tmp_path):
+    """Cancel entre spawn e registro não recria uma sessão após o cleanup."""
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    entered_create = threading.Event()
+    allow_create = threading.Event()
+    spawned = []
+    failures = []
+    original_create = tool._create_session
+
+    def delayed_create(process, **kwargs):
+        spawned.append(process)
+        entered_create.set()
+        assert allow_create.wait(timeout=5)
+        return original_create(process, **kwargs)
+
+    call = ToolCall(
+        name="exec_command",
+        arguments={"cmd": "sleep 30", "yield_time_ms": 10},
+        metadata={
+            "trusted_context": TrustedToolExecutionContext(
+                run_id="run-race",
+                agent_name="delegado",
+            )
+        },
+    )
+
+    def execute() -> None:
+        try:
+            tool.exec_command(call)
+        except Exception as exc:  # esperado: registro rejeitado pelo tombstone
+            failures.append(exc)
+
+    with patch.object(tool, "_create_session", side_effect=delayed_create):
+        worker = threading.Thread(target=execute)
+        worker.start()
+        assert entered_create.wait(timeout=5)
+        assert tool.close_command_sessions_for_run("run-race") == []
+        allow_create.set()
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert len(failures) == 1
+    assert "Run encerrado" in str(failures[0])
+    assert tool._sessions == {}
+    assert tool._session_reservations == 0
+    assert spawned[0].poll() is not None
+
+
+def test_tty_master_fd_is_closed_exactly_once_across_competitors():
+    """Reader, cleanup e close_stdin disputam o fd; só o primeiro fecha."""
+    import os as _os
+
+    read_fd, write_fd = _os.pipe()
+    _os.close(write_fd)
+    session = CommandSession(
+        session_id=1,
+        process=MagicMock(),
+        command="true",
+        cwd=Path("."),
+        started_at=0.0,
+        tty=True,
+        tty_master_fd=read_fd,
+    )
+
+    # Reader com fd antigo não fecha o fd atual da sessão.
+    assert ShellTool._close_tty_master_fd(session, expected_fd=read_fd + 1000) is False
+    assert session.tty_master_fd == read_fd
+
+    assert ShellTool._close_tty_master_fd(session, expected_fd=read_fd) is True
+    assert session.tty_master_fd is None
+    with pytest.raises(OSError):
+        _os.fstat(read_fd)
+
+    # Segundo competidor (cleanup) encontra o fd já retirado: nada a fechar.
+    assert ShellTool._close_tty_master_fd(session) is False
+
+
+def test_aborted_run_tombstones_are_bounded_and_keep_newest(tmp_path):
+    """Sessão longa: o registro de runs abortados não cresce sem limite."""
+    from quimera.runtime.tools import shell as shell_module
+
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    limit = shell_module._MAX_ABORTED_RUNS
+    for index in range(limit + 1):
+        assert tool.close_command_sessions_for_run(f"run-{index}") == []
+
+    assert len(tool._aborted_run_ids) == limit
+    assert tool._is_command_run_aborted("run-0") is False
+    assert tool._is_command_run_aborted("run-1") is True
+    assert tool._is_command_run_aborted(f"run-{limit}") is True
+
+
+def test_abort_after_session_registration_does_not_start_readers(tmp_path):
+    """Cleanup que vence após o registro impede readers sobre streams fechados."""
+    tool = ShellTool(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    entered_start = threading.Event()
+    allow_start = threading.Event()
+    registered = []
+    failures = []
+    original_start = tool._start_reader_threads
+
+    def delayed_start(session):
+        registered.append(session)
+        entered_start.set()
+        assert allow_start.wait(timeout=5)
+        return original_start(session)
+
+    call = ToolCall(
+        name="exec_command",
+        arguments={"cmd": "sleep 30", "yield_time_ms": 10},
+        metadata={
+            "trusted_context": TrustedToolExecutionContext(
+                run_id="run-post-create",
+                agent_name="delegado",
+            )
+        },
+    )
+
+    def execute() -> None:
+        try:
+            tool.exec_command(call)
+        except Exception as exc:  # esperado: cleanup venceu antes dos readers
+            failures.append(exc)
+
+    with patch.object(tool, "_start_reader_threads", side_effect=delayed_start):
+        worker = threading.Thread(target=execute)
+        worker.start()
+        assert entered_start.wait(timeout=5)
+        [session] = registered
+        assert tool.close_command_sessions_for_run("run-post-create") == [
+            session.session_id
+        ]
+        allow_start.set()
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert len(failures) == 1
+    assert "antes de iniciar leitores" in str(failures[0])
+    assert session.reader_threads == []
+    assert tool._sessions == {}
+    assert session.process.poll() is not None
 
 
 def test_poll_command_session_reads_output_without_stdin_payload(tmp_path):

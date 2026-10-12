@@ -160,6 +160,41 @@ def test_agent_gateway_passes_event_run_id_to_agent_client():
     assert client.received_run_id.startswith("agentrun:")
 
 
+def test_agent_gateway_only_closes_persistent_commands_when_run_aborts():
+    """Drivers locais/OpenAI preservam sucesso e limpam runs abortados."""
+    class RecordingExecutor:
+        def __init__(self):
+            self.closed_runs = []
+
+        def close_command_sessions_for_run(self, run_id):
+            self.closed_runs.append(run_id)
+            return []
+
+    successful_client = RunIdCapturingAgentClient()
+    successful_client.tool_executor = RecordingExecutor()
+    successful_gateway = make_gateway(successful_client)
+
+    assert successful_gateway.call("codex") == "resposta final"
+    assert successful_client.tool_executor.closed_runs == []
+
+    aborted_client = RunIdCapturingAgentClient()
+    aborted_client.result = None
+    aborted_client.tool_executor = RecordingExecutor()
+    aborted_gateway = make_gateway(aborted_client)
+
+    assert aborted_gateway.call("codex") is None
+    assert aborted_client.tool_executor.closed_runs == [aborted_client.received_run_id]
+
+    # Saída vazia é "failed" para o evento de run; o cleanup segue a mesma regra.
+    empty_client = RunIdCapturingAgentClient()
+    empty_client.result = ""
+    empty_client.tool_executor = RecordingExecutor()
+    empty_gateway = make_gateway(empty_client)
+
+    assert empty_gateway.call("codex") == ""
+    assert empty_client.tool_executor.closed_runs == [empty_client.received_run_id]
+
+
 def test_agent_gateway_uses_null_sink_without_changing_behavior():
     gateway = make_gateway(
         FakeAgentClient(chunks=["ignorado"]), sink=NullAgentRunSink()

@@ -112,6 +112,7 @@ class ToolExecutor:
         self._browser_tools = None
         self._host_tools = None
         self._search_tools = None
+        self._shell_tools = None
         self._register_builtin_tools()
 
     @staticmethod
@@ -136,7 +137,7 @@ class ToolExecutor:
         """Registra todas as ferramentas builtin usando os módulos register()."""
         files_tools.register(self.registry, self.policy, self.config)
         patch_tools.register(self.registry, self.policy, self.config)
-        shell_tools.register(self.registry, self.policy, self.config)
+        self._shell_tools = shell_tools.register(self.registry, self.policy, self.config)
         web_tools.register(self.registry, self.policy, self.config)
         self._browser_tools = browser_tools.register(self.registry, self.policy, self.config)
         self._task_tools = tasks_tools.register(self.registry, self.policy, self.config)
@@ -152,6 +153,12 @@ class ToolExecutor:
         # incluídos: _register_builtin_tools roda por instância).
         self._search_tools = search_tools.register(self.registry, self.policy, self.config)
         self._search_tools.set_executor(self)
+
+    def close_command_sessions_for_run(self, run_id: str) -> list[int]:
+        """Encerra comandos persistentes deixados pelo run informado."""
+        if self._shell_tools is None:
+            return []
+        return self._shell_tools.close_command_sessions_for_run(run_id)
 
     def fork_for_concurrent_run(self) -> "ToolExecutor":
         """Cria um executor isolado para uma execução concorrente.
