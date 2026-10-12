@@ -407,18 +407,19 @@ class TextualRenderer(RendererBase):
         self._bridge.emit(TextualUiEvent("system", clean_message))
 
     def show_banner(self, message: str) -> None:
-        """Exibe banner de boas-vindas/logo no feed Textual."""
+        """Exibe banner de boas-vindas/logo no cabeçalho de boot do feed."""
         self._bridge.emit(
             TextualUiEvent(
                 "banner",
                 strip_ansi(str(message)).strip("\r\n"),
                 compact=True,
+                boot=True,
             )
         )
 
     def show_boot_message(self, message: str) -> None:
         """Exibe uma linha compacta pertencente apenas ao cabeçalho de boot."""
-        self._bridge.emit(TextualUiEvent("muted", str(message), compact=True))
+        self._bridge.emit(TextualUiEvent("muted", str(message), compact=True, boot=True))
 
     def show_boot_status(self, key: str, lines) -> None:
         """Cria ou substitui no lugar o bloco de status do boot ``key``."""
@@ -426,7 +427,7 @@ class TextualRenderer(RendererBase):
             "key": str(key),
             "lines": [line.as_payload() for line in coerce_boot_status_lines(lines)],
         }
-        self._bridge.emit(TextualUiEvent("boot_status", payload, compact=True))
+        self._bridge.emit(TextualUiEvent("boot_status", payload, compact=True, boot=True))
 
     def show_system_neutral(self, message: str) -> None:
         """Exibe mensagem neutra com o espaçamento normal do feed."""
@@ -491,7 +492,11 @@ class TextualRenderer(RendererBase):
         self._bridge.emit(TextualUiEvent("approval", strip_ansi(str(message)).strip("\r\n")))
 
     def clear_screen(self) -> None:
-        """Limpa o feed Textual sem escrever ANSI direto no terminal."""
+        """Limpa o chat do feed Textual, preservando o cabeçalho de boot.
+
+        Não escreve ANSI no terminal: o app Textual remove só os itens que
+        não pertencem ao cabeçalho (logo, projeto, bloco MCP, caminhos de log).
+        """
         self._bridge.emit(TextualUiEvent("clear"))
 
     def show_plain(self, message: str, agent=None, muted: bool = False) -> None:

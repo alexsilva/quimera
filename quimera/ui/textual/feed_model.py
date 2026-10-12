@@ -179,9 +179,27 @@ class TextualFeedModel:
         """Última mudança aplicada ao feed."""
         return self._last_change
 
-    def clear(self) -> None:
-        """Limpa estado do feed."""
-        self._items.clear()
+    def boot_items(self) -> list[TextualFeedItem]:
+        """Itens do cabeçalho de boot: logo, linhas de boot e blocos de status."""
+        return [item for item in self._items if item.event.boot]
+
+    def clear_chat(self) -> None:
+        """Limpa o chat e mantém o cabeçalho de boot.
+
+        O cabeçalho (eventos com ``boot=True``: logo, projeto, bloco MCP,
+        caminhos de log) é a parte estática do feed; tudo o que veio do chat
+        — histórico restaurado, turnos, transitórios, previews de tools — sai.
+        Os blocos de status continuam atualizáveis no lugar depois da limpeza.
+        ``_finalized_agents`` fica: um evento tardio de agente já encerrado
+        continua ignorado até a próxima run, em vez de virar transitório
+        fantasma no chat recém-limpo.
+        """
+        self._items[:] = self.boot_items()
+        self._reset_live_state()
+        self._last_change = TextualFeedChange(True, redraw=True)
+
+    def _reset_live_state(self) -> None:
+        """Zera o estado por agente que só existe por causa de itens do chat."""
         self._transient_index_by_agent.clear()
         self._stream_buffer_by_agent.clear()
         self._stream_meta_by_agent.clear()
@@ -193,8 +211,6 @@ class TextualFeedModel:
         self._mcp_http_tool_stats_by_agent.clear()
         self._pending_turn_summary_by_agent.clear()
         self._delegation_slots.clear()
-        self._finalized_agents.clear()
-        self._last_change = TextualFeedChange(True, redraw=True)
 
     def hydrate_from_history(
             self,

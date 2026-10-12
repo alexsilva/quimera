@@ -70,7 +70,7 @@ def build_help(agent_names: Sequence[str]) -> str:
             "- /agents: lista os agentes disponíveis\n"
             "- /connect <agente>: configura interativamente a conexão de um agente e persiste no base_dir\n"
             "- /disconnect <agente>: remove a conexão persistida de um agente\n"
-            "- /clear: limpa a tela do terminal\n"
+            "- /clear: limpa o chat e mantém o cabeçalho da sessão (logo, projeto, MCP, logs)\n"
             "- /config: abre a janela popup de configurações\n"
             "- /prompt [agente]: simula o prompt final e mostra análise dos blocos\n"
             "- /context [show]: mostra o contexto atual\n"

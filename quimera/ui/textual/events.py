@@ -13,3 +13,6 @@ class TextualUiEvent:
     payload: Any = None
     agent: str | None = None
     compact: bool = False
+    #: Pertence ao cabeçalho de boot (logo, projeto, bloco MCP, caminhos de
+    #: log). O feed mantém esses itens quando o chat é limpo.
+    boot: bool = False

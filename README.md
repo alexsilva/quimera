@@ -144,7 +144,8 @@ python quimera.py --help
 - `/stats [<agente>|json|reset]`: consulta ou zera as métricas de entrega coletadas dos agentes.
 - `/reload`: recarrega agentes/profiles.
 - `/reset [state|history|all]`: limpa `shared_state`, histórico ou ambos.
-- `/clear`, `/help` (ou `/g`), `/exit`.
+- `/clear`: limpa o chat e mantém o cabeçalho da sessão (logo, projeto, bloco MCP, caminhos de log). Mesmo efeito de Ctrl+L na TUI.
+- `/help` (ou `/g`), `/exit`.
 
 
 ## Testes interativos locais

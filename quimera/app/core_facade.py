@@ -481,7 +481,12 @@ class CoreFacadeMixin:
                 pass
 
     def clear_terminal_screen(self) -> None:
-        """Limpa a viewport e o scrollback do terminal, reposicionando o cursor."""
+        """Limpa o chat.
+
+        Com renderer, delega a ele: a TUI remove só o chat e mantém o
+        cabeçalho de boot (logo, projeto, bloco MCP, caminhos de log). Sem
+        renderer, limpa viewport e scrollback do terminal e reposiciona o cursor.
+        """
         renderer = self.__dict__.get("renderer")
         if renderer is not None:
             renderer.clear_screen()

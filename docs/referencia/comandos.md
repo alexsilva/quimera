@@ -21,7 +21,7 @@
 | `/approve` | `/a`, `/y` | Pré-aprova próxima mutação. |
 | `/approve-all` | `/aa` | Autoaprova mutações subsequentes. |
 | `/reset [state\|history\|all]` | — | Limpa `shared_state`, histórico ou ambos. |
-| `/clear` | — | Limpa tela. |
+| `/clear` | — | Limpa o chat; mantém o cabeçalho da sessão (logo, projeto, MCP, logs). |
 | `/exit` | — | Encerra chat. |
 
 ## Modos

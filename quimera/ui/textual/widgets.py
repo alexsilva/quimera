@@ -101,13 +101,6 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
         self._entry_widgets[index].update(renderable)
         return True
 
-    def clear_entries(self) -> None:
-        """Remove todos os slots e seu estado de reconciliação."""
-        if self._entry_widgets:
-            self.remove_children(self._entry_widgets)
-        self._entry_widgets.clear()
-        self._entry_tokens.clear()
-
 
 class _PrefixDimHighlighter(Highlighter):
     """Aplica estilo dim ao prefixo fixo do input."""

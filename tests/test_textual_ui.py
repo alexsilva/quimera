@@ -4324,7 +4324,7 @@ def test_textual_unified_feed_replaces_parallel_runs_in_their_original_slots():
     asyncio.run(run_test())
 
 
-def test_textual_unified_feed_handles_middle_removal_clear_and_resync():
+def test_textual_unified_feed_handles_middle_removal_empty_sync_and_resync():
     import asyncio
 
     from textual.app import App, ComposeResult
@@ -4356,7 +4356,7 @@ def test_textual_unified_feed_handles_middle_removal_clear_and_resync():
                 "mensagem C",
             ]
 
-            feed.clear_entries()
+            feed.sync_entries([])
             await pilot.pause()
 
             assert list(feed.children) == []
@@ -6032,3 +6032,327 @@ def test_mcp_server_editor_rejeita_ambiente_malformado():
     manager.upsert_in_background.assert_not_called()
     message = parent.notify.call_args.args[0]
     assert "KEY=valor" in message and "DISPLAY" in message
+
+
+def _boot_header_events() -> list[TextualUiEvent]:
+    """Cabeçalho de boot como o renderer o emite: logo, linhas e bloco MCP."""
+    return [
+        TextualUiEvent("banner", "Quimera", compact=True, boot=True),
+        TextualUiEvent("muted", "Projeto: /tmp/projeto", compact=True, boot=True),
+        TextualUiEvent(
+            "boot_status",
+            {"key": "mcp", "lines": [{"status": "busy", "text": "MCP client 'x': conectando…"}]},
+            compact=True,
+            boot=True,
+        ),
+        TextualUiEvent("muted", "Audit de render:\n  /tmp/render.jsonl", compact=True, boot=True),
+    ]
+
+
+def test_textual_renderer_marks_only_boot_header_events_as_boot():
+    from quimera.ui.boot_status import BootStatusLine
+
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_banner("Quimera")
+    renderer.show_boot_message("Projeto: /tmp/projeto")
+    renderer.show_boot_status("mcp", [BootStatusLine("ok", "MCP interno iniciado")])
+    renderer.show_system_neutral("mensagem neutra durante o chat")
+    renderer.show_system("mensagem de sistema durante o chat")
+    renderer.show_plain("mensagem simples durante o chat")
+    renderer.show_message("claude", "resposta")
+
+    assert [event.kind for event in emitted] == [
+        "banner", "muted", "boot_status", "muted", "system", "plain", "agent_message",
+    ]
+    assert [event.boot for event in emitted] == [True, True, True, False, False, False, False]
+
+
+def test_textual_feed_clear_chat_keeps_boot_header_and_drops_chat():
+    model = TextualFeedModel()
+    header = _boot_header_events()
+    for event in header:
+        assert model.apply(event)
+    assert model.hydrate_from_history(
+        [
+            {"role": "user", "content": "mensagem antiga"},
+            {"role": "claude", "content": "resposta antiga"},
+        ]
+    )
+    model.apply(TextualUiEvent("user_message", {"content": "revise"}))
+    model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
+    model.apply(TextualUiEvent("stream_chunk", "pensando", agent="claude"))
+    model.apply(TextualUiEvent("tool_preview", {"content": "tool: read_file"}, agent="claude"))
+    assert model.has_transients
+    assert len(model.items) > len(header)
+
+    model.clear_chat()
+
+    assert [item.event for item in model.items] == header
+    assert [item.event.boot for item in model.items] == [True, True, True, True]
+    assert model.boot_items() == model.items
+    assert not model.has_transients
+    assert model.transient_items() == []
+    assert model.last_change.changed is True
+    assert model.last_change.redraw is True
+
+
+def test_textual_feed_clear_chat_resets_agent_state_for_the_next_turn():
+    model = TextualFeedModel()
+    for event in _boot_header_events():
+        model.apply(event)
+    model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
+    model.apply(TextualUiEvent("stream_chunk", "metade", agent="claude"))
+    model.apply(TextualUiEvent("agent_message", {"content": "resposta final"}, agent="claude"))
+    model.apply(TextualUiEvent("turn_summary", {"tools": []}, agent="claude"))
+
+    model.clear_chat()
+
+    # Nada do turno anterior sobrevive: o stream recomeça do zero e o resumo
+    # pendente não vira rodapé da próxima resposta.
+    assert model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
+    assert model.apply(TextualUiEvent("stream_chunk", "nova", agent="claude"))
+    transient = model.transient_items()
+    assert len(transient) == 1
+    assert transient[0][1].event.payload["content"] == "nova"
+    assert model.apply(TextualUiEvent("agent_message", {"content": "resposta nova"}, agent="claude"))
+    assert "turn_summary" not in model.items[-1].event.payload
+    assert [item.event.kind for item in model.items] == [
+        "banner", "muted", "boot_status", "muted", "agent_message",
+    ]
+
+
+def test_textual_feed_clear_chat_mid_stream_restarts_the_transient_from_scratch():
+    model = TextualFeedModel()
+    for event in _boot_header_events():
+        model.apply(event)
+    model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
+    model.apply(TextualUiEvent("stream_chunk", "metade ", agent="claude"))
+
+    model.clear_chat()
+
+    # Sem novo stream_start, o chunk seguinte não arrasta o texto apagado.
+    assert model.apply(TextualUiEvent("stream_chunk", "resto", agent="claude"))
+    transient = model.transient_items()
+    assert len(transient) == 1
+    assert transient[0][1].event.payload == "resto"
+    assert model.apply(TextualUiEvent("agent_message", {"content": "final"}, agent="claude"))
+    assert not model.has_transients
+    assert [item.event.kind for item in model.items] == [
+        "banner", "muted", "boot_status", "muted", "agent_message",
+    ]
+
+
+def test_textual_feed_clear_chat_keeps_finalized_agents_so_late_events_stay_ignored():
+    model = TextualFeedModel()
+    for event in _boot_header_events():
+        model.apply(event)
+    model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
+    model.apply(TextualUiEvent("agent_message", {"content": "resposta"}, agent="claude"))
+    model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            _agent_lifecycle_payload("concluído", status=AgentLifecycleStatus.COMPLETED),
+            agent="claude",
+        )
+    )
+
+    model.clear_chat()
+
+    # Chunk atrasado de uma run já encerrada não vira transitório fantasma.
+    assert model.apply(TextualUiEvent("stream_chunk", "tardio", agent="claude")) is False
+    assert not model.has_transients
+    assert len(model.items) == 4
+    # A próxima run reabre normalmente.
+    assert model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
+    assert model.apply(TextualUiEvent("stream_chunk", "nova run", agent="claude"))
+    assert model.transient_items()[0][1].event.payload["content"] == "nova run"
+
+
+def test_textual_feed_boot_status_still_updates_in_place_after_clear_chat():
+    model = TextualFeedModel()
+    for event in _boot_header_events():
+        model.apply(event)
+    model.apply(TextualUiEvent("user_message", {"content": "oi"}))
+    model.clear_chat()
+
+    connected = TextualUiEvent(
+        "boot_status",
+        {"key": "mcp", "lines": [{"status": "ok", "text": "MCP client 'x': conectado"}]},
+        compact=True,
+        boot=True,
+    )
+    assert model.apply(connected) is True
+
+    assert [item.event.kind for item in model.items] == ["banner", "muted", "boot_status", "muted"]
+    assert model.items[2].event is connected
+    assert model.last_change.redraw is True
+
+    model.apply(TextualUiEvent("user_message", {"content": "de novo"}))
+    assert [item.event.kind for item in model.items] == [
+        "banner", "muted", "boot_status", "muted", "user_message",
+    ]
+    assert model.items[-1].event.boot is False
+
+
+def test_textual_feed_clear_chat_keeps_boot_items_emitted_after_chat_started():
+    model = TextualFeedModel()
+    model.apply(TextualUiEvent("banner", "Quimera", compact=True, boot=True))
+    model.apply(TextualUiEvent("user_message", {"content": "oi"}))
+    late = TextualUiEvent("boot_status", {"key": "tarde", "lines": []}, compact=True, boot=True)
+    model.apply(late)
+
+    model.clear_chat()
+
+    assert [item.event.kind for item in model.items] == ["banner", "boot_status"]
+    assert model.items[1].event is late
+
+
+def test_textual_unified_feed_keeps_boot_slots_mounted_when_chat_is_cleared():
+    """O widget preserva os slots do cabeçalho; só os slots do chat saem."""
+    from textual.app import App, ComposeResult
+
+    class FeedApp(App):
+        def compose(self) -> ComposeResult:
+            yield _UnifiedFeed(id="feed")
+
+    model = TextualFeedModel()
+    for event in _boot_header_events():
+        model.apply(event)
+    model.apply(TextualUiEvent("user_message", {"content": "oi"}))
+    model.apply(TextualUiEvent("agent_message", {"content": "olá"}, agent="claude"))
+
+    def entries():
+        return [
+            (id(item.event), item.transient, _render_event(item.event), bool(item.event.compact))
+            for item in model.items
+        ]
+
+    async def run_test() -> None:
+        app = FeedApp()
+        async with app.run_test(size=(80, 24)) as pilot:
+            feed = app.query_one("#feed", _UnifiedFeed)
+            feed.sync_entries(entries())
+            await pilot.pause()
+            assert len(feed.children) == 6
+            boot_slots = list(feed.children)[:4]
+
+            model.clear_chat()
+            feed.sync_entries(entries())
+            await pilot.pause()
+
+            assert list(feed.children) == boot_slots
+            assert all(slot.is_attached for slot in boot_slots)
+            assert feed._entry_tokens == [id(item.event) for item in model.items]
+
+            model.apply(TextualUiEvent("user_message", {"content": "de novo"}))
+            feed.sync_entries(entries())
+            await pilot.pause()
+            assert list(feed.children)[:4] == boot_slots
+            assert len(feed.children) == 5
+
+    asyncio.run(run_test())
+
+
+def _textual_app_with_mock_widgets(bridge: TextualUiBridge):
+    """App Textual real com widgets substituídos, no padrão dos testes de rajada."""
+    captured_apps = []
+    quimera_app = SimpleNamespace(
+        renderer=None,
+        input_gate=SimpleNamespace(_build_toolbar_renderable=Mock(return_value="toolbar")),
+    )
+
+    def capture_app(app, *args, **kwargs):
+        captured_apps.append(app)
+
+    with patch("textual.app.App.run", capture_app):
+        run_textual_quimera_app(quimera_app, bridge)
+
+    app = captured_apps[0]
+    feed = SimpleNamespace(
+        is_vertical_scroll_end=False,
+        sync_entries=Mock(),
+        anchor=Mock(),
+    )
+    widgets = {
+        "#feed": feed,
+        "#toolbar": SimpleNamespace(size=SimpleNamespace(width=80), update=Mock()),
+        "#status_bar": SimpleNamespace(display=True, update=Mock()),
+        "#agent_status": SimpleNamespace(display=True, update=Mock()),
+        "#breadcrumb": SimpleNamespace(update=Mock()),
+    }
+    app.query_one = Mock(side_effect=lambda selector, *_: widgets[selector])
+    app.refresh = Mock()
+    app.call_after_refresh = Mock()
+    return app, feed
+
+
+def _synced_kinds(app, feed) -> list[str]:
+    tokens = [entry[0] for entry in feed.sync_entries.call_args.args[0]]
+    by_token = {id(item.event): item.event.kind for item in app._feed_model.items}
+    return [by_token[token] for token in tokens]
+
+
+def test_textual_app_clear_event_keeps_boot_header_and_clears_chat():
+    bridge = TextualUiBridge()
+    app, feed = _textual_app_with_mock_widgets(bridge)
+    for event in _boot_header_events():
+        bridge.emit(event)
+    bridge.emit(TextualUiEvent("user_message", {"content": "revise"}))
+    bridge.emit(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
+    bridge.emit(TextualUiEvent("stream_chunk", "pensando", agent="claude"))
+    bridge.emit(TextualUiEvent("tool_preview", {"content": "tool: read_file"}, agent="claude"))
+    app._drain_bridge_events()
+    assert _synced_kinds(app, feed)[:4] == ["banner", "muted", "boot_status", "muted"]
+    assert len(_synced_kinds(app, feed)) > 4
+    assert app._active_tool_previews
+    cached_boot_renderables = [
+        app._feed_renderable_cache[id(item.event)] for item in app._feed_model.boot_items()
+    ]
+
+    bridge.emit(TextualUiEvent("clear"))
+    app._drain_bridge_events()
+
+    assert _synced_kinds(app, feed) == ["banner", "muted", "boot_status", "muted"]
+    assert feed.sync_entries.call_args.kwargs == {"force": False}
+    feed.anchor.assert_called()
+    assert app._active_tool_previews == {}
+    assert app.active_agent is None
+    # O cabeçalho não é re-renderizado: os renderables em cache continuam os mesmos.
+    assert [
+        app._feed_renderable_cache[id(item.event)] for item in app._feed_model.boot_items()
+    ] == cached_boot_renderables
+    assert set(app._feed_renderable_cache) == {id(item.event) for item in app._feed_model.items}
+    app.refresh.assert_called_with(layout=True)
+
+    # O bloco MCP segue atualizável no lugar e o chat novo entra abaixo do cabeçalho.
+    bridge.emit(
+        TextualUiEvent(
+            "boot_status",
+            {"key": "mcp", "lines": [{"status": "ok", "text": "MCP client 'x': conectado"}]},
+            compact=True,
+            boot=True,
+        )
+    )
+    bridge.emit(TextualUiEvent("user_message", {"content": "de novo"}))
+    app._drain_bridge_events()
+    assert _synced_kinds(app, feed) == ["banner", "muted", "boot_status", "muted", "user_message"]
+    assert app._feed_model.items[2].event.payload["lines"][0]["status"] == "ok"
+
+
+def test_textual_app_ctrl_l_action_clears_chat_like_the_clear_event():
+    bridge = TextualUiBridge()
+    app, feed = _textual_app_with_mock_widgets(bridge)
+    for event in _boot_header_events():
+        bridge.emit(event)
+    bridge.emit(TextualUiEvent("user_message", {"content": "revise"}))
+    app._drain_bridge_events()
+
+    app.action_clear_feed()
+
+    assert _synced_kinds(app, feed) == ["banner", "muted", "boot_status", "muted"]
+    assert [b[0] for b in app.BINDINGS if b[1] == "clear_feed"] == ["ctrl+l"]
+    assert [b[2] for b in app.BINDINGS if b[1] == "clear_feed"] == ["Limpar chat"]

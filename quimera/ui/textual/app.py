@@ -138,7 +138,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             ("ctrl+t", "cycle_theme", "Tema"),
             ("alt+t", "cycle_theme", "Tema"),
             ("f6", "cycle_theme", "Tema"),
-            ("ctrl+l", "clear_feed", "Limpar feed"),
+            ("ctrl+l", "clear_feed", "Limpar chat"),
             ("ctrl+end", "scroll_to_bottom", "Ir ao fim"),
             ("ctrl+home", "scroll_to_top", "Ir ao topo"),
             ("pageup", "feed_page_up", "Rolar feed acima"),
@@ -662,10 +662,18 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._refresh_toolbar()
 
         def action_clear_feed(self) -> None:
-            self._feed_model.clear()
-            self.query_one("#feed", _UnifiedFeed).clear_entries()
-            self._feed_renderable_cache.clear()
+            self._clear_chat_feed()
+
+        def _clear_chat_feed(self) -> None:
+            """Limpa o chat e mantém o cabeçalho de boot no topo do feed.
+
+            Os slots do cabeçalho (logo, projeto, bloco MCP, caminhos de log)
+            continuam montados; a reconciliação por posição remove apenas os
+            slots excedentes, que eram o chat.
+            """
+            self._feed_model.clear_chat()
             self._clear_status_bar()
+            self._sync_feed(scroll_end=True)
             self._refresh_now(layout=True)
 
         def action_scroll_to_bottom(self) -> None:
@@ -786,11 +794,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._record_status_event(event)
             self._update_status_bar()
             if event.kind == "clear":
-                self._feed_model.clear()
-                self.query_one("#feed", _UnifiedFeed).clear_entries()
-                self._feed_renderable_cache.clear()
-                self._clear_status_bar()
-                self._refresh_now(layout=True)
+                self._clear_chat_feed()
                 return
             if event.kind == "question":
                 self._set_question_overlay(event.payload)
