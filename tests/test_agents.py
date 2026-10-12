@@ -2510,6 +2510,32 @@ def test_opencode_profile_injects_mcp_via_env_var():
         profile.set_mcp_socket_path(original_mcp_socket)
 
 
+def test_opencode_profile_mcp_timeout_outlives_server_delegate_timeout():
+    """OpenCode expira requests MCP em 5 s por padrão; delegate com wait=true dura minutos.
+
+    Sem timeout explícito o OpenCode devolve "MCP error -32001: Request timed
+    out" ao agente delegador e o servidor, ao receber a desistência, cancela a
+    delegação filha. O cliente deve expirar sempre depois do servidor (mesma
+    regra do Codex via tool_timeout_sec).
+    """
+    from quimera.runtime.config import (
+        DEFAULT_DELEGATE_TIMEOUT_SECONDS,
+        DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS,
+    )
+
+    profile = get_profile("opencode")
+    original_mcp_socket = profile._mcp_socket_path
+    try:
+        profile.set_mcp_socket_path("/tmp/quimera.sock")
+        config = json.loads(profile.env_for_cli()["OPENCODE_CONFIG_CONTENT"])
+        timeout_ms = config["mcp"]["quimera"]["timeout"]
+        assert isinstance(timeout_ms, int)
+        assert timeout_ms == DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS * 1000
+        assert timeout_ms > DEFAULT_DELEGATE_TIMEOUT_SECONDS * 1000
+    finally:
+        profile.set_mcp_socket_path(original_mcp_socket)
+
+
 def test_opencode_profile_permission_does_not_depend_on_workspace_config(tmp_path, monkeypatch):
     """A permissão do tmp do Quimera é inteiramente injetada pelo profile."""
     profile = OpenCodeProfile(

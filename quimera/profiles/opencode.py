@@ -6,6 +6,7 @@ from quimera.agent_events import SpyEvent
 from quimera.paths import TMP_BASE_DIR
 from quimera.profiles.base import ExecutionProfile, register
 from quimera.profiles.spy_utils import describe_tool_input, format_agent_message_lines
+from quimera.runtime.config import DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS
 
 
 def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
@@ -114,6 +115,13 @@ class OpenCodeProfile(ExecutionProfile):
                     "type": "local",
                     "command": proxy_cmd,
                     "enabled": True,
+                    # O OpenCode aplica este timeout (ms, padrão 5000) às requests
+                    # MCP, inclusive tools/call: a doc do SDK fala só em "fetching
+                    # tools", mas delegate com wait=true devolvia "MCP error -32001:
+                    # Request timed out" em 5 s, e o servidor tratava a desistência
+                    # como cancelamento da delegação filha. Mesmo teto que o Codex
+                    # recebe via tool_timeout_sec.
+                    "timeout": int(DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS) * 1000,
                 }
             }
         return json.dumps(config)
