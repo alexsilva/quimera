@@ -418,8 +418,14 @@ class TextualRenderer(RendererBase):
         )
 
     def show_boot_message(self, message: str) -> None:
-        """Exibe uma linha compacta pertencente apenas ao cabeçalho de boot."""
-        self._bridge.emit(TextualUiEvent("muted", str(message), compact=True, boot=True))
+        """Exibe uma linha compacta pertencente apenas ao cabeçalho de boot.
+
+        Quebras de linha nas bordas saem, como no renderer clássico: um
+        ``\\n`` final (ex.: na linha do audit de render) viraria uma linha
+        vazia entre o cabeçalho e a régua que o fecha.
+        """
+        clean_message = strip_ansi(str(message)).strip("\r\n")
+        self._bridge.emit(TextualUiEvent("muted", clean_message, compact=True, boot=True))
 
     def show_boot_status(self, key: str, lines) -> None:
         """Cria ou substitui no lugar o bloco de status do boot ``key``."""

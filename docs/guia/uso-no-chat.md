@@ -64,6 +64,6 @@ Use com cuidado: agentes com ferramentas podem editar arquivos e executar comand
 
 ## Limpar ou sair
 
-- `/clear` limpa o chat e mantém o cabeçalho da sessão no topo: logo, projeto, bloco de status MCP e caminhos de log. Ctrl+L na TUI faz o mesmo.
+- `/clear` limpa o chat e mantém o cabeçalho da sessão no topo: logo, projeto, bloco de status MCP e caminhos de log, fechados por uma régua que separa o cabeçalho do chat. Ctrl+L na TUI faz o mesmo.
 - `/reset [state|history|all]` limpa `shared_state`, histórico ou ambos.
 - `/exit` encerra a sessão.

@@ -962,6 +962,10 @@ def _render_event(event: TextualUiEvent):
         return Text(str(event.payload), style="dim")
     if event.kind == "boot_status":
         return _build_boot_status_renderable(event.payload)
+    if event.kind == "boot_separator":
+        # Régua que fecha o cabeçalho de boot; o feed a mantém como último
+        # item do cabeçalho, logo acima do chat.
+        return Rule(style="dim cyan")
     if event.kind == "system":
         payload_text = str(event.payload or "").strip()
         if payload_text.startswith("[") and "]" in payload_text:
@@ -995,11 +999,12 @@ def boot_status_link_style(url: str) -> Style:
 
 
 def _build_boot_status_renderable(payload):
-    """Bloco do boot separado do histórico por uma régua da identidade visual.
+    """Bloco de status do boot (ex.: conexões MCP), uma linha por entrada.
 
-    Linhas com ``url`` mostram o link completo depois do texto, clicável. A
-    régua usa o mesmo estilo do separador exibido logo abaixo da logo, deixando
-    claro onde termina o estado operacional e começa o conteúdo do chat.
+    Linhas com ``url`` mostram o link completo depois do texto, clicável. O
+    bloco não carrega régua própria: quem separa o cabeçalho do chat é o item
+    ``boot_separator``, que o feed mantém abaixo de todas as linhas de boot,
+    inclusive as emitidas depois deste bloco (caminhos de log e audit).
     """
     data = payload if isinstance(payload, dict) else {}
     text = Text(no_wrap=False, overflow="fold")
@@ -1014,9 +1019,7 @@ def _build_boot_status_renderable(payload):
         if line.url:
             text.append(" ")
             text.append(line.url, style=boot_status_link_style(line.url))
-    if not lines:
-        return text
-    return Group(text, Rule(style="dim cyan"))
+    return text
 
 
 def _render_themed_agent_block(theme_name: str, label: str, style: str, body, *, streaming: bool = False):

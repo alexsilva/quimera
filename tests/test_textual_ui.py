@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+import pytest
 from rich.console import Console, Group
 from rich.padding import Padding
 
@@ -5628,16 +5629,17 @@ def test_render_boot_status_uses_status_glyphs():
         compact=True,
     )
 
-    renderable = _render_event(event)
-    assert isinstance(renderable, Group)
-    status_text, separator = renderable.renderables
+    from rich.text import Text
+
+    status_text = _render_event(event)
+    # Sem régua própria: quem fecha o cabeçalho é o item boot_separator.
+    assert isinstance(status_text, Text)
 
     assert status_text.plain == (
         "● MCP interno iniciado\n◌ MCP client 'y': conectando…\n✗ MCP client 'x': falha"
     )
     styles = {str(span.style) for span in status_text.spans}
     assert {"green", "yellow", "red", "dim"} <= styles
-    assert separator.style == "dim cyan"
 
 
 def test_mcp_connections_screen_shows_background_connection_phases(tmp_path):
@@ -5709,9 +5711,10 @@ def test_render_boot_status_torna_url_de_autorizacao_clicavel():
         compact=True,
     )
 
-    renderable = _render_event(event)
-    assert isinstance(renderable, Group)
-    status_text, separator = renderable.renderables
+    from rich.text import Text
+
+    status_text = _render_event(event)
+    assert isinstance(status_text, Text)
 
     assert status_text.plain == (
         f"◌ MCP client 'jira': conectando…\n· autorize 'jira' no navegador: {url}"
@@ -5723,7 +5726,6 @@ def test_render_boot_status_torna_url_de_autorizacao_clicavel():
     meta = link_spans[0].style.meta
     assert meta["@click"] == f"app.open_external_url({url!r})"
     assert status_text.plain[link_spans[0].start : link_spans[0].end] == url
-    assert separator.style == "dim cyan"
 
 
 def test_textual_renderer_show_boot_status_preserva_url():
@@ -6071,6 +6073,20 @@ def test_textual_renderer_marks_only_boot_header_events_as_boot():
     assert [event.boot for event in emitted] == [True, True, True, False, False, False, False]
 
 
+def test_textual_renderer_show_boot_message_strips_edge_newlines():
+    """Um ``\\n`` final não vira linha vazia entre o cabeçalho e a régua."""
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_boot_message("\r\n\x1b[2mAudit de render:\x1b[0m\n  /tmp/render.jsonl\r\n")
+
+    assert emitted[0].payload == "Audit de render:\n  /tmp/render.jsonl"
+    assert emitted[0].boot is True
+    assert emitted[0].compact is True
+
+
 def test_textual_feed_clear_chat_keeps_boot_header_and_drops_chat():
     model = TextualFeedModel()
     header = _boot_header_events()
@@ -6091,8 +6107,9 @@ def test_textual_feed_clear_chat_keeps_boot_header_and_drops_chat():
 
     model.clear_chat()
 
-    assert [item.event for item in model.items] == header
-    assert [item.event.boot for item in model.items] == [True, True, True, True]
+    assert [item.event for item in model.items[:-1]] == header
+    assert model.items[-1].event.kind == "boot_separator"
+    assert [item.event.boot for item in model.items] == [True] * 5
     assert model.boot_items() == model.items
     assert not model.has_transients
     assert model.transient_items() == []
@@ -6121,7 +6138,7 @@ def test_textual_feed_clear_chat_resets_agent_state_for_the_next_turn():
     assert model.apply(TextualUiEvent("agent_message", {"content": "resposta nova"}, agent="claude"))
     assert "turn_summary" not in model.items[-1].event.payload
     assert [item.event.kind for item in model.items] == [
-        "banner", "muted", "boot_status", "muted", "agent_message",
+        "banner", "muted", "boot_status", "muted", "boot_separator", "agent_message",
     ]
 
 
@@ -6142,7 +6159,7 @@ def test_textual_feed_clear_chat_mid_stream_restarts_the_transient_from_scratch(
     assert model.apply(TextualUiEvent("agent_message", {"content": "final"}, agent="claude"))
     assert not model.has_transients
     assert [item.event.kind for item in model.items] == [
-        "banner", "muted", "boot_status", "muted", "agent_message",
+        "banner", "muted", "boot_status", "muted", "boot_separator", "agent_message",
     ]
 
 
@@ -6165,7 +6182,7 @@ def test_textual_feed_clear_chat_keeps_finalized_agents_so_late_events_stay_igno
     # Chunk atrasado de uma run já encerrada não vira transitório fantasma.
     assert model.apply(TextualUiEvent("stream_chunk", "tardio", agent="claude")) is False
     assert not model.has_transients
-    assert len(model.items) == 4
+    assert len(model.items) == 5
     # A próxima run reabre normalmente.
     assert model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
     assert model.apply(TextualUiEvent("stream_chunk", "nova run", agent="claude"))
@@ -6187,13 +6204,13 @@ def test_textual_feed_boot_status_still_updates_in_place_after_clear_chat():
     )
     assert model.apply(connected) is True
 
-    assert [item.event.kind for item in model.items] == ["banner", "muted", "boot_status", "muted"]
+    assert [item.event.kind for item in model.items] == ["banner", "muted", "boot_status", "muted", "boot_separator"]
     assert model.items[2].event is connected
     assert model.last_change.redraw is True
 
     model.apply(TextualUiEvent("user_message", {"content": "de novo"}))
     assert [item.event.kind for item in model.items] == [
-        "banner", "muted", "boot_status", "muted", "user_message",
+        "banner", "muted", "boot_status", "muted", "boot_separator", "user_message",
     ]
     assert model.items[-1].event.boot is False
 
@@ -6205,10 +6222,121 @@ def test_textual_feed_clear_chat_keeps_boot_items_emitted_after_chat_started():
     late = TextualUiEvent("boot_status", {"key": "tarde", "lines": []}, compact=True, boot=True)
     model.apply(late)
 
+    # O item tardio entra no cabeçalho, acima da régua, e não no meio do chat.
+    assert [item.event.kind for item in model.items] == [
+        "banner", "boot_status", "boot_separator", "user_message",
+    ]
+
     model.clear_chat()
 
-    assert [item.event.kind for item in model.items] == ["banner", "boot_status"]
+    assert [item.event.kind for item in model.items] == ["banner", "boot_status", "boot_separator"]
     assert model.items[1].event is late
+
+
+def test_render_boot_separator_is_the_header_rule():
+    from rich.rule import Rule
+
+    renderable = _render_event(TextualUiEvent("boot_separator", compact=True, boot=True))
+
+    assert isinstance(renderable, Rule)
+    assert renderable.style == "dim cyan"
+
+
+def test_textual_feed_boot_separator_closes_the_header_below_every_boot_line():
+    """A régua fica abaixo de todas as linhas de boot, inclusive as emitidas
+    depois do bloco MCP (caminhos de log e audit), e nunca se duplica."""
+    model = TextualFeedModel()
+
+    def kinds() -> list[str]:
+        return [item.event.kind for item in model.items]
+
+    assert model.apply(TextualUiEvent("banner", "Quimera", compact=True, boot=True))
+    assert kinds() == ["banner", "boot_separator"]
+    assert model.last_change.redraw is True
+
+    assert model.apply(TextualUiEvent("muted", "Projeto: /tmp/projeto", compact=True, boot=True))
+    assert kinds() == ["banner", "muted", "boot_separator"]
+
+    connecting = TextualUiEvent(
+        "boot_status",
+        {"key": "mcp", "lines": [{"status": "busy", "text": "MCP client 'x': conectando…"}]},
+        compact=True,
+        boot=True,
+    )
+    assert model.apply(connecting)
+    assert kinds() == ["banner", "muted", "boot_status", "boot_separator"]
+
+    assert model.apply(
+        TextualUiEvent("muted", "Audit de render:\n  /tmp/render.jsonl", compact=True, boot=True)
+    )
+    assert kinds() == ["banner", "muted", "boot_status", "muted", "boot_separator"]
+
+    separator = model.items[-1].event
+    assert separator.boot is True
+    assert separator.compact is True
+    assert model.boot_items() == model.items
+
+    # O bloco MCP segue atualizável no lugar, sem mexer na régua.
+    connected = TextualUiEvent(
+        "boot_status",
+        {"key": "mcp", "lines": [{"status": "ok", "text": "MCP client 'x': conectado"}]},
+        compact=True,
+        boot=True,
+    )
+    assert model.apply(connected)
+    assert kinds() == ["banner", "muted", "boot_status", "muted", "boot_separator"]
+    assert model.items[2].event is connected
+
+    model.apply(TextualUiEvent("user_message", {"content": "oi"}))
+    assert kinds() == [
+        "banner", "muted", "boot_status", "muted", "boot_separator", "user_message",
+    ]
+    assert model.last_change.appended is model.items[-1]
+
+
+@pytest.mark.parametrize(
+    "late",
+    [
+        TextualUiEvent("muted", "Log da sessão: /tmp/app.log", compact=True, boot=True),
+        TextualUiEvent(
+            "boot_status",
+            {"key": "outro", "lines": [{"status": "ok", "text": "bloco novo"}]},
+            compact=True,
+            boot=True,
+        ),
+    ],
+    ids=["linha", "bloco_novo"],
+)
+def test_textual_feed_late_boot_item_enters_the_header_and_reindexes_transients(late):
+    model = TextualFeedModel()
+    for event in _boot_header_events():
+        model.apply(event)
+    model.apply(TextualUiEvent("user_message", {"content": "revise"}))
+    model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
+    model.apply(TextualUiEvent("stream_chunk", "pensando", agent="claude"))
+    ((index_before, _),) = model.transient_items()
+
+    assert model.apply(late)
+    assert model.last_change.redraw is True
+
+    assert [item.event.kind for item in model.items][:6] == [
+        "banner", "muted", "boot_status", "muted", late.kind, "boot_separator",
+    ]
+    assert model.items[4].event is late
+    assert model.items[6].event.kind == "user_message"
+    assert sum(item.event.kind == "boot_separator" for item in model.items) == 1
+
+    # O slot transitório desceu uma posição e o próximo chunk atualiza esse
+    # slot, não o turno humano que ficou acima dele.
+    ((index_after, transient_after),) = model.transient_items()
+    assert index_after == index_before + 1
+    assert transient_after.transient
+    assert model.apply(TextualUiEvent("stream_chunk", " mais", agent="claude"))
+    ((index_final, transient_final),) = model.transient_items()
+    assert index_final == index_after
+    assert transient_final.event.payload["content"].endswith("mais")
+    assert model.items[index_final - 1].event.payload["content"] == "revise"
+    assert model.items[index_final] is transient_final
 
 
 def test_textual_unified_feed_keeps_boot_slots_mounted_when_chat_is_cleared():
@@ -6237,8 +6365,8 @@ def test_textual_unified_feed_keeps_boot_slots_mounted_when_chat_is_cleared():
             feed = app.query_one("#feed", _UnifiedFeed)
             feed.sync_entries(entries())
             await pilot.pause()
-            assert len(feed.children) == 6
-            boot_slots = list(feed.children)[:4]
+            assert len(feed.children) == 7
+            boot_slots = list(feed.children)[:5]
 
             model.clear_chat()
             feed.sync_entries(entries())
@@ -6251,8 +6379,55 @@ def test_textual_unified_feed_keeps_boot_slots_mounted_when_chat_is_cleared():
             model.apply(TextualUiEvent("user_message", {"content": "de novo"}))
             feed.sync_entries(entries())
             await pilot.pause()
-            assert list(feed.children)[:4] == boot_slots
-            assert len(feed.children) == 5
+            assert list(feed.children)[:5] == boot_slots
+            assert len(feed.children) == 6
+
+    asyncio.run(run_test())
+
+
+def test_textual_unified_feed_slots_follow_the_model_when_a_late_boot_line_enters_the_header():
+    """Linha de boot tardia entra acima da régua; os slots seguem o modelo posição a posição."""
+    from textual.app import App, ComposeResult
+
+    class FeedApp(App):
+        def compose(self) -> ComposeResult:
+            yield _UnifiedFeed(id="feed")
+
+    model = TextualFeedModel()
+    for event in _boot_header_events():
+        model.apply(event)
+    model.apply(TextualUiEvent("user_message", {"content": "oi"}))
+    model.apply(TextualUiEvent("agent_message", {"content": "olá"}, agent="claude"))
+
+    def entries():
+        return [
+            (id(item.event), item.transient, _render_event(item.event), bool(item.event.compact))
+            for item in model.items
+        ]
+
+    async def run_test() -> None:
+        app = FeedApp()
+        async with app.run_test(size=(80, 24)) as pilot:
+            feed = app.query_one("#feed", _UnifiedFeed)
+            feed.sync_entries(entries())
+            await pilot.pause()
+            assert len(feed.children) == 7
+
+            model.apply(
+                TextualUiEvent("muted", "Log da sessão: /tmp/app.log", compact=True, boot=True)
+            )
+            feed.sync_entries(entries())
+            await pilot.pause()
+
+            assert [item.event.kind for item in model.items] == [
+                "banner", "muted", "boot_status", "muted", "muted", "boot_separator",
+                "user_message", "agent_message",
+            ]
+            assert len(feed.children) == 8
+            assert feed._entry_tokens == [id(item.event) for item in model.items]
+            assert [slot.has_class("-compact") for slot in feed.children] == [
+                True, True, True, True, True, True, False, False,
+            ]
 
     asyncio.run(run_test())
 
@@ -6306,8 +6481,10 @@ def test_textual_app_clear_event_keeps_boot_header_and_clears_chat():
     bridge.emit(TextualUiEvent("stream_chunk", "pensando", agent="claude"))
     bridge.emit(TextualUiEvent("tool_preview", {"content": "tool: read_file"}, agent="claude"))
     app._drain_bridge_events()
-    assert _synced_kinds(app, feed)[:4] == ["banner", "muted", "boot_status", "muted"]
-    assert len(_synced_kinds(app, feed)) > 4
+    assert _synced_kinds(app, feed)[:5] == [
+        "banner", "muted", "boot_status", "muted", "boot_separator",
+    ]
+    assert len(_synced_kinds(app, feed)) > 5
     assert app._active_tool_previews
     cached_boot_renderables = [
         app._feed_renderable_cache[id(item.event)] for item in app._feed_model.boot_items()
@@ -6316,7 +6493,7 @@ def test_textual_app_clear_event_keeps_boot_header_and_clears_chat():
     bridge.emit(TextualUiEvent("clear"))
     app._drain_bridge_events()
 
-    assert _synced_kinds(app, feed) == ["banner", "muted", "boot_status", "muted"]
+    assert _synced_kinds(app, feed) == ["banner", "muted", "boot_status", "muted", "boot_separator"]
     assert feed.sync_entries.call_args.kwargs == {"force": False}
     feed.anchor.assert_called()
     assert app._active_tool_previews == {}
@@ -6339,7 +6516,7 @@ def test_textual_app_clear_event_keeps_boot_header_and_clears_chat():
     )
     bridge.emit(TextualUiEvent("user_message", {"content": "de novo"}))
     app._drain_bridge_events()
-    assert _synced_kinds(app, feed) == ["banner", "muted", "boot_status", "muted", "user_message"]
+    assert _synced_kinds(app, feed) == ["banner", "muted", "boot_status", "muted", "boot_separator", "user_message"]
     assert app._feed_model.items[2].event.payload["lines"][0]["status"] == "ok"
 
 
@@ -6353,6 +6530,6 @@ def test_textual_app_ctrl_l_action_clears_chat_like_the_clear_event():
 
     app.action_clear_feed()
 
-    assert _synced_kinds(app, feed) == ["banner", "muted", "boot_status", "muted"]
+    assert _synced_kinds(app, feed) == ["banner", "muted", "boot_status", "muted", "boot_separator"]
     assert [b[0] for b in app.BINDINGS if b[1] == "clear_feed"] == ["ctrl+l"]
     assert [b[2] for b in app.BINDINGS if b[1] == "clear_feed"] == ["Limpar chat"]

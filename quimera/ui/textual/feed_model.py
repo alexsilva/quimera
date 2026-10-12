@@ -180,7 +180,10 @@ class TextualFeedModel:
         return self._last_change
 
     def boot_items(self) -> list[TextualFeedItem]:
-        """Itens do cabeçalho de boot: logo, linhas de boot e blocos de status."""
+        """Itens do cabeçalho de boot: logo, linhas, blocos de status e a régua.
+
+        A régua (``boot_separator``) é sempre o último item do cabeçalho.
+        """
         return [item for item in self._items if item.event.boot]
 
     def clear_chat(self) -> None:
@@ -287,6 +290,8 @@ class TextualFeedModel:
             return self._apply_submission_status(event)
         if event.kind == "boot_status":
             return self._apply_boot_status(event)
+        if event.boot:
+            return self._append_header_item(TextualFeedItem(event, transient=False))
         if event.kind == "visual_reset":
             return self._apply_visual_reset(event)
         if event.kind == "agent_message":
@@ -407,8 +412,39 @@ class TextualFeedModel:
             self._items[index] = item
             self._last_change = TextualFeedChange(True, redraw=True)
             return True
+        if event.boot:
+            return self._append_header_item(item)
         self._items.append(item)
         self._last_change = TextualFeedChange(True, appended=item)
+        return True
+
+    def _boot_separator_index(self) -> int | None:
+        for index, existing in enumerate(self._items):
+            if existing.event.kind == "boot_separator":
+                return index
+        return None
+
+    def _append_header_item(self, item: TextualFeedItem) -> bool:
+        """Anexa ``item`` ao fim do cabeçalho de boot, acima da régua.
+
+        A régua (``boot_separator``) é criada pelo próprio modelo junto com o
+        primeiro item do cabeçalho e fica sempre como último item de boot: é
+        ela que separa o cabeçalho do chat, qualquer que seja a ordem em que
+        logo, linhas de boot e blocos de status chegam. Um item de boot que
+        chega depois de o chat ter começado entra no cabeçalho, não no meio
+        do chat; os índices dos transitórios abaixo são recalculados.
+        """
+        separator_index = self._boot_separator_index()
+        position = 0 if separator_index is None else separator_index
+        self._items.insert(position, item)
+        header_end = position + 1
+        if separator_index is None:
+            separator = TextualUiEvent("boot_separator", compact=True, boot=True)
+            self._items.insert(header_end, TextualFeedItem(separator, transient=False))
+            header_end += 1
+        if header_end < len(self._items):
+            self._reindex_transients()
+        self._last_change = TextualFeedChange(True, redraw=True)
         return True
 
     def _apply_submission_status(self, event: TextualUiEvent) -> bool:
