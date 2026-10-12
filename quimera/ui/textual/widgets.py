@@ -20,6 +20,7 @@ from textual.widgets._input import Selection
 
 from quimera.app.completion_dropdown import CompletionDropdown, PromptHistorySuggester
 from quimera.clipboard_support import ClipboardManager
+from quimera.ui.textual.screenshot import feed_widget_geometry
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +49,39 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
         super().__init__(*args, **kwargs)
         self._entry_widgets: list[_FeedEntry] = []
         self._entry_tokens: list[int] = []
+        self._last_clamp_by_reactive: dict[str, tuple] = {}
 
     def on_mount(self) -> None:
         # Âncora nativa: o compositor recola o scroll no fim no mesmo frame em
         # que a altura do conteúdo muda, sem frame intermediário defasado.
         # Rolar para cima solta a âncora; voltar ao fim reengata sozinho.
         self.anchor()
+
+    def on_resize(self, event) -> None:
+        """Registra o reflow do feed no audit de render (``tui_resize``).
+
+        O Resize do widget chega depois do layout, com ``container_size`` e
+        as regiões dos slots já novas: é o ponto certo para descrever a
+        janela após o teclado virtual aparecer ou sumir. (O Resize do App
+        chega antes do reflow e descreveria a janela anterior.)
+        """
+        try:
+            app = self.app
+            audit_event = getattr(app, "audit_event", None)
+            terminal = app.size
+        except Exception:
+            return
+        if not callable(audit_event):
+            return
+        try:
+            audit_event(
+                "tui_resize",
+                width=int(terminal.width),
+                height=int(terminal.height),
+                **feed_widget_geometry(self),
+            )
+        except Exception:
+            logger.debug("Falha ao registrar resize do feed", exc_info=True)
 
     def set_reactive(self, reactive, value) -> None:
         """Clampa o scroll vertical que o compositor grava sem validar.
@@ -72,9 +100,51 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
         2026-10): se o compositor passar a validar o valor, este override vira
         código morto e pode sair; os testes de regressão acusam se faltar.
         """
-        if reactive.name in ("scroll_y", "scroll_target_y") and value < 0:
-            value = 0
+        if reactive.name in ("scroll_y", "scroll_target_y"):
+            if value < 0:
+                self._audit_scroll_clamp(reactive.name, value)
+                value = 0
+            else:
+                self._last_clamp_by_reactive.pop(reactive.name, None)
         super().set_reactive(reactive, value)
+
+    def _audit_scroll_clamp(self, name: str, value) -> None:
+        """Deixa o clamp visível no audit de render (``tui_scroll_clamped``).
+
+        O compositor regrava o mesmo negativo a cada reflow enquanto o
+        conteúdo for mais baixo que a janela; por reactive, só a primeira
+        ocorrência de cada geometria vai para o log, até um valor válido ser
+        escrito de novo.
+        """
+        try:
+            signature = (
+                int(value),
+                int(self.container_size.height),
+                int(self.virtual_size.height),
+                len(self.children),
+            )
+        except Exception:
+            return
+        if self._last_clamp_by_reactive.get(name) == signature:
+            return
+        self._last_clamp_by_reactive[name] = signature
+        try:
+            audit_event = getattr(self.app, "audit_event", None)
+        except Exception:
+            return
+        if not callable(audit_event):
+            return
+        try:
+            audit_event(
+                "tui_scroll_clamped",
+                reactive=name,
+                value=signature[0],
+                container_height=signature[1],
+                virtual_height=signature[2],
+                slots=signature[3],
+            )
+        except Exception:
+            logger.debug("Falha ao registrar clamp de scroll", exc_info=True)
 
     def sync_entries(
         self,

@@ -23,20 +23,28 @@ def _json_safe(value: Any) -> Any:
 
 
 class RenderAuditLogger:
-    """Grava eventos estruturados e o stream ANSI bruto de renderização."""
+    """Grava eventos estruturados e, opcionalmente, o stream ANSI bruto.
+
+    O stream ANSI só existe para o renderer clássico, que escreve no terminal
+    por um console próprio. No Textual o driver escreve direto em stdout, sem
+    passar pelo renderer; nesse modo ``ansi_path`` fica ``None`` e nenhum
+    arquivo ``.ansi`` é criado (antes nascia vazio e sugeria captura).
+    """
 
     _ANSI_BURST_DEDUP_WINDOW_SEC = 0.05
     _ANSI_BURST_MIN_BYTES = 64
 
-    def __init__(self, events_path: Path, ansi_path: Path):
+    def __init__(self, events_path: Path, ansi_path: Path | None = None):
         self.events_path = Path(events_path)
-        self.ansi_path = Path(ansi_path)
+        self.ansi_path = Path(ansi_path) if ansi_path is not None else None
         self.log_dir = self.events_path.parent
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._closed = False
         self._events_handle = self.events_path.open("w", encoding="utf-8")
-        self._ansi_handle = self.ansi_path.open("wb")
+        self._ansi_handle = (
+            self.ansi_path.open("wb") if self.ansi_path is not None else None
+        )
         self._last_ansi_payload: bytes | None = None
         self._last_ansi_ts: float = 0.0
         self._suppressed_ansi_burst_repeats: int = 0
@@ -63,7 +71,7 @@ class RenderAuditLogger:
             payload = data
         now = time.monotonic()
         with self._lock:
-            if self._closed:
+            if self._closed or self._ansi_handle is None:
                 return
             if (
                 self._last_ansi_payload is not None
@@ -125,7 +133,8 @@ class RenderAuditLogger:
                 sampler_stop.set()
             self._flush_suppressed_ansi_burst_locked()
             self._events_handle.close()
-            self._ansi_handle.close()
+            if self._ansi_handle is not None:
+                self._ansi_handle.close()
             self._closed = True
 
     def __enter__(self) -> "RenderAuditLogger":

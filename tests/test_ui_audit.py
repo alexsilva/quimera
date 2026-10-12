@@ -256,3 +256,20 @@ def test_spy_presenter_events_are_logged_in_render_audit(tmp_path):
     assert spy_events[0].get("kind") == "context"
     assert spy_events[0].get("transient") is True
     assert "raciocínio em progresso" in str(spy_events[0].get("preview", ""))
+
+
+def test_audit_logger_without_ansi_path_records_events_only(tmp_path):
+    """Modo Textual: só eventos estruturados; nenhum .ansi vazio é criado."""
+    events_path = tmp_path / "render" / "render-textual.jsonl"
+    logger = RenderAuditLogger(events_path)
+    try:
+        logger.log_event("tui_resize", width=80, height=24)
+        logger.write_ansi(b"\x1b[2J")  # ignorado sem stream
+    finally:
+        logger.close()
+
+    events = _read_jsonl(events_path)
+    assert [event["event"] for event in events] == ["tui_resize"]
+    assert events[0]["width"] == 80
+    assert logger.ansi_path is None
+    assert list((tmp_path / "render").iterdir()) == [events_path]

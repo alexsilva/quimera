@@ -91,6 +91,15 @@ TOOL_METADATA: dict[str, ToolMetadata] = {
         ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,
     ),
 
+    # Diagnóstico da TUI (só com --debug e interface Textual ativa). O SVG vai
+    # para os logs da sessão, nunca para o workspace: não é mutação.
+    "tui_screenshot": _meta(
+        ToolRisk.READ,
+        parallel_safe=True,
+        capabilities=("tui_screenshot",),
+        http_profiles=_READ_LOCAL,
+    ),
+
     # Descoberta de tools diferidas.
     "tool_search": _meta(
         ToolRisk.READ, parallel_safe=True, http_profiles=_READ_LOCAL,

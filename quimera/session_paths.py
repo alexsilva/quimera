@@ -54,6 +54,11 @@ class SessionPaths:
         return self.logs_dir / "render"
 
     @property
+    def render_screenshots_dir(self) -> Path:
+        """SVGs da tool ``tui_screenshot`` (criado sob demanda, só em debug)."""
+        return self.render_logs_dir / "screenshots"
+
+    @property
     def metrics_dir(self) -> Path:
         return self.logs_dir / "metrics"
 

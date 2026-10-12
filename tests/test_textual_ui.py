@@ -6653,3 +6653,253 @@ def test_textual_app_ctrl_l_action_clears_chat_like_the_clear_event():
     assert _synced_kinds(app, feed) == ["banner", "muted", "boot_status", "muted", "boot_separator"]
     assert [b[0] for b in app.BINDINGS if b[1] == "clear_feed"] == ["ctrl+l"]
     assert [b[2] for b in app.BINDINGS if b[1] == "clear_feed"] == ["Limpar chat"]
+
+
+# ---------------------------------------------------------------------------
+# Screenshot da TUI e audit de render no modo Textual
+# ---------------------------------------------------------------------------
+
+
+class _FakeAuditLogger:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+        self.closed = False
+
+    def log_event(self, event: str, **payload) -> None:
+        self.events.append((event, payload))
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _quimera_app_with_renderer(renderer) -> SimpleNamespace:
+    """Fake do core com renderer: o app real liga o profile resolver no boot."""
+    return SimpleNamespace(
+        renderer=renderer,
+        input_gate=None,
+        run=threading.Event().wait,
+        _resolve_profile_style=lambda *args, **kwargs: None,
+    )
+
+
+def test_textual_screenshot_returns_screen_text_svg_and_feed_geometry():
+    """App real: a captura devolve as linhas visíveis e a geometria do feed."""
+    from quimera.ui.textual.screenshot import capture_textual_screenshot
+
+    bridge = TextualUiBridge()
+    app = _capture_quimera_textual_app(_fake_quimera_app(), bridge)
+
+    async def run_test() -> None:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            for event in _boot_header_events():
+                bridge.emit(event)
+            bridge.emit(TextualUiEvent("user_message", {"content": "pergunta"}))
+            bridge.emit(
+                TextualUiEvent("agent_message", {"content": "resposta\nlinha 2"}, agent="claude")
+            )
+            app._drain_bridge_events()
+            await pilot.pause()
+            await pilot.pause()
+            feed = app.query_one("#feed", _UnifiedFeed)
+
+            shot = capture_textual_screenshot(app, title="captura-de-teste")
+
+            assert (shot.width, shot.height) == (80, 24)
+            assert len(shot.lines) == 24
+            assert "Projeto: /tmp/projeto" in shot.text
+            assert "pergunta" in shot.text
+            assert "resposta" in shot.text
+            assert "\x1b" not in shot.text
+            assert not any(line.endswith(" ") for line in shot.lines)
+            assert shot.svg.startswith("<svg")
+            assert "captura-de-teste" in shot.svg
+            assert shot.feed["scroll_y"] == feed.scroll_y == 0
+            assert shot.feed["max_scroll_y"] == feed.max_scroll_y
+            assert shot.feed["slots"] == len(feed.children)
+            assert shot.feed["first_slot_y"] == shot.feed["content_y"] == feed.content_region.y
+            assert shot.feed["container_height"] == feed.container_size.height
+            assert shot.feed["last_slot_bottom"] == feed.children[-1].region.bottom
+
+    asyncio.run(run_test())
+
+
+def test_textual_renderer_captures_screenshot_from_a_worker_thread_and_refuses_without_app():
+    """A tool roda fora da thread do Textual: a ponte passa por call_from_thread."""
+    bridge = TextualUiBridge()
+    renderer = TextualRenderer(bridge)
+    app = _capture_quimera_textual_app(_quimera_app_with_renderer(renderer), bridge)
+    assert renderer.supports_screenshot is True
+
+    async def run_test() -> None:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            for event in _boot_header_events():
+                bridge.emit(event)
+            app._drain_bridge_events()
+            await pilot.pause()
+            await pilot.pause()
+
+            loop = asyncio.get_running_loop()
+            shot = await loop.run_in_executor(None, renderer.capture_screenshot)
+
+            assert (shot.width, shot.height) == (80, 24)
+            assert "Projeto: /tmp/projeto" in shot.text
+            # Na própria thread do app a captura é direta.
+            same = renderer.capture_screenshot(title="x")
+            assert same.text == shot.text
+
+    asyncio.run(run_test())
+
+    with pytest.raises(RuntimeError, match="não está ativa"):
+        renderer.capture_screenshot()
+
+
+def test_renderer_base_declares_no_screenshot_support():
+    from quimera.ui.base import RendererBase
+
+    class Minimal(RendererBase):
+        def show_system(self, message):
+            return None
+
+    renderer = Minimal()
+    assert RendererBase.supports_screenshot is False
+    with pytest.raises(RuntimeError):
+        renderer.capture_screenshot()
+
+
+def test_textual_renderer_audit_logger_is_attached_later_and_closed_with_the_renderer():
+    bridge = TextualUiBridge()
+    renderer = TextualRenderer(bridge)
+    renderer.log_debug_event("ignorado", a=1)  # sem logger: no-op
+
+    audit = _FakeAuditLogger()
+    renderer.set_audit_logger(audit)
+    renderer.log_debug_event("deferred_enqueue", agent="claude")
+    assert audit.events == [("deferred_enqueue", {"agent": "claude"})]
+
+    renderer.close()
+    assert audit.closed is True
+    renderer.log_debug_event("depois_do_close")
+    assert len(audit.events) == 1
+
+
+def test_textual_app_audit_events_cover_scroll_clamp_clear_and_resize():
+    """Com --debug, a TUI registra o que antes só se via a olho: clamp, /clear, resize."""
+    bridge = TextualUiBridge()
+    renderer = TextualRenderer(bridge)
+    audit = _FakeAuditLogger()
+    renderer.set_audit_logger(audit)
+    app = _capture_quimera_textual_app(_quimera_app_with_renderer(renderer), bridge)
+
+    def events_named(name: str) -> list[dict]:
+        return [payload for event, payload in audit.events if event == name]
+
+    async def run_test() -> None:
+        async with app.run_test(size=(80, 45)) as pilot:
+            await pilot.pause()
+            for event in _boot_header_events():
+                bridge.emit(event)
+            app._drain_bridge_events()
+            await pilot.pause()
+            await pilot.pause()
+            feed = app.query_one("#feed", _UnifiedFeed)
+
+            # Cabeçalho curto numa janela alta: o compositor grava scroll
+            # negativo a cada reflow; o clamp entra no log uma vez por
+            # geometria e por reactive, não a cada frame.
+            clamps = events_named("tui_scroll_clamped")
+            assert clamps, audit.events
+            assert all(payload["value"] < 0 for payload in clamps)
+            assert {payload["reactive"] for payload in clamps} <= {"scroll_y", "scroll_target_y"}
+            signatures = [
+                (p["reactive"], p["value"], p["container_height"], p["virtual_height"], p["slots"])
+                for p in clamps
+            ]
+            assert len(signatures) == len(set(signatures))
+            assert feed.scroll_y == 0
+            audit.events.clear()
+            feed.refresh(layout=True)
+            await pilot.pause()
+            await pilot.pause()
+            assert events_named("tui_scroll_clamped") == []
+
+            bridge.emit(TextualUiEvent("clear"))
+            app._drain_bridge_events()
+            await pilot.pause()
+            await pilot.pause()
+            clear_events = events_named("tui_clear_chat")
+            assert len(clear_events) == 1
+            assert clear_events[0]["kept_items"] == len(app._feed_model.items)
+            assert clear_events[0]["scroll_y"] == 0
+            assert clear_events[0]["slots"] == len(feed.children)
+            audit.events.clear()
+
+            await pilot.resize_terminal(80, 18)
+            await pilot.pause()
+            await pilot.pause()
+            resize_events = events_named("tui_resize")
+            assert resize_events, audit.events
+            last = resize_events[-1]
+            assert (last["width"], last["height"]) == (80, 18)
+            # Geometria lida depois do reflow: descreve a janela nova.
+            assert last["container_height"] == feed.container_size.height < 18
+            assert last["scroll_y"] == 0
+            assert last["slots"] == len(feed.children)
+
+    asyncio.run(run_test())
+    renderer.close()
+    assert audit.closed is True
+
+
+def test_textual_bridge_screenshot_wait_is_bounded_when_the_app_loop_stalls():
+    """Loop do Textual parado sem fechar: a thread da tool não fica presa."""
+    import time
+
+    bridge = TextualUiBridge()
+
+    class StalledApp:
+        def call_from_thread(self, callback, *args, **kwargs):
+            time.sleep(5)  # simula um loop que nunca executa o callback
+            return None
+
+    bridge.attach_textual_app(StalledApp())
+    # attach registra a thread atual como a do app; -1 força o ramo "outra
+    # thread" (call_from_thread) sem precisar de uma thread real no teste.
+    bridge._textual_thread_id = -1
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="não respondeu"):
+        bridge.capture_screenshot(timeout=0.2)
+    assert time.monotonic() - started < 2.0
+
+
+def test_textual_bridge_screenshot_propagates_app_errors_from_the_worker():
+    bridge = TextualUiBridge()
+
+    class ClosingApp:
+        def call_from_thread(self, callback, *args, **kwargs):
+            raise RuntimeError("App is not running")
+
+    bridge.attach_textual_app(ClosingApp())
+    bridge._textual_thread_id = -1  # idem: força o ramo call_from_thread
+
+    with pytest.raises(RuntimeError, match="App is not running"):
+        bridge.capture_screenshot(timeout=1.0)
+
+
+def test_textual_bridge_screenshot_turns_cancelled_callback_into_runtime_error():
+    """App fechando durante a espera: CancelledError (BaseException) vira RuntimeError."""
+    import asyncio as _asyncio
+
+    bridge = TextualUiBridge()
+
+    class ClosingApp:
+        def call_from_thread(self, callback, *args, **kwargs):
+            raise _asyncio.CancelledError()
+
+    bridge.attach_textual_app(ClosingApp())
+    bridge._textual_thread_id = -1
+
+    with pytest.raises(RuntimeError, match="encerrada"):
+        bridge.capture_screenshot(timeout=1.0)

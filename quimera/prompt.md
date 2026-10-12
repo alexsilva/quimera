@@ -18,7 +18,17 @@ Agentes de IA nesta conversa: {agents}
 
 <!-- IF:render_debug_active -->
 <debug_state title="Debug de render ativo">
-Logs: {render_log_path} (jsonl) · {render_ansi_path} (ansi) · {metrics_path} (métricas)
+Logs: {render_log_path} (jsonl) · {metrics_path} (métricas)
+<!-- IF:tui_screenshot_available -->
+Interface Textual ativa. A tool `tui_screenshot` devolve a tela atual em texto, linha a linha, com a geometria do feed (scroll_y, max_scroll_y, container_height, slots, first_slot_y) e salva o SVG em {render_screenshots_dir}. Use-a antes de teorizar sobre layout: é o que o humano vê.
+
+- cabeçalho fora do topo / espaço em cima → first_slot_y ≠ content_y ou tui_scroll_clamped no jsonl
+- teclado virtual / janela mudou → tui_resize (width, height, geometria)
+- /clear → tui_clear_chat (kept_items = itens do cabeçalho)
+- cada captura → tui_screenshot (path)
+<!-- ENDIF:tui_screenshot_available -->
+<!-- NOT_IF:tui_screenshot_available -->
+Stream ANSI bruto: {render_ansi_path}
 
 - flicker → queue_depth>0 ou transient_coalesced>10
 - ghosting → transient_replace, prev_lines≠new_lines do evento anterior; ou \033[A sem \033[J no ansi
@@ -26,6 +36,7 @@ Logs: {render_log_path} (jsonl) · {render_ansi_path} (ansi) · {metrics_path} (
 - rolagem sumiu → prev_lines > term_lines-2
 - texto repetido → ansi_duplicate_suppressed
 - overlay preso → transient_clear (prev_lines≠0)
+<!-- ENDNOT_IF:tui_screenshot_available -->
 
 Contar eventos: `python3 -c "import collections,json;c=collections.Counter(json.loads(l)['event'] for l in open('{render_log_path}') if l.strip());print(dict(c))"`
 </debug_state>

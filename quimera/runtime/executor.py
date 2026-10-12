@@ -24,6 +24,7 @@ from .tools import shell as shell_tools
 from .tools import state as state_tools
 from .tools import tasks as tasks_tools
 from .tools import todo as todo_tools
+from .tools import tui as tui_tools
 from .tools import web as web_tools
 
 
@@ -52,6 +53,7 @@ class ToolExecutorWiring:
         ("update_state_fn", "set_update_state_fn"),
         ("tool_preview_callback", "set_tool_preview_callback"),
         ("tool_progress_callback", "set_tool_progress_callback"),
+        ("tui_screenshot_provider", "set_tui_screenshot_provider"),
     )
 
     delegate_fn: Callable | None = None
@@ -67,6 +69,7 @@ class ToolExecutorWiring:
     update_state_fn: Callable | None = None
     tool_preview_callback: Callable | None = None
     tool_progress_callback: Callable | None = None
+    tui_screenshot_provider: object | None = None
 
     def apply_to(self, executor: "ToolExecutor") -> None:
         """Reaplica as injeções registradas em outro executor."""
@@ -77,7 +80,10 @@ class ToolExecutorWiring:
 
     # Subconjunto que torna tasks_delegate/tasks_create/list_agents operáveis. Fica fora
     # tudo que é escopo do chat (cancel_checker, ask_user, preview/progress),
-    # que não pode vazar para um executor isolado.
+    # que não pode vazar para um executor isolado. A captura de tela da TUI
+    # entra: é diagnóstico global da sessão (só existe com --debug), não
+    # pertence a um turno, e um revisor delegado por API precisa enxergar a
+    # mesma tela que o agente do chat.
     _DELEGATION_SETTERS: ClassVar[tuple[tuple[str, str], ...]] = (
         ("delegate_fn", "set_delegate_fn"),
         ("background_delegate_fn", "set_background_delegate_fn"),
@@ -86,6 +92,7 @@ class ToolExecutorWiring:
         ("active_agents_provider", "set_active_agents_provider"),
         ("agent_stats_provider", "set_agent_stats_provider"),
         ("orchestrator_provider", "set_orchestrator_provider"),
+        ("tui_screenshot_provider", "set_tui_screenshot_provider"),
     )
 
     def apply_delegation_to(self, executor: "ToolExecutor") -> None:
@@ -137,6 +144,7 @@ class ToolExecutor:
         self._task_tools = None
         self._browser_tools = None
         self._host_tools = None
+        self._tui_tools = None
         self._search_tools = None
         self._shell_tools = None
         self._register_builtin_tools()
@@ -174,6 +182,7 @@ class ToolExecutor:
         self._state_tools = state_tools.register(self.registry, self.policy, self.config)
         git.register(self.registry, self.policy, self.config)
         self._host_tools = host_tools.register(self.registry, self.policy, self.config)
+        self._tui_tools = tui_tools.register(self.registry, self.policy, self.config)
         mcp_clients_tools.register(self.registry, self.policy, self.config)
         # A tool de descoberta resolve o catálogo real deste executor (forks
         # incluídos: _register_builtin_tools roda por instância).
@@ -403,6 +412,19 @@ class ToolExecutor:
     def is_update_state_available(self) -> bool:
         """Indica se update_shared_state está operável no contexto atual."""
         return self._state_tools.is_update_state_available()
+
+    def set_tui_screenshot_provider(self, provider) -> None:
+        """Injeta a captura de tela da TUI (``TuiScreenshotProvider``).
+
+        Só o wiring da aplicação injeta, e só com ``--debug`` e a interface
+        Textual ativa; sem provider a tool ``tui_screenshot`` sai do catálogo.
+        """
+        self._wiring.tui_screenshot_provider = provider
+        self._tui_tools.set_screenshot_provider(provider)
+
+    def is_tui_screenshot_available(self) -> bool:
+        """Indica se tui_screenshot está operável no contexto atual."""
+        return self._tui_tools.is_tui_screenshot_available()
 
     def execute(self, call: ToolCall, progress_callback: Callable[[str], None] | None = None) -> ToolResult:
         """Executa um ToolCall com política de aprovação.

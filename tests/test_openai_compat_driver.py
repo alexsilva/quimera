@@ -174,6 +174,7 @@ def test_schema_names_match_registered_tools():
         "browser_console", "browser_network",
         # Host diagnostics
         "host_processes", "host_process_inspect", "host_process_sample", "host_memory",
+        "tui_screenshot",
         # Git tools
         "git_status", "git_log", "git_diff", "git_branch", "git_fetch",
         "git_add", "git_commit", "git_checkout", "git_push",
@@ -1410,6 +1411,7 @@ def test_run_tools_system_prompt_keeps_user_role_for_real_request_only():
         "host_process_inspect",
         "host_process_sample",
         "host_memory",
+        "tui_screenshot",
         "git_status",
         "git_log",
         "git_diff",

@@ -16,9 +16,10 @@ from quimera.runtime.tools import delegate as delegate_tools
 from quimera.runtime.tools import memory as memory_tools
 from quimera.runtime.tools import tasks as tasks_tools
 from quimera.runtime.tools import todo as todo_tools
+from quimera.runtime.tools import tui as tui_tools
 
 _EXPECTED_SCHEMA_FINGERPRINT = (
-    "06cc5ffef23c0394a377c72a47c940c686d9925e5351cdf2eddc629828bb50ed"
+    "8891c141d4a4ebdf143c5aa6a8e438dd2346b28728009025925bb316a589e687"
 )
 
 
@@ -35,7 +36,7 @@ def _fingerprint(schemas: list[dict]) -> str:
 def test_catalog_materializes_the_public_schema_without_contract_changes():
     """A representação tipada não pode alterar o contrato publicado."""
     assert materialize_tool_schemas() == TOOL_SCHEMAS
-    assert len(TOOL_SPECS) == len(TOOL_SCHEMAS) == 59
+    assert len(TOOL_SPECS) == len(TOOL_SCHEMAS) == 60
     assert _fingerprint(TOOL_SCHEMAS) == _EXPECTED_SCHEMA_FINGERPRINT
 
 
@@ -86,7 +87,7 @@ def test_schema_and_registry_are_one_to_one():
     schema_names = {item["function"]["name"] for item in TOOL_SCHEMAS}
 
     assert registry_names == schema_names
-    assert len(registry_names) == 59
+    assert len(registry_names) == 60
 
 
 def test_explicit_tool_name_lists_match_registered_handlers():
@@ -101,6 +102,7 @@ def test_explicit_tool_name_lists_match_registered_handlers():
         tasks_tools._TASK_TOOL_NAMES,
         tasks_tools._JOB_TOOL_NAMES,
         delegate_tools._DELEGATE_TOOL_NAMES,
+        tui_tools._TUI_TOOL_NAMES,
         ["update_shared_state"],
     ):
         for name in names:

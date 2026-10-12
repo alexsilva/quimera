@@ -40,6 +40,7 @@ from quimera.ui.textual.theme_store import TuiThemeStore
 _logger = logging.getLogger(__name__)
 
 from quimera.ui.textual.driver import QuimeraLinuxDriver
+from quimera.ui.textual.screenshot import feed_geometry
 from quimera.ui.textual.renderables import (
     _build_question_overlay,
     _build_window_overlay_payload,
@@ -675,6 +676,27 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._clear_status_bar()
             self._sync_feed(scroll_end=True)
             self._refresh_now(layout=True)
+            self.audit_event(
+                "tui_clear_chat",
+                kept_items=len(self._feed_model.items),
+                **feed_geometry(self),
+            )
+
+        def audit_event(self, event: str, **payload) -> None:
+            """Grava um evento da TUI no audit de render (só com ``--debug``).
+
+            O renderer é o dono do logger; sem ele (sem debug, ou app de
+            teste sem renderer) a chamada é no-op. Widgets usam este ponto
+            para registrar correções silenciosas, como o clamp de scroll.
+            """
+            renderer = getattr(quimera_app, "renderer", None)
+            log_event = getattr(renderer, "log_debug_event", None)
+            if not callable(log_event):
+                return
+            try:
+                log_event(event, **payload)
+            except Exception:
+                _logger.debug("Falha ao gravar evento de audit da TUI", exc_info=True)
 
         def action_scroll_to_bottom(self) -> None:
             feed = self.query_one("#feed", _UnifiedFeed)

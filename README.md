@@ -83,7 +83,7 @@ Principais flags:
 - `--model MODELO`: modelo do LLM.
 - `--base-url URL`: URL base da API.
 - `--api-key-env VAR`: variável de ambiente da API key.
-- `--debug`: modo debug com logs detalhados.
+- `--debug`: modo debug: audit de render em `data/logs/render/` (eventos jsonl; o stream `.ansi` só existe no renderer clássico, em modo pipe), métricas de prompt e, na TUI Textual, a tool `tui_screenshot`, com que os agentes veem a tela atual em texto e salvam o SVG em `data/logs/render/screenshots/`.
 - `--test`: modo de teste com agents fake.
 - `--cmd COMANDO`: comando para driver=cli.
 - `--working-dir DIR`: diretório de trabalho.
@@ -270,6 +270,7 @@ Ferramentas suportadas pelo runtime (expostas via MCP e, quando disponível, pel
 - tasks/jobs/agentes: `tasks_create`, `tasks_list`, `tasks_cancel`, `jobs_list`, `jobs_get`, `list_agents`
 - memória/estado: `memory_save`, `memory_retrieve`, `update_shared_state`, `todo_write`, `todo_list`
 - interação: `ask_user`
+- diagnóstico da TUI: `tui_screenshot` — só com `--debug` e a interface Textual ativa; devolve as linhas visíveis da tela com a geometria do feed (scroll, slots, altura) e salva o SVG, o mesmo da paleta de comandos do Textual, em `data/logs/render/screenshots/` da sessão
 - web: `web_search`, `web_fetch`
 - **cross-MCP**: `tasks_delegate` — delega tarefas a outro agente no pool (disponível apenas quando MCP está ativo); cada delegação executa em `AgentClient` isolado, com cancelamento propagado do fluxo principal
 

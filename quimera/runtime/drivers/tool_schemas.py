@@ -36,6 +36,7 @@ _CAPABILITY_METHODS = {
     "tasks": "is_tasks_available",
     "ask_user": "is_ask_user_available",
     "update_shared_state": "is_update_state_available",
+    "tui_screenshot": "is_tui_screenshot_available",
 }
 
 

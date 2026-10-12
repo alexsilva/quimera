@@ -20,6 +20,7 @@ class ToolActivityCategory(str, Enum):
 INSPECTION_TOOLS = frozenset({
     "read_file", "list_files", "grep_search", "git_status", "git_diff",
     "git_log", "git_branch", "browser_status", "browser_network",
+    "tui_screenshot",
 })
 MODIFICATION_TOOLS = frozenset({"apply_patch", "write_file", "remove_file"})
 VERSION_CONTROL_TOOLS = frozenset({

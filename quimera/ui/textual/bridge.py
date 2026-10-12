@@ -1,6 +1,7 @@
 """Bridge thread-safe entre a aplicação e a UI Textual."""
 from __future__ import annotations
 
+import asyncio
 import queue
 import threading
 import time
@@ -24,6 +25,37 @@ class _TextualConsoleShim:
         if end and end != "\n":
             message = f"{message}{end}"
         self._bridge.emit(TextualUiEvent("plain", message))
+
+
+def _call_with_timeout(fn, *, timeout: float, what: str):
+    """Roda ``fn`` numa thread daemon e espera no máximo ``timeout`` segundos.
+
+    ``App.call_from_thread`` espera ``future.result()`` sem timeout; se o loop
+    do app parar sem fechar, quem chamou fica pendurado para sempre. A thread
+    daemon pode ficar presa nesse caso sem segurar o encerramento do processo.
+    """
+    outcome: dict[str, object] = {}
+    done = threading.Event()
+
+    def _runner() -> None:
+        try:
+            outcome["value"] = fn()
+        except asyncio.CancelledError:
+            # O app fechou durante a espera: o Textual cancela o callback. É
+            # BaseException e atravessaria o ``except Exception`` das tools.
+            outcome["error"] = RuntimeError("A interface Textual foi encerrada durante a captura.")
+        except BaseException as exc:  # noqa: BLE001 - repassado ao chamador
+            outcome["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=_runner, daemon=True, name="textual-call-with-timeout").start()
+    if not done.wait(timeout):
+        raise RuntimeError(f"{what} em {timeout:g} s.")
+    error = outcome.get("error")
+    if error is not None:
+        raise error  # type: ignore[misc]
+    return outcome.get("value")
 
 
 class TextualUiBridge:
@@ -329,6 +361,34 @@ class TextualUiBridge:
                 return
             for pending_event in self.drain_pending_events():
                 textual_app.handle_bridge_event(pending_event)
+
+    def capture_screenshot(self, *, title: str | None = None, timeout: float = 10.0):
+        """Captura a tela atual do app Textual a partir de qualquer thread.
+
+        O compositor só pode ser lido na thread do app: fora dela a captura
+        passa por ``call_from_thread``, que espera o frame ser exportado sem
+        limite de tempo. A espera aqui é limitada: se o loop do Textual parar
+        sem fechar (janela estreita no encerramento da TUI com uma tool em
+        voo), a thread da tool recebe ``RuntimeError`` em vez de ficar presa.
+        Sem app anexado (TUI ainda subindo ou já encerrada) também levanta
+        ``RuntimeError``.
+        """
+        from quimera.ui.textual.screenshot import capture_textual_screenshot
+
+        with self._lock:
+            textual_app = self.textual_app
+            textual_thread_id = self._textual_thread_id
+        if textual_app is None:
+            raise RuntimeError("A interface Textual não está ativa.")
+        if threading.get_ident() == textual_thread_id:
+            return capture_textual_screenshot(textual_app, title=title)
+        return _call_with_timeout(
+            lambda: textual_app.call_from_thread(
+                capture_textual_screenshot, textual_app, title=title
+            ),
+            timeout=timeout,
+            what="A interface Textual não respondeu à captura de tela",
+        )
 
     def flush_ui_events(self) -> bool:
         """Força o app Textual a drenar eventos visuais pendentes agora."""

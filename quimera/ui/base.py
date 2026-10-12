@@ -37,6 +37,8 @@ class RendererBase:
 
     supports_agent_feed = False
     supports_submission_status = False
+    #: True quando o renderer captura a tela atual (``capture_screenshot``).
+    supports_screenshot = False
     #: True quando o renderer tem canal estruturado para atividade de agente
     #: (retry/failover); False manda os chamadores usarem o caminho textual
     #: prompt-aware (show_*_message) em vez de notify_*.
@@ -202,6 +204,10 @@ class RendererBase:
 
     def log_debug_event(self, event, **payload):
         return None
+
+    def capture_screenshot(self, *, title=None):
+        """Captura a tela atual; só renderers com ``supports_screenshot``."""
+        raise RuntimeError("Este renderer não captura a tela.")
 
     def close(self, timeout=5.0):
         return None

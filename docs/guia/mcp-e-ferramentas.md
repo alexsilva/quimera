@@ -97,6 +97,7 @@ um resultado sem evento de início ainda gera evidência com o mesmo ID.
 | `close_command_session` | Fecha sessão persistente de comando. |
 | `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_branch`, `git_checkout`, `git_fetch`, `git_push` | Operações git estruturadas no repositório do workspace. |
 | `browser_start`, `browser_navigate`, `browser_click`, `browser_type`, `browser_press`, `browser_mouse`, `browser_wait`, `browser_snapshot`, `browser_screenshot`, `browser_console`, `browser_network`, `browser_evaluate`, `browser_status`, `browser_close` | Automação de navegador (Chrome/Chromium via Playwright, extra `browser`); screenshots são salvos por sessão no diretório de artefatos do workspace. |
+| `tui_screenshot` | Diagnóstico da TUI Textual, só com `--debug`: captura a tela atual em texto (as linhas que o humano vê) com a geometria do feed (`scroll_y`, `max_scroll_y`, `container_height`, `slots`, `first_slot_y`) e salva o SVG em `data/logs/render/screenshots/` da sessão. Fora do debug, ou sem a TUI, a tool não entra no catálogo. |
 | `tasks_create` | Cria uma task pelo fluxo do `/task`: o roteador escolhe o executor e outro agente revisa. |
 | `tasks_list` | Lista tasks com filtros, mais recentes primeiro; sem filtro, lista o job atual. Pagina com `limit` (padrão 20) e `offset`; o `content` traz `items`, `total` e `next_offset`. Como o `offset` reflete o estado de cada chamada, mudanças entre páginas podem deslocar itens. |
 | `tasks_cancel` | Cancela uma delegação em execução (apenas quem delegou, ou o humano). |

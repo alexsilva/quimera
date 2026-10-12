@@ -85,6 +85,7 @@ class TextualRenderer(RendererBase):
     supports_agent_feed = True
     supports_submission_status = True
     supports_structured_agent_activity = True
+    supports_screenshot = True
 
     def __init__(self, bridge: TextualUiBridge) -> None:
         self._bridge = bridge
@@ -296,18 +297,40 @@ class TextualRenderer(RendererBase):
         """Compatibilidade com TerminalRenderer."""
         return None
 
+    def set_audit_logger(self, audit_logger) -> None:
+        """Liga o audit de render (``--debug``) a este renderer.
+
+        O ``TerminalRenderer`` recebe o logger no construtor; aqui ele chega
+        depois, porque a TUI cria o renderer antes de o app saber se está em
+        debug. Sem esta ligação ``log_debug_event`` era no-op e o jsonl da
+        sessão ficava vazio no modo Textual.
+        """
+        self._audit_logger = audit_logger
+
     def close(self, timeout: float = 5.0) -> None:
-        """Compatibilidade com TerminalRenderer."""
+        """Fecha o audit de render, se houver; a UI em si é do app Textual."""
+        audit_logger = self._audit_logger
+        self._audit_logger = None
+        if audit_logger is None:
+            return None
+        try:
+            audit_logger.close()
+        except Exception:
+            return None
         return None
 
     def log_debug_event(self, event: str, **payload) -> None:
-        """Compatibilidade com auditoria do TerminalRenderer."""
+        """Grava um evento estruturado no audit de render (só com ``--debug``)."""
         if self._audit_logger is None:
             return
         try:
             self._audit_logger.log_event(event, **payload)
         except Exception:
             return
+
+    def capture_screenshot(self, *, title: str | None = None, timeout: float = 10.0):
+        """Captura a tela atual da TUI (texto, SVG e geometria do feed)."""
+        return self._bridge.capture_screenshot(title=title, timeout=timeout)
 
     @contextmanager
     def terminal_floor(self, *, title: str = "Terminal floor", metadata: dict[str, Any] | None = None, timeout: float = 2.0):

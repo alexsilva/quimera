@@ -101,6 +101,18 @@ def test_capability_metadata_preserves_multi_requirement_for_tasks():
     assert TOOL_METADATA["tasks_cancel"].capabilities == ("task_db", "delegate")
 
 
+def test_tui_screenshot_is_read_only_diagnostic_gated_by_capability():
+    """Só existe com --debug e TUI ativa; grava nos logs da sessão, não no workspace."""
+    metadata = TOOL_METADATA["tui_screenshot"]
+
+    assert metadata.capabilities == ("tui_screenshot",)
+    assert metadata.risk == ToolRisk.READ
+    assert metadata.mutates is False
+    assert metadata.approval == ApprovalMode.NONE
+    assert metadata.parallel_safe is True
+    assert "tui_screenshot" in tools_for_http_profile("read-local")
+
+
 def test_read_only_modes_fail_closed_for_mutating_tools():
     mutation_names = {
         name for name, metadata in TOOL_METADATA.items() if metadata.mutates

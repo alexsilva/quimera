@@ -134,8 +134,71 @@ def test_prompt_includes_render_debug_block_when_active():
     assert "/tmp/test/data/logs/render/render.ansi" in debug_block
     assert "/tmp/test/data/logs/metrics/test-session.jsonl" in debug_block
     assert "Counter" in debug_block
+    # Renderer clássico: dicas do compositor de terminal, sem a tool da TUI.
+    assert "queue_depth" in debug_block
+    assert "tui_screenshot" not in debug_block
+    assert "<!--" not in debug_block
     session_block = _extract_block(prompt, "session_state")
     assert "LOG DA APLICAÇÃO: /tmp/test/data/logs/app-test-session.log" in session_block
+
+
+def test_prompt_debug_block_describes_tui_screenshot_when_textual_is_active():
+    """Com a TUI Textual não há stream ANSI; o prompt aponta a tool tui_screenshot."""
+    session_state = {
+        "session_id": "test-session",
+        "current_job_id": 123,
+        "workspace_root": "/tmp/test",
+        "current_dir": ".",
+        "render_debug_active": True,
+        "render_log_path": "/tmp/test/data/logs/render/render.jsonl",
+        "render_ansi_path": "",
+        "tui_screenshot_available": True,
+        "render_screenshots_dir": "/tmp/test/data/logs/render/screenshots",
+        "metrics_path": "/tmp/test/data/logs/metrics/test-session.jsonl",
+    }
+
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        session_state=session_state,
+        user_name="ALEX",
+    )
+
+    prompt = builder.build(agent="codex", history=[{"role": "human", "content": "o cabeçalho sumiu"}])
+
+    debug_block = _extract_block(prompt, "debug_state")
+    assert debug_block.startswith("Logs: /tmp/test/data/logs/render/render.jsonl (jsonl)")
+    assert "`tui_screenshot`" in debug_block
+    assert "/tmp/test/data/logs/render/screenshots" in debug_block
+    assert "tui_scroll_clamped" in debug_block
+    assert "tui_resize" in debug_block
+    assert "Stream ANSI" not in debug_block
+    assert "queue_depth" not in debug_block
+    assert "<!--" not in debug_block
+    assert "Counter" in debug_block
+
+
+def test_prompt_ignores_tui_screenshot_flag_without_render_debug():
+    """A tool só é anunciada dentro do bloco de debug."""
+    session_state = {
+        "session_id": "test-session",
+        "current_job_id": 123,
+        "workspace_root": "/tmp/test",
+        "current_dir": ".",
+        "render_debug_active": False,
+        "tui_screenshot_available": True,
+        "render_screenshots_dir": "/tmp/test/data/logs/render/screenshots",
+    }
+
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        session_state=session_state,
+        user_name="ALEX",
+    )
+
+    prompt = builder.build(agent="codex", history=[{"role": "human", "content": "pedido"}])
+
+    assert "tui_screenshot" not in prompt
+    assert "screenshots" not in prompt
 
 
 def test_prompt_omits_render_debug_block_when_inactive():

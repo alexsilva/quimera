@@ -75,6 +75,7 @@ from ...tasks.classifiers import classify_task_review_result
 from ...tasks.executor import create_executor
 from ...tasks.services import AppTaskServices
 from ...tasks.repository import TaskRepository
+from ...runtime.tools.tui import TuiScreenshotProvider
 from ...ui import RenderAuditLogger, TerminalRenderer
 
 
@@ -177,6 +178,15 @@ def _release_tasks_fn(workspace):
         _runtime_tasks.release_agent_tasks(name, db_path=str(workspace.tasks_db))
     return _fn
 
+
+
+def _renderer_supports_screenshot(renderer) -> bool:
+    """True só para renderers que declaram ``supports_screenshot = True``.
+
+    Comparação estrita: fakes com ``__getattr__`` permissivo devolvem um
+    callable (truthy) para qualquer atributo.
+    """
+    return getattr(renderer, "supports_screenshot", False) is True
 
 class AppAssembler:
     """Constrói os colaboradores de `QuimeraApp` em seis fases fixas."""
@@ -307,9 +317,6 @@ class AppAssembler:
     # ------------------------------------------------------------------
 
     def _build_ui(self, opts: AppOptions, app, plat: PlatformBundle) -> UiBundle:
-        render_audit_logger = (
-            RenderAuditLogger(plat.render_log_path, plat.render_ansi_path) if opts.debug else None
-        )
         if opts.renderer_override is not None:
             renderer = opts.renderer_override
             # O renderer externo (Textual) nasce com o tema default; sem este
@@ -321,12 +328,23 @@ class AppAssembler:
             density = getattr(plat.config, "density", None)
             if callable(set_density) and density:
                 set_density(density)
+            # O audit de render nascia aqui e era entregue só ao renderer
+            # clássico: no Textual o jsonl da sessão ficava em 0 bytes. O
+            # Textual escreve no terminal pelo driver próprio, então só os
+            # eventos estruturados existem nesse modo (sem stream ANSI).
+            set_audit_logger = getattr(renderer, "set_audit_logger", None)
+            if opts.debug and callable(set_audit_logger):
+                set_audit_logger(RenderAuditLogger(plat.render_log_path))
         else:
             renderer = TerminalRenderer(
                 theme=plat.active_theme,
                 get_profile_style=app._resolve_profile_style,
                 density=plat.config.density,
-                audit_logger=render_audit_logger,
+                audit_logger=(
+                    RenderAuditLogger(plat.render_log_path, plat.render_ansi_path)
+                    if opts.debug
+                    else None
+                ),
             )
         agent_run_sink = AgentRunController(renderer)
         event_sink = EventSink()
@@ -602,6 +620,9 @@ class AppAssembler:
         previous_current_job_id_env = os.environ.get("QUIMERA_CURRENT_JOB_ID")
         os.environ["QUIMERA_CURRENT_JOB_ID"] = str(current_job_id)
 
+        tui_screenshot_available = bool(
+            opts.debug and _renderer_supports_screenshot(opts.renderer_override)
+        )
         prompt_session_state = {
             "session_id": session_state["session_id"],
             "is_new_session": app._format_yes_no(is_new_session),
@@ -614,7 +635,19 @@ class AppAssembler:
             "os_info": f"{platform_info.system()} {platform_info.release()}",
             "render_debug_active": opts.debug,
             "render_log_path": str(plat.render_log_path) if opts.debug else "",
-            "render_ansi_path": str(plat.render_ansi_path) if opts.debug else "",
+            # O stream ANSI só existe no renderer clássico; a TUI Textual
+            # oferece a tool tui_screenshot no lugar.
+            "render_ansi_path": (
+                str(plat.render_ansi_path)
+                if opts.debug and opts.renderer_override is None
+                else ""
+            ),
+            "tui_screenshot_available": tui_screenshot_available,
+            "render_screenshots_dir": (
+                str(plat.session_paths.render_screenshots_dir)
+                if tui_screenshot_available
+                else ""
+            ),
             "metrics_path": str(plat.metrics_file) if plat.metrics_file else "",
             "app_log_path": (
                 str(plat.app_log_path)
@@ -1001,6 +1034,17 @@ class AppAssembler:
         tasks.tool_executor.set_agent_cleanup_callback(app._cleanup_sub_agent_stream)
         tasks.tool_executor.set_ask_user_fn(ui.input_broker.request_ask_user)
         tasks.tool_executor.set_update_state_fn(rt.protocol.apply_state_update)
+        # tui_screenshot só existe com --debug e um renderer que captura a
+        # tela (Textual); sem o provider a tool fica fora do catálogo.
+        if rt.debug_prompt_metrics and _renderer_supports_screenshot(ui.renderer):
+            tasks.tool_executor.set_tui_screenshot_provider(
+                TuiScreenshotProvider(
+                    capture=ui.renderer.capture_screenshot,
+                    output_dir=plat.session_paths.render_screenshots_dir,
+                    session_id=plat.session_id,
+                    log_event=ui.renderer.log_debug_event,
+                )
+            )
         app.lifecycle = AppLifecycle(app)
         app.lifecycle.start()
         ui.input_gate.set_toolbar_context_resolver(chat.toolbar_coordinator.build_input_toolbar_context)
