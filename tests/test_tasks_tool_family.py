@@ -203,28 +203,144 @@ def test_tasks_list_without_filters_defaults_to_current_job(tmp_path, monkeypatc
     assert not seen, "sem job atual e sem filtro o banco não é consultado"
 
 
-def test_jobs_list_returns_newest_first_and_caps_by_limit(tmp_path, monkeypatch):
-    """``jobs_list`` devolve do mais recente ao mais antigo, no máximo ``limit`` (padrão 20)."""
+def _page(result):
+    """Decodifica o envelope paginado do ``content``."""
+    assert result.ok is True, result.error
+    payload = json.loads(result.content)
+    assert set(payload) == {"items", "total", "offset", "limit", "next_offset"}
+    return payload
+
+
+def test_jobs_list_paginates_newest_first_with_limit_and_offset(tmp_path, monkeypatch):
+    """``jobs_list`` pagina por ``limit``/``offset`` do mais recente ao mais antigo (pedido de ALEX, 2026-10-12)."""
     job_tools = JobTools(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
     rows = [{"id": i} for i in range(1, 31)]  # repositório: updated_at ASC
     monkeypatch.setattr(tasks_tools, "_list_jobs", lambda filt, db_path=None: list(rows))
 
-    result = job_tools.jobs_list(ToolCall(name="jobs_list", arguments={}))
+    first = _page(job_tools.jobs_list(ToolCall(name="jobs_list", arguments={})))
+    assert [job["id"] for job in first["items"]] == list(range(30, 10, -1))
+    assert (first["total"], first["offset"], first["limit"], first["next_offset"]) == (30, 0, 20, 20)
 
-    assert result.ok is True
-    assert [job["id"] for job in json.loads(result.content)] == list(range(30, 10, -1))
-    assert result.truncated is True
+    second = _page(job_tools.jobs_list(ToolCall(name="jobs_list", arguments={"offset": first["next_offset"]})))
+    assert [job["id"] for job in second["items"]] == list(range(10, 0, -1))
+    assert second["next_offset"] is None
 
-    result = job_tools.jobs_list(ToolCall(name="jobs_list", arguments={"limit": 50}))
-    assert len(json.loads(result.content)) == 30
-    assert result.truncated is False
+    full = _page(job_tools.jobs_list(ToolCall(name="jobs_list", arguments={"limit": 50})))
+    assert len(full["items"]) == 30 and full["next_offset"] is None
 
-    result = job_tools.jobs_list(ToolCall(name="jobs_list", arguments={"limit": 1}))
-    assert [job["id"] for job in json.loads(result.content)] == [30]
+    single = _page(job_tools.jobs_list(ToolCall(name="jobs_list", arguments={"limit": 1, "offset": 3})))
+    assert [job["id"] for job in single["items"]] == [27]
+    assert single["next_offset"] == 4
 
+
+def test_list_pages_chain_without_gaps_and_truncated_mirrors_next_offset(tmp_path, monkeypatch):
+    """Seguindo ``next_offset`` até ``null`` percorre tudo sem repetir nem pular; ``truncated``/``data`` acompanham."""
+    job_tools = JobTools(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    rows = [{"id": i} for i in range(1, 8)]
+    monkeypatch.setattr(tasks_tools, "_list_jobs", lambda filt, db_path=None: list(rows))
+
+    seen: list[int] = []
+    offset, pages = 0, 0
+    while offset is not None:
+        result = job_tools.jobs_list(ToolCall(name="jobs_list", arguments={"limit": 3, "offset": offset}))
+        page = _page(result)
+        assert result.truncated is (page["next_offset"] is not None)
+        assert result.data == {k: page[k] for k in ("total", "offset", "limit", "next_offset")}
+        seen.extend(job["id"] for job in page["items"])
+        offset = page["next_offset"]
+        pages += 1
+
+    assert seen == [7, 6, 5, 4, 3, 2, 1]
+    assert pages == 3
+
+    beyond = job_tools.jobs_list(ToolCall(name="jobs_list", arguments={"offset": 99}))
+    page = _page(beyond)
+    assert page["items"] == [] and page["total"] == 7 and page["next_offset"] is None
+    assert beyond.truncated is False
+
+
+def test_tasks_list_paginates_newest_first_and_enriches_only_the_page(tmp_path, monkeypatch):
+    """``tasks_list`` usa a mesma mecânica e só anexa ``live`` às tasks da página devolvida."""
+    tools = TaskTools(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    rows = [{"id": i, "status": "completed", "origin": "delegate", "body": ""} for i in range(1, 26)]
+    monkeypatch.setattr(tasks_tools, "_list_tasks", lambda filt, db_path=None: list(rows))
+    enriched: list[int] = []
+
+    def attach(task):
+        enriched.append(task["id"])
+        return task
+
+    monkeypatch.setattr(tools, "_attach_live_delegation", attach)
+
+    first = _page(tools.tasks_list(ToolCall(name="tasks_list", arguments={"job_id": 3, "limit": 10})))
+    assert [task["id"] for task in first["items"]] == list(range(25, 15, -1))
+    assert first["next_offset"] == 10 and first["total"] == 25
+    assert enriched == list(range(25, 15, -1)), "live só é consultado para a página devolvida"
+
+    last = _page(tools.tasks_list(ToolCall(name="tasks_list", arguments={"job_id": 3, "limit": 10, "offset": 20})))
+    assert [task["id"] for task in last["items"]] == [5, 4, 3, 2, 1]
+    assert last["next_offset"] is None
+
+
+def test_page_metadata_precedes_items_and_survives_content_truncation(tmp_path, monkeypatch):
+    """Metadados vêm antes de ``items``: o prefixo que sobrevive ao corte do harness ainda traz next_offset (revisão task 102)."""
+    job_tools = JobTools(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    rows = [{"id": i, "description": "x" * 4_000} for i in range(1, 31)]
+    monkeypatch.setattr(tasks_tools, "_list_jobs", lambda filt, db_path=None: list(rows))
+
+    result = job_tools.jobs_list(ToolCall(name="jobs_list", arguments={"limit": 10}))
+
+    assert result.content.startswith('{"total": 30, "offset": 0, "limit": 10, "next_offset": 10, "items": [')
+    clipped = result.to_prompt_payload(2_000)
+    assert clipped["truncated"] is True
+    assert '"next_offset": 10' in clipped["content"][:120]
+
+
+def test_page_bounds_report_non_integer_arguments_clearly(tmp_path, monkeypatch):
+    """Fora da policy, ``limit``/``offset`` não inteiros viram erro legível, não ``invalid literal``."""
+    job_tools = JobTools(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
+    monkeypatch.setattr(tasks_tools, "_list_jobs", lambda filt, db_path=None: [])
+
+    result = job_tools.jobs_list(ToolCall(name="jobs_list", arguments={"offset": "abc"}))
+
+    assert result.ok is False
+    assert result.error == "'offset' deve ser inteiro, recebido 'abc'"
+
+
+def test_list_limit_is_clamped_by_runtime_ceiling(tmp_path, monkeypatch):
+    """O teto ``max_list_results`` vale nas duas listagens mesmo sem passar pela policy."""
+    config = ToolRuntimeConfig(workspace=Workspace(tmp_path), max_list_results=5)
+    rows = [{"id": i, "status": "completed", "origin": "human", "body": ""} for i in range(1, 13)]
+    monkeypatch.setattr(tasks_tools, "_list_jobs", lambda filt, db_path=None: list(rows))
+    monkeypatch.setattr(tasks_tools, "_list_tasks", lambda filt, db_path=None: list(rows))
+
+    jobs = _page(JobTools(config).jobs_list(ToolCall(name="jobs_list", arguments={"limit": 500})))
+    tasks = _page(TaskTools(config).tasks_list(ToolCall(name="tasks_list", arguments={"job_id": 1, "limit": 0, "offset": -4})))
+
+    assert (len(jobs["items"]), jobs["limit"], jobs["next_offset"]) == (5, 5, 5), "acima do teto cai no teto"
+    assert (len(tasks["items"]), tasks["limit"], tasks["offset"]) == (1, 1, 0), "abaixo do piso cai em 1/0"
+
+
+def test_list_validators_reject_bad_limit_and_offset(tmp_path, monkeypatch):
+    """``limit`` inteiro >= 1 e ``offset`` inteiro >= 0 nas duas tools; ausentes são aceitos."""
+    monkeypatch.setenv("QUIMERA_CURRENT_JOB_ID", "1")
     validator = TaskToolsValidator(ToolRuntimeConfig(workspace=Workspace(tmp_path)))
-    for bad in (0, -1, True, "5"):
-        with pytest.raises(ToolPolicyError, match="jobs_list requer 'limit' inteiro positivo"):
-            validator.validate(ToolCall(name="jobs_list", arguments={"limit": bad}))
-    validator.validate(ToolCall(name="jobs_list", arguments={"limit": 5}))
-    validator.validate(ToolCall(name="jobs_list", arguments={}))
+    for tool in ("jobs_list", "tasks_list"):
+        for bad in (0, -1, True, "5", 2.5):
+            with pytest.raises(ToolPolicyError, match=f"{tool} requer 'limit' inteiro positivo"):
+                validator.validate(ToolCall(name=tool, arguments={"limit": bad}))
+        for bad in (-1, False, "0", 1.5):
+            with pytest.raises(ToolPolicyError, match=f"{tool} requer 'offset' inteiro não negativo"):
+                validator.validate(ToolCall(name=tool, arguments={"offset": bad}))
+        validator.validate(ToolCall(name=tool, arguments={"limit": 5, "offset": 0}))
+        validator.validate(ToolCall(name=tool, arguments={}))
+
+
+def test_list_schemas_publish_pagination_contract():
+    """Catálogo expõe ``limit``/``offset`` e descreve o envelope nas duas listagens."""
+    by_name = {schema["function"]["name"]: schema["function"] for schema in TOOL_SCHEMAS}
+    for tool in ("tasks_list", "jobs_list"):
+        params = by_name[tool]["parameters"]["properties"]
+        assert (params["limit"]["type"], params["limit"]["minimum"]) == ("integer", 1)
+        assert (params["offset"]["type"], params["offset"]["minimum"]) == ("integer", 0)
+        assert "next_offset" in by_name[tool]["description"]

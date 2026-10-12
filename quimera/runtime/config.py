@@ -47,7 +47,7 @@ class ToolRuntimeConfig:
     max_output_chars: int = 1_000_000
     max_file_read_chars: int = 20_000
     max_search_results: int = 100
-    max_task_results: int = 500
+    max_list_results: int = 100  # teto de itens por página em tasks_list/jobs_list
     require_approval_for_mutations: bool = True
     require_approval_for_task_creation: bool = True
     allow_ask_user: bool = True

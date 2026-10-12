@@ -681,13 +681,13 @@ class TaskToolsCoverageTests(unittest.TestCase):
         """Verifica que Test list jobs tasks and get job paths."""
         with patch("quimera.runtime.tools.tasks._list_tasks", return_value=[{"id": 1}]):
             tasks = self.tools.tasks_list(ToolCall(name="tasks_list", arguments={"status": "approved"}))
-        self.assertEqual(json.loads(tasks.content), [{"id": 1}])
+        self.assertEqual(json.loads(tasks.content)["items"], [{"id": 1}])
         with patch("quimera.runtime.tools.tasks._list_tasks", side_effect=RuntimeError("boom")):
             failed_tasks = self.tools.tasks_list(ToolCall(name="tasks_list", arguments={}))
         self.assertFalse(failed_tasks.ok)
         with patch("quimera.runtime.tools.tasks._list_jobs", return_value=[{"id": 2}]):
             jobs = self.job_tools.jobs_list(ToolCall(name="jobs_list", arguments={"status": "planning"}))
-        self.assertEqual(json.loads(jobs.content), [{"id": 2}])
+        self.assertEqual(json.loads(jobs.content)["items"], [{"id": 2}])
         with patch("quimera.runtime.tools.tasks._list_jobs", side_effect=RuntimeError("boom")):
             failed_jobs = self.job_tools.jobs_list(ToolCall(name="jobs_list", arguments={}))
         self.assertFalse(failed_jobs.ok)

@@ -6,11 +6,19 @@ Família ``tasks_*`` — verbos sobre o recurso task:
   roteador escolhe o executor e outro agente revisa);
 - ``tasks_delegate``: delegação a um alvo explícito, sem fila nem revisão
   (implementada em ``delegate.py``);
-- ``tasks_list``: lista tasks com filtros;
+- ``tasks_list``: lista tasks com filtros, paginadas;
 - ``tasks_cancel``: cancela uma delegação em execução.
 
 Jobs são outro substantivo e têm família própria ``jobs_*`` (``jobs_list``,
 ``jobs_get``), implementada aqui por ``JobTools``.
+
+As duas listagens devolvem do mais recente ao mais antigo e paginam por
+``limit``/``offset`` (ver ``_paginate``): o ``content`` é um envelope
+``{"total", "offset", "limit", "next_offset", "items": [...]}``, porque o
+payload de tool enviado ao modelo pelo harness nativo não inclui ``data`` e o
+agente precisa enxergar a posição da página em qualquer transporte. Os
+metadados vêm antes de ``items`` para sobreviver ao truncamento de ``content``
+por tamanho (harness nativo e clientes MCP cortam a cauda de resultados grandes).
 """
 from __future__ import annotations
 
@@ -31,7 +39,7 @@ from ...tasks.api import (
 from ._helpers import resolve_current_job_id
 from .base import ToolBase, ValidatableTool
 
-JOBS_LIST_DEFAULT_LIMIT = 20
+LIST_DEFAULT_LIMIT = 20
 TASKS_LIST_FILTER_HINT = (
     "tasks_list sem filtro lista o job atual, mas nenhum job atual está definido; "
     "informe job_id, status, assigned_to ou id"
@@ -42,6 +50,76 @@ logger = logging.getLogger(__name__)
 _TASK_TOOL_NAMES = ["tasks_create", "tasks_list", "tasks_cancel"]
 _JOB_TOOL_NAMES = ["jobs_list", "jobs_get"]
 _LIVE_THINKING_MAX_CHARS = 400
+
+
+def _page_bounds(arguments: dict, *, max_limit: int) -> tuple[int, int]:
+    """Lê ``limit``/``offset`` (já validados pela policy) e aplica o teto do runtime.
+
+    O clamp fica aqui, e não só no validador, porque o handler pode ser chamado
+    sem passar pela policy (testes, chamadas internas) e o teto protege o
+    contexto do agente em qualquer caminho.
+    """
+    limit = _int_arg(arguments, "limit", LIST_DEFAULT_LIMIT)
+    offset = _int_arg(arguments, "offset", 0)
+    ceiling = max(1, int(max_limit))
+    return max(1, min(limit, ceiling)), max(0, offset)
+
+
+def _int_arg(arguments: dict, key: str, default: int) -> int:
+    """Converte um argumento inteiro opcional com erro legível em vez do ``ValueError`` cru."""
+    raw = arguments.get(key)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"'{key}' deve ser inteiro, recebido {raw!r}") from exc
+
+
+def _paginate(items: list, *, limit: int, offset: int) -> tuple[list, dict]:
+    """Recorta a página ``[offset, offset+limit)`` e descreve sua posição no total.
+
+    ``next_offset`` é o ``offset`` da página seguinte, ou ``None`` na última;
+    o agente só precisa repassá-lo na próxima chamada.
+    """
+    total = len(items)
+    page = items[offset:offset + limit]
+    end = offset + len(page)
+    meta = {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "next_offset": end if end < total else None,
+    }
+    return page, meta
+
+
+def _page_result(call: ToolCall, page: list, meta: dict) -> ToolResult:
+    """Monta o resultado paginado: envelope no ``content``, metadados também em ``data``.
+
+    ``meta`` vai antes de ``items`` de propósito: ``ToolResult.to_prompt_payload``
+    corta ``content`` acima de ``max_chars`` e um cliente MCP mostra só o começo de
+    resultados grandes; ``next_offset`` precisa estar no prefixo que sobrevive.
+    """
+    return ToolResult(
+        ok=True,
+        tool_name=call.name,
+        content=json.dumps({**meta, "items": page}),
+        truncated=meta["next_offset"] is not None,
+        data=dict(meta),
+    )
+
+
+def _validate_page_args(tool_name: str, arguments: dict) -> None:
+    """``limit`` (>= 1) e ``offset`` (>= 0), quando informados, são inteiros."""
+    limit = arguments.get("limit")
+    if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or limit < 1):
+        raise ToolPolicyError(f"{tool_name} requer 'limit' inteiro positivo")
+    offset = arguments.get("offset")
+    if offset is not None and (
+        not isinstance(offset, int) or isinstance(offset, bool) or offset < 0
+    ):
+        raise ToolPolicyError(f"{tool_name} requer 'offset' inteiro não negativo")
 
 
 def _live_excerpt(value) -> str:
@@ -344,10 +422,11 @@ class TaskTools(
         return enriched
 
     def tasks_list(self, call: ToolCall) -> ToolResult:
-        """Lista tasks com filtros (job_id, status, assigned_to, id ou filters).
+        """Lista tasks com filtros (job_id, status, assigned_to, id ou filters), paginadas.
 
         Sem nenhum filtro, lista as tasks do job atual (``QUIMERA_CURRENT_JOB_ID``);
         fora de um job a chamada sem filtro é recusada para não varrer o banco inteiro.
+        O repositório devolve em ``id`` crescente; a página 0 traz as mais recentes.
         """
         filt = self._build_filters(call.arguments)
         if not filt:
@@ -356,16 +435,11 @@ class TaskTools(
                 return ToolResult(ok=False, tool_name=call.name, error=TASKS_LIST_FILTER_HINT)
             filt = {"job_id": current_job_id}
         try:
-            tasks = _list_tasks(filt, db_path=self.workspace.tasks_db)
-            max_results = int(call.arguments.get("max_results", self.config.max_task_results))
-            truncated = len(tasks) > max_results
-            tasks = [self._attach_live_delegation(task) for task in tasks[:max_results]]
-            return ToolResult(
-                ok=True,
-                tool_name=call.name,
-                content=json.dumps(tasks),
-                truncated=truncated,
-            )
+            tasks = list(reversed(_list_tasks(filt, db_path=self.workspace.tasks_db)))
+            limit, offset = _page_bounds(call.arguments, max_limit=self.config.max_list_results)
+            page, meta = _paginate(tasks, limit=limit, offset=offset)
+            page = [self._attach_live_delegation(task) for task in page]
+            return _page_result(call, page, meta)
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
@@ -390,7 +464,7 @@ class JobTools(ToolBase, tool_prefix="jobs"):
         return job_id
 
     def jobs_list(self, call: ToolCall) -> ToolResult:
-        """Lista jobs do mais recente ao mais antigo, no máximo ``limit`` (padrão 20).
+        """Lista jobs do mais recente ao mais antigo, paginados por ``limit``/``offset``.
 
         O repositório devolve em ordem crescente de ``updated_at``; sem corte, uma
         sessão longa devolve centenas de jobs e estoura o orçamento de qualquer modelo.
@@ -400,18 +474,11 @@ class JobTools(ToolBase, tool_prefix="jobs"):
             value = call.arguments.get(key)
             if value is not None:
                 filt[key] = value
-        raw_limit = call.arguments.get("limit")
         try:
-            limit = JOBS_LIST_DEFAULT_LIMIT if raw_limit is None else max(1, int(raw_limit))
-            jobs = _list_jobs(filt, db_path=self.workspace.tasks_db)
-            jobs.reverse()
-            truncated = len(jobs) > limit
-            return ToolResult(
-                ok=True,
-                tool_name=call.name,
-                content=json.dumps(jobs[:limit]),
-                truncated=truncated,
-            )
+            jobs = list(reversed(_list_jobs(filt, db_path=self.workspace.tasks_db)))
+            limit, offset = _page_bounds(call.arguments, max_limit=self.config.max_list_results)
+            page, meta = _paginate(jobs, limit=limit, offset=offset)
+            return _page_result(call, page, meta)
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
@@ -452,7 +519,8 @@ class TaskToolsValidator(ValidatableTool):
             raise ToolPolicyError("tasks_cancel requer 'task_id' inteiro")
 
     def _validate_tasks_list(self, call: ToolCall) -> None:
-        """Sem filtro só é aceito dentro de um job atual; evita varredura do banco inteiro."""
+        """Sem filtro só é aceito dentro de um job atual; ``limit``/``offset`` são inteiros."""
+        _validate_page_args("tasks_list", call.arguments)
         filt = call.arguments.get("filters") or {}
         has_top_level_filter = any(
             call.arguments.get(k) is not None
@@ -463,12 +531,8 @@ class TaskToolsValidator(ValidatableTool):
             raise ToolPolicyError(TASKS_LIST_FILTER_HINT)
 
     def _validate_jobs_list(self, call: ToolCall) -> None:
-        """Filtros são opcionais; ``limit``, quando informado, é inteiro positivo."""
-        limit = call.arguments.get("limit")
-        if limit is None:
-            return
-        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
-            raise ToolPolicyError("jobs_list requer 'limit' inteiro positivo")
+        """Filtros são opcionais; ``limit``/``offset``, quando informados, são inteiros."""
+        _validate_page_args("jobs_list", call.arguments)
 
     def _validate_jobs_get(self, call: ToolCall) -> None:
         """jobs_get não exige job_id obrigatório (usa fallback)."""

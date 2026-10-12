@@ -344,7 +344,7 @@ class ExecutorTests(unittest.TestCase):
         result = ex.execute(ToolCall(name="tasks_list", arguments={"job_id": job_id, "status": "proposed"}))
 
         self.assertTrue(result.ok)
-        payload = json.loads(result.content)
+        payload = json.loads(result.content)["items"]
         self.assertEqual([task["id"] for task in payload], [task_id])
 
     def test_propose_task_via_executor_is_blocked(self):
@@ -430,7 +430,7 @@ class ExecutorTests(unittest.TestCase):
         result = ex.execute(ToolCall(name="jobs_list", arguments={"created_by": "alex"}))
 
         self.assertTrue(result.ok)
-        payload = json.loads(result.content)
+        payload = json.loads(result.content)["items"]
         self.assertEqual(len(payload), 1)
         self.assertEqual(payload[0]["description"], "Planejamento")
 

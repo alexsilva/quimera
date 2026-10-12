@@ -867,7 +867,7 @@ def test_list_tasks_attaches_live_thinking_for_running_delegations(mock_list, ta
     result = task_tools.tasks_list(ToolCall(name="tasks_list", arguments={"id": 7}))
 
     assert result.ok is True
-    tasks = json.loads(result.content)
+    tasks = json.loads(result.content)["items"]
     assert tasks[0]["live"] == [
         {
             "delegation_id": "dlg-1",
@@ -892,7 +892,7 @@ def test_list_tasks_limits_live_thinking_excerpt_keeping_tail(mock_list, task_to
 
     result = task_tools.tasks_list(ToolCall(name="tasks_list", arguments={"id": 7}))
 
-    excerpt = json.loads(result.content)[0]["live"][0]["last_thinking"]
+    excerpt = json.loads(result.content)["items"][0]["live"][0]["last_thinking"]
     assert excerpt.startswith("…")
     assert excerpt.endswith("FINAL")
     assert len(excerpt) == 401
@@ -910,7 +910,7 @@ def test_list_tasks_does_not_enrich_finished_or_foreign_tasks(mock_list, task_to
 
     result = task_tools.tasks_list(ToolCall(name="tasks_list", arguments={"job_id": 3}))
 
-    tasks = json.loads(result.content)
+    tasks = json.loads(result.content)["items"]
     assert all("live" not in task for task in tasks)
 
 
@@ -928,7 +928,7 @@ def test_list_tasks_survives_lookup_failure_and_bad_body(mock_list, task_tools):
     result = task_tools.tasks_list(ToolCall(name="tasks_list", arguments={"job_id": 3}))
 
     assert result.ok is True
-    assert all("live" not in task for task in json.loads(result.content))
+    assert all("live" not in task for task in json.loads(result.content)["items"])
 
 
 @patch("quimera.runtime.tools.tasks._list_tasks")
@@ -938,4 +938,4 @@ def test_list_tasks_unchanged_without_injected_lookup(mock_list, task_tools):
     result = task_tools.tasks_list(ToolCall(name="tasks_list", arguments={"id": 7}))
 
     assert result.ok is True
-    assert "live" not in json.loads(result.content)[0]
+    assert "live" not in json.loads(result.content)["items"][0]

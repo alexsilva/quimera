@@ -18,7 +18,7 @@ from quimera.runtime.tools import tasks as tasks_tools
 from quimera.runtime.tools import todo as todo_tools
 
 _EXPECTED_SCHEMA_FINGERPRINT = (
-    "c9b2688cd73524eb9c0d84421a7506b4e7533c4ea4b9762992481a886ec0979b"
+    "06cc5ffef23c0394a377c72a47c940c686d9925e5351cdf2eddc629828bb50ed"
 )
 
 

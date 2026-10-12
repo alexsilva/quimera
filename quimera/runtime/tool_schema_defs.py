@@ -100,21 +100,26 @@ TOOL_SCHEMA: dict[str, dict] = {
     },
     "tasks_list": {
         "name": "tasks_list",
-        "description": "Lista tarefas; sem filtros, as do job atual",
+        "description": "Lista tarefas, mais recentes primeiro; sem filtros, as do job atual. Pagina com limit/offset",
         "parameters": {
             "job_id": {"type": "int", "description": "Filtrar por job ID", "required": False},
             "status": {"type": "str",
                        "description": "pending|in_progress|completed|failed|cancelled|proposed|approved|rejected",
                        "required": False},
+            "limit": {"type": "int", "description": "Itens por página (padrão 20)", "required": False},
+            "offset": {"type": "int", "description": "Itens a pular; use o next_offset da página anterior",
+                       "required": False},
         },
     },
     "jobs_list": {
         "name": "jobs_list",
-        "description": "Lista jobs do mais recente ao mais antigo (padrão: 20)",
+        "description": "Lista jobs do mais recente ao mais antigo. Pagina com limit/offset",
         "parameters": {
             "status": {"type": "str", "description": "planning|active|completed|failed", "required": False},
             "created_by": {"type": "str", "description": "Filtrar por criador", "required": False},
-            "limit": {"type": "int", "description": "Máximo de jobs devolvidos (padrão 20)", "required": False},
+            "limit": {"type": "int", "description": "Itens por página (padrão 20)", "required": False},
+            "offset": {"type": "int", "description": "Itens a pular; use o next_offset da página anterior",
+                       "required": False},
         },
     },
     "jobs_get": {

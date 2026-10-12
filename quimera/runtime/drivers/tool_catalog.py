@@ -512,8 +512,13 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='tasks_list',
-        description='Lista tarefas. Sem filtros devolve as tasks do job atual; use job_id '
-                    'para outro job e status, assigned_to ou id para refinar. '
+        description='Lista tarefas, da mais recente à mais antiga, em páginas de limit itens '
+                    '(padrão 20) a partir de offset. Sem filtros devolve as tasks do job '
+                    'atual; use job_id para outro job e status, assigned_to ou id para '
+                    "refinar. O content é um objeto {total, offset, limit, next_offset, items}: "
+                    'repasse next_offset em offset para a página seguinte (null na última). '
+                    'Como offset pagina o estado no momento da chamada, alterações entre páginas '
+                    'podem deslocar itens; use next_offset como dica, não como snapshot fixo. '
                     'Tasks de delegação em execução (origin=delegate, status=in_progress) '
                     "incluem o campo 'live' com o último raciocínio (thinking) do agente "
                     'delegado — útil para acompanhar uma delegação com wait=false.',
@@ -524,16 +529,31 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                                           'in_progress, completed, failed, cancelled ou '
                                           'rejected.'},
                 'assigned_to': {'type': 'string', 'description': 'Filtrar por agente atribuído.'},
-                'id': {'type': 'integer', 'description': 'Filtrar por ID da task.'}},
+                'id': {'type': 'integer', 'description': 'Filtrar por ID da task.'},
+                'limit': {'type': 'integer', 'minimum': 1,
+                          'description': 'Itens por página, da mais recente à mais antiga. '
+                                         'Padrão: 20; acima do teto do runtime (100) é reduzido.'},
+                'offset': {'type': 'integer', 'minimum': 0,
+                           'description': 'Itens a pular antes da página; use o next_offset '
+                                          'da resposta anterior. Padrão: 0.'}},
  'required': []},
         output_schema={'type': 'object',
  'properties': {'ok': {'type': 'boolean'},
                 'content': {'type': 'string',
-                            'description': 'JSON array of TaskRecord objects; delegações '
-                                           "in_progress trazem 'live': [{delegation_id, agent, "
-                                           'status, last_thinking, last_activity?, '
-                                           'updated_seconds_ago}]'},
-                'truncated': {'type': 'boolean'},
+                            'description': 'JSON object {total, offset, limit, next_offset|null, '
+                                           'items: TaskRecord[]}, mais recente primeiro; '
+                                           "delegações in_progress trazem 'live': "
+                                           '[{delegation_id, agent, status, last_thinking, '
+                                           'last_activity?, updated_seconds_ago}]'},
+                'truncated': {'type': 'boolean',
+                              'description': 'true quando há página seguinte (next_offset != null); '
+                                             'em payloads compactados também pode indicar corte de content'},
+                'data': {'type': 'object',
+                         'properties': {'total': {'type': 'integer'},
+                                        'offset': {'type': 'integer'},
+                                        'limit': {'type': 'integer'},
+                                        'next_offset': {'oneOf': [{'type': 'integer'},
+                                                                  {'type': 'null'}]}}},
                 'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
  'required': ['ok', 'content']},
     ),
@@ -567,23 +587,39 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='jobs_list',
-        description='Lista jobs de sessão do mais recente ao mais antigo, no máximo limit '
-                    '(padrão 20); truncated=true indica que há mais. Use status ou '
-                    'created_by para filtrar e jobs_get para um job específico.',
+        description='Lista jobs de sessão do mais recente ao mais antigo, em páginas de limit '
+                    'itens (padrão 20) a partir de offset. O content é um objeto {total, '
+                    'offset, limit, next_offset, items}: repasse next_offset em offset para a '
+                    'página seguinte (null na última; truncated=true enquanto houver mais). '
+                    'Como offset pagina o estado no momento da chamada, alterações entre páginas '
+                    'podem deslocar itens; use next_offset como dica, não como snapshot fixo. '
+                    'Use status ou created_by para filtrar e jobs_get para um job específico.',
         parameters={'type': 'object',
  'properties': {'status': {'type': 'string',
                            'description': 'Filtrar por status, como planning, active, completed ou '
                                           'failed.'},
                 'created_by': {'type': 'string', 'description': 'Filtrar por criador do job.'},
-                'limit': {'type': 'integer',
-                          'description': 'Máximo de jobs devolvidos, do mais recente ao mais '
-                                         'antigo. Padrão: 20.'}},
+                'limit': {'type': 'integer', 'minimum': 1,
+                          'description': 'Itens por página, do mais recente ao mais antigo. '
+                                         'Padrão: 20; acima do teto do runtime (100) é reduzido.'},
+                'offset': {'type': 'integer', 'minimum': 0,
+                           'description': 'Itens a pular antes da página; use o next_offset '
+                                          'da resposta anterior. Padrão: 0.'}},
  'required': []},
         output_schema={'type': 'object',
  'properties': {'ok': {'type': 'boolean'},
                 'content': {'type': 'string',
-                            'description': 'JSON array of JobRecord objects, mais recente primeiro'},
-                'truncated': {'type': 'boolean'},
+                            'description': 'JSON object {total, offset, limit, next_offset|null, '
+                                           'items: JobRecord[]}, mais recente primeiro'},
+                'truncated': {'type': 'boolean',
+                              'description': 'true quando há página seguinte (next_offset != null); '
+                                             'em payloads compactados também pode indicar corte de content'},
+                'data': {'type': 'object',
+                         'properties': {'total': {'type': 'integer'},
+                                        'offset': {'type': 'integer'},
+                                        'limit': {'type': 'integer'},
+                                        'next_offset': {'oneOf': [{'type': 'integer'},
+                                                                  {'type': 'null'}]}}},
                 'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
  'required': ['ok', 'content']},
     ),
