@@ -635,6 +635,16 @@ class TaskExecutorPool:
         background_agent_client.tool_executor = self._build_background_tool_executor()
         if background_agent_client.tool_executor is None:
             return None
+        # Drivers de API executam tools neste executor. Sem a fiação de
+        # delegação do executor primário, um agente delegado por API não
+        # enxerga `delegate`/`tasks` (live teste 4, 2026-10-12: claudecloud-sonnet
+        # delegado não encontrou a tool), enquanto CLIs a têm via MCP.
+        primary_wiring = getattr(
+            getattr(chat_agent_client, "tool_executor", None), "_wiring", None
+        )
+        apply_delegation = getattr(primary_wiring, "apply_delegation_to", None)
+        if callable(apply_delegation):
+            apply_delegation(background_agent_client.tool_executor)
         if execution_mode_override is not None:
             policy = getattr(background_agent_client.tool_executor, "policy", None)
             if policy is not None:

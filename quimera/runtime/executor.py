@@ -75,6 +75,32 @@ class ToolExecutorWiring:
             if value is not None:
                 getattr(executor, setter_name)(value)
 
+    # Subconjunto que torna delegate/tasks/list_agents operáveis. Fica fora
+    # tudo que é escopo do chat (cancel_checker, ask_user, preview/progress),
+    # que não pode vazar para um executor isolado.
+    _DELEGATION_SETTERS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("delegate_fn", "set_delegate_fn"),
+        ("background_delegate_fn", "set_background_delegate_fn"),
+        ("task_create_fn", "set_task_create_fn"),
+        ("delegation_run_lookup", "set_delegation_run_lookup"),
+        ("active_agents_provider", "set_active_agents_provider"),
+        ("agent_stats_provider", "set_agent_stats_provider"),
+        ("orchestrator_provider", "set_orchestrator_provider"),
+    )
+
+    def apply_delegation_to(self, executor: "ToolExecutor") -> None:
+        """Reaplica só a fiação de delegação em um executor isolado.
+
+        Drivers de API (claudecloud, codexcloud) executam tools no executor
+        do próprio AgentClient. Um delegado criado com executor nu não enxerga
+        ``delegate``/``tasks`` — ao contrário dos CLIs, que chegam ao executor
+        primário pelo servidor MCP compartilhado — e não consegue subdelegar.
+        """
+        for attribute, setter_name in self._DELEGATION_SETTERS:
+            value = getattr(self, attribute)
+            if value is not None:
+                getattr(executor, setter_name)(value)
+
 
 class ToolExecutor:
     """Executa chamadas estruturadas de ferramentas com validação e aprovação."""

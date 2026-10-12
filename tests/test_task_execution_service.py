@@ -458,6 +458,83 @@ def test_background_dispatches_get_isolated_tool_executors(tmp_path):
     assert first._tool_executor_override.approval_handler is not second._tool_executor_override.approval_handler
 
 
+def test_background_dispatch_inherits_delegation_wiring_from_chat_executor(tmp_path):
+    """Driver de API delegado precisa enxergar `delegate`, como os CLIs via MCP.
+
+    Live teste 4 (2026-10-12): claudecloud-sonnet delegado não encontrava a
+    tool delegate — o executor de background nascia nu, sem delegate_fn. Só a
+    fiação de delegação é copiada; callbacks de chat (cancel_checker, ask_user)
+    não podem vazar para o escopo isolado.
+    """
+    from unittest.mock import MagicMock
+
+    from quimera.runtime.config import ToolRuntimeConfig
+    from quimera.runtime.executor import ToolExecutor
+    from quimera.workspace import Workspace
+
+    primary = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), MagicMock())
+
+    def delegate_fn(agent, **opts):
+        return "ok"
+
+    def task_create_fn(*args, **kwargs):
+        return {"task_id": 1}
+
+    def chat_cancel_checker():
+        return True
+
+    primary.set_delegate_fn(delegate_fn)
+    primary.set_background_delegate_fn(delegate_fn)
+    primary.set_task_create_fn(task_create_fn)
+    primary.set_cancel_checker(chat_cancel_checker)
+
+    app = type("App", (), {})()
+    app.renderer = object()
+    app.agent_client = type(
+        "ChatClient", (), {"idle_timeout": 45, "tool_executor": primary}
+    )()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
+    app.visibility = "summary"
+    app.auto_approve_mutations = False
+
+    services = build_task_services(app)
+    dispatch = services._create_background_dispatch_services()
+
+    assert dispatch is not None
+    background = dispatch._tool_executor_override
+    assert background is not primary
+    assert background.is_delegate_available()
+    assert background._wiring.delegate_fn is delegate_fn
+    assert background._wiring.background_delegate_fn is delegate_fn
+    assert background._wiring.task_create_fn is task_create_fn
+    assert background._wiring.cancel_checker is None
+    assert background._wiring.ask_user_fn is None
+
+
+def test_background_dispatch_without_primary_wiring_keeps_working(tmp_path):
+    """Chat client sem tool_executor (ou sem _wiring) não quebra o dispatch."""
+    app = type("App", (), {})()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45, "tool_executor": object()})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
+    app.visibility = "summary"
+    app.auto_approve_mutations = False
+
+    services = build_task_services(app)
+    dispatch = services._create_background_dispatch_services()
+
+    assert dispatch is not None
+    assert dispatch._tool_executor_override.is_delegate_available() is False
+
+
 def test_task_tool_auto_approval_scope_applies_to_any_background_agent():
     """Tasks em background devem autorizar tools sem depender do driver do agente."""
     app = type("App", (), {})()
