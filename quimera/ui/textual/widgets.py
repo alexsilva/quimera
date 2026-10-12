@@ -55,6 +55,27 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
         # Rolar para cima solta a âncora; voltar ao fim reengata sozinho.
         self.anchor()
 
+    def set_reactive(self, reactive, value) -> None:
+        """Clampa o scroll vertical que o compositor grava sem validar.
+
+        Com o feed ancorado, o compositor do Textual recola o scroll no fim a
+        cada reflow calculando ``fundo_do_conteúdo - altura_do_container`` e
+        gravando o resultado com ``set_reactive``, que pula ``validate_scroll_y``.
+        Quando o conteúdo é mais baixo que a janela (logo após o boot, depois
+        de ``/clear`` ou quando o terminal cresce ao ocultar o teclado virtual),
+        o valor sai negativo e o conteúdo inteiro desce: o cabeçalho fica colado
+        ao fundo do feed, com espaço vazio em cima. Corrigir depois não adianta,
+        porque o reflow seguinte recalcula e grava o negativo de novo. Clampar
+        no ponto de escrita mantém a âncora nativa e o conteúdo no topo.
+
+        Verificado no Textual 8.2.8 (e ainda assim no ``main`` do upstream em
+        2026-10): se o compositor passar a validar o valor, este override vira
+        código morto e pode sair; os testes de regressão acusam se faltar.
+        """
+        if reactive.name in ("scroll_y", "scroll_target_y") and value < 0:
+            value = 0
+        super().set_reactive(reactive, value)
+
     def sync_entries(
         self,
         entries: Iterable[tuple[int, bool, object, bool]],

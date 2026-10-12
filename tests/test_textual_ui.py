@@ -6385,6 +6385,126 @@ def test_textual_unified_feed_keeps_boot_slots_mounted_when_chat_is_cleared():
     asyncio.run(run_test())
 
 
+def test_textual_unified_feed_keeps_short_content_at_the_top_while_anchored():
+    """Conteúdo mais baixo que a janela fica no topo, mesmo com o feed ancorado.
+
+    O compositor do Textual recola a âncora gravando ``scroll_y`` com
+    ``set_reactive`` (sem ``validate_scroll_y``); com conteúdo curto o valor
+    saía negativo e o cabeçalho descia até o fundo do feed, com espaço vazio
+    em cima: no boot em terminal alto, depois de ``/clear`` e quando o
+    terminal cresce ao ocultar o teclado virtual.
+    """
+    from textual.app import App, ComposeResult
+
+    class FeedApp(App):
+        def compose(self) -> ComposeResult:
+            yield _UnifiedFeed(id="feed")
+
+    def entries(chat: int):
+        boot = [(index, False, f"boot {index}", True) for index in range(5)]
+        return boot + [(100 + index, False, f"chat {index}", True) for index in range(chat)]
+
+    async def run_test() -> None:
+        app = FeedApp()
+        async with app.run_test(size=(60, 30)) as pilot:
+            feed = app.query_one("#feed", _UnifiedFeed)
+            assert feed.is_anchored
+
+            # Boot em terminal alto: só o cabeçalho, bem mais baixo que a janela.
+            feed.sync_entries(entries(chat=0))
+            await pilot.pause()
+            await pilot.pause()
+            assert feed.scroll_y == 0
+            assert feed.children[0].region.y == feed.content_region.y
+
+            # A âncora continua seguindo o fim quando o chat passa da janela.
+            feed.sync_entries(entries(chat=60))
+            await pilot.pause()
+            await pilot.pause()
+            assert feed.scroll_y == feed.max_scroll_y > 0
+
+            # /clear: só o cabeçalho de novo, no topo e não no fundo.
+            feed.sync_entries(entries(chat=0))
+            await pilot.pause()
+            await pilot.pause()
+            assert feed.scroll_y == 0
+            assert feed.children[0].region.y == feed.content_region.y
+
+            # Teclado virtual: a janela encolhe e volta a crescer com o mesmo
+            # conteúdo curto; o cabeçalho permanece no topo nos dois sentidos.
+            await pilot.resize_terminal(60, 8)
+            await pilot.pause()
+            await pilot.pause()
+            assert feed.scroll_y == 0
+            assert feed.children[0].region.y == feed.content_region.y
+
+            await pilot.resize_terminal(60, 40)
+            await pilot.pause()
+            await pilot.pause()
+            assert feed.scroll_y == 0
+            assert feed.children[0].region.y == feed.content_region.y
+
+    asyncio.run(run_test())
+
+
+def test_textual_app_clear_and_keyboard_resize_keep_boot_header_at_the_top():
+    """App real: /clear em terminal alto e o vai-e-vem do teclado virtual."""
+    bridge = TextualUiBridge()
+    app = _capture_quimera_textual_app(_fake_quimera_app(), bridge)
+
+    async def run_test() -> None:
+        async with app.run_test(size=(80, 45)) as pilot:
+            await pilot.pause()
+            feed = app.query_one("#feed", _UnifiedFeed)
+
+            for event in _boot_header_events():
+                bridge.emit(event)
+            app._drain_bridge_events()
+            await pilot.pause()
+            await pilot.pause()
+            # Cabeçalho bem mais baixo que a janela (virtual_size nunca fica abaixo do container).
+            assert feed.children[-1].region.bottom < feed.content_region.bottom
+            assert feed.scroll_y == 0
+            assert feed.children[0].region.y == feed.content_region.y
+
+            for index in range(12):
+                bridge.emit(TextualUiEvent("user_message", {"content": f"pergunta {index}"}))
+                bridge.emit(
+                    TextualUiEvent(
+                        "agent_message",
+                        {"content": f"resposta {index}\nlinha 2\nlinha 3"},
+                        agent="claude",
+                    )
+                )
+            app._drain_bridge_events()
+            await pilot.pause()
+            await pilot.pause()
+            assert feed.scroll_y == feed.max_scroll_y > 0
+
+            bridge.emit(TextualUiEvent("clear"))
+            app._drain_bridge_events()
+            await pilot.pause()
+            await pilot.pause()
+            assert [item.event.kind for item in app._feed_model.items][-1] == "boot_separator"
+            assert feed.scroll_y == 0
+            assert feed.children[0].region.y == feed.content_region.y
+
+            # Teclado aparece (janela encolhe) e some (janela cresce).
+            await pilot.resize_terminal(80, 18)
+            await pilot.pause()
+            await pilot.pause()
+            assert feed.scroll_y == 0
+            assert feed.children[0].region.y == feed.content_region.y
+
+            await pilot.resize_terminal(80, 45)
+            await pilot.pause()
+            await pilot.pause()
+            assert feed.scroll_y == 0
+            assert feed.children[0].region.y == feed.content_region.y
+
+    asyncio.run(run_test())
+
+
 def test_textual_unified_feed_slots_follow_the_model_when_a_late_boot_line_enters_the_header():
     """Linha de boot tardia entra acima da régua; os slots seguem o modelo posição a posição."""
     from textual.app import App, ComposeResult
