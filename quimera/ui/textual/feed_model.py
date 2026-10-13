@@ -126,6 +126,7 @@ class TextualFeedModel:
         self._tool_preview_dwell_seconds = max(0.0, float(tool_preview_dwell_seconds))
         self._items: list[TextualFeedItem] = []
         self._transient_index_by_agent: dict[str, int] = {}
+        self._active_submissions_by_index: dict[int, TextualFeedItem] = {}
         self._stream_buffer_by_agent: dict[str, str] = {}
         self._stream_meta_by_agent: dict[str, dict[str, Any]] = {}
         self._transient_tools_by_agent: dict[str, list[str]] = {}
@@ -160,19 +161,21 @@ class TextualFeedModel:
         return transients
 
     def active_submission_items(self) -> list[tuple[int, TextualFeedItem]]:
-        """Turnos humanos com submissão ainda não terminal, para animar a esfera."""
-        active: list[tuple[int, TextualFeedItem]] = []
-        for index, item in enumerate(self._items):
-            if item.event.kind != "user_message":
-                continue
-            payload = item.event.payload if isinstance(item.event.payload, dict) else {}
-            submission = payload.get("submission")
-            if not isinstance(submission, dict):
-                continue
-            status = str(submission.get("status") or "").strip().lower()
-            if status and status not in TERMINAL_SUBMISSION_STATUSES:
-                active.append((index, item))
-        return active
+        """Snapshot ordenado dos turnos ativos, sem varrer o scrollback a cada pulso."""
+        return sorted(self._active_submissions_by_index.items())
+
+    def _track_submission_item(self, index: int, item: TextualFeedItem) -> None:
+        """Mantém o índice pequeno de turnos cuja esfera ainda precisa de animação."""
+        self._active_submissions_by_index.pop(index, None)
+        if item.event.kind != "user_message":
+            return
+        payload = item.event.payload if isinstance(item.event.payload, dict) else {}
+        submission = payload.get("submission")
+        if not isinstance(submission, dict):
+            return
+        status = str(submission.get("status") or "").strip().lower()
+        if status and status not in TERMINAL_SUBMISSION_STATUSES:
+            self._active_submissions_by_index[index] = item
 
     @property
     def last_change(self) -> TextualFeedChange:
@@ -199,11 +202,13 @@ class TextualFeedModel:
         """
         self._items[:] = self.boot_items()
         self._reset_live_state()
+        self._reindex_transients()
         self._last_change = TextualFeedChange(True, redraw=True)
 
     def _reset_live_state(self) -> None:
         """Zera o estado por agente que só existe por causa de itens do chat."""
         self._transient_index_by_agent.clear()
+        self._active_submissions_by_index.clear()
         self._stream_buffer_by_agent.clear()
         self._stream_meta_by_agent.clear()
         self._transient_tools_by_agent.clear()
@@ -385,6 +390,8 @@ class TextualFeedModel:
             return True
         item = TextualFeedItem(event, transient=False)
         self._items.append(item)
+        if event.kind == "user_message":
+            self._track_submission_item(len(self._items) - 1, item)
         self._last_change = TextualFeedChange(True, appended=item)
         return True
 
@@ -444,6 +451,8 @@ class TextualFeedModel:
             header_end += 1
         if header_end < len(self._items):
             self._reindex_transients()
+        elif item.event.kind == "user_message":
+            self._track_submission_item(position, item)
         self._last_change = TextualFeedChange(True, redraw=True)
         return True
 
@@ -482,6 +491,7 @@ class TextualFeedModel:
                 transient=False,
             )
             self._items[index] = replacement
+            self._track_submission_item(index, replacement)
             self._last_change = TextualFeedChange(True, redraw=True)
             return True
         self._last_change = TextualFeedChange(False)
@@ -797,6 +807,7 @@ class TextualFeedModel:
         self._completed_tool_requests_by_agent.clear()
         self._mcp_http_tool_stats_by_agent.clear()
         self._delegation_slots.clear()
+        self._reindex_transients()
         changed = len(self._items) != before
         self._last_change = TextualFeedChange(changed, redraw=changed)
         return changed
@@ -837,10 +848,14 @@ class TextualFeedModel:
         return True
 
     def _reindex_transients(self) -> None:
+        """Reconstrói índices posicionais apenas quando slots são inseridos/removidos."""
         self._transient_index_by_agent.clear()
+        self._active_submissions_by_index.clear()
         for index, item in enumerate(self._items):
             if item.transient:
                 self._transient_index_by_agent[self._agent_key(item.event)] = index
+            elif item.event.kind == "user_message":
+                self._track_submission_item(index, item)
 
     @staticmethod
     def _tool_preview_subject(content: str) -> str:

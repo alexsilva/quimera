@@ -630,7 +630,27 @@ def test_apply_patch_multi_file_can_run_parallel_with_disjoint_write_file(tmp_pa
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(ToolRuntimeConfig(workspace=Workspace(tmp_path)), approval)
-    intervals, overlap_seen = _register_timed_handlers(executor, "apply_patch", "write_file")
+    rendezvous = threading.Barrier(2)
+    overlap_seen = threading.Event()
+
+    def handler(call):
+        # Ambos precisam entrar no handler enquanto o outro ainda está lá.
+        # sleep(0.05) só observava uma janela do scheduler e falhava sob carga
+        # mesmo com locks disjuntos corretos. A barreira prova concorrência;
+        # se houver serialização indevida, ela quebra e o resultado falha.
+        try:
+            rendezvous.wait(timeout=1.0)
+        except threading.BrokenBarrierError:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="Handlers de paths disjuntos não alcançaram o rendezvous",
+            )
+        overlap_seen.set()
+        return ToolResult(ok=True, tool_name=call.name, content="ok")
+
+    executor.registry.register("apply_patch", handler)
+    executor.registry.register("write_file", handler)
 
     results = _execute_concurrently(
         executor,
@@ -641,7 +661,7 @@ def test_apply_patch_multi_file_can_run_parallel_with_disjoint_write_file(tmp_pa
     )
 
     assert all(result.ok for result in results)
-    assert len(intervals) == 2
+    assert len(results) == 2
     assert overlap_seen.is_set()
 
 

@@ -142,12 +142,38 @@ _live_markdown_cache: dict[tuple[str, str], Markdown] = {}
 # texto integral entra no feed como mensagem final do turno.
 _LIVE_TAIL_LINE_LIMIT = 8
 _LIVE_TAIL_MAX_CHARS = 1_600
+# splitlines reconhece mais separadores que LF. O caminho de memória limitada
+# abaixo só trata LF; documentos pequenos e os demais separadores mantêm a
+# semântica exata do splitlines (inclusive CRLF e separadores Unicode).
+_SPLITLINES_OTHER_BREAKS = "\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+_LIVE_TAIL_BOUNDED_THRESHOLD = 16_000
 
 
 def _live_tail(text: str) -> tuple[str, str]:
     """Cauda visível do conteúdo vivo e rótulo do trecho oculto ('' se íntegro)."""
-    lines = text.splitlines()
-    tail = "\n".join(lines[-_LIVE_TAIL_LINE_LIMIT:])
+    if len(text) > _LIVE_TAIL_BOUNDED_THRESHOLD and not any(
+        separator in text for separator in _SPLITLINES_OTHER_BREAKS
+    ):
+        # count/rfind rodam em C. Não aloca uma lista com todas as linhas do
+        # raciocínio acumulado só para mostrar as últimas oito a cada pulso.
+        line_count = text.count("\n") + int(not text.endswith("\n"))
+        end = len(text) - int(text.endswith("\n"))
+        start = end
+        for _ in range(_LIVE_TAIL_LINE_LIMIT):
+            boundary = text.rfind("\n", 0, start)
+            if boundary < 0:
+                start = 0
+                break
+            start = boundary
+        else:
+            start += 1
+        # A cauda ainda pode conter uma linha enorme. Limita o slice antes
+        # de alocá-lo, não depois de copiar a linha inteira.
+        tail = text[max(start, end - _LIVE_TAIL_MAX_CHARS - 1):end]
+    else:
+        lines = text.splitlines()
+        line_count = len(lines)
+        tail = "\n".join(lines[-_LIVE_TAIL_LINE_LIMIT:])
     if len(tail) > _LIVE_TAIL_MAX_CHARS:
         cut = tail[-_LIVE_TAIL_MAX_CHARS:]
         newline = cut.find("\n")
@@ -156,7 +182,7 @@ def _live_tail(text: str) -> tuple[str, str]:
         tail = cut
     if tail == text:
         return text, ""
-    hidden = len(lines) - (tail.count("\n") + 1)
+    hidden = line_count - (tail.count("\n") + 1)
     if hidden > 0:
         return tail, f"⋮ +{hidden} linhas anteriores"
     return tail, "⋮ trecho anterior oculto"

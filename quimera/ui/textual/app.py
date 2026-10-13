@@ -159,6 +159,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._bridge_drain_timer = None
             self._active_agent_timer = None
             self._thinking_pulse_timer = None
+            self._thinking_pulse_paused = False
             self._handling_bridge_batch = False
             self._bridge_batch_feed_dirty = False
             self._bridge_batch_feed_force = False
@@ -172,6 +173,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._last_active_agent_info: tuple[str, str] | None = None
             self._active_tool_previews: dict[str, str] = {}
             self._last_status_bar_state: tuple[tuple[str, str] | None, tuple[tuple[str, str], ...]] | None = None
+            self._blank_status_selectors: set[str] = set()
             self._feed_model = TextualFeedModel()
             self._history_file_path: Path | None = None
             self._restored_history_hydrated = False
@@ -389,17 +391,29 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     if self.active_agent == event.agent:
                         self.active_agent = None
 
+        def _blank_status_widget(self, selector: str) -> bool:
+            """Esconde e esvazia um Static de status só na primeira vez.
+
+            ``#status_bar`` e ``#agent_status`` nunca voltam a ser exibidos;
+            repetir ``update("")`` a cada poll de 0,2 s pedia layout da tela
+            inteira em idle sem mudar nada visível.
+            """
+            if selector in self._blank_status_selectors:
+                return True
+            try:
+                widget = self.query_one(selector, Static)
+            except NoMatches:
+                return False
+            widget.display = False
+            widget.update("")
+            self._blank_status_selectors.add(selector)
+            return True
+
         def _update_agent_status_widget(self) -> bool:
             if self._handling_bridge_batch:
                 self._bridge_batch_status_dirty = True
                 return True
-            try:
-                agent_status = self.query_one("#agent_status", Static)
-            except NoMatches:
-                return False
-            agent_status.display = False
-            agent_status.update("")
-            return True
+            return self._blank_status_widget("#agent_status")
 
         def _update_breadcrumb(self) -> None:
             if self._handling_bridge_batch:
@@ -428,12 +442,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if self._handling_bridge_batch:
                 self._bridge_batch_status_dirty = True
                 return
-            try:
-                widget = self.query_one("#status_bar", Static)
-            except NoMatches:
+            if not self._blank_status_widget("#status_bar"):
                 return
-            widget.display = False
-            widget.update("")
             self._update_agent_status_widget()
 
         def _update_status_bar(self) -> None:
@@ -449,12 +459,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 return
             self._last_status_bar_state = state
             self._last_active_agent_info = info
-            try:
-                widget = self.query_one("#status_bar", Static)
-            except NoMatches:
-                return
-            widget.display = False
-            widget.update("")
+            self._blank_status_widget("#status_bar")
 
         def _poll_active_agent(self) -> None:
             self._update_status_bar()
@@ -558,6 +563,39 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self.query_one("#summary-spinner", _SummarySpinner).update(frame)
             self._spinner_index += 1
 
+        def _pause_thinking_pulse(self) -> None:
+            """Suspende o timer do pulso quando não há nada para animar.
+
+            O timer fica bloqueado no ``Event`` interno do Textual, sem agendar
+            wakeups; o ritmo de 0,25 s não muda enquanto houver atividade.
+            """
+            timer = self._thinking_pulse_timer
+            if timer is None or self._thinking_pulse_paused:
+                return
+            try:
+                timer.pause()
+            except Exception:
+                _logger.debug("Falha ao pausar o pulso de pensamento", exc_info=True)
+                return
+            self._thinking_pulse_paused = True
+
+        def _resume_thinking_pulse(self) -> None:
+            """Retoma o pulso ao reconciliar o feed; o primeiro tick vem em 0,25 s."""
+            if not self._thinking_pulse_paused:
+                return
+            timer = self._thinking_pulse_timer
+            if timer is None:
+                self._thinking_pulse_paused = False
+                return
+            try:
+                # reset() reativa o timer e recomeça a grade a partir de agora,
+                # em vez de disparar um tick atrasado imediatamente.
+                timer.reset()
+            except Exception:
+                _logger.debug("Falha ao retomar o pulso de pensamento", exc_info=True)
+                return
+            self._thinking_pulse_paused = False
+
         def _pulse_thinking_marker(self) -> None:
             """Anima o marcador de pensamento e a esfera do turno humano em execução."""
             expired_tools = self._feed_model.expire_tool_previews()
@@ -567,6 +605,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             active_submissions = self._feed_model.active_submission_items()
             if not self._feed_model.has_transients and not active_submissions:
                 reset_thinking_pulse()
+                if not expired_tools:
+                    # Sem transients, submissões nem expiry neste tick não há o
+                    # que animar: dorme até o próximo _sync_feed retomar.
+                    self._pause_thinking_pulse()
                 return
             advance_thinking_pulse()
             self._sync_transient_feed_slots()
@@ -721,6 +763,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 self._bridge_batch_feed_force |= force
                 self._bridge_batch_scroll_end |= scroll_end
                 return
+            # Qualquer reconciliação real pode ter criado transients, submissões
+            # ou expiries; o pulso decide no próximo tick se volta a dormir.
+            self._resume_thinking_pulse()
             feed = self.query_one("#feed", _UnifiedFeed)
             entries: list[tuple[int, bool, object, bool]] = []
             active_tokens: set[int] = set()

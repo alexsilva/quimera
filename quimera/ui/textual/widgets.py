@@ -161,7 +161,10 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
             widget = self._entry_widgets[index]
             if force or transient or token != self._entry_tokens[index]:
                 widget.update(renderable)
-            widget.set_class(compact, "-compact")
+            # O scrollback normalmente mantém a mesma classe por toda a run.
+            # Evita validar identificadores CSS de cada slot a cada rajada.
+            if widget.has_class("-compact") != compact:
+                widget.set_class(compact, "-compact")
             self._entry_tokens[index] = token
 
         if len(desired) < len(self._entry_widgets):

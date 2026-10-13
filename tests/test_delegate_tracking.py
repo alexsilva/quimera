@@ -973,7 +973,9 @@ class TestCancelamentoPeloDelegador:
         assert notes["cancelled_by"] == "claude"
         assert notes["cancel_reason"] == "mudei de plano"
         assert "cancelada por claude" in row["result"]
-        job = task_api.list_jobs(db_path=db_path)[-1]
+        # O finalize assíncrono persiste task e job em escritas separadas.
+        # Observar a task terminal não garante que a escrita do job terminou.
+        job = _wait_job_status(db_path, row["job_id"], "cancelled")
         assert job["status"] == "cancelled"
 
     def test_agente_alheio_nao_pode_cancelar(self, tools_com_db):

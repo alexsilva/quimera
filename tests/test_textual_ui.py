@@ -5102,7 +5102,11 @@ def test_textual_app_status_bar_tracks_tool_preview_events():
     assert "_active_tool_previews" in source
     assert 'event.kind == "tool_preview"' in source
     assert "def _update_status_bar" in source
-    assert 'self.query_one("#status_bar", Static)' in source
+    # A consulta é compartilhada pelo helper que evita updates/layouts
+    # repetidos dos dois widgets invisíveis, sem perder o tracking de tools.
+    assert 'self._blank_status_widget("#status_bar")' in source
+    assert 'self.query_one(selector, Static)' in source
+    assert "def _blank_status_widget" in source
     assert 'text.append("[spy]"' not in source
     assert 'text.append("processando...")' not in source
 
