@@ -15,6 +15,7 @@ e preserva a API externa existente.
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from typing import Any, Callable
 
 from ..agents.capabilities import is_user_cancelled
@@ -30,6 +31,16 @@ from .executor_pool import (  # noqa: F401
 )
 from .protocol import TaskCreationResult, TaskProtocolService
 from .repository import TaskRepository
+from ..workflows.coordinator import WorkflowCoordinator
+from ..workflows.models import WorkflowLimits
+from ..workflows.repository import WorkflowRepository
+from ..workflows.service import (
+    CoordinationLock,
+    WorkflowService,
+    build_decision_consult,
+    task_event_wake,
+)
+from .events import TaskEvent
 
 
 class AppTaskServices:
@@ -125,6 +136,7 @@ class AppTaskServices:
         parse_response: Callable[[Any], tuple[Any, Any, Any, Any, Any]],
         classify_task_execution_result: Callable[[str | None], tuple[bool, str]] = classify_task_execution_result,
         classify_task_review_result: Callable[[str | None], tuple[bool, str, str]] = classify_task_review_result,
+        get_workflow_limits: Callable[[], dict] | None = None,
     ):
         # ── Store raw accessors for lazy resolution ─────────────────
         self._task_executor_factory = task_executor_factory
@@ -208,6 +220,9 @@ class AppTaskServices:
         self._parse_response = parse_response
         self._classify_task_execution_result = classify_task_execution_result
         self._classify_task_review_result = classify_task_review_result
+        self._get_workflow_limits = get_workflow_limits
+        self._workflow_service: WorkflowService | None = None
+        self._workflow_service_lock = threading.Lock()
 
         # ── Create sub-services ─────────────────────────────────────
         self._protocol = TaskProtocolService(
@@ -233,6 +248,7 @@ class AppTaskServices:
             session_state=session_state,
             wake_executors=self._wake_task_executors,
             get_renderer=self._get_renderer,
+            get_workflow_overview=self._workflow_overview,
         )
         self._executor_pool = TaskExecutorPool(
             task_executor_factory=task_executor_factory,
@@ -264,6 +280,7 @@ class AppTaskServices:
             get_approval_handler=self._get_approval_handler,
             set_approval_handler=set_approval_handler,
             get_agent_profile=get_agent_profile,
+            get_workflow_limits=self._workflow_limits,
             session_state=session_state,
             get_session_state=self._get_session_state,
             get_execution_mode=get_execution_mode,
@@ -553,8 +570,8 @@ class AppTaskServices:
     # ── Setup / bootstrap (delegates to TaskExecutorPool) ──────────
 
     def setup_task_executors(self, claim_gate=None):
-        """Inicializa executores assíncronos para tasks humanas."""
-        return self._executor_pool.setup_task_executors(
+        """Inicializa executores assíncronos para tasks humanas e o monitor de workflows."""
+        result = self._executor_pool.setup_task_executors(
             claim_gate=claim_gate,
             task_executors=self._task_executors_ref,
             task_executors_getter=self._task_executors_getter,
@@ -562,6 +579,10 @@ class AppTaskServices:
             current_job_id=self._current_job_id_value,
             current_job_id_getter=self._current_job_id_getter,
         )
+        service = self.workflow_service
+        if service is not None:
+            service.start()
+        return result
 
     def build_tool_executor(
         self,
@@ -619,8 +640,74 @@ class AppTaskServices:
                 close()
 
     def stop_task_executors(self):
-        """Interrompe todos os executores de tasks em segundo plano."""
+        """Interrompe o monitor de workflows e todos os executores de tasks em segundo plano."""
+        service = self._workflow_service
+        if service is not None:
+            service.stop()
         return self._executor_pool.stop_task_executors()
+
+    # ── Workflows ───────────────────────────────────────────────────
+
+    @property
+    def workflow_service(self) -> WorkflowService | None:
+        """Serviço de workflows da sessão (criado sob demanda; None sem workspace)."""
+        with self._workflow_service_lock:
+            if self._workflow_service is None:
+                self._workflow_service = self._build_workflow_service()
+            return self._workflow_service
+
+    def _workflow_limits(self) -> WorkflowLimits:
+        """Limites de workflow da configuração: fonte única do coordenador e dos hooks do pool."""
+        return WorkflowLimits.from_mapping(
+            self._get_workflow_limits() if self._get_workflow_limits else None
+        )
+
+    def _build_workflow_service(self) -> WorkflowService | None:
+        workspace = self._get_workspace()
+        if workspace is None:
+            return None
+        tasks = self._build_task_repository()
+        limits = self._workflow_limits()
+        system_layer = self._get_system_layer()
+
+        def notify(message: str) -> None:
+            if system_layer is not None:
+                system_layer.show_system_message(message)
+
+        pool = self._executor_pool
+        coordinator = WorkflowCoordinator(
+            WorkflowRepository(tasks, limits),
+            tasks,
+            get_active_agents=self._agent_pool_agents,
+            get_job_id=self._current_job_id,
+            interrupt_tasks=pool.cancel_task_runs,
+            live_task_ids=pool.live_task_ids,
+            wake=self._wake_workflow_activity,
+            notify=notify,
+            consult=build_decision_consult(
+                pool._background_dispatch_per_call().delegate, notify=notify
+            ),
+        )
+        service = WorkflowService(
+            coordinator,
+            refresh_state=self.refresh_task_shared_state,
+            lock=CoordinationLock(Path(workspace.tasks_db).with_suffix(".workflows.lock")),
+        )
+        sink = self._get_event_sink()
+        if sink is not None:
+            sink.subscribe(TaskEvent, task_event_wake(service))
+        return service
+
+    def _wake_workflow_activity(self) -> None:
+        """Mudança de estado de workflow: acorda os executores e o monitor de workflows."""
+        self._wake_task_executors()
+        service = self._workflow_service
+        if service is not None:
+            service.wake()
+
+    def _workflow_overview(self) -> list[dict]:
+        service = self._workflow_service
+        return service.open_overview() if service is not None else []
 
     def cancel_background_work(self) -> None:
         """Propaga cancelamento do usuário aos AgentClients de background."""

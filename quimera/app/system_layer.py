@@ -28,6 +28,7 @@ from ..constants import (
     CMD_STATS,
     CMD_TASK,
     CMD_DEBATE,
+    CMD_WORKFLOW,
     CMD_CONFIG,
     DEFAULT_FIRST_AGENT,
     build_agents_help,
@@ -73,6 +74,7 @@ class SystemLayerDependencies:
     read_user_input: Callable | None = None
     task_command_handler: Callable | None = None
     debate_command_handler: Callable | None = None
+    workflow_command_handler: Callable | None = None
     bugs_command_handler: Callable | None = None
     stats_command_handler: Callable | None = None
     session_state_manager: Any = None
@@ -136,6 +138,7 @@ class AppSystemLayer:
         read_user_input=None,
         task_command_handler=None,
         debate_command_handler=None,
+        workflow_command_handler=None,
         bugs_command_handler=None,
         stats_command_handler=None,
         session_state_manager=None,
@@ -184,6 +187,7 @@ class AppSystemLayer:
         self.read_user_input = read_user_input
         self.task_command_handler = task_command_handler
         self.debate_command_handler = debate_command_handler
+        self.workflow_command_handler = workflow_command_handler
         self.bugs_command_handler = bugs_command_handler
         self.stats_command_handler = stats_command_handler
         self.session_state_manager = session_state_manager
@@ -665,6 +669,13 @@ class AppSystemLayer:
                 self.debate_command_handler(command)
             else:
                 self._display.show_warning_message("Comando /debate indisponivel nesta sessao.")
+            return True
+
+        if command == CMD_WORKFLOW or command.startswith(f"{CMD_WORKFLOW} "):
+            if callable(self.workflow_command_handler):
+                self.workflow_command_handler(command)
+            else:
+                self._display.show_warning_message("Comando /workflow indisponivel nesta sessao.")
             return True
 
         if command == CMD_RESET or command.startswith(f"{CMD_RESET} "):

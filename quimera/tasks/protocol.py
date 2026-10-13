@@ -68,6 +68,7 @@ class TaskProtocolService:
         session_state: Any = None,
         wake_executors: Callable[[], None] | None = None,
         get_renderer: Callable[[], Any] | None = None,
+        get_workflow_overview: Callable[[], list[dict]] | None = None,
     ) -> None:
         self._workspace = workspace
         self._get_workspace_fn = get_workspace
@@ -91,6 +92,7 @@ class TaskProtocolService:
         self._session_state = session_state
         self._wake_executors = wake_executors or (lambda: None)
         self._get_renderer_fn = get_renderer
+        self._get_workflow_overview = get_workflow_overview
 
     # ── Comando /task ──────────────────────────────────────────────────
 
@@ -252,6 +254,11 @@ class TaskProtocolService:
         if not isinstance(shared_state, dict) or current_job_id is None or workspace is None:
             return
         shared_state["task_overview"] = self.build_task_overview()
+        workflows = self._get_workflow_overview() if self._get_workflow_overview else []
+        if workflows:
+            shared_state["workflow_overview"] = workflows
+        else:
+            shared_state.pop("workflow_overview", None)
         try:
             from ..runtime.tools.todo import TodoRegistry
             shared_state["agent_todos"] = TodoRegistry.get_active_as_dicts(current_job_id)

@@ -224,6 +224,54 @@ TOOL_METADATA: dict[str, ToolMetadata] = {
         capabilities=("task_db", "delegate"),
         http_profiles=_AGENT,
     ),
+    # Workflows: publicar/consultar/pausar/cancelar/concluir não colocam trabalho novo
+    # em movimento (a gate é a checagem de dono feita pela própria tool). Iniciar e
+    # replanejar disparam execução com auto-aprovação de tasks, então exigem a mesma
+    # aprovação de tasks_create: delegar não amplia permissões.
+    "workflows_create": _meta(
+        ToolRisk.WRITE,
+        mutates=True,
+        capabilities=("task_db", "workflows"),
+        http_profiles=_AGENT,
+    ),
+    "workflows_start": _meta(
+        ToolRisk.WRITE,
+        mutates=True,
+        approval=ApprovalMode.TASK_CREATION,
+        capabilities=("task_db", "workflows"),
+        http_profiles=_AGENT,
+    ),
+    "workflows_status": _meta(
+        ToolRisk.READ,
+        parallel_safe=True,
+        capabilities=("task_db", "workflows"),
+        http_profiles=_READ_LOCAL,
+    ),
+    "workflows_control": _meta(
+        ToolRisk.WRITE,
+        mutates=True,
+        capabilities=("task_db", "workflows"),
+        http_profiles=_AGENT,
+    ),
+    "workflows_replan": _meta(
+        ToolRisk.WRITE,
+        mutates=True,
+        approval=ApprovalMode.TASK_CREATION,
+        capabilities=("task_db", "workflows"),
+        http_profiles=_AGENT,
+    ),
+    "workflows_cancel": _meta(
+        ToolRisk.WRITE,
+        mutates=True,
+        capabilities=("task_db", "workflows"),
+        http_profiles=_AGENT,
+    ),
+    "workflows_finish": _meta(
+        ToolRisk.WRITE,
+        mutates=True,
+        capabilities=("task_db", "workflows"),
+        http_profiles=_AGENT,
+    ),
     "jobs_list": _meta(
         ToolRisk.READ,
         parallel_safe=True,

@@ -3,28 +3,22 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Iterable
+
+from ..domain.work_items import (
+    WorkItem,
+    WorkItemError,
+    parse_work_items,
+    validate_work_items as _validate_work_items,
+)
 
 
 MAX_DEBATE_RESPONSE_CHARS = 128_000
 MAX_DEBATE_TEXT_CHARS = 20_000
 MAX_DEBATE_LIST_ITEMS = 32
 MAX_DEBATE_WORK_ITEMS = 50
-_WORK_ITEM_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
-_TASK_TYPES = frozenset(
-    {
-        "architecture",
-        "bug_investigation",
-        "code_edit",
-        "code_review",
-        "documentation",
-        "general",
-        "test_execution",
-    }
-)
 
 
 class DebateProtocolError(ValueError):
@@ -61,21 +55,6 @@ class DebateLimits:
     max_rounds: int = 2
     timeout_seconds: float = 900.0
     quorum: int = 2
-
-
-@dataclass(frozen=True, slots=True)
-class WorkItem:
-    id: str
-    title: str
-    description: str
-    task_type: str = "general"
-    assigned_to: str | None = None
-    dependencies: tuple[str, ...] = ()
-    acceptance_criteria: tuple[str, ...] = ()
-    priority: str = "medium"
-
-    def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,35 +270,10 @@ def synthesis_from_response(
 
 def validate_work_items(items: Iterable[WorkItem]) -> None:
     """Validate IDs and acyclicity of a workflow plan."""
-    work_items = tuple(items)
-    by_id = {item.id: item for item in work_items}
-    if len(by_id) != len(work_items):
-        raise DebateProtocolError("work_items contem IDs duplicados")
-    for item in work_items:
-        unknown = set(item.dependencies) - set(by_id)
-        if unknown:
-            raise DebateProtocolError(
-                f"work item {item.id} depende de IDs desconhecidos: {', '.join(sorted(unknown))}"
-            )
-        if item.id in item.dependencies:
-            raise DebateProtocolError(f"work item {item.id} depende de si mesmo")
-
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(item_id: str) -> None:
-        if item_id in visiting:
-            raise DebateProtocolError("workflow contem ciclo de dependencias")
-        if item_id in visited:
-            return
-        visiting.add(item_id)
-        for dependency in by_id[item_id].dependencies:
-            visit(dependency)
-        visiting.remove(item_id)
-        visited.add(item_id)
-
-    for item_id in by_id:
-        visit(item_id)
+    try:
+        _validate_work_items(items)
+    except WorkItemError as exc:
+        raise DebateProtocolError(str(exc)) from exc
 
 
 def synthesis_from_dict(payload: dict[str, Any] | None) -> DebateSynthesis | None:
@@ -351,71 +305,10 @@ def synthesis_from_dict(payload: dict[str, Any] | None) -> DebateSynthesis | Non
 
 
 def _work_items(value: Any) -> tuple[WorkItem, ...]:
-    if value in (None, ""):
-        return ()
-    if not isinstance(value, (list, tuple)):
-        raise DebateProtocolError("work_items deve ser uma lista")
-    if len(value) > MAX_DEBATE_WORK_ITEMS:
-        raise DebateProtocolError(
-            f"work_items excede o limite de {MAX_DEBATE_WORK_ITEMS} itens"
-        )
-    items: list[WorkItem] = []
-    for index, raw in enumerate(value, start=1):
-        if not isinstance(raw, dict):
-            raise DebateProtocolError("cada work_item deve ser um objeto")
-        item_id = _text(
-            raw.get("id") or f"T{index}", field_name="work_item.id", max_chars=64
-        )
-        if not _WORK_ITEM_ID_RE.fullmatch(item_id):
-            raise DebateProtocolError(f"work_item possui id invalido: {item_id}")
-        title = _required_text(raw, "title", max_chars=500)
-        description = _text(
-            raw.get("description") or title,
-            field_name="work_item.description",
-            max_chars=8_000,
-        )
-        priority = _text(
-            raw.get("priority") or "medium",
-            field_name="work_item.priority",
-            max_chars=20,
-        ).lower()
-        if priority not in {"low", "medium", "high", "critical"}:
-            raise DebateProtocolError(
-                f"prioridade invalida no work_item {item_id}: {priority}"
-            )
-        task_type = _text(
-            raw.get("task_type") or "general",
-            field_name="work_item.task_type",
-            max_chars=40,
-        ).lower()
-        if task_type not in _TASK_TYPES:
-            raise DebateProtocolError(
-                f"task_type invalido no work_item {item_id}: {task_type}"
-            )
-        items.append(
-            WorkItem(
-                id=item_id,
-                title=title,
-                description=description,
-                task_type=task_type,
-                assigned_to=_text(
-                    raw.get("assigned_to"),
-                    field_name="work_item.assigned_to",
-                    max_chars=200,
-                )
-                or None,
-                dependencies=_text_items(
-                    raw.get("dependencies"),
-                    field_name="work_item.dependencies",
-                ),
-                acceptance_criteria=_text_items(
-                    raw.get("acceptance_criteria"),
-                    field_name="work_item.acceptance_criteria",
-                ),
-                priority=priority,
-            )
-        )
-    return tuple(items)
+    try:
+        return parse_work_items(value, max_items=MAX_DEBATE_WORK_ITEMS)
+    except WorkItemError as exc:
+        raise DebateProtocolError(str(exc)) from exc
 
 
 def _required_text(

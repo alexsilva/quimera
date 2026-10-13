@@ -70,6 +70,25 @@ task pending_review
   -> failed se não há recuperação
 ```
 
+## Workflow distribuído
+
+```text
+agente principal chama workflows_create (plano com tasks e dependências)
+  -> validação determinística (IDs, ciclos, critérios, limites)
+  -> publicação atômica e idempotente: workflow ready + tasks + dependências
+workflows_start -> running
+  -> claim_task existente com gate de workflow (running, não superada,
+     escrita exclusiva) e dependências concluídas
+  -> TaskRunner + ganchos: contexto com handoffs aceitos das dependências,
+     tentativa registrada, handoff verificado sem IA
+  -> TaskReviewer (revisor != executor) aceita ou devolve a pending
+  -> evento de task acorda o WorkflowService
+  -> WorkflowCoordinator.reconcile lê o banco: completed, blocked ou segue
+  -> em decisão, consulta o principal: workflows_finish ou workflows_replan
+```
+
+Detalhes em [Workflows distribuídos](workflows.md).
+
 ## Tool call via MCP
 
 ```text

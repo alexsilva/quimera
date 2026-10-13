@@ -58,6 +58,7 @@ from ...bugs import (
 from ...config import ConfigManager
 from ...constants import MSG_MIGRATION, Visibility
 from ...debate import DebateRepository, DebateService
+from ...workflows.commands import WorkflowCommandHandler
 from ...environment import RuntimeSecrets
 from ...modes import DEBATE_MODE
 from ...context import ContextManager
@@ -765,6 +766,7 @@ class AppAssembler:
             parse_response=app.parse_response,
             classify_task_execution_result=app.classify_task_execution_result,
             classify_task_review_result=classify_task_review_result,
+            get_workflow_limits=lambda: getattr(plat.config, "workflow_limits", {}),
         )
         session_services = AppSessionServices(
             session_state=rt.chat_state,
@@ -988,6 +990,11 @@ class AppAssembler:
     ) -> None:
         sess.system_layer.task_command_handler = tasks.task_services.handle_task_command
         sess.system_layer.debate_command_handler = tasks.debate_service.handle_command
+        sess.system_layer.workflow_command_handler = WorkflowCommandHandler(
+            lambda: getattr(tasks.task_services.workflow_service, "coordinator", None),
+            show_system=sess.system_layer.show_system_message,
+            show_warning=sess.system_layer.show_warning_message,
+        ).handle
         tasks.task_services.bind_session_services(tasks.session_services)
         tasks.task_services.bind_dispatch_services(tasks.dispatch_services)
         tasks.task_services.bind_dispatch_tool_executor(tasks.tool_executor)
@@ -1011,6 +1018,7 @@ class AppAssembler:
         tasks.tool_executor.set_delegate_fn(background_delegate_fn)
         tasks.tool_executor.set_background_delegate_fn(background_delegate_fn)
         tasks.tool_executor.set_task_create_fn(tasks.task_services.create_agent_task)
+        tasks.tool_executor.set_workflow_service(tasks.task_services.workflow_service)
         # tasks_list enxerga o thinking ao vivo de delegações em execução via
         # o registry de runs em memória, correlacionado pelo delegation_id
         # persistido no body da task.

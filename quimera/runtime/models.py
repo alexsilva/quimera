@@ -49,6 +49,7 @@ class TaskRecord:
     started_at: str | None = None
     completed_at: str | None = None
     reviewed_by: str | None = None
+    attempt_count: int = 0
 
 
 @dataclass(slots=True)

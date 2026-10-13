@@ -178,6 +178,9 @@ def test_schema_names_match_registered_tools():
         # Git tools
         "git_status", "git_log", "git_diff", "git_branch", "git_fetch",
         "git_add", "git_commit", "git_checkout", "git_push",
+        # Workflows distribuídos
+        "workflows_create", "workflows_start", "workflows_status", "workflows_control",
+        "workflows_replan", "workflows_cancel", "workflows_finish",
     }
     actual = {s["function"]["name"] for s in TOOL_SCHEMAS}
     assert actual == expected

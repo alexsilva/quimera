@@ -31,16 +31,58 @@ class _SystemLayerProto(Protocol):
 
 
 class _TaskRepositoryProto(Protocol):
-    def fail_task(self, task_id: int, reason: str | None = None) -> bool:
+    def fail_task(
+        self, task_id: int, reason: str | None = None, *, expected_attempt: int | None = None
+    ) -> bool:
         ...
 
-    def requeue_task(self, task_id: int, failed_agent: str, reason: str | None = None) -> bool:
+    def requeue_task(
+        self,
+        task_id: int,
+        failed_agent: str,
+        reason: str | None = None,
+        *,
+        expected_attempt: int | None = None,
+        max_attempts: int | None = None,
+    ) -> bool:
         ...
 
-    def submit_for_review(self, task_id: int, result: str | None = None) -> bool:
+    def submit_for_review(
+        self, task_id: int, result: str | None = None, *, expected_attempt: int | None = None
+    ) -> bool:
         ...
 
-    def complete_task(self, task_id: int, result: str | None = None, reviewed_by: str | None = None) -> bool:
+    def complete_task(
+        self,
+        task_id: int,
+        result: str | None = None,
+        reviewed_by: str | None = None,
+        *,
+        expected_attempt: int | None = None,
+    ) -> bool:
+        ...
+
+
+class _TaskHooksProto(Protocol):
+    """Ganchos opcionais para tasks de workflow (contexto, tentativas, handoff)."""
+
+    def delegation_for(self, task: TaskRecord, agent: str, base: dict[str, object]) -> dict[str, object]:
+        ...
+
+    def begin(self, task: TaskRecord, agent: str) -> None:
+        ...
+
+    def finish(self, task: TaskRecord, agent: str, response: str) -> tuple[bool, str]:
+        ...
+
+    def abort(self, task: TaskRecord, agent: str, reason: str) -> None:
+        ...
+
+    @property
+    def max_attempts(self) -> int:
+        ...
+
+    def discarded(self, task: TaskRecord) -> bool:
         ...
 
 
@@ -70,6 +112,7 @@ class TaskRunner:
         record_failure: Callable[[str], None] | None = None,
         before_agent_call: Callable[[str], None] | None = None,
         after_agent_call: Callable[[str], None] | None = None,
+        task_hooks: _TaskHooksProto | None = None,
     ) -> None:
         self.dispatch_services = dispatch_services
         self.system_layer = system_layer
@@ -80,6 +123,7 @@ class TaskRunner:
         self.record_failure = record_failure or (lambda _agent_name: None)
         self.before_agent_call = before_agent_call or (lambda _agent_name: None)
         self.after_agent_call = after_agent_call or (lambda _agent_name: None)
+        self.task_hooks = task_hooks
 
     def handler_for(self, agent_name: str) -> Callable[[TaskRecord], bool]:
         """Retorna handler de execução compatível com TaskExecutor."""
@@ -88,11 +132,16 @@ class TaskRunner:
     def run(self, task: TaskRecord, agent_name: str) -> bool:
         """Executa a task com o agente informado. Retorna True se bem-sucedida."""
         task_id = task.id
+        hooks = self.task_hooks if task.origin == "workflow" else None
+        # Tasks de workflow só aceitam escrita da tentativa que as reivindicou.
+        fence = {"expected_attempt": task.attempt_count} if hooks is not None else {}
+        # Requeue de workflow respeita o limite de tentativas na própria transação.
+        retry = {**fence, "max_attempts": hooks.max_attempts} if hooks is not None else {}
         try:
             description = task.description or ""
             body = task.body or description
             if not body:
-                self.repository.fail_task(task_id, reason="empty body")
+                self.repository.fail_task(task_id, reason="empty body", **fence)
                 return False
 
             delegation = {
@@ -106,12 +155,20 @@ class TaskRunner:
                 "priority": task.priority or "normal",
                 "chain": ["task-runner", agent_name],
             }
+            if hooks is not None:
+                delegation = hooks.delegation_for(task, agent_name, delegation)
             review_agents = self.failover_policy.review_agents_for(agent_name)
             desc_preview = (description[:60] + "\u2026") if len(description) > 60 else description
             self.system_layer.show_muted_message(
                 f"[task {task_id}] {agent_name}: iniciando \u2014 {desc_preview}"
             )
 
+            if hooks is not None:
+                hooks.begin(task, agent_name)
+                if hooks.discarded(task):
+                    # Cancelada/substituída entre o claim e o dispatch: o agente não roda.
+                    self._abort(hooks, task, agent_name, "interrompida pelo workflow")
+                    return False
             self.before_agent_call(agent_name)
             try:
                 response = self.dispatch_services.delegate(
@@ -131,32 +188,45 @@ class TaskRunner:
                 self.system_layer.show_muted_message(
                     f"[task {task_id}] {agent_name}: cancelado pelo usu\u00e1rio"
                 )
-                self.repository.fail_task(task_id, reason="cancelled by user")
+                self._abort(hooks, task, agent_name, "cancelled by user")
+                self.repository.fail_task(task_id, reason="cancelled by user", **fence)
+                return False
+
+            if response is None and hooks is not None and hooks.discarded(task):
+                # Interrompida por cancelamento/replanejamento: não é falha do agente.
+                self._abort(hooks, task, agent_name, "interrompida pelo workflow")
                 return False
 
             if response is None:
                 self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: sem resposta")
                 self.record_failure(agent_name)
+                self._abort(hooks, task, agent_name, "communication failed")
                 if self.failover_policy.can_failover(task_id, agent_name):
-                    self.repository.requeue_task(task_id, agent_name, reason="communication failed")
+                    self.repository.requeue_task(
+                        task_id, agent_name, reason="communication failed", **retry
+                    )
                 else:
-                    self.repository.fail_task(task_id, reason="communication failed")
+                    self.repository.fail_task(task_id, reason="communication failed", **fence)
                 return False
 
             self.system_layer.show_muted_message(
                 f"[task {task_id}] {agent_name}:\n{response.strip()}"
             )
             ok, task_result = self.classify_task_execution_result(response)
+            if ok and hooks is not None:
+                ok, task_result = hooks.finish(task, agent_name, response)
+            elif not ok:
+                self._abort(hooks, task, agent_name, task_result)
             if not ok:
                 self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: bloqueada")
                 if self.failover_policy.can_failover(task_id, agent_name):
-                    self.repository.requeue_task(task_id, agent_name, reason=task_result)
+                    self.repository.requeue_task(task_id, agent_name, reason=task_result, **retry)
                 else:
-                    self.repository.fail_task(task_id, reason=task_result)
+                    self.repository.fail_task(task_id, reason=task_result, **fence)
                 return False
 
             if review_agents:
-                ok = self.repository.submit_for_review(task_id, result=task_result)
+                ok = self.repository.submit_for_review(task_id, result=task_result, **fence)
                 if not ok:
                     self.system_layer.show_muted_message(
                         f"[task {task_id}] {agent_name}: erro ao submeter para review"
@@ -166,7 +236,7 @@ class TaskRunner:
                     f"[task {task_id}] {agent_name}: aguardando review de outro agente"
                 )
             else:
-                ok = self.repository.complete_task(task_id, result=task_result)
+                ok = self.repository.complete_task(task_id, result=task_result, **fence)
                 if not ok:
                     self.system_layer.show_muted_message(
                         f"[task {task_id}] {agent_name}: erro ao concluir task"
@@ -178,8 +248,14 @@ class TaskRunner:
             return True
         except Exception as exc:
             self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: erro: {exc}")
+            self._abort(hooks, task, agent_name, str(exc))
             if self.failover_policy.can_failover(task_id, agent_name):
-                self.repository.requeue_task(task_id, agent_name, reason=str(exc))
+                self.repository.requeue_task(task_id, agent_name, reason=str(exc), **retry)
             else:
-                self.repository.fail_task(task_id, reason=str(exc))
+                self.repository.fail_task(task_id, reason=str(exc), **fence)
             return False
+
+    @staticmethod
+    def _abort(hooks: _TaskHooksProto | None, task: TaskRecord, agent: str, reason: str) -> None:
+        if hooks is not None:
+            hooks.abort(task, agent, reason)

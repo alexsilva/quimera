@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from ..constants import TaskStatus, TaskType, can_transition
 from ..runtime.models import JobRecord, TaskRecord
 from ..app.event_sink import EventSink
+from ..workflows.schema import (
+    EXEC_CLAIM_GATE_SQL,
+    REVIEW_CLAIM_GATE_SQL,
+    ensure_workflow_schema,
+)
 from .events import (
     TaskProposed,
     TaskApproved,
@@ -51,6 +58,43 @@ class TaskRepository:
     @staticmethod
     def _now() -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    def timestamp(self) -> str:
+        """Timestamp UTC no mesmo formato das colunas de data do banco."""
+        return self._now()
+
+    @staticmethod
+    def _stale_attempt(current: object, expected: int | None) -> bool:
+        """True quando uma tentativa antiga tenta escrever sobre uma mais nova."""
+        return expected is not None and int(current or 0) != int(expected)
+
+    @staticmethod
+    def _attempts_exhausted(attempt_count: int, max_attempts: int | None) -> bool:
+        return max_attempts is not None and attempt_count >= max_attempts
+
+    def _publish_requeue(
+        self,
+        task_id: int,
+        job_id: int,
+        reason: str | None,
+        failed_agent: str,
+        attempt: int,
+        exhausted: bool,
+    ) -> None:
+        if exhausted:
+            self._publish(
+                TaskFailed(task_id=task_id, job_id=job_id, reason=reason, failed_agent=failed_agent)
+            )
+            return
+        self._publish(
+            TaskRequeued(
+                task_id=task_id,
+                job_id=job_id,
+                reason=reason,
+                failed_agent=failed_agent,
+                attempt=attempt,
+            )
+        )
 
     @staticmethod
     def _failed_agents_token(agent_name: str) -> str:
@@ -133,8 +177,23 @@ class TaskRepository:
             "CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent "
             "ON task_dependencies(depends_on_task_id)"
         )
+        ensure_workflow_schema(conn)
         conn.commit()
         conn.close()
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """Transação ``BEGIN IMMEDIATE`` para operações compostas e atômicas."""
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            yield conn
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     # ── Jobs ──────────────────────────────────────────────────────────
 
@@ -273,7 +332,7 @@ class TaskRepository:
         sql = (
             "SELECT id, job_id, description, body, status, task_type, origin, assigned_to, "
             "result, notes, priority, created_at, updated_at, created_by, requested_by, "
-            "started_at, completed_at, reviewed_by "
+            "started_at, completed_at, reviewed_by, attempt_count "
             "FROM tasks"
         )
         clauses: list[str] = []
@@ -282,6 +341,10 @@ class TaskRepository:
             if col in filt:
                 clauses.append(f"{col} = ?")
                 params.append(filt[col])
+        if "ids" in filt:
+            ids = [int(value) for value in filt["ids"]]
+            clauses.append(f"id IN ({', '.join('?' for _ in ids)})")
+            params.extend(ids)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY id ASC"
@@ -308,6 +371,7 @@ class TaskRepository:
                 started_at=r[15],
                 completed_at=r[16],
                 reviewed_by=r[17],
+                attempt_count=int(r[18] or 0),
             )
             for r in rows
         ]
@@ -331,38 +395,36 @@ class TaskRepository:
 
     def add_task_dependency(self, task_id: int, depends_on_task_id: int) -> bool:
         """Adds an idempotent prerequisite edge between two tasks."""
+        with self.transaction() as conn:
+            return self.insert_task_dependency(conn, task_id, depends_on_task_id)
+
+    def insert_task_dependency(
+        self, conn: sqlite3.Connection, task_id: int, depends_on_task_id: int
+    ) -> bool:
+        """Insere a aresta (idempotente, sem ciclos) dentro de uma transação do chamador."""
         if int(task_id) == int(depends_on_task_id):
             raise ValueError("task nao pode depender de si mesma")
-        conn = self._conn()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            creates_cycle = conn.execute(
-                """
-                WITH RECURSIVE reachable(task_id) AS (
-                    SELECT ?
-                    UNION
-                    SELECT edge.depends_on_task_id
-                    FROM task_dependencies AS edge
-                    JOIN reachable ON edge.task_id = reachable.task_id
-                )
-                SELECT 1 FROM reachable WHERE task_id = ? LIMIT 1
-                """,
-                (int(depends_on_task_id), int(task_id)),
-            ).fetchone()
-            if creates_cycle:
-                raise ValueError("dependencia criaria ciclo entre tasks")
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO task_dependencies(task_id, depends_on_task_id, created_at) "
-                "VALUES (?, ?, ?)",
-                (int(task_id), int(depends_on_task_id), self._now()),
+        creates_cycle = conn.execute(
+            """
+            WITH RECURSIVE reachable(task_id) AS (
+                SELECT ?
+                UNION
+                SELECT edge.depends_on_task_id
+                FROM task_dependencies AS edge
+                JOIN reachable ON edge.task_id = reachable.task_id
             )
-            conn.commit()
-            return cur.rowcount > 0
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+            SELECT 1 FROM reachable WHERE task_id = ? LIMIT 1
+            """,
+            (int(depends_on_task_id), int(task_id)),
+        ).fetchone()
+        if creates_cycle:
+            raise ValueError("dependencia criaria ciclo entre tasks")
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO task_dependencies(task_id, depends_on_task_id, created_at) "
+            "VALUES (?, ?, ?)",
+            (int(task_id), int(depends_on_task_id), self._now()),
+        )
+        return cur.rowcount > 0
 
     def list_task_dependencies(self, task_id: int) -> list[int]:
         """Returns direct prerequisite task IDs in stable order."""
@@ -377,6 +439,109 @@ class TaskRepository:
 
     # ── Tasks — escrita ───────────────────────────────────────────────
 
+    def transition_tasks(
+        self,
+        conn: sqlite3.Connection,
+        task_ids: list[int],
+        to_status: TaskStatus,
+        *,
+        reason: str | None = None,
+    ) -> list[int]:
+        """Transiciona em lote, na transação do chamador, as tasks que podem ir a ``to_status``.
+
+        Devolve os ids efetivamente alterados; tasks em estado que não admite a
+        transição (ex.: já concluídas) ficam intactas.
+        """
+        changed: list[int] = []
+        now = self._now()
+        for task_id in task_ids:
+            row = conn.execute(
+                "SELECT status FROM tasks WHERE id = ?", (int(task_id),)
+            ).fetchone()
+            if not row or not can_transition(row[0], to_status):
+                continue
+            conn.execute(
+                "UPDATE tasks SET status = ?, notes = ?, completed_at = ?, updated_at = ? "
+                "WHERE id = ?",
+                (to_status, reason, now, now, int(task_id)),
+            )
+            changed.append(int(task_id))
+        return changed
+
+    def requeue_interrupted(
+        self,
+        conn: sqlite3.Connection,
+        task_id: int,
+        reason: str,
+        *,
+        observed: tuple[str, int, str | None] | None = None,
+        max_attempts: int | None = None,
+    ) -> bool:
+        """Recoloca na fila uma task cuja execução ou revisão foi interrompida.
+
+        Execução interrompida volta a ``pending`` com nova tentativa; revisão
+        interrompida volta a ``pending_review`` e preserva o resultado do executor.
+        ``observed`` = ``(status, attempt_count, updated_at)`` lidos na decisão: se a
+        linha mudou desde então (novo claim ou desfecho), nada é alterado. Com
+        ``max_attempts``, a tentativa que esgota o limite vai a ``failed`` aqui mesmo,
+        sem janela para um novo claim.
+        """
+        row = conn.execute(
+            "SELECT status, attempt_count, updated_at FROM tasks WHERE id = ?", (int(task_id),)
+        ).fetchone()
+        if not row:
+            return False
+        if observed is not None and (row[0], int(row[1] or 0), row[2]) != observed:
+            return False
+        now = self._now()
+        if row[0] == TaskStatus.REVIEWING:
+            conn.execute(
+                "UPDATE tasks SET status = ?, reviewed_by = NULL, notes = ?, updated_at = ? "
+                "WHERE id = ?",
+                (TaskStatus.PENDING_REVIEW, reason, now, int(task_id)),
+            )
+            return True
+        if row[0] != TaskStatus.IN_PROGRESS:
+            return False
+        attempt_count = int(row[1] or 0) + 1
+        exhausted = self._attempts_exhausted(attempt_count, max_attempts)
+        if exhausted:
+            reason = f"limite de {max_attempts} tentativas atingido: {reason}"
+        conn.execute(
+            "UPDATE tasks SET status = ?, assigned_to = NULL, result = NULL, notes = ?, "
+            "attempt_count = ?, started_at = NULL, completed_at = ?, updated_at = ? "
+            "WHERE id = ?",
+            (
+                TaskStatus.FAILED if exhausted else TaskStatus.PENDING,
+                reason,
+                attempt_count,
+                now if exhausted else None,
+                now,
+                int(task_id),
+            ),
+        )
+        return True
+
+    def unassign_pending_task(self, task_id: int) -> bool:
+        """Remove a atribuição de uma task ainda ``pending`` para que o roteador a redistribua."""
+        with self.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE tasks SET assigned_to = NULL, updated_at = ? "
+                "WHERE id = ? AND status = ? AND assigned_to IS NOT NULL",
+                (self._now(), int(task_id), TaskStatus.PENDING),
+            )
+            return cur.rowcount == 1
+
+    def set_tasks_job(
+        self, conn: sqlite3.Connection, task_ids: list[int], job_id: int
+    ) -> None:
+        """Move tasks para outro job (adoção de workflows de uma sessão anterior)."""
+        for task_id in task_ids:
+            conn.execute(
+                "UPDATE tasks SET job_id = ?, updated_at = ? WHERE id = ?",
+                (int(job_id), self._now(), int(task_id)),
+            )
+
     def release_agent_tasks(self, agent_name: str) -> None:
         """Libera tasks pendentes/em progresso de um agente para reatribuição.
 
@@ -389,12 +554,25 @@ class TaskRepository:
         cur = conn.cursor()
         try:
             cur.execute("BEGIN IMMEDIATE")
+            # Task de workflow em curso liberada conta como tentativa encerrada do
+            # agente removido: nova tentativa (a run antiga fica cercada pelo fence)
+            # e o agente entra em failed_agents. As demais origens não mudam.
+            token = self._failed_agents_token(agent_name)
             cur.execute(
-                "UPDATE tasks SET assigned_to = NULL, status = ?, updated_at = ? "
+                "UPDATE tasks SET assigned_to = NULL, status = ?, updated_at = ?, "
+                "attempt_count = attempt_count "
+                "+ CASE WHEN status = ? AND origin = 'workflow' THEN 1 ELSE 0 END, "
+                "failed_agents = CASE WHEN status = ? AND origin = 'workflow' "
+                "AND instr(COALESCE(failed_agents, ''), ?) = 0 "
+                "THEN COALESCE(failed_agents, '') || ? ELSE failed_agents END "
                 "WHERE assigned_to = ? AND status IN (?, ?) AND origin != 'delegate'",
                 (
                     TaskStatus.PENDING,
                     self._now(),
+                    TaskStatus.IN_PROGRESS,
+                    TaskStatus.IN_PROGRESS,
+                    token,
+                    token,
                     agent_name,
                     TaskStatus.PENDING,
                     TaskStatus.IN_PROGRESS,
@@ -424,54 +602,79 @@ class TaskRepository:
         source_context: str | None = None,
     ) -> int:
         """Cria uma task no job informado."""
-        conn = self._conn()
-        cur = conn.cursor()
+        with self.transaction() as conn:
+            task_id = self.insert_task(
+                conn,
+                job_id,
+                description,
+                task_type=task_type,
+                assigned_to=assigned_to,
+                origin=origin,
+                status=status,
+                priority=priority,
+                created_by=created_by,
+                requested_by=requested_by,
+                notes=notes,
+                body=body,
+                source_context=source_context,
+            )
+        self._publish(
+            TaskProposed(
+                task_id=int(task_id),
+                job_id=job_id,
+                description=description,
+                task_type=task_type,
+                requested_by=requested_by,
+                source_context=source_context,
+            )
+        )
+        return task_id
+
+    def insert_task(
+        self,
+        conn: sqlite3.Connection,
+        job_id: int,
+        description: str,
+        *,
+        task_type: TaskType | str = TaskType.GENERAL,
+        assigned_to: str | None = None,
+        origin: str = "human_command",
+        status: TaskStatus | str = TaskStatus.PENDING,
+        priority: str = "medium",
+        created_by: str | None = None,
+        requested_by: str | None = None,
+        notes: str | None = None,
+        body: str | None = None,
+        source_context: str | None = None,
+    ) -> int:
+        """Insere a task dentro de uma transação do chamador e devolve o id."""
         now = self._now()
         started_at = now if str(status) == TaskStatus.IN_PROGRESS else None
-        try:
-            cur.execute("BEGIN IMMEDIATE")
-            cur.execute(
-                """
-                INSERT INTO tasks(job_id, description, body, status, task_type, origin, assigned_to,
-                                  priority, created_at, updated_at, started_at, created_by, requested_by, notes, source_context)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job_id,
-                    description,
-                    body,
-                    status,
-                    task_type,
-                    origin,
-                    assigned_to,
-                    priority,
-                    now,
-                    now,
-                    started_at,
-                    created_by,
-                    requested_by,
-                    notes,
-                    source_context,
-                ),
-            )
-            task_id = cur.lastrowid
-            conn.commit()
-            conn.close()
-            self._publish(
-                TaskProposed(
-                    task_id=int(task_id),
-                    job_id=job_id,
-                    description=description,
-                    task_type=task_type,
-                    requested_by=requested_by,
-                    source_context=source_context,
-                )
-            )
-            return task_id
-        except Exception:
-            conn.rollback()
-            conn.close()
-            raise
+        cur = conn.execute(
+            """
+            INSERT INTO tasks(job_id, description, body, status, task_type, origin, assigned_to,
+                              priority, created_at, updated_at, started_at, created_by, requested_by, notes, source_context)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                description,
+                body,
+                status,
+                task_type,
+                origin,
+                assigned_to,
+                priority,
+                now,
+                now,
+                started_at,
+                created_by,
+                requested_by,
+                notes,
+                source_context,
+            ),
+        )
+        return int(cur.lastrowid)
 
     def update_task(
         self,
@@ -517,16 +720,38 @@ class TaskRepository:
             conn.close()
             raise
 
-    def fail_task(self, task_id: int, reason: str | None = None) -> bool:
+    def fail_task(
+        self,
+        task_id: int,
+        reason: str | None = None,
+        *,
+        expected_attempt: int | None = None,
+        expected_status: TaskStatus | str | None = None,
+    ) -> bool:
         """Marca task como failed."""
         return self.transition_task(
-            task_id, TaskStatus.FAILED, result=reason, notes=reason
+            task_id,
+            TaskStatus.FAILED,
+            result=reason,
+            notes=reason,
+            expected_attempt=expected_attempt,
+            expected_status=expected_status,
         )
 
     def requeue_task(
-        self, task_id: int, failed_agent: str, reason: str | None = None
+        self,
+        task_id: int,
+        failed_agent: str,
+        reason: str | None = None,
+        *,
+        expected_attempt: int | None = None,
+        max_attempts: int | None = None,
     ) -> bool:
-        """Retorna task para pending após falha de execução."""
+        """Retorna task para pending após falha de execução.
+
+        Com ``max_attempts``, a tentativa que esgota o limite leva a task a
+        ``failed`` na mesma transação, sem janela para um novo claim.
+        """
         conn = self._conn()
         cur = conn.cursor()
         try:
@@ -541,7 +766,9 @@ class TaskRepository:
                 conn.rollback()
                 conn.close()
                 return False
-            if not can_transition(row[0], TaskStatus.PENDING):
+            if not can_transition(row[0], TaskStatus.PENDING) or self._stale_attempt(
+                row[2], expected_attempt
+            ):
                 conn.rollback()
                 conn.close()
                 return False
@@ -551,30 +778,26 @@ class TaskRepository:
                 failed_agents += token
             attempt_count = int(row[2] or 0) + 1
             job_id = row[3]
+            exhausted = self._attempts_exhausted(attempt_count, max_attempts)
+            if exhausted:
+                reason = f"limite de {max_attempts} tentativas atingido: {reason or ''}".strip()
             cur.execute(
                 "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
-                "failed_agents = ?, attempt_count = ?, started_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?",
+                "failed_agents = ?, attempt_count = ?, started_at = NULL, completed_at = ?, updated_at = ? WHERE id = ?",
                 (
-                    TaskStatus.PENDING,
+                    TaskStatus.FAILED if exhausted else TaskStatus.PENDING,
                     reason,
                     reason,
                     failed_agents,
                     attempt_count,
+                    now if exhausted else None,
                     now,
                     task_id,
                 ),
             )
             conn.commit()
             conn.close()
-            self._publish(
-                TaskRequeued(
-                    task_id=task_id,
-                    job_id=job_id,
-                    reason=reason,
-                    failed_agent=failed_agent,
-                    attempt=attempt_count,
-                )
-            )
+            self._publish_requeue(task_id, job_id, reason, failed_agent, attempt_count, exhausted)
             return True
         except Exception:
             conn.rollback()
@@ -589,6 +812,7 @@ class TaskRepository:
         *,
         notes: str | None = None,
         executed_by: str | None = None,
+        expected_attempt: int | None = None,
     ) -> bool:
         """Conclui task respeitando state machine.
 
@@ -601,9 +825,15 @@ class TaskRepository:
         cur = conn.cursor()
         try:
             cur.execute("BEGIN IMMEDIATE")
-            cur.execute("SELECT status, job_id FROM tasks WHERE id = ?", (task_id,))
+            cur.execute(
+                "SELECT status, job_id, attempt_count FROM tasks WHERE id = ?", (task_id,)
+            )
             row = cur.fetchone()
-            if not row or not can_transition(row[0], TaskStatus.COMPLETED):
+            if (
+                not row
+                or not can_transition(row[0], TaskStatus.COMPLETED)
+                or self._stale_attempt(row[2], expected_attempt)
+            ):
                 conn.rollback()
                 conn.close()
                 return False
@@ -641,17 +871,28 @@ class TaskRepository:
             conn.close()
             raise
 
-    def submit_for_review(self, task_id: int, result: str | None = None) -> bool:
+    def submit_for_review(
+        self,
+        task_id: int,
+        result: str | None = None,
+        *,
+        expected_attempt: int | None = None,
+    ) -> bool:
         """Submete task para review."""
         conn = self._conn()
         cur = conn.cursor()
         try:
             cur.execute("BEGIN IMMEDIATE")
             cur.execute(
-                "SELECT status, job_id, assigned_to FROM tasks WHERE id = ?", (task_id,)
+                "SELECT status, job_id, assigned_to, attempt_count FROM tasks WHERE id = ?",
+                (task_id,),
             )
             row = cur.fetchone()
-            if not row or not can_transition(row[0], TaskStatus.PENDING_REVIEW):
+            if (
+                not row
+                or not can_transition(row[0], TaskStatus.PENDING_REVIEW)
+                or self._stale_attempt(row[3], expected_attempt)
+            ):
                 conn.rollback()
                 conn.close()
                 return False
@@ -682,8 +923,11 @@ class TaskRepository:
         failed_agent: str,
         result: str | None = None,
         notes: str | None = None,
+        *,
+        expected_attempt: int | None = None,
+        max_attempts: int | None = None,
     ) -> bool:
-        """Retorna task para pending após falha no review."""
+        """Retorna task para pending após falha no review (``max_attempts`` como em ``requeue_task``)."""
         conn = self._conn()
         cur = conn.cursor()
         try:
@@ -698,7 +942,9 @@ class TaskRepository:
                 conn.rollback()
                 conn.close()
                 return False
-            if not can_transition(row[0], TaskStatus.PENDING):
+            if not can_transition(row[0], TaskStatus.PENDING) or self._stale_attempt(
+                row[2], expected_attempt
+            ):
                 conn.rollback()
                 conn.close()
                 return False
@@ -708,31 +954,27 @@ class TaskRepository:
                 failed_agents += token
             attempt_count = int(row[2] or 0) + 1
             job_id = row[3]
+            exhausted = self._attempts_exhausted(attempt_count, max_attempts)
+            if exhausted:
+                notes = f"limite de {max_attempts} tentativas atingido: {notes or ''}".strip()
             cur.execute(
                 "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
                 "reviewed_by = NULL, failed_agents = ?, attempt_count = ?, "
-                "started_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?",
+                "started_at = NULL, completed_at = ?, updated_at = ? WHERE id = ?",
                 (
-                    TaskStatus.PENDING,
+                    TaskStatus.FAILED if exhausted else TaskStatus.PENDING,
                     result,
                     notes,
                     failed_agents,
                     attempt_count,
+                    now if exhausted else None,
                     now,
                     task_id,
                 ),
             )
             conn.commit()
             conn.close()
-            self._publish(
-                TaskRequeued(
-                    task_id=task_id,
-                    job_id=job_id,
-                    reason=notes,
-                    failed_agent=failed_agent,
-                    attempt=attempt_count,
-                )
-            )
+            self._publish_requeue(task_id, job_id, notes, failed_agent, attempt_count, exhausted)
             return True
         except Exception:
             conn.rollback()
@@ -748,19 +990,31 @@ class TaskRepository:
         notes: str | None | object = _UNSET,
         approved_by: str | None | object = _UNSET,
         assigned_to: str | None | object = _UNSET,
+        expected_attempt: int | None = None,
+        expected_status: TaskStatus | str | None = None,
     ) -> bool:
-        """Transiciona task para ``to_status`` preservando campos omitidos."""
+        """Transiciona task para ``to_status`` preservando campos omitidos.
+
+        ``expected_status`` faz compare-and-set do estado de origem: a decisão
+        tomada sobre uma leitura anterior não se aplica se a task mudou desde então.
+        """
         conn = self._conn()
         cur = conn.cursor()
         try:
             cur.execute("BEGIN IMMEDIATE")
-            cur.execute("SELECT status, job_id FROM tasks WHERE id = ?", (task_id,))
+            cur.execute(
+                "SELECT status, job_id, attempt_count FROM tasks WHERE id = ?", (task_id,)
+            )
             row = cur.fetchone()
             if not row:
                 conn.rollback()
                 conn.close()
                 return False
-            if not can_transition(row[0], to_status):
+            if (
+                not can_transition(row[0], to_status)
+                or self._stale_attempt(row[2], expected_attempt)
+                or (expected_status is not None and row[0] != expected_status)
+            ):
                 conn.rollback()
                 conn.close()
                 return False
@@ -849,6 +1103,7 @@ class TaskRepository:
                       WHERE dependency_edge.task_id = candidate.id
                         AND prerequisite.status != ?
                   )
+                  {EXEC_CLAIM_GATE_SQL}
                 ORDER BY candidate.id ASC
                 LIMIT 1
                 """,
@@ -927,6 +1182,7 @@ class TaskRepository:
                   AND (assigned_to IS NULL OR assigned_to != ?)
                   AND (reviewed_by IS NULL OR reviewed_by != ?)
                   {job_filter}
+                  {REVIEW_CLAIM_GATE_SQL}
                 ORDER BY id ASC
                 LIMIT 1
                 """,

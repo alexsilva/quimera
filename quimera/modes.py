@@ -80,6 +80,21 @@ MODES: dict[str, ExecutionMode] = {
 }
 
 
+def read_only_mode(mode: ExecutionMode | None) -> ExecutionMode:
+    """Restringe ``mode`` a workspace somente leitura, sem afrouxar nenhuma restrição dele."""
+    if mode is not None and mode.read_only_fs:
+        return mode
+    blocked = set(_READ_ONLY_BLOCKED_TOOLS) | set(mode.blocked_tools if mode else ())
+    return ExecutionMode(
+        name="read_only_task",
+        read_only_fs=True,
+        allow_network=mode.allow_network if mode else True,
+        blocked_tools=sorted(blocked),
+        allowed_tools=None if mode is None or mode.allowed_tools is None else list(mode.allowed_tools),
+        prompt_addon="[MODO: LEITURA] Tarefa de leitura/investigação: não edite arquivos.",
+    )
+
+
 DEBATE_MODE = ExecutionMode(
     name="debate",
     read_only_fs=True,
@@ -97,6 +112,12 @@ DEBATE_MODE = ExecutionMode(
         "tasks_create",
         "tasks_delegate",
         "tasks_cancel",
+        "workflows_create",
+        "workflows_start",
+        "workflows_control",
+        "workflows_replan",
+        "workflows_cancel",
+        "workflows_finish",
         "ask_user",
         "update_shared_state",
         "todo_write",

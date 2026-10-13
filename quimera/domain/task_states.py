@@ -27,9 +27,10 @@ class TaskStatus(str, enum.Enum):
 
 # Tabela de transições válidas entre estados de task
 VALID_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
-    TaskStatus.PROPOSED: frozenset({TaskStatus.APPROVED, TaskStatus.REJECTED}),
-    TaskStatus.APPROVED: frozenset({TaskStatus.IN_PROGRESS}),
-    TaskStatus.PENDING: frozenset({TaskStatus.IN_PROGRESS}),
+    TaskStatus.PROPOSED: frozenset({TaskStatus.APPROVED, TaskStatus.REJECTED, TaskStatus.CANCELLED}),
+    TaskStatus.APPROVED: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}),
+    # pending -> failed: task que nunca poderá rodar (sem agente elegível, tentativas esgotadas).
+    TaskStatus.PENDING: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.FAILED, TaskStatus.CANCELLED}),
     TaskStatus.IN_PROGRESS: frozenset({
         TaskStatus.PENDING_REVIEW,
         TaskStatus.COMPLETED,
@@ -37,12 +38,13 @@ VALID_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
         TaskStatus.PENDING,
         TaskStatus.CANCELLED,
     }),
-    TaskStatus.PENDING_REVIEW: frozenset({TaskStatus.REVIEWING}),
+    TaskStatus.PENDING_REVIEW: frozenset({TaskStatus.REVIEWING, TaskStatus.CANCELLED}),
     TaskStatus.REVIEWING: frozenset({
         TaskStatus.COMPLETED,
         TaskStatus.FAILED,
         TaskStatus.PENDING,
         TaskStatus.PENDING_REVIEW,
+        TaskStatus.CANCELLED,
     }),
     TaskStatus.COMPLETED: frozenset(),
     TaskStatus.FAILED: frozenset(),

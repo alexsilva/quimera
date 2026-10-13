@@ -90,6 +90,70 @@ TOOL_SCHEMA: dict[str, dict] = {
             "description": {"type": "str", "description": "Descrição da task", "required": True},
         },
     },
+    "workflows_create": {
+        "name": "workflows_create",
+        "description": "Publica um plano de tarefas com dependências (objetivo, tasks, critérios); dry_run só valida",
+        "parameters": {
+            "objective": {"type": "str", "description": "Objetivo global do usuário", "required": True},
+            "work_items": {"type": "list", "description": "Tasks do plano: id, title, description, task_type, dependencies, acceptance_criteria, evidence_expected, assigned_to, writes", "required": True},
+            "global_criteria": {"type": "list", "description": "Critérios globais de conclusão", "required": False},
+            "constraints": {"type": "list", "description": "Restrições e escopo permitido", "required": False},
+            "idempotency_key": {"type": "str", "description": "Chave para republicar sem duplicar", "required": False},
+            "dry_run": {"type": "bool", "description": "Só valida o plano, sem persistir", "required": False},
+        },
+    },
+    "workflows_start": {
+        "name": "workflows_start",
+        "description": "Inicia a execução distribuída de um workflow publicado (idempotente)",
+        "parameters": {
+            "workflow_id": {"type": "int", "description": "ID do workflow", "required": True},
+        },
+    },
+    "workflows_status": {
+        "name": "workflows_status",
+        "description": "Estado, tasks, tentativas e evidências lidos do banco; sem workflow_id lista os abertos",
+        "parameters": {
+            "workflow_id": {"type": "int", "description": "ID do workflow", "required": False},
+            "include_results": {"type": "bool", "description": "Inclui handoffs das tasks concluídas", "required": False},
+        },
+    },
+    "workflows_control": {
+        "name": "workflows_control",
+        "description": "Pausa ou retoma um workflow",
+        "parameters": {
+            "workflow_id": {"type": "int", "description": "ID do workflow", "required": True},
+            "action": {"type": "str", "description": "pause|resume", "required": True},
+        },
+    },
+    "workflows_replan": {
+        "name": "workflows_replan",
+        "description": "Nova versão do plano (lista completa de tasks); preserva o que continua válido",
+        "parameters": {
+            "workflow_id": {"type": "int", "description": "ID do workflow", "required": True},
+            "base_version": {"type": "int", "description": "Versão vigente em que o novo plano se baseia", "required": True},
+            "objective": {"type": "str", "description": "Objetivo global", "required": True},
+            "work_items": {"type": "list", "description": "Lista completa de tasks da nova versão", "required": True},
+            "global_criteria": {"type": "list", "description": "Critérios globais", "required": False},
+            "constraints": {"type": "list", "description": "Restrições e escopo", "required": False},
+        },
+    },
+    "workflows_cancel": {
+        "name": "workflows_cancel",
+        "description": "Cancela o workflow, suas tasks e as execuções em curso (só as dele)",
+        "parameters": {
+            "workflow_id": {"type": "int", "description": "ID do workflow", "required": True},
+            "reason": {"type": "str", "description": "Motivo do cancelamento", "required": False},
+        },
+    },
+    "workflows_finish": {
+        "name": "workflows_finish",
+        "description": "Conclui explicitamente: completed (todas as tasks aceitas), blocked ou failed, com síntese",
+        "parameters": {
+            "workflow_id": {"type": "int", "description": "ID do workflow", "required": True},
+            "outcome": {"type": "str", "description": "completed|blocked|failed", "required": True},
+            "summary": {"type": "str", "description": "Síntese final fundamentada em evidências", "required": True},
+        },
+    },
     "tasks_cancel": {
         "name": "tasks_cancel",
         "description": "Cancela uma delegação em execução (apenas quem delegou, ou o humano)",

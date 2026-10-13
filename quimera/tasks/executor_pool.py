@@ -9,8 +9,10 @@ aprovação automática de tools para tasks.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import weakref
+from collections.abc import Iterable
 from typing import Any, Callable
 
 from ..agents import AgentClient
@@ -27,9 +29,15 @@ from .repository import TaskRepository
 from .reviewer import TaskReviewer
 from ..runtime.tools.files import set_staging_root
 from ..runtime.tools.todo import TodoRegistry
+from ..modes import read_only_mode
+from ..workflows.execution import WorkflowTaskHooks
+from ..workflows.models import WorkflowLimits
+from ..workflows.repository import WorkflowRepository
 
 
 _BACKGROUND_AGENT_TIMEOUT_SECONDS = 120
+# delegation_id das execuções/revisões de tasks: identifica a task a que a run pertence.
+_TASK_RUN_ID = re.compile(r"^task-(?:review-)?(\d+)$")
 
 _logger = logging.getLogger(__name__)
 
@@ -53,7 +61,15 @@ class _BackgroundDispatchPerCall:
         self._auto_approve_task_tools = auto_approve_task_tools
 
     def delegate(self, target_agent: str, **kwargs):
-        background_dispatch = self._owner._create_background_dispatch_services()
+        delegation = kwargs.get("delegation")
+        read_only = isinstance(delegation, dict) and delegation.get("read_only") is True
+        background_dispatch = (
+            self._owner._create_background_dispatch_services(
+                execution_mode_override=read_only_mode(self._owner.get_execution_mode())
+            )
+            if read_only
+            else self._owner._create_background_dispatch_services()
+        )
         if background_dispatch is None:
             fallback_delegate = self._owner._delegate if self._owner._allow_delegate_fallback else None
             if fallback_delegate is not None:
@@ -68,14 +84,30 @@ class _BackgroundDispatchPerCall:
         )
         if self._auto_approve_task_tools:
             self._owner._enable_task_tool_auto_approval(target_agent, approval_handler=approval_handler)
+        task_id = _task_id_of(kwargs.get("delegation"))
+        client = getattr(background_dispatch, "_agent_client_override", None)
         try:
+            if task_id is not None and client is not None:
+                if not self._owner._track_task_run(task_id, client):
+                    # Cancelada entre o claim e o dispatch: o agente não chega a rodar.
+                    return None
             return background_dispatch.delegate(target_agent, **kwargs)
         finally:
+            if task_id is not None and client is not None:
+                self._owner._untrack_task_run(task_id, client)
             if self._auto_approve_task_tools:
                 self._owner._disable_task_tool_auto_approval(target_agent, approval_handler=approval_handler)
             close = getattr(background_dispatch, "close", None)
             if callable(close):
                 close()
+
+
+def _task_id_of(delegation: Any) -> int | None:
+    """Id da task cuja execução/revisão a delegação representa (None para outras delegações)."""
+    if not isinstance(delegation, dict):
+        return None
+    match = _TASK_RUN_ID.match(str(delegation.get("delegation_id") or ""))
+    return int(match.group(1)) if match else None
 
 
 class TaskExecutorPool:
@@ -117,6 +149,7 @@ class TaskExecutorPool:
         get_approval_handler: Callable[[], Any] | None = None,
         set_approval_handler: Callable[[Any], None] | None = None,
         get_agent_profile: Callable[[str], Any] | None = None,
+        get_workflow_limits: Callable[[], WorkflowLimits] | None = None,
         session_state: Any = None,
         get_session_state: Callable[[], Any] | None = None,
         get_execution_mode: Callable[[], Any] | None = None,
@@ -182,6 +215,7 @@ class TaskExecutorPool:
         self._get_approval_handler = get_approval_handler
         self._set_approval_handler = set_approval_handler
         self._get_agent_profile = get_agent_profile
+        self._get_workflow_limits = get_workflow_limits or WorkflowLimits
         self._session_state = session_state
         self._get_session_state_fn = get_session_state
         self._get_execution_mode = get_execution_mode
@@ -231,6 +265,10 @@ class TaskExecutorPool:
         self._background_agent_clients: "weakref.WeakSet[Any]" = weakref.WeakSet()
         self._background_clients_lock = threading.Lock()
         self._background_shutdown = False
+        # Execuções vivas por task: permitem cancelar só as de um workflow.
+        self._task_runs: dict[int, list[Any]] = {}
+        # Tasks com execuções canceladas (terminal): barra runs que começariam depois.
+        self._cancelled_task_runs: set[int] = set()
         self._approval_handler: Any = None
         self._dispatch_tool_executor: ToolExecutor | None = None
         self._dispatch_services: Any = None
@@ -755,6 +793,44 @@ class TaskExecutorPool:
             return False
         return True
 
+    def _track_task_run(self, task_id: int, client: Any) -> bool:
+        """Registra a execução viva; False se a task já teve as execuções canceladas."""
+        with self._background_clients_lock:
+            self._task_runs.setdefault(task_id, []).append(client)
+            return task_id not in self._cancelled_task_runs
+
+    def _untrack_task_run(self, task_id: int, client: Any) -> None:
+        with self._background_clients_lock:
+            clients = self._task_runs.get(task_id, [])
+            if client in clients:
+                clients.remove(client)
+            if not clients:
+                self._task_runs.pop(task_id, None)
+
+    def live_task_ids(self) -> set[int]:
+        """Ids das tasks com execução ou revisão viva neste processo."""
+        with self._background_clients_lock:
+            return set(self._task_runs)
+
+    def cancel_task_runs(self, task_ids: Iterable[int]) -> list[int]:
+        """Interrompe (com seus subprocessos) apenas as execuções das tasks informadas.
+
+        Devolve os ids que tinham uma execução viva alcançada.
+        """
+        wanted = {int(task_id) for task_id in task_ids}
+        with self._background_clients_lock:
+            # Mesma seção crítica do registro: run registrado depois enxerga o cancelamento.
+            self._cancelled_task_runs.update(wanted)
+            targets = {
+                task_id: list(clients)
+                for task_id, clients in self._task_runs.items()
+                if task_id in wanted
+            }
+        for clients in targets.values():
+            for client in clients:
+                client.cancel_active_work()
+        return sorted(targets)
+
     def cancel_background_work(self) -> None:
         """Propaga cancelamento do usuário aos AgentClients de background vivos."""
         with self._background_clients_lock:
@@ -793,6 +869,7 @@ class TaskExecutorPool:
             classify_task_execution_result=self._classify_task_execution_result,
             was_user_cancelled=self._background_was_user_cancelled,
             record_failure=self.get_record_failure(),
+            task_hooks=self._build_workflow_hooks(),
         )
 
     def _build_task_review_service(self, failover_policy: TaskFailoverPolicy) -> TaskReviewer:
@@ -804,6 +881,16 @@ class TaskExecutorPool:
             classify_task_review_result=self._classify_task_review_result,
             was_user_cancelled=self._background_was_user_cancelled,
             event_sink=self.get_event_sink(),
+            task_hooks=self._build_workflow_hooks(),
+        )
+
+    def _build_workflow_hooks(self) -> WorkflowTaskHooks:
+        repository = self._build_task_repository()
+        workspace = self.get_workspace()
+        return WorkflowTaskHooks(
+            WorkflowRepository(repository, self._get_workflow_limits()),
+            repository,
+            getattr(workspace, "cwd", None),
         )
 
     def _build_task_failover_policy(self) -> TaskFailoverPolicy:

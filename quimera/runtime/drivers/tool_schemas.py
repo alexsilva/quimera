@@ -34,6 +34,7 @@ TOOL_SCHEMAS = materialize_tool_schemas()
 _CAPABILITY_METHODS = {
     "delegate": "is_delegate_available",
     "tasks": "is_tasks_available",
+    "workflows": "is_workflows_available",
     "ask_user": "is_ask_user_available",
     "update_shared_state": "is_update_state_available",
     "tui_screenshot": "is_tui_screenshot_available",

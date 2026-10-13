@@ -26,6 +26,7 @@ from .tools import tasks as tasks_tools
 from .tools import todo as todo_tools
 from .tools import tui as tui_tools
 from .tools import web as web_tools
+from .tools import workflows as workflows_tools
 
 
 @dataclass
@@ -43,6 +44,7 @@ class ToolExecutorWiring:
         ("delegate_fn", "set_delegate_fn"),
         ("background_delegate_fn", "set_background_delegate_fn"),
         ("task_create_fn", "set_task_create_fn"),
+        ("workflow_service", "set_workflow_service"),
         ("delegation_run_lookup", "set_delegation_run_lookup"),
         ("active_agents_provider", "set_active_agents_provider"),
         ("agent_stats_provider", "set_agent_stats_provider"),
@@ -59,6 +61,7 @@ class ToolExecutorWiring:
     delegate_fn: Callable | None = None
     background_delegate_fn: Callable | None = None
     task_create_fn: Callable | None = None
+    workflow_service: object | None = None
     delegation_run_lookup: Callable | None = None
     active_agents_provider: Callable | None = None
     agent_stats_provider: Callable | None = None
@@ -88,6 +91,7 @@ class ToolExecutorWiring:
         ("delegate_fn", "set_delegate_fn"),
         ("background_delegate_fn", "set_background_delegate_fn"),
         ("task_create_fn", "set_task_create_fn"),
+        ("workflow_service", "set_workflow_service"),
         ("delegation_run_lookup", "set_delegation_run_lookup"),
         ("active_agents_provider", "set_active_agents_provider"),
         ("agent_stats_provider", "set_agent_stats_provider"),
@@ -142,6 +146,7 @@ class ToolExecutor:
         self._interaction_tools = None
         self._state_tools = None
         self._task_tools = None
+        self._workflow_tools = None
         self._browser_tools = None
         self._host_tools = None
         self._tui_tools = None
@@ -175,6 +180,7 @@ class ToolExecutor:
         web_tools.register(self.registry, self.policy, self.config)
         self._browser_tools = browser_tools.register(self.registry, self.policy, self.config)
         self._task_tools = tasks_tools.register(self.registry, self.policy, self.config)
+        self._workflow_tools = workflows_tools.register(self.registry, self.policy, self.config)
         todo_tools.register(self.registry, self.policy, self.config)
         memory_tools.register(self.registry, self.policy, self.config)
         self._delegate_tools = delegate_module.register(self.registry, self.policy, self.config)
@@ -334,6 +340,15 @@ class ToolExecutor:
         self._wiring.task_create_fn = fn
         self._task_tools.set_create_task_fn(fn)
 
+    def set_workflow_service(self, service) -> None:
+        """Injeta o serviço de workflows usado pelas tools workflows_*."""
+        self._wiring.workflow_service = service
+        self._workflow_tools.set_workflow_service(service)
+
+    def is_workflows_available(self) -> bool:
+        """Indica se as tools workflows_* estão ligadas ao serviço da aplicação."""
+        return self._workflow_tools.is_workflows_available()
+
     def is_tasks_available(self) -> bool:
         """Indica se a tool tasks_create está ligada ao serviço da aplicação."""
         return self._task_tools.is_tasks_available()
@@ -369,6 +384,7 @@ class ToolExecutor:
         """Injeta provider que retorna o agente orquestrador ativo (ou None)."""
         self._wiring.orchestrator_provider = fn
         self._delegate_tools.set_orchestrator_provider(fn)
+        self._workflow_tools.set_orchestrator_provider(fn)
 
     def set_cancel_checker(self, fn) -> None:
         """Injeta checker de cancelamento para tools longas."""

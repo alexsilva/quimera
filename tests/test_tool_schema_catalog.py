@@ -19,6 +19,10 @@ from quimera.runtime.tools import todo as todo_tools
 from quimera.runtime.tools import tui as tui_tools
 
 _EXPECTED_SCHEMA_FINGERPRINT = (
+    "a5137422556086ef5c5a87eb475e1810d92419d0341dc8dcfcc0a54611f642ba"
+)
+# Contrato anterior à família workflows_*: as 60 tools existentes não mudaram.
+_PRE_WORKFLOWS_SCHEMA_FINGERPRINT = (
     "8891c141d4a4ebdf143c5aa6a8e438dd2346b28728009025925bb316a589e687"
 )
 
@@ -36,8 +40,18 @@ def _fingerprint(schemas: list[dict]) -> str:
 def test_catalog_materializes_the_public_schema_without_contract_changes():
     """A representação tipada não pode alterar o contrato publicado."""
     assert materialize_tool_schemas() == TOOL_SCHEMAS
-    assert len(TOOL_SPECS) == len(TOOL_SCHEMAS) == 60
+    assert len(TOOL_SPECS) == len(TOOL_SCHEMAS) == 67
     assert _fingerprint(TOOL_SCHEMAS) == _EXPECTED_SCHEMA_FINGERPRINT
+
+
+def test_workflow_tools_are_purely_additive_to_the_public_schema():
+    """Adicionar workflows_* não pode alterar nenhum schema já publicado."""
+    legacy = [
+        schema for schema in TOOL_SCHEMAS
+        if not schema["function"]["name"].startswith("workflows_")
+    ]
+    assert len(legacy) == 60
+    assert _fingerprint(legacy) == _PRE_WORKFLOWS_SCHEMA_FINGERPRINT
 
 
 def test_materialization_does_not_share_nested_mutable_structures():
@@ -87,7 +101,7 @@ def test_schema_and_registry_are_one_to_one():
     schema_names = {item["function"]["name"] for item in TOOL_SCHEMAS}
 
     assert registry_names == schema_names
-    assert len(registry_names) == 60
+    assert len(registry_names) == 67
 
 
 def test_explicit_tool_name_lists_match_registered_handlers():

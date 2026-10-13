@@ -38,6 +38,50 @@ class ToolSpec:
         return {"type": "function", "function": function}
 
 
+
+_WORKFLOW_OUTPUT: JsonSchema = {
+    'type': 'object',
+    'properties': {
+        'ok': {'type': 'boolean'},
+        'content': {'type': 'string', 'description': 'JSON do estado do workflow lido do banco'},
+        'data': {'type': 'object',
+                 'properties': {'workflow_id': {'type': 'integer'},
+                                'status': {'type': 'string'},
+                                'plan_version': {'type': 'integer'},
+                                'counts': {'type': 'object'},
+                                'work_items': {'type': 'array', 'items': {'type': 'object'}}}},
+        'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
+    'required': ['ok', 'content']}
+
+_WORKFLOW_ID: JsonSchema = {'type': 'integer', 'description': 'ID do workflow.'}
+
+_WORKFLOW_PLAN_PROPERTIES: dict[str, Any] = {
+    'objective': {'type': 'string', 'description': 'Objetivo global pedido pelo usuário.'},
+    'work_items': {'type': 'array',
+              'description': 'Tasks do plano. Cada uma: id (único), title, description, '
+                             'task_type (architecture|bug_investigation|code_edit|code_review|'
+                             'documentation|general|test_execution), dependencies (ids), '
+                             'acceptance_criteria (obrigatório, verificável), evidence_expected, '
+                             'assigned_to (opcional; sem ele o roteador escolhe), priority, '
+                             'writes (true se altera arquivos; tarefas de escrita rodam uma por vez).',
+              'items': {'type': 'object',
+                        'properties': {'id': {'type': 'string'},
+                                       'title': {'type': 'string'},
+                                       'description': {'type': 'string'},
+                                       'task_type': {'type': 'string'},
+                                       'dependencies': {'type': 'array', 'items': {'type': 'string'}},
+                                       'acceptance_criteria': {'type': 'array', 'items': {'type': 'string'}},
+                                       'evidence_expected': {'type': 'array', 'items': {'type': 'string'}},
+                                       'assigned_to': {'type': 'string'},
+                                       'priority': {'type': 'string'},
+                                       'writes': {'type': 'boolean'}},
+                        'required': ['id', 'title', 'acceptance_criteria']}},
+    'global_criteria': {'type': 'array', 'items': {'type': 'string'},
+                        'description': 'Critérios globais de conclusão do objetivo.'},
+    'constraints': {'type': 'array', 'items': {'type': 'string'},
+                    'description': 'Restrições e escopo permitido, repassados a cada executor.'},
+}
+
 TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name='host_processes',
@@ -608,6 +652,97 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                                         'hint': {'type': 'string'}}},
                 'error': {'oneOf': [{'type': 'string'}, {'type': 'null'}]}},
  'required': ['ok', 'content']},
+    ),
+    ToolSpec(
+        name='workflows_create',
+        description='Publica um workflow: plano estruturado (objetivo, tasks com dependências e '
+                    'critérios de aceite verificáveis) validado de forma determinística e salvo de '
+                    'forma atômica e idempotente. Use para trabalho amplo com etapas dependentes '
+                    'ou paralelizáveis; para tarefa simples resolva direto ou use tasks_delegate. '
+                    'O workflow fica "ready" até workflows_start. dry_run=true só valida.',
+        parameters={'type': 'object',
+ 'properties': {**_WORKFLOW_PLAN_PROPERTIES,
+                'idempotency_key': {'type': 'string',
+                                    'description': 'Opcional: mesma chave republicada não duplica.'},
+                'dry_run': {'type': 'boolean', 'description': 'Só valida o plano; nada é salvo.'}},
+ 'required': ['objective', 'work_items']},
+        output_schema=_WORKFLOW_OUTPUT,
+    ),
+    ToolSpec(
+        name='workflows_start',
+        description='Inicia a execução distribuída do workflow: tasks independentes rodam em '
+                    'paralelo, dependentes aguardam o aceite das predecessoras (incluindo revisão). '
+                    'Não bloqueia: acompanhe com workflows_status. Requer a mesma aprovação de '
+                    'tasks_create. Repetir a chamada é idempotente.',
+        parameters={'type': 'object', 'properties': {'workflow_id': _WORKFLOW_ID},
+ 'required': ['workflow_id']},
+        output_schema=_WORKFLOW_OUTPUT,
+    ),
+    ToolSpec(
+        name='workflows_status',
+        description='Estado do workflow lido do banco: status, versão do plano, contagens, '
+                    'tasks (responsável, dependências, tentativas) e, com include_results, os '
+                    'handoffs das tasks concluídas. Sem workflow_id lista os workflows abertos. '
+                    'Use apenas quando precisar da informação: o runtime avisa você quando há '
+                    'decisão a tomar.',
+        parameters={'type': 'object',
+ 'properties': {'workflow_id': _WORKFLOW_ID,
+                'include_results': {'type': 'boolean',
+                                    'description': 'Inclui arquivos, verificações e evidências.'}},
+ 'required': []},
+        output_schema=_WORKFLOW_OUTPUT,
+    ),
+    ToolSpec(
+        name='workflows_control',
+        description='Pausa (nenhuma task nova é reivindicada; o que já executa termina) ou '
+                    'retoma um workflow. Somente o agente coordenador que o criou.',
+        parameters={'type': 'object',
+ 'properties': {'workflow_id': _WORKFLOW_ID,
+                'action': {'type': 'string', 'enum': ['pause', 'resume']}},
+ 'required': ['workflow_id', 'action']},
+        output_schema=_WORKFLOW_OUTPUT,
+    ),
+    ToolSpec(
+        name='workflows_replan',
+        description='Aplica uma nova versão do plano quando houver evidência de que ele precisa '
+                    'mudar. Envie a lista COMPLETA de tasks; as concluídas e idênticas (com '
+                    'dependências válidas) são preservadas, as alteradas ou removidas são '
+                    'substituídas/canceladas e a versão anterior fica no histórico. base_version '
+                    'deve ser a versão vigente. Há limite de replanejamentos. Requer a mesma '
+                    'aprovação de tasks_create.',
+        parameters={'type': 'object',
+ 'properties': {'workflow_id': _WORKFLOW_ID,
+                'base_version': {'type': 'integer', 'minimum': 1,
+                                 'description': 'Versão do plano em que esta revisão se baseia.'},
+                **_WORKFLOW_PLAN_PROPERTIES},
+ 'required': ['workflow_id', 'base_version', 'objective', 'work_items']},
+        output_schema=_WORKFLOW_OUTPUT,
+    ),
+    ToolSpec(
+        name='workflows_cancel',
+        description='Cancela o workflow: tasks não terminais viram cancelled e as execuções '
+                    'ativas (com seus subprocessos) são interrompidas; outros workflows não são '
+                    'afetados. Somente o agente coordenador que o criou.',
+        parameters={'type': 'object',
+ 'properties': {'workflow_id': _WORKFLOW_ID,
+                'reason': {'type': 'string', 'description': 'Motivo registrado no workflow.'}},
+ 'required': ['workflow_id']},
+        output_schema=_WORKFLOW_OUTPUT,
+    ),
+    ToolSpec(
+        name='workflows_finish',
+        description='Conclusão explícita pelo coordenador. completed: só com todas as tasks '
+                    'aceitas e critérios globais verificados; summary é a síntese final com '
+                    'evidências. blocked: faltam informações ou há impedimento real (o workflow '
+                    'aguarda decisão). failed: encerra e cancela o que resta. Nunca declare '
+                    'resultado que as evidências não sustentam.',
+        parameters={'type': 'object',
+ 'properties': {'workflow_id': _WORKFLOW_ID,
+                'outcome': {'type': 'string', 'enum': ['completed', 'blocked', 'failed']},
+                'summary': {'type': 'string',
+                            'description': 'Síntese fundamentada em resultados verificáveis.'}},
+ 'required': ['workflow_id', 'outcome', 'summary']},
+        output_schema=_WORKFLOW_OUTPUT,
     ),
     ToolSpec(
         name='jobs_list',

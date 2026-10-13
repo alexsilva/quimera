@@ -98,6 +98,14 @@ class ConfigManager:
         )
 
     @property
+    def workflow_limits(self) -> dict:
+        """Limites operacionais de workflows; só chaves com inteiros positivos são aceitas."""
+        raw = self._load().get("workflow_limits")
+        if not isinstance(raw, dict):
+            return {}
+        return {key: value for key, value in raw.items() if type(value) is int and value > 0}
+
+    @property
     def workspace_policy(self) -> str:
         """Retorna o preset de policy do workspace."""
         value = str(self._load().get("workspace_policy") or "").strip().lower()

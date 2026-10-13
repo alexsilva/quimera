@@ -122,6 +122,7 @@ python quimera.py --help
 ## Comandos no chat
 
 - `/task <descrição>`: cria task humana explícita e roteia para o melhor agente.
+- `/workflow [list|show <id>|pause <id>|resume <id>|cancel <id>]`: acompanha e controla workflows distribuídos (ver [Workflows distribuídos](docs/desenvolvimento/workflows.md)).
 - `/planning <msg>`: modo leitura para planejamento.
 - `/analysis <msg>`: modo leitura para análise.
 - `/design <msg>`: modo design sem execução de código.
@@ -268,6 +269,7 @@ Ferramentas suportadas pelo runtime (expostas via MCP e, quando disponível, pel
 - git: `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_branch`, `git_checkout`, `git_fetch`, `git_push`
 - navegador: família `browser_*` (start, navigate, click, type, snapshot, screenshot, console, network, evaluate, ...) — automação Chrome/Chromium via Playwright (extra `browser`), com screenshots salvos por sessão no diretório de artefatos do workspace
 - tasks/jobs/agentes: `tasks_create`, `tasks_list`, `tasks_cancel`, `jobs_list`, `jobs_get`, `list_agents`
+- workflows distribuídos: `workflows_create`, `workflows_start`, `workflows_status`, `workflows_control`, `workflows_replan`, `workflows_cancel`, `workflows_finish` — o agente principal publica um plano com dependências e o runtime distribui, revisa e o consulta só nas decisões ([detalhes](docs/desenvolvimento/workflows.md))
 - memória/estado: `memory_save`, `memory_retrieve`, `update_shared_state`, `todo_write`, `todo_list`
 - interação: `ask_user`
 - diagnóstico da TUI: `tui_screenshot` — só com `--debug` e a interface Textual ativa; devolve as linhas visíveis da tela com a geometria do feed (scroll, slots, altura) e salva o SVG, o mesmo da paleta de comandos do Textual, em `data/logs/render/screenshots/` da sessão

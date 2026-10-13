@@ -50,13 +50,39 @@ class _TaskRepositoryProto(Protocol):
         failed_agent: str,
         result: str | None = None,
         notes: str | None = None,
+        *,
+        expected_attempt: int | None = None,
+        max_attempts: int | None = None,
     ) -> bool:
         ...
 
-    def complete_task(self, task_id: int, result: str | None = None, reviewed_by: str | None = None) -> bool:
+    def complete_task(
+        self,
+        task_id: int,
+        result: str | None = None,
+        reviewed_by: str | None = None,
+        *,
+        expected_attempt: int | None = None,
+    ) -> bool:
         ...
 
-    def fail_task(self, task_id: int, reason: str | None = None) -> bool:
+    def fail_task(
+        self, task_id: int, reason: str | None = None, *, expected_attempt: int | None = None
+    ) -> bool:
+        ...
+
+
+class _TaskHooksProto(Protocol):
+    """Ganchos opcionais para tasks de workflow (contexto de review e tentativas)."""
+
+    def review_delegation(self, task: TaskRecord, agent: str, base: dict[str, object]) -> dict[str, object]:
+        ...
+
+    def reviewed(self, task: TaskRecord, agent: str, accepted: bool, review_text: str) -> None:
+        ...
+
+    @property
+    def max_attempts(self) -> int:
         ...
 
 
@@ -82,6 +108,7 @@ class TaskReviewer:
         classify_task_review_result: Callable[[str | None], tuple[bool, str, str]],
         was_user_cancelled: Callable[[], bool],
         event_sink: _EventSinkProto | None = None,
+        task_hooks: _TaskHooksProto | None = None,
     ) -> None:
         self.dispatch_services = dispatch_services
         self.system_layer = system_layer
@@ -90,6 +117,7 @@ class TaskReviewer:
         self.classify_task_review_result = classify_task_review_result
         self.was_user_cancelled = was_user_cancelled
         self.event_sink = event_sink
+        self.task_hooks = task_hooks
 
     def handler_for(self, agent_name: str) -> Callable[[TaskRecord], bool]:
         """Retorna handler de review compatível com TaskExecutor."""
@@ -98,6 +126,10 @@ class TaskReviewer:
     def review(self, task: TaskRecord, agent_name: str) -> bool:
         """Revisa a task com o agente informado. Retorna True se aprovada."""
         task_id = task.id
+        hooks = self.task_hooks if task.origin == "workflow" else None
+        # Tasks de workflow só aceitam escrita da tentativa que está sendo revisada.
+        fence = {"expected_attempt": task.attempt_count} if hooks is not None else {}
+        retry = {**fence, "max_attempts": hooks.max_attempts} if hooks is not None else {}
         try:
             executor = task.assigned_to
             if executor == agent_name:
@@ -153,6 +185,8 @@ class TaskReviewer:
                 "priority": task.priority or "normal",
                 "chain": ["task-reviewer", agent_name],
             }
+            if hooks is not None:
+                review_delegation = hooks.review_delegation(task, agent_name, review_delegation)
             response = self.dispatch_services.delegate(
                 agent_name,
                 delegation=review_delegation,
@@ -168,7 +202,7 @@ class TaskReviewer:
                 self.system_layer.show_muted_message(
                     f"[task {task_id}] {agent_name}: cancelado pelo usu\u00e1rio"
                 )
-                self.repository.fail_task(task_id, reason="cancelled by user")
+                self.repository.fail_task(task_id, reason="cancelled by user", **fence)
                 return False
 
             self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}:\n{response or ''}")
@@ -179,7 +213,11 @@ class TaskReviewer:
                     executor or agent_name,
                     result=task_result,
                     notes=review_text,
+                    **retry,
                 )
+                # Veredito só entra no histórico se a transição da task venceu o CAS.
+                if ok and hooks is not None:
+                    hooks.reviewed(task, agent_name, False, review_text)
                 if not ok:
                     self.system_layer.show_muted_message(
                         f"[task {task_id}] {agent_name}: erro ao recolocar task em fila"
@@ -194,12 +232,15 @@ class TaskReviewer:
                 task_id,
                 result=task_result,
                 reviewed_by=agent_name,
+                **fence,
             )
             if not ok:
                 self.system_layer.show_muted_message(
                     f"[task {task_id}] {agent_name}: erro ao concluir task ap\u00f3s review"
                 )
                 return False
+            if hooks is not None:
+                hooks.reviewed(task, agent_name, True, review_text)
             self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: review conclu\u00eddo")
             return True
         except Exception as exc:
@@ -217,6 +258,7 @@ class TaskReviewer:
                     self.repository.fail_task(
                         task_id,
                         reason=f"review failed and fallback transition failed: {exc}",
+                        **fence,
                     )
                 else:
                     if self.event_sink is not None:
@@ -232,5 +274,6 @@ class TaskReviewer:
                 self.repository.fail_task(
                     task_id,
                     reason=f"review failed without operational fallback: {exc}",
+                    **fence,
                 )
             return False

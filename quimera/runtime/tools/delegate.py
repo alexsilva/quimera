@@ -28,6 +28,7 @@ from ...tasks.api import (
     update_job_status,
 )
 from ..approval import TrustedToolExecutionContext
+from ...workflows.execution import is_workflow_task_run
 from .base import ToolBase, ValidatableTool
 
 logger = logging.getLogger(__name__)
@@ -895,6 +896,13 @@ class DelegateTools(ToolBase):
                 "delegation_id": delegation_id,
                 "chain": DelegateTools._delegation_chain(source_agent, normalized_target_agent or target_agent),
             }
+            parent_run_id = str(step.get("parent_run_id") or "").strip()
+            if parent_run_id:
+                # Delegação a partir de uma task de workflow: o run filho herda o
+                # prefixo do run da task, para que as guardas de workflow (sem
+                # cascatas) valham em qualquer profundidade.
+                delegation["parent_run_id"] = parent_run_id
+                delegation["run_id"] = f"{parent_run_id}-d{uuid.uuid4().hex[:8]}"
             role = str(step.get("role") or "").strip()
             access_list = step.get("access_list") or []
             if role:
@@ -1494,6 +1502,8 @@ class DelegateTools(ToolBase):
         steps_raw = arguments.get("steps")
 
         calling_agent = self._get_calling_agent(call)
+        caller_run_id = TrustedToolExecutionContext.from_trusted_metadata(call.metadata).run_id
+        workflow_parent_run_id = caller_run_id if is_workflow_task_run(caller_run_id) else ""
 
         orchestrator = (
             self._orchestrator_provider()
@@ -1603,6 +1613,7 @@ class DelegateTools(ToolBase):
                 "fallback_agents": fallback_agents,
                 "source_agent": calling_agent or "",
                 "delegation_id": self._new_delegation_id(),
+                "parent_run_id": workflow_parent_run_id,
             }
         ]
 
@@ -1722,6 +1733,7 @@ class DelegateTools(ToolBase):
                         "fallback_agents": normalized_extra_fallback,
                         "source_agent": calling_agent or "",
                         "delegation_id": self._new_delegation_id(),
+                        "parent_run_id": workflow_parent_run_id,
                     }
                 )
 

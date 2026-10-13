@@ -22,6 +22,7 @@ from ..bugs import BugEvidenceRef, BugReport
 from ..config import ConfigManager
 from ..constants import (
     CMD_AGENTS, CMD_ALIASES, CMD_BUGS, CMD_CLEAR, CMD_CONNECT, CMD_DEBATE,
+    CMD_WORKFLOW,
     CMD_DISCONNECT, CMD_CONTEXT, CMD_EDIT, CMD_EXIT,
     CMD_APPROVE, CMD_APPROVE_ALL, CMD_FILE_PREFIX, CMD_HELP,
     CMD_POLICY, CMD_SANDBOX, CMD_PROMPT, CMD_RELOAD, CMD_RESET, CMD_STATS, CMD_TASK,
@@ -130,6 +131,7 @@ class CoreFacadeMixin:
             CMD_CLEAR,
             CMD_CONNECT,
             CMD_DEBATE,
+            CMD_WORKFLOW,
             CMD_DISCONNECT,
             CMD_CONTEXT,
             CMD_EDIT,
@@ -177,6 +179,8 @@ class CoreFacadeMixin:
             return ["list", "show", "close", "analyze", "stats"]
         if command == CMD_STATS:
             return ["json", "reset", *sorted(self.agent_pool)]
+        if command == CMD_WORKFLOW:
+            return ["list", "show ", "pause ", "resume ", "cancel "]
         if command == CMD_DEBATE:
             if partial.startswith("--agents"):
                 return [
