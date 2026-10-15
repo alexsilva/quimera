@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
+from ..runtime.tools.mcp_clients import get_bridge as get_mcp_client_bridge
 from ..runtime.tools.todo import TodoRegistry
+
+_logger = logging.getLogger(__name__)
 
 
 class AppLifecycle:
@@ -54,6 +58,16 @@ class AppLifecycle:
         finally:
             if process_supervisor is not None:
                 process_supervisor.shutdown()
+            # Depois do resumo de sessão (que ainda pode usar tools externas)
+            # e antes de o interpretador unir as threads do pool do chat: o
+            # shutdown mata os servidores MCP externos (ex.: mcp-remote) e
+            # fecha os pipes, o que devolve EOF a qualquer leitura presa.
+            mcp_client_bridge = get_mcp_client_bridge()
+            if mcp_client_bridge is not None:
+                try:
+                    mcp_client_bridge.shutdown()
+                except Exception:
+                    _logger.warning("Falha ao encerrar MCP clients externos", exc_info=True)
             current_job_id = getattr(app, "current_job_id", None)
             if current_job_id is not None:
                 TodoRegistry.cleanup(current_job_id)

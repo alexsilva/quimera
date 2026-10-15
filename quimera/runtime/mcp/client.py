@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import re
 import shlex
 import socket
@@ -236,19 +237,89 @@ def _build_request(
     return request
 
 
-def _read_line(stream: IO[str]) -> str | None:
-    line = stream.readline()
-    if not line:
-        return None
-    return line.rstrip("\n").rstrip("\r")
+#: Prazo do handshake e da descoberta (``initialize``, ``tools/list``, ``ping``).
+MCP_CLIENT_REQUEST_TIMEOUT_SECONDS = 30.0
+#: Prazo de um ``tools/call`` em servidor externo. A chamada também termina
+#: antes se o run do agente for cancelado ou a sessão for encerrada.
+MCP_CLIENT_TOOL_CALL_TIMEOUT_SECONDS = 300.0
+#: Intervalo em que uma leitura pendente confere o cancelamento do run.
+_CANCEL_POLL_SECONDS = 0.5
+
+
+class MCPRequestCancelled(RuntimeError):
+    """O run do agente foi cancelado enquanto a resposta era aguardada."""
+
+
+class _LineQueueReader:
+    """Entrega as linhas de um stream por fila, com prazo em cada leitura.
+
+    ``readline()`` em pipe ou socket bloqueia sem limite quando o servidor
+    emudece, e ``select`` no descritor não resolve: o ``TextIOWrapper`` pode
+    já ter consumido bytes para o próprio buffer. Uma thread daemon drena o
+    stream até o EOF e publica ``None`` como sentinela, de modo que
+    :meth:`readline` sempre retorna dentro do prazo pedido.
+    """
+
+    def __init__(self, stream: IO[str], *, name: str = "") -> None:
+        self._stream = stream
+        self._lines: queue.Queue[str | None] = queue.Queue()
+        self._eof = False
+        self._thread = threading.Thread(
+            target=self._pump,
+            name=f"quimera-mcp-reader-{name or 'external'}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _pump(self) -> None:
+        try:
+            for line in self._stream:
+                self._lines.put(line)
+        except Exception:
+            _logger.debug("MCP client: leitura do stdout interrompida", exc_info=True)
+        finally:
+            self._lines.put(None)
+
+    def readline(self, timeout: float) -> str | None:
+        """Próxima linha; ``None`` após o EOF; ``TimeoutError`` se nada chegar."""
+        if self._eof:
+            return None
+        try:
+            line = self._lines.get(timeout=max(timeout, 0.0))
+        except queue.Empty:
+            raise TimeoutError("MCP client: nenhuma linha recebida no prazo") from None
+        if line is None:
+            self._eof = True
+        return line
 
 
 def _read_response(
-    stream: IO[str], request_id: str | int, timeout: float = 30.0
+    reader: _LineQueueReader,
+    request_id: str | int,
+    timeout: float = MCP_CLIENT_REQUEST_TIMEOUT_SECONDS,
+    cancel_event: threading.Event | None = None,
 ) -> dict:
+    """Espera a resposta de ``request_id`` respeitando prazo e cancelamento.
+
+    Mensagens sem ``id`` (notificações) e respostas de pedidos já abandonados
+    por prazo ou cancelamento são descartadas.
+    """
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        line = _read_line(stream)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"MCP client: timeout de {timeout:.0f}s aguardando resposta para {request_id}"
+            )
+        if cancel_event is not None and cancel_event.is_set():
+            raise MCPRequestCancelled(
+                f"MCP client: pedido {request_id} cancelado pelo run do agente"
+            )
+        wait = remaining if cancel_event is None else min(remaining, _CANCEL_POLL_SECONDS)
+        try:
+            line = reader.readline(timeout=wait)
+        except TimeoutError:
+            continue
         if line is None:
             raise ConnectionError("MCP client: conexão fechada pelo servidor")
         try:
@@ -257,13 +328,8 @@ def _read_response(
             continue
         if not isinstance(msg, dict):
             continue
-        if "id" not in msg:
-            continue
         if msg.get("id") == request_id:
             return msg
-    raise TimeoutError(
-        f"MCP client: timeout aguardando resposta para {request_id}"
-    )
 
 
 # ── Transporte abstrato ──────────────────────────────────────────────────
@@ -719,12 +785,19 @@ class HttpMCPTransport(MCPTransport):
         return "http"
 
     def send_mcp_request(
-        self, method: str, params: dict | None = None
+        self,
+        method: str,
+        params: dict | None = None,
+        *,
+        timeout: float = MCP_CLIENT_REQUEST_TIMEOUT_SECONDS,
     ) -> dict:
         msg_id = str(uuid.uuid4())
         body = _build_request(method, params, msg_id)
         resp_data = self._http_request(
-            "POST", headers={"Content-Type": "application/json"}, data=body
+            "POST",
+            headers={"Content-Type": "application/json"},
+            data=body,
+            timeout=timeout,
         )
         if resp_data:
             return resp_data
@@ -770,6 +843,7 @@ class HttpMCPTransport(MCPTransport):
         headers: dict | None = None,
         data: dict | None = None,
         expect_session: bool = False,
+        timeout: float = MCP_CLIENT_REQUEST_TIMEOUT_SECONDS,
     ) -> dict:
         import urllib.error
         import urllib.request
@@ -790,7 +864,7 @@ class HttpMCPTransport(MCPTransport):
                     req.add_header(k, v)
 
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 if expect_session:
                     sid = resp.headers.get("MCP-Session-Id")
                     if sid:
@@ -821,18 +895,25 @@ class _HttpWriterDummy:
 
 
 class MCPClientSession:
-    """Gerencia uma sessão com um servidor MCP externo."""
+    """Gerencia uma sessão com um servidor MCP externo.
+
+    O catálogo de tools é descoberto uma única vez, ao fim do handshake, e
+    fica em :attr:`tools`. Registrar handlers a partir dele é uma operação
+    local; a rede só volta a ser consultada em uma nova conexão (reconectar
+    pelo MCP Hub).
+    """
 
     def __init__(self, transport: MCPTransport, name: str = "external") -> None:
         self._transport = transport
         self._name = name
-        self._reader: IO[str] | None = None
+        self._reader: _LineQueueReader | None = None
         self._writer: IO[str] | None = None
         self._lock = threading.Lock()
         self._server_info: dict = {}
         self._protocol_version: str = ""
         self._seq = 0
         self._connected = False
+        self._tools: list[dict] = []
 
     @property
     def name(self) -> str:
@@ -854,14 +935,25 @@ class MCPClientSession:
     def transport(self) -> MCPTransport:
         return self._transport
 
+    @property
+    def tools(self) -> list[dict]:
+        """Catálogo (``tools/list``) descoberto no handshake desta sessão."""
+        return list(self._tools)
+
     def connect(self) -> None:
-        self._reader, self._writer = self._transport.connect()
+        """Handshake ``initialize`` seguido da descoberta do catálogo.
+
+        Uma sessão cujo ``tools/list`` falha não é utilizável e, portanto,
+        não conecta: o bridge publica a falha e o MCP Hub permite refazer.
+        """
+        reader, self._writer = self._transport.connect()
         self._connected = True
 
         try:
             if isinstance(self._transport, HttpMCPTransport):
                 result = self._transport.http_initialize()
             else:
+                self._reader = _LineQueueReader(reader, name=self._name)
                 result = self._send_request(
                     "initialize",
                     {
@@ -873,6 +965,10 @@ class MCPClientSession:
                         },
                     },
                 )
+            self._server_info = result.get("serverInfo", result)
+            self._protocol_version = result.get("protocolVersion", "")
+            self._send_notification("notifications/initialized")
+            tools = self.list_tools()
         except Exception as exc:
             self._connected = False
             if isinstance(self._transport, StdioMCPTransport):
@@ -887,14 +983,13 @@ class MCPClientSession:
                 raise error from exc
             raise
 
-        self._server_info = result.get("serverInfo", result)
-        self._protocol_version = result.get("protocolVersion", "")
-        self._send_notification("notifications/initialized")
+        self._tools = tools
         _logger.info(
-            "MCP client '%s' conectado a %s v%s",
+            "MCP client '%s' conectado a %s v%s · %d tool(s)",
             self._name,
             self._server_info.get("name", "?"),
             self._protocol_version,
+            len(tools),
         )
 
     def disconnect(self) -> None:
@@ -902,12 +997,24 @@ class MCPClientSession:
         self._transport.disconnect()
 
     def list_tools(self) -> list[dict]:
+        """Consulta ``tools/list`` no servidor; use :attr:`tools` para o catálogo já descoberto."""
         result = self._send_request("tools/list", {})
         raw = result.get("tools", []) if isinstance(result, dict) else []
         return list(raw)
 
-    def call_tool(self, name: str, arguments: dict) -> dict:
-        return self._send_request("tools/call", {"name": name, "arguments": arguments})
+    def call_tool(
+        self,
+        name: str,
+        arguments: dict,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> dict:
+        return self._send_request(
+            "tools/call",
+            {"name": name, "arguments": arguments},
+            timeout=MCP_CLIENT_TOOL_CALL_TIMEOUT_SECONDS,
+            cancel_event=cancel_event,
+        )
 
     def send_ping(self) -> dict:
         return self._send_request("ping", {})
@@ -916,9 +1023,17 @@ class MCPClientSession:
         self._seq += 1
         return f"mcp-{self._seq}"
 
-    def _send_request(self, method: str, params: dict) -> dict:
+    def _send_request(
+        self,
+        method: str,
+        params: dict,
+        *,
+        timeout: float = MCP_CLIENT_REQUEST_TIMEOUT_SECONDS,
+        cancel_event: threading.Event | None = None,
+    ) -> dict:
         if isinstance(self._transport, HttpMCPTransport):
-            resp = self._transport.send_mcp_request(method, params)
+            # ``urlopen`` não é interrompível: o cancelamento vale só pelo prazo.
+            resp = self._transport.send_mcp_request(method, params, timeout=timeout)
             if isinstance(resp, dict):
                 if "error" in resp:
                     err = resp["error"]
@@ -932,12 +1047,14 @@ class MCPClientSession:
         body = _build_request(method, params, msg_id)
 
         with self._lock:
-            if self._writer is None:
+            if self._writer is None or self._reader is None:
                 raise ConnectionError("MCP client: não conectado")
             line = json.dumps(body, ensure_ascii=False) + "\n"
             self._writer.write(line)
             self._writer.flush()
-            resp = _read_response(self._reader, msg_id)
+            resp = _read_response(
+                self._reader, msg_id, timeout=timeout, cancel_event=cancel_event
+            )
 
         if "error" in resp:
             err = resp["error"]
@@ -967,9 +1084,11 @@ class MCPClientSession:
 class MCPClientBridge:
     """Bridge entre servidores MCP externos e o runtime Quimera.
 
-    Conecta a servidores MCP externos configurados, descobre suas tools
-    via ``tools/list`` e registra handlers no ``ToolRegistry`` que
-    traduzem chamadas locais em chamadas remotas.
+    Conecta a servidores MCP externos configurados e registra, no
+    ``ToolRegistry`` de cada executor, handlers que traduzem chamadas locais
+    em chamadas remotas. A descoberta (``tools/list``) acontece uma vez por
+    sessão, no handshake; :meth:`register_handlers` só lê esse catálogo e por
+    isso pode rodar a cada fork de executor sem tocar a rede.
     """
 
     def __init__(self) -> None:
@@ -1334,7 +1453,12 @@ class MCPClientBridge:
         return True
 
     def register_handlers(self, registry) -> list[str]:
-        """Descobre tools de todas as sessões e registra handlers no ToolRegistry.
+        """Registra no ToolRegistry as tools já descobertas pelas sessões conectadas.
+
+        Operação local: percorre ``session.tools`` de cada sessão e liga um
+        handler por tool. Não há ida à rede aqui, o que mantém o fork de
+        executor por execução na casa dos milissegundos e livre de travar
+        quando um servidor externo emudece.
 
         Returns:
             Lista de nomes de tools registradas.
@@ -1346,19 +1470,9 @@ class MCPClientBridge:
         # Snapshot: conexões em background podem entrar no dict durante a
         # iteração; elas serão incluídas no próximo refresh_registration.
         for session_name, session in list(self.sessions.items()):
-            try:
-                tools = session.list_tools()
-            except Exception as exc:
-                _logger.warning(
-                    "MCP bridge '%s': falha ao listar tools: %s",
-                    session_name,
-                    exc,
-                )
-                continue
-
             tool_counts[session_name] = 0
             effective_prefix = f"{session_name}_"
-            for tool in tools:
+            for tool in session.tools:
                 tool_name = tool.get("name", "")
                 if not tool_name:
                     continue
@@ -1421,8 +1535,14 @@ class MCPClientBridge:
     ) -> Callable[[ToolCall], ToolResult]:
         def handler(call: ToolCall) -> ToolResult:
             start = time.monotonic()
+            # Evento publicado pelo MCPServer (agentes CLI) e pelo driver
+            # OpenAI-compatível (perfis de API e cloud) quando o run é
+            # cancelado: a espera pela resposta remota termina junto.
+            cancel_event = call.metadata.get("_mcp_cancel_event")
             try:
-                result = session.call_tool(remote_tool_name, call.arguments)
+                result = session.call_tool(
+                    remote_tool_name, call.arguments, cancel_event=cancel_event
+                )
                 duration = int((time.monotonic() - start) * 1000)
 
                 content_parts = result.get("content", [])

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
+import os
 import sys
 import threading
 import time
@@ -19,14 +21,20 @@ from quimera.runtime.drivers.tool_schemas import (
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.mcp.client import (
     DEFAULT_MCP_REMOTE_VERSION,
+    MCP_CLIENT_REQUEST_TIMEOUT_SECONDS,
+    MCP_CLIENT_TOOL_CALL_TIMEOUT_SECONDS,
     HttpMCPTransport,
     MCPClientBridge,
     MCPClientSession,
     MCPConnectError,
     MCPConnectSuperseded,
     MCPConnectionPhase,
+    MCPRequestCancelled,
+    MCPTransport,
     RemoteMCPTransport,
     StdioMCPTransport,
+    _LineQueueReader,
+    _read_response,
     build_mcp_remote_command,
     connect_mcp_client_spec,
     connect_mcp_clients_in_background,
@@ -75,11 +83,19 @@ def test_http_mcp_session_sends_initialized_notification_after_handshake(monkeyp
         "send_mcp_notification",
         lambda method, params=None: calls.append((method, params)),
     )
+    monkeypatch.setattr(
+        transport,
+        "send_mcp_request",
+        lambda method, params=None, *, timeout: calls.append((method, params))
+        or {"result": {"tools": [{"name": "search", "inputSchema": {"type": "object"}}]}},
+    )
 
     session = MCPClientSession(transport, name="remote")
     session.connect()
 
-    assert calls == [("notifications/initialized", None)]
+    # ``initialized`` precede a descoberta; o catálogo fica na sessão.
+    assert calls == [("notifications/initialized", None), ("tools/list", {})]
+    assert [tool["name"] for tool in session.tools] == ["search"]
 
 
 class FakeSession:
@@ -87,8 +103,13 @@ class FakeSession:
 
     def __init__(self) -> None:
         self.calls = []
+        self.cancel_events = []
 
     def list_tools(self):
+        raise AssertionError("register_handlers não deve consultar a rede")
+
+    @property
+    def tools(self):
         return [
             {
                 "name": "search_issue",
@@ -103,8 +124,9 @@ class FakeSession:
             }
         ]
 
-    def call_tool(self, name: str, arguments: dict):
+    def call_tool(self, name: str, arguments: dict, *, cancel_event=None):
         self.calls.append((name, arguments))
+        self.cancel_events.append(cancel_event)
         return {
             "content": [{"type": "text", "text": "PC-1 Example issue"}],
             "isError": False,
@@ -112,8 +134,9 @@ class FakeSession:
 
 
 class MultiFakeSession(FakeSession):
-    def list_tools(self):
-        tools = super().list_tools()
+    @property
+    def tools(self):
+        tools = super().tools
         tools.append(
             {
                 "name": "transition_issue",
@@ -132,7 +155,7 @@ class MultiFakeSession(FakeSession):
 
 
 class ImageFakeSession(FakeSession):
-    def call_tool(self, name: str, arguments: dict):
+    def call_tool(self, name: str, arguments: dict, *, cancel_event=None):
         return {
             "content": [
                 {"type": "text", "text": "Screenshot salvo."},
@@ -349,7 +372,8 @@ def _install_fake_session(monkeypatch, *, failing=(), tools_by_name=None):
         def disconnect(self):
             self.connected = False
 
-        def list_tools(self):
+        @property
+        def tools(self):
             return [
                 {
                     "name": tool_name,
@@ -359,7 +383,7 @@ def _install_fake_session(monkeypatch, *, failing=(), tools_by_name=None):
                 for tool_name in tools_by_name.get(self._name, ["ping"])
             ]
 
-        def call_tool(self, name, arguments):
+        def call_tool(self, name, arguments, *, cancel_event=None):
             return {"content": [{"type": "text", "text": "ok"}], "isError": False}
 
     monkeypatch.setattr("quimera.runtime.mcp.client.MCPClientSession", FakeMCPClientSession)
@@ -679,11 +703,10 @@ def test_manager_disconnect_remove_tools_vivas_e_preserva_config(monkeypatch, tm
     config.set_mcp_configuration(["jira=stdio:jira-cmd"], [])
 
     class FakeSession:
+        tools = []
+
         def disconnect(self):
             captured["disconnected"] = True
-
-        def list_tools(self):
-            return []
 
     bridge = MCPClientBridge()
     bridge._sessions["jira"] = FakeSession()
@@ -1162,8 +1185,7 @@ class _GateSession:
     def disconnect(self):
         self.closed = True
 
-    def list_tools(self):
-        return []
+    tools: list[dict] = []
 
 
 def _gated_transport(kind: str = "stdio") -> MagicMock:
@@ -1500,3 +1522,220 @@ def test_stdio_transport_repassa_falha_do_popen_a_thread_do_handshake(tmp_path):
     with pytest.raises(FileNotFoundError):
         transport.connect()
     assert transport._process is None
+
+
+# ── Catálogo por sessão e leitura com prazo real ──────────────────────────
+
+
+class _ScriptedTransport(MCPTransport):
+    """Transporte em memória: devolve as respostas já escritas e grava os pedidos."""
+
+    def __init__(self, responses: list[dict], *, reader=None) -> None:
+        self.reader = reader if reader is not None else io.StringIO(
+            "".join(json.dumps(response) + "\n" for response in responses)
+        )
+        self.writer = io.StringIO()
+        self.disconnected = False
+
+    def connect(self):
+        return self.reader, self.writer
+
+    def disconnect(self) -> None:
+        self.disconnected = True
+
+    @property
+    def transport_type(self) -> str:
+        return "stdio"
+
+    def requests(self) -> list[dict]:
+        return [json.loads(line) for line in self.writer.getvalue().splitlines() if line]
+
+
+def _initialize_response(msg_id: str = "mcp-1") -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": msg_id,
+        "result": {
+            "protocolVersion": "2025-11-25",
+            "serverInfo": {"name": "fake", "version": "1"},
+        },
+    }
+
+
+def _tools_response(names: list[str], msg_id: str = "mcp-2") -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": msg_id,
+        "result": {
+            "tools": [
+                {"name": name, "description": "", "inputSchema": {"type": "object"}}
+                for name in names
+            ]
+        },
+    }
+
+
+def test_session_connect_descobre_catalogo_uma_vez_e_register_handlers_nao_vai_a_rede():
+    """A descoberta roda no handshake; o fork do executor só lê ``session.tools``."""
+    transport = _ScriptedTransport([_initialize_response(), _tools_response(["search"])])
+    session = MCPClientSession(transport, name="jira")
+
+    session.connect()
+
+    methods = [request["method"] for request in transport.requests()]
+    assert methods == ["initialize", "notifications/initialized", "tools/list"]
+    assert [tool["name"] for tool in session.tools] == ["search"]
+
+    bridge = MCPClientBridge()
+    bridge._sessions["jira"] = session
+    bridge._started = True
+    registered = []
+    for _ in range(3):
+        registered = bridge.register_handlers(ToolRegistry())
+
+    assert registered == ["jira_search"]
+    assert bridge.state("jira") is None or bridge.state("jira").tools == 1
+    # Nenhum ``tools/list`` novo foi escrito no pipe pelos registros.
+    assert [request["method"] for request in transport.requests()] == methods
+
+
+def test_session_connect_falha_quando_tools_list_nao_responde():
+    """Sessão sem catálogo não conecta: o bridge publica a falha e o Hub refaz."""
+    transport = _ScriptedTransport([_initialize_response()])
+    session = MCPClientSession(transport, name="jira")
+
+    with pytest.raises(ConnectionError, match="conexão fechada pelo servidor"):
+        session.connect()
+
+    assert session.connected is False
+    assert session.tools == []
+
+
+def _pipe_reader() -> tuple[_LineQueueReader, int]:
+    read_fd, write_fd = os.pipe()
+    reader = _LineQueueReader(os.fdopen(read_fd, "r", encoding="utf-8"), name="teste")
+    return reader, write_fd
+
+
+def test_read_response_expira_quando_o_servidor_emudece():
+    """Regressão do travamento: ``readline`` em pipe mudo não tem fim; a fila tem."""
+    reader, write_fd = _pipe_reader()
+    try:
+        started = time.monotonic()
+        with pytest.raises(TimeoutError, match="timeout de 0s"):
+            _read_response(reader, "mcp-1", timeout=0.3)
+        assert time.monotonic() - started < 2.0
+    finally:
+        os.close(write_fd)
+
+
+def test_read_response_descarta_respostas_de_pedidos_abandonados():
+    reader, write_fd = _pipe_reader()
+    try:
+        os.write(write_fd, b'{"jsonrpc":"2.0","method":"notifications/progress"}\n')
+        os.write(write_fd, b'{"jsonrpc":"2.0","id":"mcp-1","result":{"late":true}}\n')
+        os.write(write_fd, b'{"jsonrpc":"2.0","id":"mcp-2","result":{"ok":true}}\n')
+
+        response = _read_response(reader, "mcp-2", timeout=2.0)
+
+        assert response["result"] == {"ok": True}
+    finally:
+        os.close(write_fd)
+
+
+def test_fechar_o_pipe_destrava_leitura_presa_sem_esperar_o_prazo():
+    """É o que ``bridge.shutdown()`` faz ao matar o servidor: EOF encerra a espera."""
+    reader, write_fd = _pipe_reader()
+    outcome: dict[str, BaseException] = {}
+
+    def wait_forever() -> None:
+        try:
+            _read_response(reader, "mcp-1", timeout=30.0)
+        except BaseException as exc:  # noqa: BLE001 - registrado para o teste
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=wait_forever, daemon=True)
+    thread.start()
+    time.sleep(0.2)
+    assert thread.is_alive()
+
+    os.close(write_fd)
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert isinstance(outcome["error"], ConnectionError)
+    # Depois do EOF toda leitura responde na hora, sem esperar o prazo.
+    assert reader.readline(timeout=30.0) is None
+
+
+def test_read_response_termina_quando_o_run_do_agente_e_cancelado():
+    reader, write_fd = _pipe_reader()
+    cancel_event = threading.Event()
+    try:
+        timer = threading.Timer(0.2, cancel_event.set)
+        timer.start()
+        started = time.monotonic()
+        with pytest.raises(MCPRequestCancelled):
+            _read_response(reader, "mcp-1", timeout=30.0, cancel_event=cancel_event)
+        assert time.monotonic() - started < 3.0
+    finally:
+        os.close(write_fd)
+
+
+def test_call_tool_usa_prazo_longo_e_handshake_usa_prazo_curto(monkeypatch):
+    observed: list[tuple[str, float, object]] = []
+
+    def fake_read_response(reader, request_id, timeout, cancel_event=None):
+        observed.append((request_id, timeout, cancel_event))
+        if len(observed) == 1:
+            return _initialize_response(request_id)
+        if len(observed) == 2:
+            return _tools_response(["search"], request_id)
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"content": []}}
+
+    monkeypatch.setattr("quimera.runtime.mcp.client._read_response", fake_read_response)
+    session = MCPClientSession(_ScriptedTransport([]), name="jira")
+    session.connect()
+    cancel_event = threading.Event()
+
+    session.call_tool("search", {"q": "x"}, cancel_event=cancel_event)
+
+    assert [entry[1] for entry in observed] == [
+        MCP_CLIENT_REQUEST_TIMEOUT_SECONDS,
+        MCP_CLIENT_REQUEST_TIMEOUT_SECONDS,
+        MCP_CLIENT_TOOL_CALL_TIMEOUT_SECONDS,
+    ]
+    assert observed[-1][2] is cancel_event
+
+
+def test_handler_repassa_o_cancel_event_do_run_a_sessao():
+    """CLI (MCPServer) e perfis de API/cloud publicam ``_mcp_cancel_event``."""
+    session = FakeSession()
+    handler = MCPClientBridge._make_handler(session, "search_issue", "", {"type": "object"})
+    cancel_event = threading.Event()
+
+    handler(
+        ToolCall(
+            name="jira_search_issue",
+            arguments={"jql": "x"},
+            metadata={"_mcp_cancel_event": cancel_event},
+        )
+    )
+    handler(ToolCall(name="jira_search_issue", arguments={"jql": "y"}))
+
+    assert session.cancel_events == [cancel_event, None]
+
+
+def test_handler_devolve_erro_quando_a_chamada_e_cancelada():
+    class CancelledSession(FakeSession):
+        def call_tool(self, name, arguments, *, cancel_event=None):
+            raise MCPRequestCancelled("MCP client: pedido mcp-3 cancelado pelo run do agente")
+
+    handler = MCPClientBridge._make_handler(
+        CancelledSession(), "search_issue", "", {"type": "object"}
+    )
+
+    result = handler(ToolCall(name="jira_search_issue", arguments={}))
+
+    assert result.ok is False
+    assert "cancelado" in result.error

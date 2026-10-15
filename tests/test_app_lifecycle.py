@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from quimera.app.lifecycle import AppLifecycle
+from quimera.runtime.tools.mcp_clients import set_bridge
 
 
 def _app(events):
@@ -47,3 +48,32 @@ def test_lifecycle_close_is_idempotent():
     lifecycle.close()
 
     assert events == first
+
+
+def test_lifecycle_close_encerra_mcp_clients_externos_depois_do_resumo():
+    """O shutdown do bridge mata os mcp-remote e fecha os pipes antes do atexit
+    unir as threads do pool do chat; corre depois do resumo de sessão, que
+    ainda pode usar tools externas."""
+    events = []
+    bridge = SimpleNamespace(shutdown=Mock(side_effect=lambda: events.append("mcp.shutdown")))
+    set_bridge(bridge)
+    try:
+        AppLifecycle(_app(events)).close()
+    finally:
+        set_bridge(None)
+
+    assert events.count("mcp.shutdown") == 1
+    assert events.index("session.shutdown") < events.index("mcp.shutdown")
+    assert events.index("mcp.shutdown") < events.index("agent.close")
+
+
+def test_lifecycle_close_segue_quando_o_shutdown_do_bridge_falha():
+    events = []
+    set_bridge(SimpleNamespace(shutdown=Mock(side_effect=RuntimeError("pipe quebrado"))))
+    try:
+        AppLifecycle(_app(events)).close()
+    finally:
+        set_bridge(None)
+
+    assert "agent.close" in events
+    assert "bugs.close" in events

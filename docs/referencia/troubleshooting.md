@@ -47,6 +47,20 @@ mesmo que um servidor esteja lento, exigindo autorização OAuth ou fora do ar.
    Reconectar) sem reiniciar.
 4. As tools de uma conexão só entram no `tools/list` dos agentes depois que ela
    conecta; agentes que já listaram as tools antes disso precisam listar de novo.
+5. O catálogo de cada conexão é lido uma única vez, no handshake. Se o servidor
+   passar a expor tools novas, use Reconectar no MCP Hub. Em compensação,
+   iniciar uma execução nunca espera por um servidor externo: o fork do
+   runtime registra as tools a partir do catálogo já conhecido, em qualquer
+   perfil de agente (CLI, API ou cloud).
+
+## Tool de MCP externo não responde
+
+Uma chamada `tools/call` a um servidor externo que emudece termina sozinha em
+até 5 minutos, com erro de timeout devolvido ao agente. Cancelar o prompt
+interrompe a espera na hora, em qualquer perfil, e encerrar o Quimera mata os
+servidores externos (ex.: `mcp-remote`) antes de sair, então uma conexão presa
+não segura mais o `/exit`. Se o servidor costuma demorar mais que isso por
+desenho, abra uma issue: o prazo é fixo em `MCP_CLIENT_TOOL_CALL_TIMEOUT_SECONDS`.
 
 ### Autorização OAuth pendente
 
