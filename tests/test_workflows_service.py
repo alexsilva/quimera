@@ -384,3 +384,96 @@ def test_pool_hooks_use_the_configured_attempt_limit(tmp_path):
     configured = TaskExecutorPool(get_workflow_limits=lambda: WorkflowLimits(max_task_attempts=5))
     assert hooks_for(configured).max_attempts == 5
     assert hooks_for(TaskExecutorPool()).max_attempts == WorkflowLimits().max_task_attempts
+
+
+def _count_reconciles(h):
+    reconciles = []
+    original = h.coordinator.reconcile
+
+    def counting(workflow_id):
+        reconciles.append(workflow_id)
+        return original(workflow_id)
+
+    h.coordinator.reconcile = counting
+    return reconciles
+
+
+def test_monitor_does_not_spin_while_a_workflow_runs(tmp_path):
+    """Um reconcile que termina não reacorda o monitor: sem evento novo, só o poll reavalia."""
+    h = Harness(tmp_path, ["a1"])
+    reconciles = _count_reconciles(h)
+    service = WorkflowService(h.coordinator, poll_seconds=30)
+    service.start()
+    try:
+        wf = h.coordinator.create(plan_payload([task_spec("T1")]), requested_by="c").workflow
+        h.coordinator.start(wf.id)
+        service.wake()
+        time.sleep(0.5)
+        # Antes eram centenas por segundo: o fim de cada reconcile disparava o próximo.
+        assert reconciles == [wf.id]
+    finally:
+        service.stop()
+
+
+def test_wake_during_a_reconcile_runs_exactly_one_more(tmp_path):
+    """Pedido chegado com o workflow ocupado não se perde: uma reavaliação ao terminar, e só uma."""
+    h = Harness(tmp_path, ["a1"])
+    reconciles = _count_reconciles(h)
+    entered, release = threading.Event(), threading.Event()
+    counting = h.coordinator.reconcile
+
+    def blocking(workflow_id):
+        if not entered.is_set():
+            entered.set()
+            release.wait(5)
+        return counting(workflow_id)
+
+    h.coordinator.reconcile = blocking
+    service = WorkflowService(h.coordinator, poll_seconds=30)
+    service.start()
+    try:
+        wf = h.coordinator.create(plan_payload([task_spec("T1")]), requested_by="c").workflow
+        h.coordinator.start(wf.id)
+        service.wake()
+        assert entered.wait(5)
+        service.wake()  # chega enquanto o primeiro reconcile ainda roda
+        time.sleep(0.2)
+        assert reconciles == []  # ocupado: nada roda em paralelo para o mesmo workflow
+        release.set()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and len(reconciles) < 2:
+            time.sleep(0.02)
+        assert reconciles == [wf.id, wf.id]
+        time.sleep(0.3)
+        assert len(reconciles) == 2  # e nenhum ciclo extra por conta própria
+    finally:
+        service.stop()
+
+
+def test_reconcile_publishes_the_overview_without_a_new_cycle(tmp_path):
+    """A conclusão decidida no reconcile chega ao shared_state sem reacordar o monitor."""
+    h = Harness(tmp_path, ["a1"])
+    h.consult_answer = "tudo conferido"
+    reconciles = _count_reconciles(h)
+    refreshed = []
+    service = WorkflowService(
+        h.coordinator, refresh_state=lambda: refreshed.append(1), poll_seconds=30
+    )
+    service.start()
+    try:
+        wf = h.coordinator.create(plan_payload([task_spec("T1")]), requested_by="claude").workflow
+        h.coordinator.start(wf.id)
+        task_id = h.workflows.snapshot(wf.id).tasks[0].link.task_id
+        assert h.tasks.claim_task("a1") == task_id
+        assert h.tasks.complete_task(task_id, result="ok")
+        service.wake()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and len(refreshed) < 2:
+            time.sleep(0.02)
+        record = h.workflows.get(wf.id)
+        assert record.status == WorkflowStatus.COMPLETED and record.result == "tudo conferido"
+        # Um refresh ao despachar (workflow em andamento) e outro do próprio reconcile (concluído).
+        assert len(refreshed) == 2 and service.open_overview() == []
+        assert reconciles == [wf.id]
+    finally:
+        service.stop()

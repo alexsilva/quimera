@@ -119,3 +119,25 @@ def test_review_agents_for_treats_alias_as_same_agent_identity():
     candidates = policy.review_agents_for(executor_agent="/code")
 
     assert candidates == ["opencode"]
+
+
+def test_is_active_agent_checks_pool_membership_with_prefix_and_alias():
+    """Verifica que is_active_agent segue o pool atual, aceitando prefixo e alias."""
+    pool = ["codex", "opencode"]
+    profiles = {
+        "codex": ProfileStub(name="codex", prefix="/codex"),
+        "opencode": ProfileStub(name="opencode", prefix="/code", aliases=["pickle"]),
+    }
+    policy = TaskFailoverPolicy(
+        active_agents=lambda: pool,
+        get_agent_profile=lambda name: profiles.get(name),
+        repository=RepositorySpy(),
+    )
+
+    assert policy.is_active_agent("codex") is True
+    assert policy.is_active_agent("/code") is True
+    assert policy.is_active_agent("pickle") is True
+    assert policy.is_active_agent("gemini") is False
+
+    pool.remove("codex")
+    assert policy.is_active_agent("codex") is False

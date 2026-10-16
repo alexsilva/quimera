@@ -127,7 +127,12 @@ mais nova, e um resultado que chega após o cancelamento é descartado.
 
 `WorkflowCoordinator.reconcile` só lê o banco e é idempotente. É chamado pelo
 monitor do `WorkflowService`, que acorda com eventos de task e, sem eles, a
-cada 5 s:
+cada 5 s enquanto houver workflow em `running` (sem workflow ativo, dorme). Um
+reconcile que termina publica o resumo no shared_state e só reacorda o monitor
+se chegou um pedido enquanto ele estava ocupado; nunca por conta própria, para
+o monitor não girar enquanto o workflow corre. A cadeia de tasks não depende
+dele: os executores são acordados diretamente pelo fim de cada worker. O
+reconcile decide o que resta:
 
 1. reenfileira tasks em voo sem execução viva neste processo e com lease
    (`lease_seconds`) expirado;

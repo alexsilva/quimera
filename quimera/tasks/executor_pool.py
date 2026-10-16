@@ -303,11 +303,39 @@ class TaskExecutorPool:
                 )
             if agent in failover_policy.review_agents_for():
                 executor.set_review_handler(task_review_service.handler_for(agent))
-            if claim_gate is not None and hasattr(executor, "set_claim_gate"):
-                executor.set_claim_gate(claim_gate)
-            executor.start()
+            if hasattr(executor, "set_claim_gate"):
+                executor.set_claim_gate(
+                    self._claim_gate_for(agent, failover_policy, claim_gate)
+                )
             executors.append(executor)
+
+        def _wake_peers() -> None:
+            for peer in executors:
+                wake = getattr(peer, "wake", None)
+                if callable(wake):
+                    wake()
+
+        for executor in executors:
+            if hasattr(executor, "set_peer_wake"):
+                executor.set_peer_wake(_wake_peers)
+            executor.start()
         self._replace_task_executors(executors)
+
+    @staticmethod
+    def _claim_gate_for(agent: str, failover_policy: TaskFailoverPolicy, claim_gate):
+        """Gate de claim do executor de ``agent``: só reivindica enquanto estiver no pool.
+
+        Um agente removido do pool (``AgentFailureTracker`` após falhas seguidas)
+        mantém o executor vivo; sem este gate ele continuava reivindicando tasks
+        livres e falhando em segundos, consumindo as tentativas de workflows.
+        """
+
+        def _allowed() -> bool:
+            if not failover_policy.is_active_agent(agent):
+                return False
+            return claim_gate is None or bool(claim_gate())
+
+        return _allowed
 
     def stop_task_executors(self):
         """Interrompe todos os executores de tasks em segundo plano."""

@@ -3,9 +3,12 @@
 Mantém um monitor leve que chama a reconciliação determinística do
 ``WorkflowCoordinator``: acordado por eventos de task e mudanças de estado e,
 só enquanto houver workflow em ``running``, também por um poll espaçado (que
-cobre eventos perdidos e leases expirados). Sem workflow ativo ele dorme. Nenhuma
-chamada de modelo fica aberta aguardando workers: o agente principal só é
-consultado quando o coordenador identifica uma decisão real.
+cobre eventos perdidos e leases expirados). Sem workflow ativo ele dorme. Um
+reconcile que termina publica o resumo e só reacorda o monitor se chegou um
+pedido enquanto ele estava ocupado: nunca por conta própria, senão o monitor
+giraria sem parar enquanto houvesse workflow em execução. Nenhuma chamada de
+modelo fica aberta aguardando workers: o agente principal só é consultado
+quando o coordenador identifica uma decisão real.
 
 Uma única sessão do Quimera coordena os workflows de um workspace: a que detém
 o ``CoordinationLock`` (flock, liberado pelo sistema quando o processo morre).
@@ -90,7 +93,9 @@ class WorkflowService:
         self._pool: ThreadPoolExecutor | None = None
         self._last_overview: list[dict] = []
         self._busy: set[int] = set()
+        self._pending: set[int] = set()  # pedidos chegados enquanto o workflow reconciliava
         self._busy_lock = threading.Lock()
+        self._overview_lock = threading.Lock()
         self._has_running = False
 
     @property
@@ -116,6 +121,7 @@ class WorkflowService:
         self._stopped.clear()
         with self._busy_lock:
             self._busy.clear()  # reconciles cancelados num stop anterior não rodaram o finally
+            self._pending.clear()
         self._take_coordination()
         self._pool = ThreadPoolExecutor(
             max_workers=_MAX_PARALLEL_RECONCILES, thread_name_prefix="workflow"
@@ -175,10 +181,11 @@ class WorkflowService:
 
     def _publish_overview(self) -> None:
         """Atualiza o shared_state só quando o resumo dos workflows abertos muda."""
-        current = self.open_overview()
-        if current != self._last_overview:
-            self._last_overview = current
-            self._refresh_state()
+        with self._overview_lock:
+            current = self.open_overview()
+            if current != self._last_overview:
+                self._last_overview = current
+                self._refresh_state()
 
     def _dispatch_reconciles(self) -> None:
         pool = self._pool
@@ -189,6 +196,8 @@ class WorkflowService:
         for workflow in running:
             with self._busy_lock:
                 if workflow.id in self._busy:
+                    # O pedido chegou durante o reconcile: reavalia uma vez ao terminar.
+                    self._pending.add(workflow.id)
                     continue
                 self._busy.add(workflow.id)
             pool.submit(self._reconcile_one, workflow.id)
@@ -201,7 +210,14 @@ class WorkflowService:
         finally:
             with self._busy_lock:
                 self._busy.discard(workflow_id)
-            self._wake.set()
+                again = workflow_id in self._pending
+                self._pending.discard(workflow_id)
+            if not self._stopped.is_set():
+                # O reconcile pode ter mudado o estado (requeue, falha, conclusão):
+                # o resumo sai daqui, sem reacordar o monitor para um novo ciclo.
+                self._publish_overview()
+            if again:
+                self._wake.set()
 
     # ── Apresentação ───────────────────────────────────────────────────
 

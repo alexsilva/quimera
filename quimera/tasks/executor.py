@@ -53,10 +53,20 @@ class TaskExecutor:
         self._review_handler: Optional[Callable] = None
         self._review_eligibility: Optional[Callable[[], bool]] = None
         self._claim_gate: Optional[Callable[[], bool]] = None
+        self._peer_wake: Optional[Callable[[], None]] = None
 
     def set_claim_gate(self, gate: Callable[[], bool]) -> None:
         """Define predicado que controla quando o executor pode reivindicar tasks."""
         self._claim_gate = gate
+
+    def set_peer_wake(self, callback: Callable[[], None]) -> None:
+        """Define callback que acorda os demais executores quando um worker termina.
+
+        O fim de uma execução costuma gerar trabalho para outro agente (review
+        de outro executor, requeue após falha); sem o aviso, o outro executor só
+        o veria no próximo poll.
+        """
+        self._peer_wake = callback
 
     def set_handler(self, handler: Callable[[TaskRecord], bool]):
         """Define o handler de execução que processa cada task reivindicada."""
@@ -171,6 +181,8 @@ class TaskExecutor:
         except Exception:
             _logger.exception("task worker recovery failed agent=%s", self.agent_name)
         self.wake()
+        if self._peer_wake is not None:
+            self._peer_wake()
 
     def _process_next(self, *, include_reviews: bool = False) -> Optional[int]:
         # Keep the capacity check, claim and submission together so manual polling

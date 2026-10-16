@@ -292,3 +292,21 @@ def test_manual_polling_respects_gate_and_requires_handler(repository):
     executor.set_claim_gate(lambda: False)
     assert executor.process_pending() is None
     assert repository.claim_sequence == [1]
+
+
+def test_completed_worker_wakes_peers(repository):
+    """O fim de um worker acorda os demais executores, não só o próprio poller."""
+    repository.claim_sequence = [1]
+    repository.tasks_by_id = {
+        1: TaskRecord(id=1, job_id=0, description="", status=TaskStatus.IN_PROGRESS)
+    }
+    executor = TaskExecutor("agent", max_workers=1, poll_interval=60, repository=repository)
+    peers_woken = threading.Event()
+    executor.set_handler(lambda task: True)
+    executor.set_peer_wake(peers_woken.set)
+    executor.start()
+    try:
+        assert peers_woken.wait(3)
+    finally:
+        executor.stop()
+        executor._executor.shutdown(wait=True)

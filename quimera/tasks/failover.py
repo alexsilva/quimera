@@ -108,9 +108,13 @@ class TaskFailoverPolicy:
         right_profile = self._resolve_profile_from_agent_name(right_norm)
         return self._profile_canonical_name(left_profile, left_norm) == self._profile_canonical_name(right_profile, right_norm)
 
+    def is_active_agent(self, agent_name: str) -> bool:
+        """Retorna se o agente está no pool ativo (tolerando prefixo e aliases)."""
+        return any(self._same_agent_identity(agent_name, active) for active in self.active_agents)
+
     def is_operational_review_agent(self, agent_name: str) -> bool:
         """Retorna se o agente está ativo e apto a executar task/review."""
-        if not any(self._same_agent_identity(agent_name, active) for active in self.active_agents):
+        if not self.is_active_agent(agent_name):
             return False
         return self._resolve_profile_from_agent_name(agent_name) is not None
 

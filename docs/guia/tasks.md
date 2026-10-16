@@ -80,6 +80,10 @@ Uma task pode ser reatribuída quando:
 
 O histórico de agentes falhos fica na própria task, junto com contador de tentativas.
 
+Um agente removido do pool da sessão (duas falhas seguidas de backend, pelo `AgentFailureTracker`) deixa de reivindicar tasks e reviews na hora: o executor dele continua vivo, mas o gate de claim segue o pool atual, e ele volta a reivindicar se reentrar no pool. Sem esse gate, o agente removido continuava pegando tasks livres e falhando em segundos, o que consumia as tentativas de um workflow antes de um agente saudável chegar a elas.
+
+Quando um worker termina uma execução ou um review, todos os executores são acordados: o review de outro agente e o requeue após falha passam a ser reivindicados na hora, em vez de esperar o próximo poll (5 s).
+
 ## Inspecionar tasks por ferramenta
 
 Agentes com MCP podem chamar:

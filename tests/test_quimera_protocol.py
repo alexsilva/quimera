@@ -4257,6 +4257,58 @@ class ProfileTests(unittest.TestCase):
         )
         complete_task.assert_not_called()
 
+    def test_task_executors_stop_claiming_when_agent_leaves_pool(self):
+        """Executor de agente removido do pool deixa de reivindicar; volta ao reentrar."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_GEMINI])
+        app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
+        app.tasks_db_path = "/tmp/quimera-tasks-test.db"
+        gates = {}
+        peer_wakes = {}
+        woken = []
+
+        class FakeExecutor:
+            def __init__(self, agent):
+                self.agent = agent
+
+            def set_review_handler(self, handler):
+                pass
+
+            def set_review_eligibility(self, predicate):
+                pass
+
+            def set_claim_gate(self, gate):
+                gates[self.agent] = gate
+
+            def set_peer_wake(self, callback):
+                peer_wakes[self.agent] = callback
+
+            def wake(self):
+                woken.append(self.agent)
+
+            def start(self):
+                return None
+
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
+            return FakeExecutor(agent)
+
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor):
+            app._setup_task_executors()
+
+        self.assertTrue(gates[AGENT_CLAUDE]())
+        self.assertTrue(gates[AGENT_GEMINI]())
+
+        app.agent_pool.remove(AGENT_CLAUDE)
+        self.assertFalse(gates[AGENT_CLAUDE]())
+        self.assertTrue(gates[AGENT_GEMINI]())
+
+        app.agent_pool.add(AGENT_CLAUDE)
+        self.assertTrue(gates[AGENT_CLAUDE]())
+
+        peer_wakes[AGENT_CLAUDE]()
+        self.assertEqual(sorted(woken), sorted([AGENT_CLAUDE, AGENT_GEMINI]))
+
     def test_task_handler_completes_when_no_other_operational_reviewer_exists(self):
         """Verifica que task handler completes when no other operational reviewer exists."""
         app = QuimeraApp.__new__(QuimeraApp)
