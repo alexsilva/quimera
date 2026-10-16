@@ -77,7 +77,7 @@ Principais flags:
 - `--driver-repl <profile>`: REPL para testar driver `openai_compat`.
 - `--mcp-socket [path]` / `--mcp-http`: socket Unix (padrão); `--mcp-http` expõe servidor HTTP adicional sem substituir o socket Unix interno.
 - `--no-mcp`: desativa o servidor MCP.
-- `--mcp-http --mcp-host 127.0.0.1 --mcp-port 9090`: expõe servidor MCP HTTP externo adicional, mantendo o socket Unix interno, e grava os valores no overlay MCP do workspace.
+- `--mcp-http --mcp-host 127.0.0.1 --mcp-port 9090`: expõe servidor MCP HTTP externo adicional só nesta sessão, mantendo o socket Unix interno; para subir sempre com o workspace, ative no MCP Hub (`F9`).
 - `--mcp-client nome=transporte:endpoint`: conecta a um servidor MCP externo e grava a conexão como local do workspace.
 - `--profile PERFIL`: profile de agente a usar.
 - `--driver DRIVER`: driver de LLM (cli, openai).

@@ -227,6 +227,129 @@ def test_known_clients_hides_dynamic_client_without_authorization():
     assert [client.client_id for client in clients] == ["active-chatgpt"]
 
 
+def _issue_access_token(provider: OAuthProvider, token: str, client_id: str, scope: str = "mcp") -> None:
+    provider._access_tokens[token] = IssuedToken(
+        token=token,
+        client_id=client_id,
+        scope=scope,
+        resource="",
+        expires_at=time.time() + 3600,
+    )
+
+
+def test_http_rejects_authenticated_client_not_active_in_workspace():
+    """Token válido não basta: o client precisa estar liberado no workspace (403, sem desafio)."""
+    provider = OAuthProvider(
+        OAuthConfig(
+            enabled=True,
+            clients=(
+                OAuthClient(client_id="chatgpt-1", client_name="ChatGPT"),
+                OAuthClient(client_id="claude-1", client_name="Claude Code"),
+            ),
+        )
+    )
+    _issue_access_token(provider, "token-chatgpt", "chatgpt-1")
+    _issue_access_token(provider, "token-claude", "claude-1")
+    active = {"Claude Code"}
+    httpd = MCP_HTTPServer(
+        _make_mcp_server(),
+        host="127.0.0.1",
+        port=0,
+        oauth=provider,
+        client_access=active.__contains__,
+    )
+    httpd.start_background()
+    _wait_for_server(httpd.host, httpd.port)
+    body = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}},
+    }).encode()
+    headers = {"Content-Type": "application/json"}
+    try:
+        denied = _http_request(
+            httpd.host, httpd.port, "POST", "/mcp", body=body,
+            headers={**headers, "Authorization": "Bearer token-chatgpt"},
+        )
+        assert denied.status == 403
+        assert denied.header("WWW-Authenticate") is None
+        error = json.loads(denied.data)["error"]
+        assert error["code"] == -32003
+        assert "ChatGPT" in error["message"] and "MCP Hub" in error["message"]
+        assert httpd._http_sessions == {}
+
+        allowed = _http_request(
+            httpd.host, httpd.port, "POST", "/mcp", body=body,
+            headers={**headers, "Authorization": "Bearer token-claude"},
+        )
+        assert allowed.status == 200
+        assert allowed.header("MCP-Session-Id")
+
+        # A liberação é lida a cada requisição: ativar no Hub vale sem reiniciar.
+        active.add("ChatGPT")
+        now_allowed = _http_request(
+            httpd.host, httpd.port, "POST", "/mcp", body=body,
+            headers={**headers, "Authorization": "Bearer token-chatgpt"},
+        )
+        assert now_allowed.status == 200
+
+        # Sem token continua 401 com desafio: autenticação vem antes da liberação.
+        anonymous = _http_request(httpd.host, httpd.port, "POST", "/mcp", body=body, headers=headers)
+        assert anonymous.status == 401
+        assert anonymous.header("WWW-Authenticate")
+    finally:
+        httpd.shutdown()
+
+
+def test_http_without_client_access_filter_admits_every_authenticated_client():
+    provider = OAuthProvider(
+        OAuthConfig(enabled=True, clients=(OAuthClient(client_id="grok-1", client_name="Grok"),))
+    )
+    _issue_access_token(provider, "token-grok", "grok-1")
+    httpd = MCP_HTTPServer(_make_mcp_server(), host="127.0.0.1", port=0, oauth=provider)
+    assert httpd.client_access is None
+    httpd.start_background()
+    _wait_for_server(httpd.host, httpd.port)
+    try:
+        body = json.dumps({"jsonrpc": "2.0", "id": 7, "method": "ping"}).encode()
+        resp = _http_request(
+            httpd.host, httpd.port, "POST", "/message", body=body,
+            headers={"Content-Type": "application/json", "Authorization": "Bearer token-grok"},
+        )
+        assert resp.status == 200
+    finally:
+        httpd.shutdown()
+
+
+def test_close_client_sessions_closes_only_the_named_clients_and_keeps_tokens():
+    provider = OAuthProvider(
+        OAuthConfig(
+            enabled=True,
+            clients=(
+                OAuthClient(client_id="chatgpt-1", client_name="ChatGPT"),
+                OAuthClient(client_id="chatgpt-2", client_name="ChatGPT"),
+                OAuthClient(client_id="grok-1", client_name="Grok"),
+            ),
+        )
+    )
+    _issue_access_token(provider, "token-chatgpt", "chatgpt-1")
+    httpd = MCP_HTTPServer(_make_mcp_server(), host="127.0.0.1", port=0, oauth=provider)
+    closed_queue, kept_queue = queue.Queue(), queue.Queue()
+    httpd._http_sessions["s-chatgpt-1"] = {"oauth_client_id": "chatgpt-1", "initialized": True}
+    httpd._http_sessions["s-chatgpt-2"] = {"oauth_client_id": "chatgpt-2", "initialized": True}
+    httpd._http_sessions["s-grok"] = {"oauth_client_id": "grok-1", "initialized": True}
+    httpd._sse_clients["s-chatgpt-1"] = closed_queue
+    httpd._sse_clients["s-grok"] = kept_queue
+
+    assert httpd.close_client_sessions(["chatgpt-1", "chatgpt-2", "", None]) == 2
+
+    assert set(httpd._http_sessions) == {"s-grok"}
+    assert set(httpd._sse_clients) == {"s-grok"}
+    assert closed_queue.get_nowait() is None
+    assert kept_queue.empty()
+    assert provider.validate_access_token("token-chatgpt") is not None
+    assert httpd.close_client_sessions([]) == 0
+
+
 def test_known_clients_collapses_multiple_sessions_for_same_oauth_client():
     """Hub representa um client OAuth uma vez, mesmo com múltiplas sessões HTTP."""
     provider = OAuthProvider(

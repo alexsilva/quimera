@@ -178,3 +178,125 @@ def test_http_editor_changes_global_defaults_and_can_restore_inheritance(context
             assert store.layer("local") == {"enabled": True}
 
     asyncio.run(run())
+
+
+def test_hub_activates_clients_per_workspace_groups_registrations_and_closes_sessions(context):
+    from quimera.runtime.mcp.http_server import ConnectedMCPClient
+
+    def client(client_id, name, **kwargs):
+        base = dict(session_id="", scope="mcp", profile="", initialized=False, connected=False, authorized=True)
+        return ConnectedMCPClient(client_id=client_id, client_name=name, **{**base, **kwargs})
+
+    clients = [
+        client("chatgpt-1", "ChatGPT", session_id="s1", connected=True, initialized=True),
+        client("chatgpt-2", "ChatGPT"),
+        client("claude-1", "Claude Code (quimera)", scope="mcp:all"),
+        client("pending-1", "Pendente", authorized=False),
+    ]
+    revoked, closed = [], []
+    context.external_mcp_http_server = SimpleNamespace(
+        known_clients=lambda: clients,
+        connected_clients=lambda: [c for c in clients if c.connected],
+        close_client_sessions=lambda ids: closed.append(tuple(ids)) or 1,
+        revoke_client_authorization=lambda client_id: revoked.append(client_id) or 1,
+    )
+    context.mcp_http_url = "http://127.0.0.1:9096/mcp"
+    store = MCPHttpSettingsStore.from_workspace(context.workspace)
+    store.set_client_active("Claude Code (quimera)", True)
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(100, 24)) as pilot:
+            app.push_screen(MCPConnectionsScreen(context, app))
+            await pilot.pause()
+            screen = app.screen
+            table = screen.query_one("#mcp_incoming_table", DataTable)
+            rows = [tuple(str(cell) for cell in table.get_row_at(i)) for i in range(table.row_count)]
+            assert [row[0] for row in rows] == ["ChatGPT ×2", "Claude Code (quimera)", "Pendente"]
+            assert [row[3] for row in rows] == ["inativo", "ativo", "não autorizado"]
+            assert str(screen.query_one("#mcp_incoming_summary", Label).render()) == "2 autorizados · 1 ativos aqui"
+            toggle = screen.query_one("#mcp_client_toggle", Button)
+            assert str(toggle.label) == "Ativar" and not toggle.disabled
+            # Os dois botões da aba cabem na tela: nada é cortado pela borda.
+            for selector in ("#mcp_client_toggle", "#mcp_revoke_client"):
+                region = screen.query_one(selector, Button).region
+                assert region.right <= app.size.width, (selector, region, app.size)
+                assert region.bottom <= app.size.height, (selector, region, app.size)
+
+            await pilot.click("#mcp_client_toggle")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert store.active_clients() == ["Claude Code (quimera)", "ChatGPT"]
+            assert str(table.get_row_at(0)[3]) == "conectado"
+            assert str(toggle.label) == "Desativar"
+            assert closed == []
+
+            await pilot.pause(0.25)
+            await pilot.click("#mcp_client_toggle")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert store.active_clients() == ["Claude Code (quimera)"]
+            assert closed == [("chatgpt-1", "chatgpt-2")]
+            assert str(table.get_row_at(0)[3]) == "inativo"
+
+            # Revogar é global e alcança todos os cadastros do mesmo nome.
+            await pilot.pause(0.25)
+            await pilot.click("#mcp_revoke_client")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert revoked == ["chatgpt-1", "chatgpt-2"]
+
+            # Um client sem autorização válida não pode ser liberado.
+            table.move_cursor(row=2, animate=False)
+            await pilot.pause()
+            assert screen.query_one("#mcp_client_toggle", Button).disabled
+            # O cadastro global não foi tocado pela liberação.
+            assert not store.global_file.exists()
+
+    asyncio.run(run())
+
+
+def test_hub_http_toggle_reflects_persisted_choice_after_boot_failure(context, monkeypatch):
+    """HTTP configurado mas sem processo (porta ocupada): Desativar impede a próxima tentativa."""
+    store = MCPHttpSettingsStore.from_workspace(context.workspace)
+    store.save("local", enabled=True, port=9096)
+    context.external_mcp_http_error = "Address already in use"
+    context.external_mcp_http_server = None
+    context.mcp_http_url = None
+    started = []
+    monkeypatch.setattr(
+        "quimera.ui.textual.mcp_screen.start_external_mcp_http",
+        lambda app, workspace, settings: started.append(settings) or SimpleNamespace(),
+    )
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(100, 24)) as pilot:
+            app.push_screen(MCPConnectionsScreen(context, app))
+            await pilot.pause()
+            hub = app.screen
+            state = str(hub.query_one("#mcp_http_state", Label).render())
+            assert "falha" in state and "Desativar não sobe mais" in state
+            assert str(hub.query_one("#mcp_server_toggle", Button).label) == "Desativar"
+
+            # Corrigir a porta no editor tenta subir de novo, porque o workspace quer o servidor.
+            await pilot.click("#mcp_server_configure")
+            await pilot.pause()
+            app.screen.query_one("#mcp_http_editor_port", Input).value = "9097"
+            await pilot.press("ctrl+s")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert [item.port for item in started] == [9097]
+
+            await pilot.pause(0.25)
+            await pilot.click("#mcp_server_toggle")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert not store.load().enabled
+            assert context.external_mcp_http_error == ""
+            assert str(hub.query_one("#mcp_server_toggle", Button).label) == "Ativar"
+            assert "inativo" in str(hub.query_one("#mcp_http_state", Label).render())
+            # Desativar não tenta subir de novo.
+            assert len(started) == 1
+
+    asyncio.run(run())

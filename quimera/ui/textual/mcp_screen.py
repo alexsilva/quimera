@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from rich.text import Text
 from textual import work
@@ -31,6 +31,67 @@ SCOPE_OPTIONS = [
     ("Global · todos os workspaces", SCOPE_GLOBAL),
     ("Local · só este workspace", SCOPE_LOCAL),
 ]
+
+
+@dataclass(frozen=True)
+class MCPClientGroup:
+    """Um client OAuth na aba Clientes: todos os cadastros com o mesmo nome.
+
+    ChatGPT e similares repetem o registro dinâmico e acumulam ``client_id``;
+    para quem usa o Hub é um único client, e é pelo nome que ele é liberado
+    por workspace. ``client_ids`` guarda os cadastros, para revogar e fechar
+    sessões de todos de uma vez.
+    """
+
+    name: str
+    client_ids: tuple[str, ...]
+    scope: str
+    authorized: bool
+    connected: bool
+    active: bool
+
+    @property
+    def label(self) -> str:
+        count = len(self.client_ids)
+        return f"{self.name} ×{count}" if count > 1 else self.name
+
+    @property
+    def state_label(self) -> str:
+        if not self.authorized:
+            return "não autorizado"
+        if not self.active:
+            return "inativo"
+        return "conectado" if self.connected else "ativo"
+
+
+def group_clients_by_name(clients, active_names) -> list[MCPClientGroup]:
+    """Agrupa os clients conhecidos pelo servidor HTTP por nome, na ordem em que aparecem."""
+    groups: dict[str, dict] = {}
+    for client in clients:
+        name = str(client.client_name or client.client_id or client.session_id[:8] or "").strip()
+        if not name:
+            continue
+        key = client.client_id or client.session_id
+        entry = groups.setdefault(
+            name, {"ids": [], "scope": "", "authorized": False, "connected": False}
+        )
+        if key and key not in entry["ids"]:
+            entry["ids"].append(key)
+        entry["scope"] = entry["scope"] or str(client.scope or client.profile or "mcp")
+        entry["authorized"] = entry["authorized"] or bool(getattr(client, "authorized", False))
+        entry["connected"] = entry["connected"] or bool(getattr(client, "connected", False))
+    active = set(active_names)
+    return [
+        MCPClientGroup(
+            name,
+            tuple(entry["ids"]),
+            entry["scope"],
+            entry["authorized"],
+            entry["connected"],
+            name in active,
+        )
+        for name, entry in groups.items()
+    ]
 
 
 class MCPServerEditorScreen(ModalScreen[str | None]):
@@ -553,8 +614,9 @@ class MCPConnectionsScreen(ModalScreen[None]):
     }
     #mcp_incoming_actions Button {
         height: 1;
-        min-width: 20;
+        min-width: 12;
         border: none;
+        margin-right: 1;
     }
     #mcp_table {
         height: 1fr;
@@ -613,7 +675,8 @@ class MCPConnectionsScreen(ModalScreen[None]):
         self.parent_app = parent_app
         self.manager = MCPConnectionManager.from_app(quimera_app)
         self._selected_name: str | None = None
-        self._selected_client_id: str | None = None
+        self._selected_client: str | None = None
+        self._client_groups: dict[str, MCPClientGroup] = {}
         self._active_tab = "clients"
         self._busy = False
         self._unsubscribe_bridge = None
@@ -650,6 +713,7 @@ class MCPConnectionsScreen(ModalScreen[None]):
                     zebra_stripes=True,
                 )
                 with Horizontal(id="mcp_incoming_actions"):
+                    yield Button("Ativar", id="mcp_client_toggle", variant="primary")
                     yield Button(
                         "Revogar autorização",
                         id="mcp_revoke_client",
@@ -678,7 +742,9 @@ class MCPConnectionsScreen(ModalScreen[None]):
 
     def on_mount(self) -> None:
         incoming = self.query_one("#mcp_incoming_table", DataTable)
-        incoming.add_columns("Cliente", "Transporte", "Escopo", "Estado")
+        # "Escopo OAuth" são os scopes do token; o escopo global/local não se
+        # aplica aqui: o cadastro é sempre global e a liberação é por workspace.
+        incoming.add_columns("Cliente", "Transporte", "Escopo OAuth", "Estado")
         table = self.query_one("#mcp_table", DataTable)
         # Mantém a ordem histórica das quatro primeiras colunas para que
         # extensões/fixtures legadas continuem lendo o estado em ``[3]``;
@@ -730,7 +796,10 @@ class MCPConnectionsScreen(ModalScreen[None]):
         )
         self.query_one("#mcp_http_state", Label).update(self._http_status_text())
         toggle = self.query_one("#mcp_server_toggle", Button)
-        toggle.label = "Desativar" if self._http_server_running() else "Ativar"
+        # O botão reflete a escolha persistida ("sobe com este workspace"),
+        # não só o processo vivo: um servidor que falhou na partida continua
+        # configurado para subir, e Desativar é o que impede a próxima tentativa.
+        toggle.label = "Desativar" if self._http_server_enabled() else "Ativar"
         toggle.disabled = self._busy
         self.query_one("#mcp_server_configure", Button).disabled = self._busy
 
@@ -739,6 +808,10 @@ class MCPConnectionsScreen(ModalScreen[None]):
 
     def _http_server_running(self) -> bool:
         return getattr(self.quimera_app, "external_mcp_http_server", None) is not None
+
+    def _http_server_enabled(self) -> bool:
+        """Servidor de pé nesta sessão ou configurado para subir com o workspace."""
+        return self._http_server_running() or self._http_store().load().enabled
 
     def _http_status_text(self) -> Text:
         """Linha do servidor HTTP: URL viva, falha de partida ou configuração em espera."""
@@ -757,7 +830,7 @@ class MCPConnectionsScreen(ModalScreen[None]):
             text.append("●", style="red")
             text.append(f" falha · {error}")
             if settings.enabled:
-                text.append(" · Configurar ajusta a porta; Ativar tenta de novo")
+                text.append(" · Configurar ajusta a porta; Desativar não sobe mais")
             return text
         text.append("○ inativo")
         text.append(
@@ -789,26 +862,42 @@ class MCPConnectionsScreen(ModalScreen[None]):
         else:
             provider = getattr(http_server, "known_clients", None)
             clients = provider() if callable(provider) else http_server.connected_clients()
-        authorized_count = sum(
-            1 for client in clients if getattr(client, "authorized", False)
-        )
+        groups = group_clients_by_name(clients, self._http_store().active_clients())
+        self._client_groups = {group.name: group for group in groups}
+        authorized_count = sum(1 for group in groups if group.authorized)
+        active_count = sum(1 for group in groups if group.authorized and group.active)
         self.query_one("#mcp_incoming_summary", Label).update(
-            f"{authorized_count} autorizados"
+            f"{authorized_count} autorizados · {active_count} ativos aqui"
         )
-        seen_row_keys: set[str] = set()
-        for client in clients:
-            label = client.client_name or client.client_id or client.session_id[:8]
-            scope = client.scope or client.profile or "mcp"
-            state = (
-                "autorizado"
-                if getattr(client, "authorized", False)
-                else "não autorizado"
+        selected_row: int | None = None
+        for index, group in enumerate(groups):
+            table.add_row(
+                group.label,
+                "http/oauth",
+                group.scope,
+                self._client_state_cell(group),
+                key=group.name,
             )
-            row_key = client.client_id or client.session_id
-            if not row_key or row_key in seen_row_keys:
-                continue
-            seen_row_keys.add(row_key)
-            table.add_row(label, "http/oauth", scope, state, key=row_key)
+            if group.name == self._selected_client:
+                selected_row = index
+        if self._selected_client and selected_row is None:
+            self._selected_client = None
+        elif selected_row is not None and table.cursor_row != selected_row:
+            table.move_cursor(row=selected_row, animate=False)
+
+    @staticmethod
+    def _client_state_cell(group: MCPClientGroup) -> Text:
+        label = group.state_label
+        if not group.authorized:
+            return Text(label, style="red")
+        if not group.active:
+            return Text(label, style="dim")
+        if group.connected:
+            return Text(label, style="green")
+        return Text(label)
+
+    def _selected_client_group(self) -> MCPClientGroup | None:
+        return self._client_groups.get(self._selected_client) if self._selected_client else None
 
     def _refresh_connections(self) -> None:
         table = self.query_one("#mcp_table", DataTable)
@@ -884,11 +973,24 @@ class MCPConnectionsScreen(ModalScreen[None]):
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Mantém o estado das ações alinhado à linha visualmente destacada."""
         if event.data_table.id == "mcp_incoming_table":
-            client_id = str(event.row_key.value or "")
-            self._selected_client_id = client_id or None
+            name = str(event.row_key.value or "")
+            self._selected_client = name or None
             self._update_client_action_state()
-            if client_id:
-                self._set_activity(f"Cliente selecionado: {client_id}")
+            group = self._selected_client_group()
+            if group is None:
+                return
+            registrations = (
+                f" · {len(group.client_ids)} cadastros OAuth" if len(group.client_ids) > 1 else ""
+            )
+            if not group.authorized:
+                self._set_activity(f"{group.name}: sem autorização válida{registrations}")
+            elif not group.active:
+                self._set_activity(
+                    f"{group.name}: inativo neste workspace · Ativar libera o acesso ao "
+                    f"servidor MCP HTTP{registrations}"
+                )
+            else:
+                self._set_activity(f"{group.name}: ativo neste workspace{registrations}")
             return
         if event.data_table.id != "mcp_table":
             return
@@ -948,6 +1050,8 @@ class MCPConnectionsScreen(ModalScreen[None]):
             self._disconnect_selected()
         elif button_id == "mcp_remove":
             self._remove_selected()
+        elif button_id == "mcp_client_toggle":
+            self.action_toggle_client()
         elif button_id == "mcp_revoke_client":
             self._revoke_selected_client()
 
@@ -966,6 +1070,11 @@ class MCPConnectionsScreen(ModalScreen[None]):
         )
         target = "#mcp_incoming_table" if clients_active else "#mcp_table"
         self.query_one(target, DataTable).focus()
+        self._set_activity(
+            "Ativar libera o client neste workspace · Revogar apaga a autorização global."
+            if clients_active
+            else "Ativar liga uma conexão do catálogo neste workspace · Remover apaga a definição."
+        )
 
     def action_close(self) -> None:
         if not self._busy:
@@ -999,8 +1108,11 @@ class MCPConnectionsScreen(ModalScreen[None]):
             self._set_activity(f"Servidor '{name}' salvo · conectando em background.")
 
     def action_toggle_active(self) -> None:
-        """Liga ou desliga uma conexão global no workspace atual."""
-        if self._busy or self._active_tab != "servers":
+        """Liga ou desliga, neste workspace, o item selecionado na aba ativa."""
+        if self._busy:
+            return
+        if self._active_tab == "clients":
+            self.action_toggle_client()
             return
         name = self._require_selected()
         if name is None:
@@ -1042,7 +1154,7 @@ class MCPConnectionsScreen(ModalScreen[None]):
         """Sobe ou derruba o servidor MCP HTTP e persiste a escolha no workspace."""
         if self._busy:
             return
-        enable = not self._http_server_running()
+        enable = not self._http_server_enabled()
         self._start_busy(
             "Ativando servidor MCP HTTP…" if enable else "Desativando servidor MCP HTTP…"
         )
@@ -1098,6 +1210,13 @@ class MCPConnectionsScreen(ModalScreen[None]):
             return
         if self._http_server_running():
             self._start_busy(f"Reiniciando servidor MCP HTTP em {settings.url}…")
+            self._restart_server_worker(settings)
+            return
+        if settings.enabled:
+            # Configurado para subir com o workspace, mas sem processo vivo
+            # (porta ocupada na partida, por exemplo): a correção já foi feita
+            # no editor, então tenta subir com os valores novos.
+            self._start_busy(f"Subindo servidor MCP HTTP em {settings.url}…")
             self._restart_server_worker(settings)
             return
         self.quimera_app.external_mcp_http_error = ""
@@ -1277,48 +1396,105 @@ class MCPConnectionsScreen(ModalScreen[None]):
 
     def _update_client_action_state(self) -> None:
         http_server = getattr(self.quimera_app, "external_mcp_http_server", None)
+        group = self._selected_client_group()
+        toggle = self.query_one("#mcp_client_toggle", Button)
+        toggle.label = "Desativar" if group is not None and group.active else "Ativar"
+        # A liberação é configuração do workspace: vale mesmo com o HTTP parado.
+        toggle.disabled = self._busy or group is None or not group.authorized
+        # Revogar mexe no store OAuth vivo; sem servidor não há provider.
         self.query_one("#mcp_revoke_client", Button).disabled = (
-            self._busy or not self._selected_client_id or http_server is None
+            self._busy or group is None or http_server is None
         )
 
+    def action_toggle_client(self) -> None:
+        """Libera ou bloqueia o client OAuth selecionado neste workspace."""
+        if self._busy:
+            return
+        group = self._selected_client_group()
+        if group is None:
+            return
+        if not group.authorized:
+            self.parent_app.notify(
+                f"'{group.name}' não tem autorização válida; autorize-o antes de ativar.",
+                severity="warning",
+            )
+            return
+        enable = not group.active
+        self._start_busy(
+            f"{'Ativando' if enable else 'Desativando'} {group.name} neste workspace…"
+        )
+        self._client_toggle_worker(group, enable)
+
+    @work(thread=True, exclusive=True, group="mcp-management")
+    def _client_toggle_worker(self, group: MCPClientGroup, enable: bool) -> None:
+        closed = 0
+        try:
+            self._http_store().set_client_active(group.name, enable)
+            if not enable:
+                http_server = getattr(self.quimera_app, "external_mcp_http_server", None)
+                close = getattr(http_server, "close_client_sessions", None)
+                if callable(close):
+                    closed = int(close(group.client_ids) or 0)
+        except Exception as exc:
+            verb = "ativar" if enable else "desativar"
+            self.app.call_from_thread(
+                self._finish_client_action,
+                f"Falha ao {verb} {group.name}: {exc}",
+                "error",
+                group.name,
+            )
+            return
+        if enable:
+            message = (
+                f"Client '{group.name}' ativado neste workspace · pode usar o servidor MCP HTTP."
+            )
+        else:
+            message = f"Client '{group.name}' desativado neste workspace."
+            if closed:
+                message = f"{message} · {closed} sessão(ões) encerrada(s)."
+        self.app.call_from_thread(self._finish_client_action, message, "information", group.name)
+
     def _revoke_selected_client(self) -> None:
-        if self._busy or not self._selected_client_id:
+        if self._busy:
+            return
+        group = self._selected_client_group()
+        if group is None:
             return
         http_server = getattr(self.quimera_app, "external_mcp_http_server", None)
         if http_server is None:
             self.parent_app.notify("Servidor MCP HTTP não está ativo.", severity="error")
             return
-        client_id = self._selected_client_id
-        self._start_busy(f"Revogando autorização de {client_id}…")
-        self._revoke_client_worker(http_server, client_id)
+        self._start_busy(f"Revogando autorização de {group.name}…")
+        self._revoke_client_worker(http_server, group)
 
     @work(thread=True, exclusive=True, group="mcp-management")
-    def _revoke_client_worker(self, http_server, client_id: str) -> None:
+    def _revoke_client_worker(self, http_server, group: MCPClientGroup) -> None:
         try:
-            http_server.revoke_client_authorization(client_id)
+            for client_id in group.client_ids:
+                http_server.revoke_client_authorization(client_id)
         except Exception as exc:
             self.app.call_from_thread(
-                self._finish_client_revoke,
-                f"Falha ao revogar autorização de {client_id}: {exc}",
+                self._finish_client_action,
+                f"Falha ao revogar autorização de {group.name}: {exc}",
                 "error",
-                client_id,
+                group.name,
             )
             return
         self.app.call_from_thread(
-            self._finish_client_revoke,
-            f"Autorização de '{client_id}' revogada.",
+            self._finish_client_action,
+            f"Autorização de '{group.name}' revogada em todos os workspaces.",
             "information",
             None,
         )
 
-    def _finish_client_revoke(
+    def _finish_client_action(
         self,
         message: str,
         severity: str,
-        selected_client_id: str | None,
+        selected_client: str | None,
     ) -> None:
         self._busy = False
-        self._selected_client_id = selected_client_id
+        self._selected_client = selected_client
         self._refresh_view()
         self._update_action_state()
         self._update_client_action_state()

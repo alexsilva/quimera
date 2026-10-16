@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import secrets
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -238,6 +238,20 @@ def _publish_external_http(
         )
 
 
+def workspace_client_access(workspace: Any) -> Callable[[str], bool] | None:
+    """Filtro de clients OAuth do servidor HTTP: só os liberados no workspace entram.
+
+    Lê o overlay ``mcp-server.json`` do workspace a cada consulta, então uma
+    mudança feita no Hub vale na requisição seguinte, sem reiniciar o servidor.
+    Workspaces mínimos de testes, sem esse arquivo, não têm filtro.
+    """
+    try:
+        store = MCPHttpSettingsStore.from_workspace(workspace)
+    except AttributeError:
+        return None
+    return store.is_client_active
+
+
 def describe_http_error(exc: BaseException) -> str:
     """Resumo de uma falha de partida do HTTP com a causa (ex.: porta em uso)."""
     cause = exc.__cause__ or exc.__context__
@@ -284,6 +298,7 @@ def start_external_mcp_http(
                 port=settings.port,
                 allowed_tools=parse_http_allowed_tools(settings.allow_tools),
                 oauth=oauth,
+                client_access=workspace_client_access(workspace),
             )
             http_server.start_background()
         except Exception as exc:

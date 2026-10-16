@@ -90,10 +90,12 @@ def test_mcp_connections_screen_mounts_and_shows_three_roles(tmp_path):
             assert "OAuth obrigatório" not in str(http_state)
             incoming_table = screen.query_one("#mcp_incoming_table", DataTable)
             assert incoming_table.row_count == 1
-            assert str(incoming_table.get_row_at(0)[3]) == "autorizado"
-            assert "1 autorizados" in str(
+            # Autorizado no cadastro global, mas ainda não liberado neste workspace.
+            assert str(incoming_table.get_row_at(0)[3]) == "inativo"
+            assert "1 autorizados · 0 ativos aqui" in str(
                 screen.query_one("#mcp_incoming_summary", Label).render()
             )
+            assert str(screen.query_one("#mcp_client_toggle", Button).label) == "Ativar"
             table = screen.query_one("#mcp_table", DataTable)
             assert table.row_count == 1
             close_button = screen.query_one("#mcp_close_top", Button)
@@ -196,13 +198,13 @@ def test_mcp_incoming_summary_counts_authorized_not_connected(tmp_path):
                 screen.query_one("#mcp_incoming_title", Label).render()
             )
             summary = str(screen.query_one("#mcp_incoming_summary", Label).render())
-            assert summary == "2 autorizados"
+            assert summary == "2 autorizados · 0 ativos aqui"
             assert "conectado" not in summary
 
             incoming_table = screen.query_one("#mcp_incoming_table", DataTable)
             assert incoming_table.row_count == 3
             states = {str(incoming_table.get_row_at(i)[3]) for i in range(3)}
-            assert states == {"autorizado", "não autorizado"}
+            assert states == {"inativo", "não autorizado"}
 
             await pilot.resize_terminal(96, 18)
             await pilot.pause()
@@ -265,11 +267,13 @@ def test_mcp_clients_load_persisted_authorizations_when_http_is_inactive(
             table = screen.query_one("#mcp_incoming_table", DataTable)
             assert table.row_count == 1
             assert str(table.get_row_at(0)[0]) == "ChatGPT"
-            assert str(table.get_row_at(0)[3]) == "autorizado"
-            assert "1 autorizados" in str(
+            assert str(table.get_row_at(0)[3]) == "inativo"
+            assert "1 autorizados · 0 ativos aqui" in str(
                 screen.query_one("#mcp_incoming_summary", Label).render()
             )
             assert screen.query_one("#mcp_revoke_client", Button).disabled is True
+            # Liberar o client é configuração do workspace: funciona sem o HTTP de pé.
+            assert screen.query_one("#mcp_client_toggle", Button).disabled is False
 
     try:
         asyncio.run(run_test())

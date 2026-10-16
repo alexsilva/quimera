@@ -143,6 +143,7 @@ Para ambiente com cliente MCP HTTP externo:
 quimera --mcp-http
 ```
 
-As flags MCP HTTP explícitas atualizam `mcp-server.json` do workspace. Nas
-partidas seguintes, sem flags, o Quimera reutiliza essa configuração; o mesmo
-estado pode ser alterado no MCP Hub (`F9`).
+As flags MCP HTTP explícitas valem só para essa sessão e não alteram o
+`mcp-server.json`. Para o servidor subir sempre com o workspace, ative-o no MCP
+Hub (`F9`), que grava a escolha, o host, a porta e o perfil por escopo, e
+libera por workspace os clients OAuth que podem usá-lo.

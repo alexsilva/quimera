@@ -12,11 +12,12 @@ Cada parte do MCP tem um par de arquivos com o mesmo nome, um em
 * ``mcp-server.json`` — servidor MCP HTTP do Quimera. O global guarda os
   padrões (host, porta, allowlist); o do workspace sobrepõe chave a chave, e
   é onde normalmente fica ``http_enabled``, porque é o workspace que decide
-  expor o servidor.
+  expor o servidor. O overlay também lista em ``http_clients_active`` os
+  clients OAuth liberados a usar o servidor deste workspace.
 
 O estado OAuth do servidor (clients e tokens) segue em
 ``<base_dir>/state/mcp-server.json``; é estado, não configuração. O cadastro
-é global, separado dos dois pares de arquivos de configuração.
+é global, como o catálogo de conexões; o que é por workspace é a liberação.
 """
 from __future__ import annotations
 
@@ -465,4 +466,40 @@ class MCPHttpSettingsStore:
         validated = validate_http_settings(**values)
         config.set_mcp_http_settings(**validated)
         return self.load()
+
+    # ── clients OAuth liberados neste workspace ──────────────────────
+
+    def active_clients(self) -> list[str]:
+        """Nomes dos clients OAuth que podem usar o servidor HTTP deste workspace.
+
+        O cadastro OAuth (clients e tokens) é global e vale para todos os
+        workspaces; esta lista é o overlay local, como ``mcp_active`` para as
+        conexões: sem a chave, nenhum client entra. A identidade é o nome que
+        o client declara ao se registrar, porque ChatGPT e similares recebem
+        um ``client_id`` novo a cada registro dinâmico, e o nome é o que o
+        usuário reconhece na tela de consentimento e no Hub.
+        """
+        return list(self._config(SCOPE_LOCAL).mcp_http_clients_active or [])
+
+    def is_client_active(self, name: str) -> bool:
+        """``True`` se o client de nome ``name`` está liberado neste workspace."""
+        return str(name or "").strip() in self.active_clients()
+
+    def set_client_active(self, name: str, active: bool) -> list[str]:
+        """Libera ou bloqueia o client neste workspace e devolve a lista resultante."""
+        name = str(name or "").strip()
+        if not name:
+            raise ValueError("Client OAuth exige um nome")
+        result: list[str] = []
+
+        def update(data):
+            current = data.get("http_clients_active")
+            names = [item for item in current if isinstance(item, str) and item != name] if isinstance(current, list) else []
+            if active:
+                names.append(name)
+            _set_list(data, "http_clients_active", names)
+            result[:] = names
+
+        update_json_object(self.workspace_file, update)
+        return result
 

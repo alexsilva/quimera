@@ -187,6 +187,7 @@ def test_start_embedded_mcp_http_centraliza_startup_sem_substituir_socket(tmp_pa
         port=9090,
         allowed_tools=DEFAULT_HTTP_READ_ONLY_TOOLS,
         oauth=ANY,
+        client_access=ANY,
     )
     oauth = http_cls.call_args.kwargs["oauth"]
     assert oauth.enabled is True
@@ -336,3 +337,27 @@ def test_external_http_real_start_stop_and_restart_preserve_oauth(tmp_path):
         assert second is not first and second.oauth is oauth
     finally:
         stop_external_mcp_http(app)
+
+
+def test_external_http_client_access_follows_the_workspace_overlay(tmp_path):
+    """O filtro entregue ao servidor HTTP lê a liberação do workspace a cada consulta."""
+    from quimera.runtime.mcp.settings import MCPHttpSettingsStore
+
+    app = _FakeApp()
+    workspace = _workspace(tmp_path)
+    with patch("quimera.runtime.mcp.session.MCPServer"), patch(
+        "quimera.runtime.mcp.session.MCP_HTTPServer"
+    ) as http_cls, patch("quimera.runtime.mcp.session.build_oauth_provider"):
+        start_external_mcp_http(app, workspace, MCPHttpSettings(enabled=True, port=9096))
+        gate = http_cls.call_args.kwargs["client_access"]
+        stop_external_mcp_http(app)
+
+    assert callable(gate)
+    assert not gate("ChatGPT")
+    MCPHttpSettingsStore.from_workspace(workspace).set_client_active("ChatGPT", True)
+    assert gate("ChatGPT")
+    assert not gate("Grok")
+    # Workspaces mínimos (fixtures) sem overlay não têm filtro: comportamento anterior.
+    from quimera.runtime.mcp.session import workspace_client_access
+
+    assert workspace_client_access(SimpleNamespace(mcp_server_file=tmp_path / "x.json")) is None

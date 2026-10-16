@@ -250,3 +250,30 @@ def test_client_toggle_persists_workspace_activation_and_restarts_only_when_enab
         assert bridge.state("jira").phase == MCPConnectionPhase.PENDING
     finally:
         set_bridge(None)
+
+
+def test_http_clients_active_is_a_workspace_overlay_keyed_by_name(tmp_path):
+    """A liberação de clients OAuth é local; sem a chave, nenhum client entra."""
+    store = MCPHttpSettingsStore(
+        tmp_path / "global" / "mcp-server.json", tmp_path / "workspace" / "mcp-server.json"
+    )
+    assert store.active_clients() == []
+    assert not store.is_client_active("ChatGPT")
+
+    assert store.set_client_active("ChatGPT", True) == ["ChatGPT"]
+    assert store.set_client_active(" Claude Code (quimera) ", True) == ["ChatGPT", "Claude Code (quimera)"]
+    assert store.set_client_active("ChatGPT", True) == ["Claude Code (quimera)", "ChatGPT"]
+    assert store.is_client_active("ChatGPT") and store.is_client_active("Claude Code (quimera)")
+    assert not store.is_client_active("Grok")
+    assert not store.global_file.exists()
+    # A liberação convive com as demais chaves do overlay sem apagá-las.
+    store.save("local", enabled=True, port=9096)
+    assert store.active_clients() == ["Claude Code (quimera)", "ChatGPT"]
+    assert store.load().port == 9096
+
+    assert store.set_client_active("ChatGPT", False) == ["Claude Code (quimera)"]
+    assert store.set_client_active("Claude Code (quimera)", False) == []
+    assert "http_clients_active" not in json.loads(store.workspace_file.read_text(encoding="utf-8"))
+    assert store.load().enabled
+    with pytest.raises(ValueError, match="nome"):
+        store.set_client_active("  ", True)

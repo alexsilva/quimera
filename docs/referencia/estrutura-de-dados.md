@@ -44,7 +44,8 @@ workspaces/<cwd_hash>/
 
 `cwd_hash` é derivado do caminho absoluto do diretório de trabalho. O
 `mcp-connections.json` combina ativações do catálogo com definições locais; o
-`mcp-server.json` sobrepõe os padrões globais chave a chave. Os formatos estão em
+`mcp-server.json` sobrepõe os padrões globais chave a chave e lista em
+`http_clients_active` os clients OAuth liberados nesse workspace. Os formatos estão em
 [MCP e ferramentas](../guia/mcp-e-ferramentas.md#arquivos-persistentes).
 
 ## Workspace temporário

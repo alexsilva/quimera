@@ -20,7 +20,7 @@ arquivos de configuração com o mesmo nome no global e no workspace:
 | `mcp-connections.json` | Catálogo global de conexões a servidores externos, com `mcp_clients` e `mcp_client_env`. |
 | `workspaces/<hash>/mcp-connections.json` | Ativações do catálogo (`mcp_active`) e conexões/ambiente locais. |
 | `mcp-server.json` | Padrões globais do servidor HTTP: `http_host`, `http_port`, `http_allow_tools` e, opcionalmente, `http_enabled`. |
-| `workspaces/<hash>/mcp-server.json` | Valores que sobrepõem os padrões globais para esse workspace, inclusive `http_enabled`. |
+| `workspaces/<hash>/mcp-server.json` | Valores que sobrepõem os padrões globais para esse workspace, inclusive `http_enabled`, e a lista `http_clients_active` dos clients OAuth liberados a usar o servidor deste workspace. |
 | `state/mcp-server.json` | Estado OAuth global: cadastros de clientes e tokens, preservados entre sessões e workspaces. |
 
 O `config.json` do workspace continua reservado às opções gerais, como o sandbox.
@@ -94,30 +94,51 @@ parar ou reconfigurar o HTTP.
 local tem precedência sobre a global, e o editor mostra a origem de cada valor
 (`local`, `global` ou `default`). **Usar global** remove os overrides locais de
 host, porta e tools, mantendo a escolha de ativação do workspace. Com o
-servidor ativo, salvar o reinicia com os valores novos; com ele parado, apenas
-grava a configuração, e **Ativar** faz a próxima tentativa. Se a nova partida
-falhar, ele fica parado e a falha aparece na linha de status. O Hub grava
-`http_enabled` sempre no workspace; no `mcp-server.json` global, essa chave só
-existe se for escrita à mão.
+servidor ativo, salvar o reinicia com os valores novos. Com ele parado mas
+configurado para subir, como depois de uma falha de bind na partida, salvar já
+tenta subir com os valores novos; desativado, apenas grava a configuração, e
+**Ativar** sobe com ela. Se a partida falhar, ele fica parado e a falha aparece
+na linha de status. O Hub grava `http_enabled` sempre no workspace; no
+`mcp-server.json` global, essa chave só existe se for escrita à mão.
 
 As flags `--mcp-http`, `--mcp-host`, `--mcp-port` e `--mcp-http-allow-tools`
-fornecidas explicitamente são validadas e gravadas no overlay do workspace;
-`--mcp-http` grava a ativação. Sem flags, a partida seguinte usa os valores
-persistidos. As flags `--mcp-oauth-*` não são persistidas: valem para o
-provider da sessão, inclusive quando o HTTP é ativado depois pelo Hub.
+valem só para a sessão em que foram passadas: são validadas e aplicadas por
+cima da configuração persistida (global ← workspace), sem gravá-la. Persistir
+é papel do Hub; uma flag gravada reapareceria em partidas sem flag e disputaria
+a porta com outro workspace que também a tivesse herdado. As flags
+`--mcp-oauth-*` seguem a mesma regra: valem para o provider da sessão,
+inclusive quando o HTTP é ativado depois pelo Hub.
 
 Uma falha de bind, como porta ocupada, não derruba a sessão: aparece no bloco
-de status e no Hub; ajuste a porta em **Configurar** e use **Ativar** para
-tentar de novo. O servidor HTTP é encerrado ao sair do app.
+de status e no Hub. O botão continua em **Desativar**, porque o workspace segue
+configurado para subir: ajuste a porta em **Configurar**, que tenta de novo ao
+salvar, ou use **Desativar** para que ele não suba mais. O servidor HTTP é
+encerrado ao sair do app.
 
 ### Clients OAuth no Hub
 
-A aba **Clientes** mostra os clients autorizados no estado OAuth global,
-inclusive quando o servidor HTTP está parado. **Revogar autorização** remove o
-grant selecionado, mas só fica disponível enquanto o servidor está ativo. A
-autorização não tem overlay por workspace: o escopo global/local do Hub se
-aplica às conexões da aba **Servidores** e à configuração do HTTP, não aos
-cadastros OAuth.
+A aba **Clientes** segue o mesmo modelo da aba **Servidores**: o cadastro é
+global e a liberação é por workspace. Os clients vêm do estado OAuth global,
+inclusive com o servidor HTTP parado, agrupados pelo nome que declararam ao se
+registrar: ChatGPT e similares repetem o registro dinâmico e acumulam
+`client_id`, e a tabela mostra `ChatGPT ×3` como um único client. A coluna
+**Escopo OAuth** traz os scopes do token, não o escopo global/local do Hub.
+
+Um client autorizado começa **inativo** em todos os workspaces. **Ativar**
+grava o nome em `http_clients_active` no `mcp-server.json` do workspace, e a
+partir da requisição seguinte ele pode usar o servidor HTTP desse workspace,
+sem reiniciar. Um client autenticado mas não liberado recebe `403` com código
+`-32003` e uma mensagem apontando para o Hub; a resposta não traz
+`WWW-Authenticate`, porque o token é válido e um desafio só levaria o client a
+repetir uma autorização que seria concedida e barrada de novo. **Desativar**
+remove o nome e encerra as sessões MCP e streams SSE já abertos por esse client
+aqui, sem tocar nos tokens. A liberação é configuração do workspace e funciona
+com o servidor parado; o resumo da aba mostra `N autorizados · M ativos aqui`.
+
+**Revogar autorização** continua global: apaga o grant de todos os cadastros
+com aquele nome, em todos os workspaces, e só fica disponível com o servidor
+ativo, porque depende do provider OAuth vivo. Um client sem autorização válida
+aparece em vermelho e não pode ser ativado antes de autorizar.
 
 ## Autenticação
 
@@ -295,9 +316,11 @@ quimera --mcp-http
 
 Isso é suficiente para um cliente MCP OAuth-aware (Claude, Cursor, ChatGPT tunnel-client) conectar sozinho: ele descobre o servidor por RFC 9728, registra-se dinamicamente por RFC 7591, abre a tela de consentimento no navegador e recebe o token. Não há `client_id` para copiar nem arquivo para editar.
 
-A flag grava a ativação no workspace. Nas partidas seguintes, o mesmo estado
-também pode ser alterado com **Ativar/Desativar** no MCP Hub (ver
-[Servidor HTTP pelo Hub](#servidor-http-pelo-hub)).
+A flag vale só para esta sessão. Para o servidor subir sempre com o workspace,
+use **Ativar** no MCP Hub (ver [Servidor HTTP pelo Hub](#servidor-http-pelo-hub)).
+Depois do consentimento, o client ainda precisa ser liberado neste workspace na
+aba **Clientes** do Hub; até lá, as chamadas MCP dele recebem `403` (ver
+[Clients OAuth no Hub](#clients-oauth-no-hub)).
 
 ### Endpoints
 

@@ -6,6 +6,7 @@ import locale
 import logging
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from .connection_configurator import ConnectionConfigurator
@@ -33,7 +34,7 @@ from .runtime.mcp.client import (
 from .runtime.mcp.settings import (
     MCPConnectionStore,
     MCPHttpSettingsStore,
-    SCOPE_LOCAL,
+    validate_http_settings,
 )
 from .config import ConfigManager
 from .workspace import Workspace
@@ -393,14 +394,20 @@ def main():
         dest="mcp_http",
         action="store_true",
         default=False,
-        help="Habilita MCP HTTP externo adicional em /mcp e persiste a ativação no workspace; agentes locais continuam usando o socket Unix interno.",
+        help=(
+            "Habilita MCP HTTP externo adicional em /mcp só nesta sessão; agentes locais continuam "
+            "usando o socket Unix interno. Para subir sempre com o workspace, ative no MCP Hub (F9)."
+        ),
     )
     parser.add_argument(
         "--mcp-port",
         dest="mcp_port",
         type=int,
         default=None,
-        help="Porta do servidor MCP HTTP externo; quando informada, é persistida no workspace.",
+        help=(
+            "Porta do servidor MCP HTTP externo nesta sessão (padrão: 9090, ou o valor "
+            "configurado no MCP Hub)."
+        ),
     )
     parser.add_argument(
         "--mcp-host",
@@ -651,8 +658,10 @@ def main():
             store=MCPConnectionStore.from_workspace(workspace),
             workspace=workspace,
         )
-        # Flags explícitas do HTTP atualizam o overlay do workspace. Sem flags,
-        # vale a configuração efetiva já persistida (default ← global ← local).
+        # Flags explícitas do HTTP valem só para esta sessão, por cima do que
+        # está persistido (global ← workspace). Persistir é papel do MCP Hub:
+        # uma flag gravada reapareceria em partidas sem flag e disputaria a
+        # porta com outro workspace que também a tivesse herdado.
         explicit_http = {
             "enabled": True if args.mcp_http else None,
             "host": args.mcp_host,
@@ -660,15 +669,13 @@ def main():
             "allow_tools": args.mcp_http_allow_tools,
         }
         explicit_http = {key: value for key, value in explicit_http.items() if value is not None}
-        mcp_http_store = MCPHttpSettingsStore.from_workspace(workspace)
         try:
-            mcp_http_settings = (
-                mcp_http_store.save(SCOPE_LOCAL, **explicit_http)
-                if explicit_http
-                else mcp_http_store.load()
-            )
+            explicit_http = validate_http_settings(**explicit_http)
         except ValueError as exc:
             parser.error(str(exc))
+        mcp_http_settings = replace(
+            MCPHttpSettingsStore.from_workspace(workspace).load(), **explicit_http
+        )
 
         isatty = _is_tty()
         textual_bridge = TextualUiBridge()

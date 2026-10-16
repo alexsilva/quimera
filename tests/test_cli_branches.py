@@ -25,8 +25,8 @@ class _FakeWorkspace:
     def __init__(self, cwd):
         self.cwd = cwd
         self.config_file = Path("/tmp/quimera-test-config.json")
-        # Arquivos MCP isolados por instância: as flags --mcp-http* persistem
-        # no overlay do workspace e não podem vazar entre testes.
+        # Arquivos MCP isolados por instância: o que a sessão gravar no
+        # overlay do workspace não pode vazar entre testes.
         root = Path(tempfile.mkdtemp(prefix="quimera-test-ws-"))
         self.mcp_connections_file = root / "mcp-connections.json"
         self.global_mcp_connections_file = root / "global" / "mcp-connections.json"
@@ -1084,6 +1084,7 @@ def test_main_mcp_http_adds_external_http_without_replacing_internal_socket(monk
         port=9090,
         allowed_tools=DEFAULT_HTTP_READ_ONLY_TOOLS,
         oauth=ANY,
+        client_access=ANY,
     )
     assert mock_http_cls.call_args.kwargs["oauth"].enabled is True
     mock_http.start_background.assert_called_once_with()
@@ -1091,6 +1092,11 @@ def test_main_mcp_http_adds_external_http_without_replacing_internal_socket(monk
     assert _FakeApp.last_instance.mcp_http_calls == []
     assert _FakeApp.last_instance.mcp_socket_path == called_path
     assert _FakeApp.last_instance.mcp_http_url == "http://127.0.0.1:9090/mcp"
+    # As flags valem só para esta sessão: uma partida seguinte sem flags não
+    # pode herdar o HTTP (e disputar a porta com outro workspace).
+    workspace = _FakeWorkspace.last_instance
+    assert not workspace.mcp_server_settings_file.exists()
+    assert not workspace.global_mcp_server_settings_file.exists()
 
 
 def test_main_mcp_http_can_combine_with_custom_internal_socket(monkeypatch):

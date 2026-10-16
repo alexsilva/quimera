@@ -39,7 +39,7 @@ import sys
 import threading
 import uuid
 import secrets
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
@@ -661,10 +661,42 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             enviada (o chamador deve retornar imediatamente).
         """
         auth = self._authenticate()
-        if auth.authenticated:
-            return auth
-        self._send_unauthorized(auth)
-        return None
+        if not auth.authenticated:
+            self._send_unauthorized(auth)
+            return None
+        denied = self._client_access_denied(auth)
+        if denied:
+            self._send_error_response(
+                403,
+                -32003,
+                f"Client OAuth '{denied}' não está ativo neste workspace do Quimera; "
+                "ative-o no MCP Hub (F9).",
+            )
+            return None
+        return auth
+
+    def _client_access_denied(self, auth: AuthContext) -> str:
+        """Nome do client OAuth barrado neste workspace, ou vazio se ele pode passar.
+
+        A resposta é 403 sem ``WWW-Authenticate``: o token é válido, o client
+        só não foi liberado aqui. Um desafio levaria clients como ChatGPT a
+        repetir a autorização, que seria concedida e barrada de novo.
+        """
+        mcp_server: MCP_HTTPServer = self.server.mcp_http_server
+        gate = mcp_server.client_access
+        if gate is None or auth.mode != "oauth" or not auth.client_id:
+            return ""
+        client = self._oauth.find_client(auth.client_id)
+        name = str(client.client_name or "").strip() if client is not None else ""
+        name = name or auth.client_id
+        if gate(name):
+            return ""
+        _logger.info(
+            "MCP HTTP: client OAuth '%s' (%s) barrado: inativo neste workspace",
+            name,
+            auth.client_id,
+        )
+        return name
 
     def _send_unauthorized(self, auth: AuthContext) -> None:
         """Responde 401 com ``WWW-Authenticate`` apontando ao metadata RFC 9728."""
@@ -941,11 +973,16 @@ class MCP_HTTPServer:
         allowed_tools: Iterable[str] | None = DEFAULT_HTTP_READ_ONLY_TOOLS,
         cors_origins: str | Iterable[str] | None = None,
         oauth: OAuthProvider | OAuthConfig | None = None,
+        client_access: Callable[[str], bool] | None = None,
     ) -> None:
         self._mcp = mcp_server
         self._mcp.set_allowed_tools(allowed_tools)
         self._http_profile = self._profile_name_for_allowed_tools(allowed_tools)
         self._oauth = self._resolve_oauth(oauth)
+        # Liberação por workspace: recebe o nome do client OAuth autenticado e
+        # diz se ele pode usar o transporte MCP desta sessão. ``None`` libera
+        # todos os clients autenticados (uso embutido e testes).
+        self._client_access = client_access
         self._cors_origins = self._normalize_cors_origins(cors_origins)
         self._host = host or os.environ.get(
             _QUIMERA_MCP_HTTP_HOST, _DEFAULT_HOST
@@ -1073,12 +1110,25 @@ class MCP_HTTPServer:
     def revoke_client_authorization(self, client_id: str) -> int:
         """Revoga o grant OAuth de um client e encerra suas sessões HTTP."""
         removed = self._oauth.revoke_client_authorization(client_id)
+        return removed + self.close_client_sessions([client_id])
+
+    def close_client_sessions(self, client_ids: Iterable[str]) -> int:
+        """Encerra as sessões MCP HTTP (e streams SSE) dos clients informados.
+
+        Não toca nos tokens: é o que o Hub usa ao desativar um client neste
+        workspace, para que uma sessão já aberta não continue chamando tools
+        depois que o acesso foi bloqueado. Devolve quantas sessões fechou.
+        """
+        wanted = {str(client_id or "").strip() for client_id in client_ids}
+        wanted.discard("")
+        if not wanted:
+            return 0
         queues_to_close: list[queue.Queue] = []
         with self._sse_lock:
             session_ids = [
                 session_id
                 for session_id, state in self._http_sessions.items()
-                if str(state.get("oauth_client_id") or "") == client_id
+                if str(state.get("oauth_client_id") or "") in wanted
             ]
             for session_id in session_ids:
                 self._http_sessions.pop(session_id, None)
@@ -1087,7 +1137,7 @@ class MCP_HTTPServer:
                     queues_to_close.append(sse_queue)
         for sse_queue in queues_to_close:
             sse_queue.put(None)
-        return removed + len(session_ids)
+        return len(session_ids)
 
     def active_clients(self) -> list[ActiveMCPHTTPClient]:
         """Retorna snapshot das sessões MCP HTTP autenticadas atualmente."""
@@ -1182,6 +1232,11 @@ class MCP_HTTPServer:
     def mcp_server(self) -> MCPServer:
         """Instância de ``MCPServer`` servida por este transporte HTTP."""
         return self._mcp
+
+    @property
+    def client_access(self) -> Callable[[str], bool] | None:
+        """Filtro de clients OAuth por nome aplicado após a autenticação, se houver."""
+        return self._client_access
 
     @property
     def allowed_tools(self) -> frozenset[str] | None:
