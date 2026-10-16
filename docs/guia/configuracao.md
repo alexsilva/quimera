@@ -8,6 +8,9 @@ O Quimera procura um diretório gravável entre locais candidatos do usuário e 
 |---|---|
 | `config.json` | Nome do usuário, janela de histórico, tema, densidade, idle timeout, tempo máximo do agente, visibilidade, threads, seleção de agentes e roteamento congelado/orquestrador. |
 | `connections.json` | Overrides e agentes dinâmicos criados por `--connect`. |
+| `mcp-connections.json` | Catálogo global de servidores MCP externos; cada workspace escolhe quais ativar. |
+| `mcp-server.json` | Padrões do servidor MCP HTTP (host, porta e perfil de tools). |
+| `state/mcp-server.json` | Estado OAuth global do servidor MCP HTTP: cadastros de clients e tokens. |
 | `secrets.env` | Segredos globais do runtime, como chaves de providers/modelos. Não são propagados para agentes ou shell. |
 | `.env` | Fonte global legada de segredos, ainda lida pelo runtime para compatibilidade. |
 
@@ -17,17 +20,23 @@ aos agentes e ferramentas daquele workspace. Por exemplo, um projeto pode
 declarar `AWS_PROFILE` ou credenciais de um ambiente de testes sem torná-las
 globais para todos os workspaces.
 
-O armazenamento interno em `~/.local/share/quimera/workspaces/<hash>/`
-continua reservado a histórico, memória, logs e estado interno. O mecanismo de
-hash do workspace não participa da resolução de configuração operacional.
+O armazenamento interno em `~/.local/share/quimera/workspaces/<hash>/` guarda
+histórico, memória, logs e estado do projeto. Na raiz desse diretório ficam
+também os overlays MCP e o `config.json` do workspace; nesse caso, o hash do
+caminho seleciona deliberadamente a configuração daquele projeto.
 
-As conexões a servidores MCP externos ficam em `mcp-connections.json`, no
-diretório do workspace. Servidores e variáveis de ambiente são persistidos
-juntos: no MCP Hub, o editor de servidor abre com as variáveis salvas da
-conexão e grava exatamente o que estiver no campo Ambiente (vazio remove as
-variáveis). Atualizações de configuração e
-conexões usam substituição atômica e locks entre processos; arquivos `.lock`
-adjacentes coordenam essas gravações e podem permanecer no diretório.
+As conexões a servidores MCP externos ficam em dois `mcp-connections.json`: o
+catálogo global, no diretório base, e o do workspace, com as conexões do
+catálogo ativadas ali (`mcp_active`) e as conexões locais. A configuração do
+servidor MCP HTTP segue o mesmo par em `mcp-server.json`, separada do estado
+OAuth em `state/mcp-server.json`. Escopos, precedência e o uso pelo MCP Hub
+estão em [MCP e ferramentas](mcp-e-ferramentas.md#arquivos-persistentes).
+Servidores e variáveis de ambiente são persistidos juntos: no MCP Hub, o editor
+de servidor abre com as variáveis em vigor da conexão e grava exatamente o que
+estiver no campo Ambiente (vazio remove as variáveis). Atualizações de
+configuração e conexões usam substituição atômica e locks entre processos;
+arquivos `.lock` adjacentes coordenam essas gravações e podem permanecer no
+diretório.
 
 Se um JSON estiver inválido, ilegível ou não contiver um objeto, a leitura usa
 defaults e registra um aviso. Novas alterações recusam sobrescrever o arquivo:
@@ -107,7 +116,8 @@ a política de visibilidade daquele processo.
 
 Para agentes com acesso ao filesystem, o `bwrap` aplica uma segunda barreira:
 arquivos privados do runtime (`.env`, `secrets.env`, `connections.json*`, o
-estado OAuth e configurações MCP persistidas por workspace) são sobrepostos por
+estado OAuth, o `config.json` do workspace e os `mcp-connections.json` global e
+do workspace) são sobrepostos por
 `/dev/null`. O restante de `~/.local/share/quimera`, incluindo histórico e
 memória, continua acessível conforme a policy do agente. A máscara não cria
 arquivo temporário nem estado global. Sem `bwrap`, permanece apenas o isolamento
@@ -132,3 +142,7 @@ Para ambiente com cliente MCP HTTP externo:
 ```bash
 quimera --mcp-http
 ```
+
+As flags MCP HTTP explícitas atualizam `mcp-server.json` do workspace. Nas
+partidas seguintes, sem flags, o Quimera reutiliza essa configuração; o mesmo
+estado pode ser alterado no MCP Hub (`F9`).

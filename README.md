@@ -77,7 +77,8 @@ Principais flags:
 - `--driver-repl <profile>`: REPL para testar driver `openai_compat`.
 - `--mcp-socket [path]` / `--mcp-http`: socket Unix (padrão); `--mcp-http` expõe servidor HTTP adicional sem substituir o socket Unix interno.
 - `--no-mcp`: desativa o servidor MCP.
-- `--mcp-http --mcp-host 127.0.0.1 --mcp-port 9090`: expõe servidor MCP HTTP externo adicional, mantendo o socket Unix interno.
+- `--mcp-http --mcp-host 127.0.0.1 --mcp-port 9090`: expõe servidor MCP HTTP externo adicional, mantendo o socket Unix interno, e grava os valores no overlay MCP do workspace.
+- `--mcp-client nome=transporte:endpoint`: conecta a um servidor MCP externo e grava a conexão como local do workspace.
 - `--profile PERFIL`: profile de agente a usar.
 - `--driver DRIVER`: driver de LLM (cli, openai).
 - `--model MODELO`: modelo do LLM.
@@ -197,7 +198,15 @@ O servidor anuncia as capabilities MCP mais recentes usadas pelo Quimera:
 
 O MCP interno via socket Unix é core do Quimera: ele inicia por padrão, é entregue a Claude, Codex, OpenCode e agentes locais similares, e expõe todas as ferramentas registradas no `ToolExecutor`. Ferramentas sensíveis continuam protegidas por `ToolPolicy`, permissões de path e fluxo de approval no executor.
 
-O MCP HTTP é uma extensão externa opcional para clientes remotos. Ele usa uma instância separada de `MCPServer`, com token externo, CORS configurável e allowlist aplicada apenas ao HTTP. A allowlist HTTP nunca reduz as ferramentas disponíveis para o socket interno.
+O MCP HTTP é uma extensão externa opcional para clientes remotos. Ele usa uma instância separada de `MCPServer`, com OAuth, CORS configurável e allowlist aplicada apenas ao HTTP. A allowlist HTTP nunca reduz as ferramentas disponíveis para o socket interno.
+
+O **MCP Hub** (`F9`) permite ativar conexões do catálogo global neste workspace,
+adicionar e editar conexões globais/locais, e configurar, ativar ou desativar o
+servidor HTTP durante a sessão. Os arquivos `mcp-connections.json` e
+`mcp-server.json` ficam no diretório base (`~/.local/share/quimera`) e têm
+overlays de mesmo nome em `workspaces/<hash>/`. A configuração HTTP é separada
+do estado OAuth global em `state/mcp-server.json`. Veja os
+[formatos e regras de herança](docs/guia/mcp-e-ferramentas.md#arquivos-persistentes).
 
 Ferramentas são executadas por chamadas estruturadas: MCP para agentes CLI/MCP-capazes e, quando o backend OpenAI-compatible oferece suporte nativo a tool calling, chamadas nativas do driver. Em ambos os caminhos, a execução concreta converge para `ToolExecutor.execute(ToolCall(...))`, com `ToolPolicy`, approval e `ToolRegistry` centralizando validação, permissão, auditoria e despacho para os handlers do runtime.
 
@@ -287,10 +296,15 @@ append e previews não destrutivos são isentos. Consulte
 Base global:
 
 - `~/.local/share/quimera` (fallback: `/tmp/quimera`)
+- `mcp-connections.json`: catálogo global de servidores MCP externos
+- `mcp-server.json`: padrões globais do servidor MCP HTTP
+- `state/mcp-server.json`: cadastros e tokens OAuth globais do servidor
 
 Por workspace (hash do `cwd`):
 
 - `workspaces/<hash>/workspace.json`
+- `workspaces/<hash>/mcp-connections.json`: ativações globais e conexões locais
+- `workspaces/<hash>/mcp-server.json`: overrides e ativação do MCP HTTP
 - `workspaces/<hash>/data/tasks.db`
 - `workspaces/<hash>/data/context/persistent.md`
 - `workspaces/<hash>/data/context/session.md`

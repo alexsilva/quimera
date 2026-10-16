@@ -45,6 +45,7 @@ from quimera.runtime.mcp.client import (
     summarize_stderr,
 )
 from quimera.runtime.mcp.manager import MCPConnectionManager, describe_mcp_client_spec
+from quimera.runtime.mcp.settings import MCPConnectionStore
 from quimera.runtime.models import ToolCall, ToolResult
 from quimera.runtime.registry import ToolRegistry
 from quimera.sandbox.bwrap import SandboxUnavailableError
@@ -390,17 +391,21 @@ def _install_fake_session(monkeypatch, *, failing=(), tools_by_name=None):
     return created
 
 
-def test_start_mcp_clients_prepara_bridge_pendente_sem_conectar(monkeypatch):
+def _store(tmp_path, specs=None, env_specs=None, *, catalog=None, catalog_env=None, active=None):
+    """Store com overlay local (``specs``) e catálogo global (``catalog``) pré-gravados."""
+    store = MCPConnectionStore(tmp_path / "global-mcp.json", tmp_path / "ws-mcp.json")
+    if specs or env_specs:
+        store.workspace_config.set_mcp_configuration(specs, env_specs)
+    if catalog or catalog_env:
+        store.global_config.set_mcp_configuration(catalog, catalog_env)
+    if active:
+        store.workspace_config.set_mcp_active(active)
+    return store
+
+
+def test_start_mcp_clients_prepara_bridge_pendente_sem_conectar(monkeypatch, tmp_path):
     """O boot só publica o bridge com estados pending; nenhum handshake roda."""
-    captured = {}
-
-    class FakeConfig:
-        mcp_clients = ["jira=stdio:jira-cmd"]
-        mcp_client_env = ["jira=JIRA_TOKEN=old-token"]
-
-        def set_mcp_configuration(self, specs, env_specs):
-            captured["persisted_specs"] = specs
-            captured["persisted_env_specs"] = env_specs
+    store = _store(tmp_path, ["jira=stdio:jira-cmd"], ["jira=JIRA_TOKEN=old-token"])
 
     def forbid_handshake(*args, **kwargs):
         raise AssertionError("handshake não deve rodar durante o boot")
@@ -411,7 +416,7 @@ def test_start_mcp_clients_prepara_bridge_pendente_sem_conectar(monkeypatch):
     runtime = start_mcp_clients(
         cli_specs=["github=remote:https://api.githubcopilot.com/mcp/"],
         cli_env_specs=["github=GITHUB_TOKEN=new-token"],
-        config=FakeConfig(),
+        store=store,
     )
 
     expected_specs = [
@@ -428,8 +433,9 @@ def test_start_mcp_clients_prepara_bridge_pendente_sem_conectar(monkeypatch):
     assert states["jira"].phase == MCPConnectionPhase.PENDING
     assert states["jira"].transport == "stdio"
     assert states["github"].transport == "remote"
-    assert captured["persisted_specs"] == expected_specs
-    assert captured["persisted_env_specs"] == [
+    # A spec da CLI fica persistida como conexão local do workspace.
+    assert store.workspace_config.mcp_clients == expected_specs
+    assert store.workspace_config.mcp_client_env == [
         "jira=JIRA_TOKEN=old-token",
         "github=GITHUB_TOKEN=new-token",
     ]
@@ -439,12 +445,8 @@ def test_start_mcp_clients_prepara_bridge_pendente_sem_conectar(monkeypatch):
     }
 
 
-def test_start_mcp_clients_sem_specs_nao_publica_bridge():
-    class FakeConfig:
-        mcp_clients = None
-        mcp_client_env = None
-
-    runtime = start_mcp_clients(cli_specs=None, cli_env_specs=None, config=FakeConfig())
+def test_start_mcp_clients_sem_specs_nao_publica_bridge(tmp_path):
+    runtime = start_mcp_clients(cli_specs=None, cli_env_specs=None, store=_store(tmp_path))
 
     assert runtime.enabled is False
     assert runtime.bridge is None
@@ -469,11 +471,8 @@ def test_connect_mcp_clients_in_background_registra_tools_e_isola_falhas(
         tools_by_name={"jira": ["search_issue"]},
     )
 
-    class FakeConfig:
-        mcp_clients = ["jira=stdio:jira-cmd", "broken=stdio:broken-cmd"]
-        mcp_client_env = None
-
-    runtime = start_mcp_clients(cli_specs=None, cli_env_specs=None, config=FakeConfig())
+    store = _store(tmp_path, ["jira=stdio:jira-cmd", "broken=stdio:broken-cmd"])
+    runtime = start_mcp_clients(cli_specs=None, cli_env_specs=None, store=store)
     executor = ToolExecutor(
         config=ToolRuntimeConfig(
             workspace=Workspace(tmp_path),
@@ -515,14 +514,10 @@ def test_connect_mcp_clients_in_background_registra_tools_e_isola_falhas(
     assert transitions[-1] == {"jira": "connected", "broken": "failed"}
 
 
-def test_connect_mcp_clients_in_background_ignora_runtime_vazio():
+def test_connect_mcp_clients_in_background_ignora_runtime_vazio(tmp_path):
     assert connect_mcp_clients_in_background(None, executor=MagicMock()) == []
 
-    class FakeConfig:
-        mcp_clients = None
-        mcp_client_env = None
-
-    runtime = start_mcp_clients(cli_specs=None, cli_env_specs=None, config=FakeConfig())
+    runtime = start_mcp_clients(cli_specs=None, cli_env_specs=None, store=_store(tmp_path))
     assert connect_mcp_clients_in_background(runtime, executor=MagicMock()) == []
 
 
@@ -1476,6 +1471,78 @@ def test_manager_upsert_in_background_com_env_vazio_remove_o_ambiente_da_conexao
     assert config.mcp_clients == ["jira=stdio:jira-cmd", "github=stdio:gh-cmd"]
     assert config.mcp_client_env == ["github=TOKEN=xyz"]
     assert manager.env_text_for("jira") == ""
+
+
+def test_manager_deactivate_cancels_handshake_queued_before_thread_starts(tmp_path, monkeypatch):
+    workspace = Workspace(tmp_path)
+    store = MCPConnectionStore.from_workspace(workspace)
+    store.upsert("jira=stdio:jira-cmd", scope="global")
+    _install_fake_session(monkeypatch)
+    bridge = MCPClientBridge()
+    set_bridge(bridge)
+    executor = MagicMock()
+    executor.registry = ToolRegistry()
+    manager = MCPConnectionManager(executor=executor, workspace=workspace)
+    threads = []
+
+    class LazyThread(threading.Thread):
+        def start(self):
+            threads.append(self)
+
+    manager.set_active("jira", True, thread_factory=LazyThread)
+    manager.set_active("jira", False)
+    threads[0].run()
+
+    assert bridge.sessions == {}
+    assert bridge.state("jira") is None
+    assert not manager.list_connections()[0].active
+    assert executor.registry.names() == []
+
+
+def test_manager_latest_edit_wins_even_when_old_thread_starts_last(tmp_path, monkeypatch):
+    workspace = Workspace(tmp_path)
+    _install_fake_session(monkeypatch)
+    bridge = MCPClientBridge()
+    set_bridge(bridge)
+    executor = MagicMock()
+    executor.registry = ToolRegistry()
+    manager = MCPConnectionManager(executor=executor, workspace=workspace)
+    threads = []
+
+    class LazyThread(threading.Thread):
+        def start(self):
+            threads.append(self)
+
+    manager.upsert_in_background("jira=stdio:old-cmd", thread_factory=LazyThread)
+    manager.upsert_in_background("jira=stdio:new-cmd", thread_factory=LazyThread)
+    threads[1].run()
+    current_session = bridge.sessions["jira"]
+    threads[0].run()
+
+    assert bridge.sessions["jira"] is current_session
+    assert manager.store.entry("jira").spec == "jira=stdio:new-cmd"
+
+
+def test_bridge_shutdown_cancels_queued_handshake(tmp_path, monkeypatch):
+    workspace = Workspace(tmp_path)
+    _install_fake_session(monkeypatch)
+    bridge = MCPClientBridge()
+    set_bridge(bridge)
+    executor = MagicMock()
+    executor.registry = ToolRegistry()
+    manager = MCPConnectionManager(executor=executor, workspace=workspace)
+    threads = []
+
+    class LazyThread(threading.Thread):
+        def start(self):
+            threads.append(self)
+
+    manager.upsert_in_background("jira=stdio:jira-cmd", thread_factory=LazyThread)
+    bridge.shutdown()
+    threads[0].run()
+
+    assert bridge.sessions == {}
+    assert bridge.state("jira").phase == MCPConnectionPhase.DISCONNECTED
 
 
 # ── Vida do subprocesso stdio × thread que o criou ───────────────────────

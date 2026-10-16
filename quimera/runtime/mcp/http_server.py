@@ -1179,6 +1179,11 @@ class MCP_HTTPServer:
         return None
 
     @property
+    def mcp_server(self) -> MCPServer:
+        """Instância de ``MCPServer`` servida por este transporte HTTP."""
+        return self._mcp
+
+    @property
     def allowed_tools(self) -> frozenset[str] | None:
         """Allowlist efetiva de tools publicada por este transporte HTTP."""
         return self._mcp.allowed_tools

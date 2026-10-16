@@ -267,8 +267,27 @@ class Workspace:
 
     @property
     def mcp_connections_file(self) -> Path:
-        """Servidores MCP externos conectados a este workspace."""
+        """Overlay do workspace sobre o catálogo de servidores MCP externos.
+
+        Guarda quais conexões globais estão ativas aqui (``mcp_active``) e as
+        conexões locais a este workspace (``mcp_clients``/``mcp_client_env``).
+        """
         return self._root / "mcp-connections.json"
+
+    @property
+    def global_mcp_connections_file(self) -> Path:
+        """Catálogo global de servidores MCP externos, compartilhado por todos os workspaces."""
+        return self.base_dir / "mcp-connections.json"
+
+    @property
+    def mcp_server_settings_file(self) -> Path:
+        """Overlay do workspace sobre a configuração do servidor MCP HTTP (porta, ativação)."""
+        return self._root / "mcp-server.json"
+
+    @property
+    def global_mcp_server_settings_file(self) -> Path:
+        """Padrões globais do servidor MCP HTTP (host, porta, allowlist)."""
+        return self.base_dir / "mcp-server.json"
 
     @property
     def workspace_config_file(self) -> Path:
@@ -302,11 +321,13 @@ class Workspace:
 
     @property
     def mcp_server_file(self) -> Path:
-        """Estado persistente global do servidor MCP HTTP do Quimera.
+        """Estado OAuth persistente do servidor MCP HTTP (clients e tokens).
 
         Fica em ``<base_dir>/state/mcp-server.json``, fora da árvore por-workspace,
         para que a autorização de clientes MCP HTTP sobreviva a troca de
-        workspace e a reinícios de sessão.
+        workspace e a reinícios de sessão. É estado, não configuração: a
+        configuração do servidor vive em :attr:`global_mcp_server_settings_file`
+        e :attr:`mcp_server_settings_file`.
         """
         return self.base_dir / "state" / "mcp-server.json"
 
@@ -326,6 +347,7 @@ class Workspace:
             self.secrets_file,
             self.workspace_config_file,
             self.mcp_connections_file,
+            self.global_mcp_connections_file,
         ]
         candidates.extend(sorted(self.connections_file.parent.glob(f"{self.connections_file.name}*")))
         candidates.extend(sorted(self.mcp_server_file.parent.glob(f"{self.mcp_server_file.name}*")))

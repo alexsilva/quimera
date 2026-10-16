@@ -44,12 +44,20 @@ quimera [opções] [test_agent]
 | `--no-mcp` | Desativa servidor MCP embutido. |
 | `--mcp [PATH]` | Atalho para `--mcp-socket`. |
 | `--mcp-socket [PATH]` | Ativa MCP via socket Unix e opcionalmente define path do socket. |
-| `--mcp-http` | Expõe servidor MCP HTTP adicional; agentes locais continuam usando socket Unix interno. |
-| `--mcp-port N` | Porta HTTP MCP; padrão `9090`. |
-| `--mcp-host HOST` | Host HTTP MCP; padrão `127.0.0.1`. |
-| `--mcp-http-allow-tools CSV` | Allowlist de tools para MCP HTTP externo (padrão: read). |
-| `--mcp-client nome=transporte:endpoint` | Conecta a um servidor MCP externo e expõe suas tools com prefixo `nome_`. Aceita `remote:` (OAuth via `mcp-remote`), `stdio:`, `socket:` e URLs `http(s)://`. Persistido por workspace em `mcp-connections.json`; pode ser repetido. |
-| `--mcp-client-env nome=KEY=val,...` | Variáveis de ambiente para uma conexão MCP client. |
+| `--mcp-http` | Expõe o servidor MCP HTTP adicional, mantém o socket Unix interno e grava `http_enabled=true` no workspace. |
+| `--mcp-port N` | Define e grava a porta HTTP MCP no workspace; sem a flag, vale a configuração herdada (padrão `9090`). |
+| `--mcp-host HOST` | Define e grava o host HTTP MCP no workspace; sem a flag, vale a configuração herdada (padrão `127.0.0.1`). |
+| `--mcp-http-allow-tools read-local|read|agent|all|CSV` | Define e grava o perfil/allowlist do MCP HTTP no workspace; sem a flag, vale a configuração herdada (padrão: `read`). |
+| `--mcp-client nome=transporte:endpoint` | Conecta a um servidor MCP externo e expõe suas tools com prefixo `nome_`. Aceita `remote:` (OAuth via `mcp-remote`), `stdio:`, `socket:` e URLs `http(s)://`. Persistido como conexão local do workspace em `workspaces/<hash>/mcp-connections.json` (se a spec for idêntica à do catálogo global, apenas ativa a global); pode ser repetido. |
+| `--mcp-client-env nome=KEY=val,...` | Variáveis de ambiente para uma conexão passada por `--mcp-client` na mesma linha de comando, gravadas junto com ela. |
+
+As flags `--mcp-http*` fornecidas explicitamente atualizam o
+`mcp-server.json` do workspace; sem elas, a partida usa os valores persistidos,
+resolvidos por chave como padrão interno ← global ← workspace. O MCP Hub também
+edita essa configuração por escopo; veja
+[MCP e ferramentas](../guia/mcp-e-ferramentas.md#servidor-http-pelo-hub).
+Conexões do catálogo global só entram na sessão quando estão ativas no
+workspace ([catálogo e ativação](../guia/mcp-e-ferramentas.md#catalogo-global-e-ativacao-por-workspace)).
 
 As conexões `--mcp-client` não bloqueiam a inicialização: o handshake de cada
 servidor roda em background depois que a interface sobe. O bloco de status no

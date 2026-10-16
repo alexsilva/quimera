@@ -77,3 +77,21 @@ def test_lifecycle_close_segue_quando_o_shutdown_do_bridge_falha():
 
     assert "agent.close" in events
     assert "bugs.close" in events
+
+
+def test_lifecycle_stops_http_started_by_hub_and_prevents_late_start():
+    events = []
+    app = _app(events)
+    app.external_mcp_http_server = SimpleNamespace(
+        shutdown=Mock(side_effect=lambda: events.append("http.shutdown"))
+    )
+    app.mcp_http_url = "http://127.0.0.1:9096/mcp"
+    lifecycle = AppLifecycle(app)
+    lifecycle.close()
+    lifecycle.close()
+
+    assert events.count("http.shutdown") == 1
+    assert events.index("http.shutdown") < events.index("agent.close")
+    assert app.external_mcp_http_server is None
+    assert app.mcp_http_url is None
+    assert app._mcp_closing

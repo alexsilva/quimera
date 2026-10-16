@@ -1095,6 +1095,7 @@ class MCPClientBridge:
         self._sessions: dict[str, MCPClientSession] = {}
         self._lock = threading.Lock()
         self._started = False
+        self._closed = False
         self._schemas: list[dict] = []
         self._schema_lock = threading.Lock()
         self._states: dict[str, MCPConnectionState] = {}
@@ -1284,7 +1285,25 @@ class MCPClientBridge:
 
     # ── Tentativas de handshake ──────────────────────────────────────
 
-    def _begin_attempt(self, name: str, transport: MCPTransport) -> int:
+    def prepare_connection(self, name: str) -> int:
+        """Reserva uma geração antes de despachar uma thread de handshake.
+
+        Uma desativação ou edição posterior invalida também o trabalho que
+        ainda não começou a rodar, além dos handshakes já em andamento.
+        """
+        with self._lock:
+            if self._closed:
+                raise MCPConnectSuperseded("bridge MCP encerrado", name=name)
+            attempt = self._attempts.get(name, 0) + 1
+            self._attempts[name] = attempt
+            previous = self._inflight.pop(name, None)
+        if previous is not None:
+            self._release_failed_transport(name, previous[1])
+        return attempt
+
+    def _begin_attempt(
+        self, name: str, transport: MCPTransport, expected_attempt: int | None = None
+    ) -> int:
         """Registra uma nova tentativa de handshake e abandona a anterior.
 
         Cada tentativa recebe uma geração; só a corrente pode publicar o
@@ -1293,7 +1312,11 @@ class MCPClientBridge:
         :class:`MCPConnectSuperseded`.
         """
         with self._lock:
-            attempt = self._attempts.get(name, 0) + 1
+            if self._closed or (
+                expected_attempt is not None and self._attempts.get(name) != expected_attempt
+            ):
+                raise MCPConnectSuperseded(f"handshake de '{name}' cancelado antes de iniciar", name=name)
+            attempt = expected_attempt if expected_attempt is not None else self._attempts.get(name, 0) + 1
             self._attempts[name] = attempt
             previous = self._inflight.pop(name, None)
             self._inflight[name] = (attempt, transport)
@@ -1307,7 +1330,7 @@ class MCPClientBridge:
 
     def _attempt_is_current(self, name: str, attempt: int) -> bool:
         with self._lock:
-            return self._attempts.get(name) == attempt
+            return not self._closed and self._attempts.get(name) == attempt
 
     def _end_attempt(self, name: str, attempt: int) -> None:
         with self._lock:
@@ -1324,8 +1347,9 @@ class MCPClientBridge:
         """
         with self._lock:
             previous = self._inflight.pop(name, None)
-            if previous is not None:
-                self._attempts[name] = self._attempts.get(name, 0) + 1
+            # Invalida também a thread reservada que ainda não chegou ao
+            # _begin_attempt; caso contrário ela reconectaria após Desativar.
+            self._attempts[name] = self._attempts.get(name, 0) + 1
         if previous is None:
             return False
         _logger.info("MCP bridge '%s': handshake em andamento cancelado", name)
@@ -1346,7 +1370,7 @@ class MCPClientBridge:
         return self.replace_connection(name, transport)
 
     def replace_connection(
-        self, name: str, transport: MCPTransport
+        self, name: str, transport: MCPTransport, *, expected_attempt: int | None = None
     ) -> MCPClientSession:
         """Conecta a nova sessão antes de substituir uma conexão existente.
 
@@ -1357,7 +1381,7 @@ class MCPClientBridge:
         é abandonado (ver :meth:`_begin_attempt`).
         """
         new_session = MCPClientSession(transport, name=name)
-        attempt = self._begin_attempt(name, transport)
+        attempt = self._begin_attempt(name, transport, expected_attempt)
         with self._lock:
             had_session = name in self._sessions
         if not had_session:
@@ -1385,7 +1409,7 @@ class MCPClientBridge:
             self._release_failed_transport(name, transport)
             raise
         with self._lock:
-            current = self._attempts.get(name) == attempt
+            current = not self._closed and self._attempts.get(name) == attempt
             if current:
                 self._inflight.pop(name, None)
                 old_session = self._sessions.get(name)
@@ -1580,6 +1604,7 @@ class MCPClientBridge:
 
     def shutdown(self) -> None:
         with self._lock:
+            self._closed = True
             inflight = list(self._inflight)
         for name in inflight:
             # Sem isso um ``mcp-remote`` esperando OAuth sobreviveria ao app.
@@ -1814,7 +1839,7 @@ def start_mcp_clients(
     *,
     cli_specs: list[str] | None,
     cli_env_specs: list[str] | None,
-    config: Any,
+    store: Any,
     workspace=None,
 ) -> MCPClientRuntime:
     """Prepara os MCP clients externos e publica o bridge global sem conectar.
@@ -1827,20 +1852,21 @@ def start_mcp_clients(
     bloco de status do boot e o MCP Hub refletem cada conexão como
     ``pending``/``connecting``/``connected``/``failed``.
 
-    Specs vindas da CLI são combinadas às persistidas por nome de conexão: uma
-    conexão nova é adicionada às já existentes, enquanto uma conexão de mesmo
-    nome é reconfigurada (substituída), nunca duplicada.
+    ``store`` é o :class:`~quimera.runtime.mcp.settings.MCPConnectionStore`
+    do workspace: catálogo global mais overlay local. Specs vindas da CLI são
+    persistidas como conexões locais do workspace (uma de mesmo nome é
+    reconfigurada, nunca duplicada) e as conexões que entram na sessão são as
+    ativas para este workspace.
     """
-    persisted_specs = getattr(config, "mcp_clients", None)
-    persisted_env = getattr(config, "mcp_client_env", None)
-
     if cli_specs:
-        specs = merge_specs_by_name(persisted_specs, cli_specs)
-        env_specs = merge_specs_by_name(persisted_env, cli_env_specs)
-    else:
-        specs = persisted_specs
-        env_specs = persisted_env
-
+        store.add_local(cli_specs, cli_env_specs)
+    absorbed = store.normalize()
+    if absorbed:
+        _logger.info(
+            "MCP clients: conexões locais idênticas ao catálogo global viraram ativações: %s",
+            ", ".join(absorbed),
+        )
+    specs, env_specs = store.active_specs()
     if not specs:
         return MCPClientRuntime(enabled=False)
 
@@ -1857,9 +1883,6 @@ def start_mcp_clients(
             bridge.mark_pending(name, spec_transport_type(spec))
     set_mcp_client_bridge(bridge)
     set_bridge_schemas([])
-
-    if cli_specs:
-        config.set_mcp_configuration(specs, env_specs)
 
     return MCPClientRuntime(
         enabled=True,
@@ -1900,6 +1923,7 @@ def connect_mcp_clients_in_background(
                 "env_overrides": env_overrides,
                 "workspace": workspace,
                 "executor": executor,
+                "expected_attempt": bridge.prepare_connection(name),
             },
             name=f"quimera-mcp-client-{name}",
             daemon=True,
@@ -1936,6 +1960,7 @@ def connect_mcp_client_spec(
     env_overrides: dict[str, dict[str, str]] | None = None,
     workspace=None,
     executor: Any = None,
+    expected_attempt: int | None = None,
 ) -> bool:
     """Conecta uma spec ao bridge e registra suas tools no executor.
 
@@ -1944,18 +1969,24 @@ def connect_mcp_client_spec(
     conexão está utilizável.
     """
     name = _spec_name(spec) or spec
+    if expected_attempt is not None and not bridge._attempt_is_current(name, expected_attempt):
+        return False
     try:
         name, transport = parse_mcp_client_spec(
             spec, env_overrides, workspace=workspace
         )
     except Exception as exc:
         _logger.error("MCP client '%s': especificação inválida: %s", name, exc)
-        bridge.mark_failed(name, exc, transport=spec_transport_type(spec))
+        if expected_attempt is None or bridge._attempt_is_current(name, expected_attempt):
+            bridge.mark_failed(name, exc, transport=spec_transport_type(spec))
         return False
 
     bind_bridge_notices(bridge, name, transport)
     try:
-        bridge.replace_connection(name, transport)
+        if expected_attempt is None:
+            bridge.replace_connection(name, transport)
+        else:
+            bridge.replace_connection(name, transport, expected_attempt=expected_attempt)
     except MCPConnectSuperseded:
         # Outra tentativa (reconectar/desconectar pelo hub) assumiu; o estado
         # publicado é o dela.

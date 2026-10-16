@@ -19,6 +19,14 @@ from quimera.runtime.mcp.session import (
     build_oauth_provider,
     load_persisted_authorized_clients,
     start_embedded_mcp,
+    start_external_mcp_http,
+    stop_external_mcp_http,
+)
+from quimera.runtime.mcp.settings import (
+    MCPConnectionEntry,
+    MCPConnectionStore,
+    MCPHttpSettings,
+    MCPHttpSettingsStore,
 )
 from quimera.runtime.mcp.client import (
     MCPClientBridge,
@@ -45,8 +53,14 @@ __all__ = [
     "create_server",
     "EmbeddedMCPRuntime",
     "start_embedded_mcp",
+    "start_external_mcp_http",
+    "stop_external_mcp_http",
     "build_oauth_provider",
     "load_persisted_authorized_clients",
+    "MCPConnectionEntry",
+    "MCPConnectionStore",
+    "MCPHttpSettings",
+    "MCPHttpSettingsStore",
     "AuthContext",
     "OAuthClient",
     "OAuthConfig",

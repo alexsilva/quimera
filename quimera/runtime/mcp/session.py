@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
+import threading
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -23,6 +25,16 @@ from quimera.runtime.mcp.oauth import (
     build_provider_from_cli,
 )
 from quimera.runtime.mcp.server import MCPServer
+from quimera.runtime.mcp.settings import (
+    DEFAULT_MCP_HTTP_ALLOW_TOOLS,
+    DEFAULT_MCP_HTTP_HOST,
+    DEFAULT_MCP_HTTP_PORT,
+    MCPHttpSettings,
+    MCPHttpSettingsStore,
+)
+
+_logger = logging.getLogger(__name__)
+_external_http_lock = threading.RLock()
 
 MCPTransport = Literal["socket", "http"]
 
@@ -199,6 +211,113 @@ def load_persisted_authorized_clients(workspace: Any) -> list[ConnectedMCPClient
     return result
 
 
+def _publish_external_http(
+    app: Any,
+    http_server: MCP_HTTPServer | None,
+    url: str | None,
+    *,
+    error: str = "",
+) -> None:
+    """Publica (ou limpa) o MCP HTTP externo nos atributos do app e no estado da sessão.
+
+    Intencionalmente não propaga HTTP aos profiles locais: eles devem
+    preferir o socket interno mesmo quando o HTTP externo está ativo.
+    """
+    setattr(app, "mcp_http_url", url)
+    setattr(app, "external_mcp_http_url", url)
+    setattr(app, "external_mcp_http_server", http_server)
+    setattr(app, "external_mcp_http_error", error)
+    if http_server is None:
+        setattr(app, "mcp_http_settings", None)
+    session_state = _prompt_session_state(app)
+    if isinstance(session_state, dict):
+        session_state["mcp_http_url"] = url or ""
+        session_state["mcp_external_http_url"] = url or ""
+        session_state["mcp_external_oauth_enabled"] = bool(
+            http_server is not None and http_server.oauth.enabled
+        )
+
+
+def describe_http_error(exc: BaseException) -> str:
+    """Resumo de uma falha de partida do HTTP com a causa (ex.: porta em uso)."""
+    cause = exc.__cause__ or exc.__context__
+    text = str(exc) or type(exc).__name__
+    if cause is not None and str(cause):
+        text = f"{text}: {cause}"
+    return text
+
+
+def start_external_mcp_http(
+    app: Any,
+    workspace: Any,
+    settings: MCPHttpSettings,
+    *,
+    oauth: OAuthProvider | None = None,
+) -> MCP_HTTPServer:
+    """Sobe o MCP HTTP externo na sessão viva e publica a URL no app.
+
+    Usado no boot e pelo MCP Hub ao ativar o servidor no workspace. É uma
+    instância separada de ``MCPServer`` para clientes remotos, com allowlist
+    aplicada só nela e OAuth obrigatório (o token do socket interno não vale
+    aqui). Levanta ``RuntimeError`` se já há um servidor ativo ou se o bind
+    falha (porta ocupada por outra instância, por exemplo); o erro fica
+    publicado para o Hub permitir corrigir a configuração.
+    """
+    with _external_http_lock:
+        if getattr(app, "_mcp_closing", False):
+            raise RuntimeError("A sessão está encerrando; o servidor MCP HTTP não pode ser iniciado.")
+        if getattr(app, "external_mcp_http_server", None) is not None:
+            raise RuntimeError("MCP HTTP externo já está ativo nesta sessão")
+        external_mcp_server = None
+        http_server = None
+        try:
+            if oauth is None:
+                oauth = build_oauth_provider(workspace, **(getattr(app, "mcp_oauth_options", None) or {}))
+            external_mcp_server = MCPServer(
+                app.tool_executor,
+                auth_token=None,
+                agent_run_sink=getattr(app, "agent_run_sink", None),
+            )
+            http_server = MCP_HTTPServer(
+                external_mcp_server,
+                host=settings.host,
+                port=settings.port,
+                allowed_tools=parse_http_allowed_tools(settings.allow_tools),
+                oauth=oauth,
+            )
+            http_server.start_background()
+        except Exception as exc:
+            try:
+                if http_server is not None:
+                    http_server.shutdown()
+                elif external_mcp_server is not None:
+                    external_mcp_server.shutdown()
+            except Exception:
+                _logger.warning("Falha ao liberar servidor MCP HTTP após erro de partida", exc_info=True)
+            _publish_external_http(app, None, None, error=describe_http_error(exc))
+            raise
+        # port=0 é útil para sessões/testes efêmeros; publique a porta que o
+        # sistema de fato reservou. Configurações persistidas usam 1..65535.
+        actual_port = http_server.port
+        if type(actual_port) is int:
+            settings = replace(settings, port=actual_port)
+        setattr(app, "mcp_http_settings", settings)
+        _publish_external_http(app, http_server, settings.url)
+        return http_server
+
+
+def stop_external_mcp_http(app: Any) -> bool:
+    """Derruba o MCP HTTP externo da sessão; ``False`` se não havia servidor."""
+    with _external_http_lock:
+        http_server = getattr(app, "external_mcp_http_server", None)
+        if http_server is None:
+            _publish_external_http(app, None, None)
+            return False
+        http_server.shutdown()
+        _publish_external_http(app, None, None)
+        return True
+
+
 def start_embedded_mcp(
     app: Any,
     workspace: Any,
@@ -207,11 +326,12 @@ def start_embedded_mcp(
     enabled: bool = True,
     transport: MCPTransport = "socket",
     socket_path: str | None = None,
-    http_host: str = "127.0.0.1",
-    http_port: int = 9090,
-    http_allowed_tools: str | Iterable[str] | None = DEFAULT_HTTP_TOOL_PROFILE,
+    http_host: str = DEFAULT_MCP_HTTP_HOST,
+    http_port: int = DEFAULT_MCP_HTTP_PORT,
+    http_allowed_tools: str | None = DEFAULT_HTTP_TOOL_PROFILE,
     external_http_enabled: bool = False,
     oauth: OAuthProvider | None = None,
+    oauth_options: dict | None = None,
 ) -> EmbeddedMCPRuntime:
     """Inicia o MCP interno obrigatório e, opcionalmente, o MCP HTTP externo.
 
@@ -221,9 +341,16 @@ def start_embedded_mcp(
     aplicada somente nessa instância.
 
     O transporte HTTP externo usa OAuth exclusivamente. O token do socket interno
-    não é reutilizado nem aceito pelo HTTP.
+    não é reutilizado nem aceito pelo HTTP. ``oauth_options`` (flags da CLI)
+    ficam guardadas em ``app.mcp_oauth_options`` para que o MCP Hub possa subir
+    o servidor mais tarde com o mesmo provider.
+
+    Uma falha ao subir o HTTP (porta ocupada) não derruba a sessão: fica em
+    ``app.external_mcp_http_error``, aparece no bloco de status do boot e o
+    Hub permite ajustar a porta e ativar de novo.
     """
     session_state = _prompt_session_state(app)
+    setattr(app, "mcp_oauth_options", dict(oauth_options or {}))
 
     if not enabled:
         app.configure_mcp_socket(None)
@@ -233,15 +360,10 @@ def start_embedded_mcp(
         if isinstance(session_state, dict):
             session_state["mcp_enabled"] = False
             session_state["mcp_socket_path"] = ""
-            session_state["mcp_http_url"] = ""
             session_state["mcp_internal_socket_path"] = ""
-            session_state["mcp_external_http_url"] = ""
-            session_state["mcp_external_oauth_enabled"] = False
         setattr(app, "mcp_socket_path", None)
-        setattr(app, "mcp_http_url", None)
         setattr(app, "internal_mcp_socket_path", None)
-        setattr(app, "external_mcp_http_url", None)
-        setattr(app, "external_mcp_http_server", None)
+        _publish_external_http(app, None, None)
         return EmbeddedMCPRuntime(enabled=False)
 
     if transport not in {"socket", "http"}:
@@ -261,60 +383,47 @@ def start_embedded_mcp(
     setattr(app, "mcp_socket_path", resolved_socket_path)
     setattr(app, "internal_mcp_socket_path", resolved_socket_path)
     setattr(app, "internal_mcp_server", internal_mcp_server)
-
-    external_mcp_server = None
-    external_mcp_http_server = None
-    external_mcp_http_url = None
-    external_mcp_allowed_tools = None
-
-    if external_http_enabled:
-        if oauth is None:
-            oauth = build_oauth_provider(workspace)
-        external_mcp_server = MCPServer(
-            app.tool_executor,
-            auth_token=None,
-            agent_run_sink=agent_run_sink,
-        )
-        external_mcp_allowed_tools = parse_http_allowed_tools(http_allowed_tools)
-        external_mcp_http_server = MCP_HTTPServer(
-            external_mcp_server,
-            host=http_host,
-            port=http_port,
-            allowed_tools=external_mcp_allowed_tools,
-            oauth=oauth,
-        )
-        external_mcp_http_server.start_background()
-        external_mcp_http_url = f"http://{http_host}:{http_port}/mcp"
-        # Intencionalmente não propagamos HTTP aos profiles locais: eles devem
-        # preferir o socket interno mesmo quando o HTTP externo está ativo.
-        setattr(app, "mcp_http_url", external_mcp_http_url)
-        setattr(app, "external_mcp_http_url", external_mcp_http_url)
-        setattr(app, "external_mcp_http_server", external_mcp_http_server)
-    else:
-        setattr(app, "mcp_http_url", None)
-        setattr(app, "external_mcp_http_url", None)
-        setattr(app, "external_mcp_http_server", None)
-
-    oauth_enabled = bool(
-        external_mcp_http_server is not None and external_mcp_http_server.oauth.enabled
-    )
     if isinstance(session_state, dict):
         session_state["mcp_enabled"] = True
         session_state["mcp_socket_path"] = resolved_socket_path
-        session_state["mcp_http_url"] = external_mcp_http_url or ""
         session_state["mcp_internal_socket_path"] = resolved_socket_path
-        session_state["mcp_external_http_url"] = external_mcp_http_url or ""
-        session_state["mcp_external_oauth_enabled"] = oauth_enabled
+
+    external_mcp_http_server = None
+    external_mcp_http_url = None
+    settings = MCPHttpSettings(
+        enabled=external_http_enabled,
+        host=http_host,
+        port=http_port,
+        allow_tools=http_allowed_tools or DEFAULT_MCP_HTTP_ALLOW_TOOLS,
+    )
+    if external_http_enabled:
+        try:
+            external_mcp_http_server = start_external_mcp_http(
+                app, workspace, settings, oauth=oauth
+            )
+            external_mcp_http_url = app.external_mcp_http_url
+        except Exception as exc:
+            error = describe_http_error(exc)
+            _logger.error("MCP HTTP externo não iniciado em %s: %s", settings.url, error)
+            _publish_external_http(app, None, None, error=error)
+    else:
+        _publish_external_http(app, None, None)
 
     return EmbeddedMCPRuntime(
         enabled=True,
         internal_mcp_server=internal_mcp_server,
         internal_mcp_socket_path=resolved_socket_path,
         internal_mcp_token=internal_mcp_token,
-        external_mcp_server=external_mcp_server,
+        external_mcp_server=(
+            external_mcp_http_server.mcp_server if external_mcp_http_server is not None else None
+        ),
         external_mcp_http_server=external_mcp_http_server,
         external_mcp_http_url=external_mcp_http_url,
-        external_mcp_allowed_tools=external_mcp_allowed_tools,
+        external_mcp_allowed_tools=(
+            external_mcp_http_server.allowed_tools
+            if external_mcp_http_server is not None
+            else None
+        ),
         external_mcp_oauth=(
             external_mcp_http_server.oauth if external_mcp_http_server is not None else None
         ),
@@ -324,5 +433,9 @@ def start_embedded_mcp(
         http_server=external_mcp_http_server,
         socket_path=resolved_socket_path,
         http_url=external_mcp_http_url,
-        allowed_tools=external_mcp_allowed_tools,
+        allowed_tools=(
+            external_mcp_http_server.allowed_tools
+            if external_mcp_http_server is not None
+            else None
+        ),
     )

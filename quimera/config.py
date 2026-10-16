@@ -17,6 +17,7 @@ WORKSPACE_POLICY_PRESETS = {"strict", "developer", "autonomous"}
 DEFAULT_VISIBILITY = "summary"
 VISIBILITY_OPTIONS = {"quiet", "summary", "full"}
 DEFAULT_THREADS = 1
+_MCP_HTTP_UNSET = object()
 
 
 class ConfigManager:
@@ -253,3 +254,59 @@ class ConfigManager:
     def set_mcp_configuration(self, specs: list[str] | None, env_specs: list[str] | None) -> None:
         """Persiste servidores e ambiente na mesma escrita atomica."""
         self._update(mcp_clients=specs or None, mcp_client_env=env_specs or None)
+
+    @property
+    def mcp_active(self) -> list[str] | None:
+        """Nomes de conexões do catálogo global ativadas neste workspace."""
+        value = self._load().get("mcp_active")
+        if isinstance(value, list) and all(isinstance(s, str) for s in value):
+            return value
+        return None
+
+    def set_mcp_active(self, names: list[str] | None) -> None:
+        """Persiste as conexões globais ativadas; lista vazia remove a chave."""
+        self._update(mcp_active=list(names) if names else None)
+
+    @property
+    def mcp_http_settings(self) -> dict:
+        """Chaves do servidor MCP HTTP presentes no arquivo, validadas por tipo.
+
+        Só o que está gravado entra no dicionário: a ausência de uma chave é o
+        que permite a um escopo herdar o valor do outro.
+        """
+        data = self._load()
+        values: dict = {}
+        enabled = data.get("http_enabled")
+        if isinstance(enabled, bool):
+            values["enabled"] = enabled
+        host = data.get("http_host")
+        if isinstance(host, str) and host.strip():
+            values["host"] = host.strip()
+        port = data.get("http_port")
+        if type(port) is int and 0 < port < 65536:
+            values["port"] = port
+        allow_tools = data.get("http_allow_tools")
+        if isinstance(allow_tools, str) and allow_tools.strip():
+            values["allow_tools"] = allow_tools.strip()
+        return values
+
+    def set_mcp_http_settings(
+        self,
+        *,
+        enabled: bool | None | object = _MCP_HTTP_UNSET,
+        host: str | None | object = _MCP_HTTP_UNSET,
+        port: int | None | object = _MCP_HTTP_UNSET,
+        allow_tools: str | None | object = _MCP_HTTP_UNSET,
+    ) -> None:
+        """Atualiza só as chaves fornecidas; ``None`` apaga uma chave."""
+        values = {}
+        if enabled is not _MCP_HTTP_UNSET:
+            values["http_enabled"] = enabled
+        if host is not _MCP_HTTP_UNSET:
+            values["http_host"] = host or None
+        if port is not _MCP_HTTP_UNSET:
+            values["http_port"] = port
+        if allow_tools is not _MCP_HTTP_UNSET:
+            values["http_allow_tools"] = allow_tools or None
+        if values:
+            self._update(**values)

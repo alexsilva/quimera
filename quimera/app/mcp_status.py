@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 MCP_BOOT_STATUS_KEY = "mcp"
 MCP_HUB_HINT = "F9 abre o MCP Hub para reconectar"
+MCP_HTTP_HUB_HINT = "F9 abre o MCP Hub para ajustar a porta e ativar de novo"
 MCP_LOG_HINT = "detalhes das falhas no log do app"
 MCP_AUTH_PENDING_LABEL = "autorização pendente no navegador"
 #: Tamanho máximo do detalhe de uma conexão no bloco. O motivo já chega
@@ -150,6 +151,14 @@ def build_mcp_boot_status_lines(app, bridge=None) -> list[BootStatusLine]:
         lines.append(BootStatusLine(BOOT_STATUS_OK, f"MCP interno iniciado em {socket_path}"))
     if http_url:
         lines.append(BootStatusLine(BOOT_STATUS_OK, f"MCP HTTP externo iniciado em {http_url}"))
+    http_error = getattr(app, "external_mcp_http_error", None)
+    if http_error:
+        reason = shorten_text(str(http_error), MCP_DETAIL_LIMIT)
+        lines.append(
+            BootStatusLine(
+                BOOT_STATUS_ERROR, f"MCP HTTP externo: falha — {reason} · {MCP_HTTP_HUB_HINT}"
+            )
+        )
     if bridge is None:
         bridge = get_bridge()
     states = _bridge_client_states(bridge)

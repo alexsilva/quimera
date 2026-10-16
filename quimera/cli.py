@@ -25,10 +25,15 @@ from . import themes as _themes
 from .app import QuimeraApp
 from .ui.textual import TextualUiBridge, run_textual_quimera_app
 from .app.simple_input_gate import SimpleInputGate
-from .runtime.mcp import build_oauth_provider, start_embedded_mcp
+from .runtime.mcp import start_embedded_mcp
 from .runtime.mcp.client import (
     connect_mcp_clients_in_background,
     start_mcp_clients,
+)
+from .runtime.mcp.settings import (
+    MCPConnectionStore,
+    MCPHttpSettingsStore,
+    SCOPE_LOCAL,
 )
 from .config import ConfigManager
 from .workspace import Workspace
@@ -388,25 +393,25 @@ def main():
         dest="mcp_http",
         action="store_true",
         default=False,
-        help="Habilita MCP HTTP externo adicional em /mcp; agentes locais continuam usando o socket Unix interno.",
+        help="Habilita MCP HTTP externo adicional em /mcp e persiste a ativação no workspace; agentes locais continuam usando o socket Unix interno.",
     )
     parser.add_argument(
         "--mcp-port",
         dest="mcp_port",
         type=int,
-        default=9090,
-        help="Porta do servidor MCP HTTP externo quando --mcp-http está ativo (padrão: 9090).",
+        default=None,
+        help="Porta do servidor MCP HTTP externo; quando informada, é persistida no workspace.",
     )
     parser.add_argument(
         "--mcp-host",
         dest="mcp_host",
-        default="127.0.0.1",
-        help="Host do servidor MCP HTTP externo quando --mcp-http está ativo (padrão: 127.0.0.1).",
+        default=None,
+        help="Host do servidor MCP HTTP externo (padrão: 127.0.0.1).",
     )
     parser.add_argument(
         "--mcp-http-allow-tools",
         dest="mcp_http_allow_tools",
-        default="read",
+        default=None,
         metavar="read-local|read|agent|all|CSV",
         help="Allowlist de tools para MCP HTTP externo: read-local (sem rede), read (padrão), agent, all ou lista CSV de nomes.",
     )
@@ -638,15 +643,32 @@ def main():
     if args.test and _test_mode_uses_fake_openai(agents):
         fake_openai_backend = _start_test_fake_openai_backend()
     try:
-        mcp_config = ConfigManager(workspace.mcp_connections_file)
         # Só prepara o bridge (estado "pending" por conexão); os handshakes
         # rodam em background depois que o app existe, sem travar o boot.
         mcp_client_runtime = start_mcp_clients(
             cli_specs=args.mcp_clients,
             cli_env_specs=args.mcp_client_env,
-            config=mcp_config,
+            store=MCPConnectionStore.from_workspace(workspace),
             workspace=workspace,
         )
+        # Flags explícitas do HTTP atualizam o overlay do workspace. Sem flags,
+        # vale a configuração efetiva já persistida (default ← global ← local).
+        explicit_http = {
+            "enabled": True if args.mcp_http else None,
+            "host": args.mcp_host,
+            "port": args.mcp_port,
+            "allow_tools": args.mcp_http_allow_tools,
+        }
+        explicit_http = {key: value for key, value in explicit_http.items() if value is not None}
+        mcp_http_store = MCPHttpSettingsStore.from_workspace(workspace)
+        try:
+            mcp_http_settings = (
+                mcp_http_store.save(SCOPE_LOCAL, **explicit_http)
+                if explicit_http
+                else mcp_http_store.load()
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
 
         isatty = _is_tty()
         textual_bridge = TextualUiBridge()
@@ -705,12 +727,11 @@ def main():
             enabled=not args.no_mcp,
             transport="socket",
             socket_path=args.mcp_socket,
-            http_host=args.mcp_host,
-            http_port=args.mcp_port,
-            http_allowed_tools=args.mcp_http_allow_tools,
-            external_http_enabled=args.mcp_http,
-            oauth=build_oauth_provider(
-                workspace,
+            http_host=mcp_http_settings.host,
+            http_port=mcp_http_settings.port,
+            http_allowed_tools=mcp_http_settings.allow_tools,
+            external_http_enabled=mcp_http_settings.enabled,
+            oauth_options=dict(
                 issuer=args.mcp_oauth_issuer,
                 client_specs=args.mcp_oauth_clients,
                 redirect_uris=args.mcp_oauth_redirect_uris,

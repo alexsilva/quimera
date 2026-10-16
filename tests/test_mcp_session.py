@@ -3,11 +3,16 @@ import time
 from types import SimpleNamespace
 from unittest.mock import ANY, patch
 
+import pytest
+
 from quimera.runtime.mcp import (
     EmbeddedMCPRuntime,
     load_persisted_authorized_clients,
     start_embedded_mcp,
+    start_external_mcp_http,
+    stop_external_mcp_http,
 )
+from quimera.runtime.mcp.settings import MCPHttpSettings
 from quimera.runtime.mcp.http_server import DEFAULT_HTTP_READ_ONLY_TOOLS
 from quimera.session_paths import SessionPaths
 from quimera.workspace import Workspace
@@ -231,3 +236,103 @@ def test_start_embedded_mcp_rejeita_transporte_invalido(tmp_path):
             raise AssertionError("ValueError esperado")
 
     mcp_cls.assert_not_called()
+
+
+def test_external_http_failure_releases_resources_and_can_be_retried(tmp_path):
+    app = _FakeApp()
+    workspace = _workspace(tmp_path)
+    settings = MCPHttpSettings(enabled=True, port=9096)
+    with patch("quimera.runtime.mcp.session.MCPServer") as mcp_cls, patch(
+        "quimera.runtime.mcp.session.MCP_HTTPServer"
+    ) as http_cls, patch("quimera.runtime.mcp.session.build_oauth_provider"):
+        http_cls.return_value.start_background.side_effect = OSError("Address already in use")
+        with pytest.raises(OSError, match="Address already in use"):
+            start_external_mcp_http(app, workspace, settings)
+
+        http_cls.return_value.shutdown.assert_called_once_with()
+        assert app.external_mcp_http_server is None
+        assert app.mcp_http_url is None
+        assert "Address already in use" in app.external_mcp_http_error
+        assert app.prompt_builder.session_state["mcp_external_http_url"] == ""
+
+        http_cls.return_value.start_background.side_effect = None
+        server = start_external_mcp_http(app, workspace, settings)
+        assert app.mcp_http_url == "http://127.0.0.1:9096/mcp"
+        assert app.external_mcp_http_error == ""
+        assert app.mcp_http_settings == settings
+        assert server is app.external_mcp_http_server
+        assert stop_external_mcp_http(app)
+        assert not stop_external_mcp_http(app)
+        assert app.mcp_http_url is None
+        assert app.socket_configs == []
+        assert app.http_configs == []
+        assert mcp_cls.call_count == 2
+
+
+def test_boot_http_failure_keeps_internal_socket_and_reports_cause(tmp_path):
+    app = _FakeApp()
+    workspace = _workspace(tmp_path)
+    with patch("quimera.runtime.mcp.session.MCPServer"), patch(
+        "quimera.runtime.mcp.session.MCP_HTTPServer"
+    ) as http_cls, patch("quimera.runtime.mcp.session.build_oauth_provider"):
+        http_cls.return_value.start_background.side_effect = OSError("porta ocupada")
+        runtime = start_embedded_mcp(app, workspace, SessionPaths(workspace), external_http_enabled=True)
+    assert runtime.enabled and runtime.internal_mcp_socket_path
+    assert runtime.external_mcp_http_server is None
+    assert app.socket_configs == [(runtime.socket_path, runtime.token)]
+    assert app.external_mcp_http_error == "porta ocupada"
+
+
+def test_disabled_http_does_not_load_oauth_and_retains_options_for_hub(tmp_path):
+    app = _FakeApp()
+    workspace = _workspace(tmp_path)
+    options = {"issuer": "https://quimera.example.test", "allow_dynamic_registration": False}
+    with patch("quimera.runtime.mcp.session.MCPServer"), patch(
+        "quimera.runtime.mcp.session.MCP_HTTPServer"
+    ), patch("quimera.runtime.mcp.session.build_oauth_provider") as provider:
+        start_embedded_mcp(app, workspace, SessionPaths(workspace), oauth_options=options)
+        provider.assert_not_called()
+        start_external_mcp_http(app, workspace, MCPHttpSettings(enabled=True))
+        provider.assert_called_once_with(workspace, **options)
+        stop_external_mcp_http(app)
+
+
+def test_http_cannot_start_while_session_is_closing(tmp_path):
+    app = _FakeApp()
+    app._mcp_closing = True
+    with patch("quimera.runtime.mcp.session.MCP_HTTPServer") as http_cls:
+        with pytest.raises(RuntimeError, match="encerrando"):
+            start_external_mcp_http(app, _workspace(tmp_path), MCPHttpSettings(enabled=True))
+    http_cls.assert_not_called()
+
+
+def test_external_http_real_start_stop_and_restart_preserve_oauth(tmp_path):
+    from http.client import HTTPConnection
+
+    from quimera.runtime.mcp.oauth import OAuthConfig, OAuthProvider
+    from tests.helpers import make_mcp_executor
+
+    app = _FakeApp()
+    app.tool_executor = make_mcp_executor()
+    workspace = _workspace(tmp_path)
+    oauth = OAuthProvider(OAuthConfig(enabled=True))
+    settings = MCPHttpSettings(enabled=True, port=0, allow_tools="read-local")
+    try:
+        first = start_external_mcp_http(app, workspace, settings, oauth=oauth)
+        assert first.port > 0
+        assert app.mcp_http_url == f"http://127.0.0.1:{first.port}/mcp"
+        assert first.oauth is oauth
+        connection = HTTPConnection("127.0.0.1", first.port, timeout=3)
+        try:
+            connection.request("GET", "/.well-known/oauth-protected-resource/mcp")
+            response = connection.getresponse()
+            assert response.status == 200
+            assert json.loads(response.read())["resource"].endswith("/mcp")
+        finally:
+            connection.close()
+        stop_external_mcp_http(app)
+        assert first.httpd is None
+        second = start_external_mcp_http(app, workspace, settings, oauth=oauth)
+        assert second is not first and second.oauth is oauth
+    finally:
+        stop_external_mcp_http(app)

@@ -34,6 +34,9 @@ class AppLifecycle:
             return
         self._closed = True
         app = self._app
+        # Uma ativação em background pelo Hub não pode publicar um servidor
+        # novo depois que a sessão começar a liberar seus recursos.
+        app._mcp_closing = True
         try:
             debate_service = getattr(app, "debate_service", None)
             if debate_service is not None:
@@ -56,6 +59,12 @@ class AppLifecycle:
             if session_services is not None:
                 session_services.shutdown(interrupted=interrupted)
         finally:
+            from ..runtime.mcp.session import stop_external_mcp_http
+
+            try:
+                stop_external_mcp_http(app)
+            except Exception:
+                _logger.warning("Falha ao encerrar servidor MCP HTTP externo", exc_info=True)
             if process_supervisor is not None:
                 process_supervisor.shutdown()
             # Depois do resumo de sessão (que ainda pode usar tools externas)

@@ -3,6 +3,7 @@ import builtins
 import importlib.util
 import os
 import sys
+import tempfile
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,11 +20,20 @@ _ORIGINAL_DEPENDENCY_CHECK = cli._ensure_required_runtime_dependencies
 
 
 class _FakeWorkspace:
+    last_instance = None
+
     def __init__(self, cwd):
         self.cwd = cwd
         self.config_file = Path("/tmp/quimera-test-config.json")
-        self.mcp_connections_file = Path("/tmp/quimera-test-mcp-connections.json")
+        # Arquivos MCP isolados por instância: as flags --mcp-http* persistem
+        # no overlay do workspace e não podem vazar entre testes.
+        root = Path(tempfile.mkdtemp(prefix="quimera-test-ws-"))
+        self.mcp_connections_file = root / "mcp-connections.json"
+        self.global_mcp_connections_file = root / "global" / "mcp-connections.json"
+        self.mcp_server_settings_file = root / "mcp-server.json"
+        self.global_mcp_server_settings_file = root / "global" / "mcp-server.json"
         self.runtime_secret_files = ()
+        _FakeWorkspace.last_instance = self
 
 
 class _FakeSessionPaths:
@@ -997,10 +1007,10 @@ def test_main_mcp_client_uses_workspace_connections_file(monkeypatch):
 
     cli.main()
 
-    assert captured["config"].config_file == Path(
-        "/tmp/quimera-test-mcp-connections.json"
-    )
-    assert captured["config"].config_file != Path("/tmp/quimera-test-config.json")
+    workspace = _FakeWorkspace.last_instance
+    assert captured["store"].workspace_file == workspace.mcp_connections_file
+    assert captured["store"].global_file == workspace.global_mcp_connections_file
+    assert captured["store"].workspace_file != Path("/tmp/quimera-test-config.json")
 
 
 def test_main_no_mcp_disables_mcp(monkeypatch):

@@ -7,21 +7,117 @@ O Quimera inicia um servidor MCP embutido por sessão para expor ferramentas do 
 Transportes suportados:
 
 - **socket Unix**: padrão, com proxy stdio para CLIs;
-- **HTTP Streamable**: ativado por `--mcp-http`, útil para clientes externos locais;
+- **HTTP Streamable**: ativado pelo MCP Hub ou por `--mcp-http`, útil para clientes externos;
 - **stdio standalone**: `python -m quimera.runtime.mcp` para usos isolados.
 
 ## Arquivos persistentes
 
-Os dois sentidos da conexão usam arquivos separados e com nomes baseados no
-papel do Quimera:
+O diretório base padrão é `~/.local/share/quimera`. Clientes e servidor têm
+arquivos de configuração com o mesmo nome no global e no workspace:
 
-- `<base_dir>/workspaces/<hash>/mcp-connections.json`: servidores MCP externos
-  aos quais o Quimera se conecta;
-- `<base_dir>/state/mcp-server.json`: estado dos clientes externos que se
-  autorizam no servidor MCP HTTP do Quimera.
+| Arquivo relativo ao diretório base | Conteúdo |
+|---|---|
+| `mcp-connections.json` | Catálogo global de conexões a servidores externos, com `mcp_clients` e `mcp_client_env`. |
+| `workspaces/<hash>/mcp-connections.json` | Ativações do catálogo (`mcp_active`) e conexões/ambiente locais. |
+| `mcp-server.json` | Padrões globais do servidor HTTP: `http_host`, `http_port`, `http_allow_tools` e, opcionalmente, `http_enabled`. |
+| `workspaces/<hash>/mcp-server.json` | Valores que sobrepõem os padrões globais para esse workspace, inclusive `http_enabled`. |
+| `state/mcp-server.json` | Estado OAuth global: cadastros de clientes e tokens, preservados entre sessões e workspaces. |
 
-O `config.json` do workspace continua reservado às opções gerais, como o
-sandbox. Os nomes antigos não são consultados.
+O `config.json` do workspace continua reservado às opções gerais, como o sandbox.
+Os arquivos de conexões podem conter credenciais: são gravados com modo `0600`
+e protegidos pelo sandbox junto com o estado OAuth.
+
+### Catálogo global e ativação por workspace
+
+No MCP Hub (`F9`), a aba **Servidores** lista todo o catálogo global e as
+conexões locais; a coluna **Escopo** mostra onde está gravada a spec em vigor
+(`global` ou `local`). **Ativar/Desativar** (`Ctrl+T`) liga ou desliga uma
+conexão global somente no workspace atual; a escolha vale imediatamente e nas
+próximas sessões. Uma conexão global desligada aparece como `inativo`, com
+**Reconectar** e **Desconectar** indisponíveis. Uma conexão que entra no
+catálogo começa inativa nos demais workspaces. Conexões locais estão sempre
+ativas; para desligá-las, use **Remover**.
+
+Por exemplo, o global pode conter:
+
+```json
+{
+  "mcp_clients": ["github=remote:https://api.githubcopilot.com/mcp"],
+  "mcp_client_env": ["github=GITHUB_MCP_TOKEN=exemplo"]
+}
+```
+
+E o workspace que usa essa conexão precisa apenas de:
+
+```json
+{"mcp_active": ["github"]}
+```
+
+**Adicionar/Editar** permite escolher escopo global ou local. A conexão global
+é compartilhada e ativada no workspace que a salvou; salvá-la no global também
+descarta o override local de mesmo nome desse workspace. Uma conexão local com
+o mesmo nome substitui a spec global, por exemplo para usar a porta do IDE
+dessa janela. Salvar no local uma cópia idêntica à global, com a mesma spec e
+o mesmo ambiente, não duplica a conexão: apenas ativa a global. O ambiente
+local substitui o global por conexão, mesmo sem override da spec; quando
+ausente, ele é herdado. Com escopo local, limpar o campo de ambiente no editor
+grava um override vazio (`"github="`) no workspace, que bloqueia a herança das
+variáveis globais. Com escopo global, limpar o campo remove o ambiente do
+catálogo para todos os workspaces que o herdam.
+
+**Desconectar** encerra apenas a sessão viva. **Remover** apaga a definição do
+escopo mostrado na tabela. Numa conexão global, pede um segundo toque e a tira
+do catálogo, logo de todos os workspaces (**Desativar** só a desliga aqui).
+Num override local, a conexão global de mesmo nome volta a valer e reconecta,
+se estiver ativa neste workspace. Alterações no catálogo entram nas sessões de
+outros workspaces na partida seguinte ou ao usar **Reconectar**.
+
+Os arquivos anteriores continuam funcionando: conexões locais permanecem
+ativas. Na partida, cópias locais idênticas ao catálogo viram referências em
+`mcp_active`; portas ou credenciais locais diferentes são preservadas. O
+catálogo não é montado automaticamente a partir dos workspaces existentes:
+uma conexão entra nele quando é salva com escopo global. `--mcp-client` grava a
+spec como conexão local do workspace ou, se ela for idêntica à do catálogo,
+apenas ativa a global.
+
+### Servidor HTTP pelo Hub
+
+A linha **MCP HTTP OAuth** mostra o servidor ativo (URL e perfil de tools), a
+falha da última partida ou, com ele parado, a porta configurada e sua origem.
+**Ativar** e **Desativar** sobem e derrubam o servidor durante a sessão e
+gravam a escolha (`http_enabled`) no workspace: a partir daí ele sobe, ou não,
+junto com esse workspace. O socket interno dos agentes continua disponível ao
+parar ou reconfigurar o HTTP.
+
+**Configurar** edita host, porta e perfil de tools (`read-local`, `read`,
+`agent`, `all` ou CSV) e grava no workspace (padrão) ou no global; cada chave
+local tem precedência sobre a global, e o editor mostra a origem de cada valor
+(`local`, `global` ou `default`). **Usar global** remove os overrides locais de
+host, porta e tools, mantendo a escolha de ativação do workspace. Com o
+servidor ativo, salvar o reinicia com os valores novos; com ele parado, apenas
+grava a configuração, e **Ativar** faz a próxima tentativa. Se a nova partida
+falhar, ele fica parado e a falha aparece na linha de status. O Hub grava
+`http_enabled` sempre no workspace; no `mcp-server.json` global, essa chave só
+existe se for escrita à mão.
+
+As flags `--mcp-http`, `--mcp-host`, `--mcp-port` e `--mcp-http-allow-tools`
+fornecidas explicitamente são validadas e gravadas no overlay do workspace;
+`--mcp-http` grava a ativação. Sem flags, a partida seguinte usa os valores
+persistidos. As flags `--mcp-oauth-*` não são persistidas: valem para o
+provider da sessão, inclusive quando o HTTP é ativado depois pelo Hub.
+
+Uma falha de bind, como porta ocupada, não derruba a sessão: aparece no bloco
+de status e no Hub; ajuste a porta em **Configurar** e use **Ativar** para
+tentar de novo. O servidor HTTP é encerrado ao sair do app.
+
+### Clients OAuth no Hub
+
+A aba **Clientes** mostra os clients autorizados no estado OAuth global,
+inclusive quando o servidor HTTP está parado. **Revogar autorização** remove o
+grant selecionado, mas só fica disponível enquanto o servidor está ativo. A
+autorização não tem overlay por workspace: o escopo global/local do Hub se
+aplica às conexões da aba **Servidores** e à configuração do HTTP, não aos
+cadastros OAuth.
 
 ## Autenticação
 
@@ -199,6 +295,10 @@ quimera --mcp-http
 
 Isso é suficiente para um cliente MCP OAuth-aware (Claude, Cursor, ChatGPT tunnel-client) conectar sozinho: ele descobre o servidor por RFC 9728, registra-se dinamicamente por RFC 7591, abre a tela de consentimento no navegador e recebe o token. Não há `client_id` para copiar nem arquivo para editar.
 
+A flag grava a ativação no workspace. Nas partidas seguintes, o mesmo estado
+também pode ser alterado com **Ativar/Desativar** no MCP Hub (ver
+[Servidor HTTP pelo Hub](#servidor-http-pelo-hub)).
+
 ### Endpoints
 
 | Endpoint | RFC | Descrição |
@@ -212,7 +312,7 @@ Isso é suficiente para um cliente MCP OAuth-aware (Claude, Cursor, ChatGPT tunn
 | `POST /oauth/revoke` | RFC 7009 | Revogação de access/refresh token. |
 | `POST /oauth/introspect` | RFC 7662 | Introspecção restrita ao client autenticado. |
 
-Os dois endpoints de discovery são **públicos** (não exigem `Authorization`) e não expõem tokens ou segredos. Ao habilitar `--mcp-http`, o Authorization Server OAuth já é iniciado automaticamente.
+Os dois endpoints de discovery são **públicos** (não exigem `Authorization`) e não expõem tokens ou segredos. Ao habilitar o HTTP, por `--mcp-http` ou pelo MCP Hub, o Authorization Server OAuth já é iniciado automaticamente.
 
 Requisições não autenticadas em `/mcp` respondem `401` com `WWW-Authenticate` contendo `resource_metadata`, que é o gatilho da auto-descoberta do cliente.
 
@@ -227,7 +327,7 @@ Requisições não autenticadas em `/mcp` respondem `401` com `WWW-Authenticate`
 
 ### Escopos e perfis de ferramentas
 
-O escopo concedido pode **restringir** o perfil de tools abaixo do configurado em `--mcp-http-allow-tools` (nunca ampliá-lo):
+O escopo concedido pode **restringir** o perfil de tools abaixo do configurado em `--mcp-http-allow-tools` ou em **Configurar** no MCP Hub (nunca ampliá-lo):
 
 | Escopo | Efeito |
 |---|---|

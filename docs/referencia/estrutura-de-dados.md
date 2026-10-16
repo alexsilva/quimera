@@ -15,6 +15,9 @@ Conteúdo comum:
 | `config.json` | Preferências globais. |
 | `connections.json` | Agentes dinâmicos e overrides de conexão. |
 | `.env` | Variáveis simples de ambiente. |
+| `mcp-connections.json` | Catálogo global de servidores MCP externos. |
+| `mcp-server.json` | Padrões do servidor MCP HTTP. |
+| `state/mcp-server.json` | Estado OAuth do servidor MCP HTTP (clients e tokens). |
 | `workspaces/` | Dados isolados por projeto. |
 
 ## Workspace persistente
@@ -23,6 +26,8 @@ Conteúdo comum:
 workspaces/<cwd_hash>/
   workspace.json
   index.json
+  mcp-connections.json
+  mcp-server.json
   data/
     context/
       _default/persistent.md
@@ -37,7 +42,10 @@ workspaces/<cwd_hash>/
     tasks.db
 ```
 
-`cwd_hash` é derivado do caminho absoluto do diretório de trabalho.
+`cwd_hash` é derivado do caminho absoluto do diretório de trabalho. O
+`mcp-connections.json` combina ativações do catálogo com definições locais; o
+`mcp-server.json` sobrepõe os padrões globais chave a chave. Os formatos estão em
+[MCP e ferramentas](../guia/mcp-e-ferramentas.md#arquivos-persistentes).
 
 ## Workspace temporário
 
