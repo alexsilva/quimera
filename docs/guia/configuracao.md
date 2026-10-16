@@ -26,8 +26,9 @@ também os overlays MCP e o `config.json` do workspace; nesse caso, o hash do
 caminho seleciona deliberadamente a configuração daquele projeto.
 
 As conexões a servidores MCP externos ficam em dois `mcp-connections.json`: o
-catálogo global, no diretório base, e o do workspace, com as conexões do
-catálogo ativadas ali (`mcp_active`) e as conexões locais. A configuração do
+catálogo global, no diretório base, que também guarda as conexões ligadas em
+todos os workspaces (`mcp_active`), e o do workspace, com as exceções locais
+(`mcp_active` liga, `mcp_inactive` desliga) e as conexões locais. A configuração do
 servidor MCP HTTP segue o mesmo par em `mcp-server.json`, separada do estado
 OAuth em `state/mcp-server.json`. Escopos, precedência e o uso pelo MCP Hub
 estão em [MCP e ferramentas](mcp-e-ferramentas.md#arquivos-persistentes).
@@ -145,5 +146,6 @@ quimera --mcp-http
 
 As flags MCP HTTP explícitas valem só para essa sessão e não alteram o
 `mcp-server.json`. Para o servidor subir sempre com o workspace, ative-o no MCP
-Hub (`F9`), que grava a escolha, o host, a porta e o perfil por escopo, e
-libera por workspace os clients OAuth que podem usá-lo.
+Hub (`F9`), que grava a escolha por workspace, o host, a porta e o perfil por
+escopo, e libera os clients OAuth que podem usá-lo, em todos os workspaces ou só
+no atual.

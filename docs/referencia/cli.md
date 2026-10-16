@@ -56,8 +56,8 @@ aplicadas por cima dos valores persistidos, resolvidos por chave como padrão
 interno ← global ← workspace; nada é gravado. Quem persiste essa configuração,
 por escopo, é o MCP Hub; veja
 [MCP e ferramentas](../guia/mcp-e-ferramentas.md#servidor-http-pelo-hub).
-Conexões do catálogo global só entram na sessão quando estão ativas no
-workspace ([catálogo e ativação](../guia/mcp-e-ferramentas.md#catalogo-global-e-ativacao-por-workspace)).
+Conexões do catálogo global só entram na sessão quando estão ativas, pelo
+padrão global ou por exceção do workspace ([catálogo e ativação](../guia/mcp-e-ferramentas.md#catalogo-global-e-ativacao-por-escopo)).
 
 As conexões `--mcp-client` não bloqueiam a inicialização: o handshake de cada
 servidor roda em background depois que a interface sobe. O bloco de status no

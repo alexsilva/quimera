@@ -40,7 +40,8 @@ class MCPClientGroup:
     ChatGPT e similares repetem o registro dinâmico e acumulam ``client_id``;
     para quem usa o Hub é um único client, e é pelo nome que ele é liberado
     por workspace. ``client_ids`` guarda os cadastros, para revogar e fechar
-    sessões de todos de uma vez.
+    sessões de todos de uma vez. ``activation_scope`` diz quem decidiu
+    ``active``: o padrão global ou uma exceção deste workspace.
     """
 
     name: str
@@ -49,6 +50,7 @@ class MCPClientGroup:
     authorized: bool
     connected: bool
     active: bool
+    activation_scope: str = SCOPE_LOCAL
 
     @property
     def label(self) -> str:
@@ -64,8 +66,11 @@ class MCPClientGroup:
         return "conectado" if self.connected else "ativo"
 
 
-def group_clients_by_name(clients, active_names) -> list[MCPClientGroup]:
-    """Agrupa os clients conhecidos pelo servidor HTTP por nome, na ordem em que aparecem."""
+def group_clients_by_name(clients, decision) -> list[MCPClientGroup]:
+    """Agrupa os clients conhecidos pelo servidor HTTP por nome, na ordem em que aparecem.
+
+    ``decision(nome)`` devolve ``(liberado, quem decide)`` para o workspace.
+    """
     groups: dict[str, dict] = {}
     for client in clients:
         name = str(client.client_name or client.client_id or client.session_id[:8] or "").strip()
@@ -80,7 +85,6 @@ def group_clients_by_name(clients, active_names) -> list[MCPClientGroup]:
         entry["scope"] = entry["scope"] or str(client.scope or client.profile or "mcp")
         entry["authorized"] = entry["authorized"] or bool(getattr(client, "authorized", False))
         entry["connected"] = entry["connected"] or bool(getattr(client, "connected", False))
-    active = set(active_names)
     return [
         MCPClientGroup(
             name,
@@ -88,10 +92,85 @@ def group_clients_by_name(clients, active_names) -> list[MCPClientGroup]:
             entry["scope"],
             entry["authorized"],
             entry["connected"],
-            name in active,
+            *decision(name),
         )
         for name, entry in groups.items()
     ]
+
+
+class MCPScopePromptScreen(ModalScreen[str | None]):
+    """Pergunta onde vale um Ativar/Desativar: só neste workspace ou em todos.
+
+    Devolve ``local``, ``global`` ou ``None`` (cancelado). O foco inicial fica
+    em "Neste workspace": o caminho curto nunca amplia o alcance sozinho.
+    """
+
+    CSS = """
+    MCPScopePromptScreen {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.65);
+    }
+    #mcp_scope_dialog {
+        width: 78;
+        height: auto;
+        background: $surface;
+        border: round $primary;
+        padding: 1 2;
+    }
+    #mcp_scope_title {
+        width: 100%;
+        text-style: bold;
+        color: $accent;
+    }
+    #mcp_scope_detail {
+        width: 100%;
+        margin-top: 1;
+        color: $text-muted;
+    }
+    #mcp_scope_buttons {
+        height: 1;
+        margin-top: 1;
+    }
+    #mcp_scope_buttons Button {
+        height: 1;
+        min-width: 14;
+        border: none;
+        margin-right: 1;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancelar"),
+        ("l", "choose('local')", "Neste workspace"),
+        ("g", "choose('global')", "Em todos"),
+    ]
+
+    AUTO_FOCUS = "#mcp_scope_local"
+
+    def __init__(self, title: str, detail: str) -> None:
+        super().__init__()
+        self._title = title
+        self._detail = detail
+
+    def compose(self) -> ComposeResult:
+        with Container(id="mcp_scope_dialog"):
+            yield Label(self._title, id="mcp_scope_title")
+            yield Label(self._detail, id="mcp_scope_detail")
+            with Horizontal(id="mcp_scope_buttons"):
+                yield Button("Neste workspace (L)", id="mcp_scope_local", variant="primary")
+                yield Button("Em todos (G)", id="mcp_scope_global")
+                yield Button("Cancelar (Esc)", id="mcp_scope_cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        scopes = {"mcp_scope_local": SCOPE_LOCAL, "mcp_scope_global": SCOPE_GLOBAL}
+        self.dismiss(scopes.get(event.button.id or ""))
+
+    def action_choose(self, scope: str) -> None:
+        self.dismiss(scope)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class MCPServerEditorScreen(ModalScreen[str | None]):
@@ -188,9 +267,12 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
         transport = info.transport if info is not None else "remote"
         if transport not in {"remote", "http", "stdio", "socket"}:
             transport = "http"
-        # Arquivos anteriores à divisão global/local não tinham ``scope``;
-        # eles são conexões locais do workspace por compatibilidade.
-        scope = getattr(info, "scope", SCOPE_LOCAL) if info is not None else SCOPE_LOCAL
+        # O editor abre no escopo que a coluna Escopo mostra para a linha: quem
+        # decide a ativação aqui. Numa conexão do catálogo ligada por exceção
+        # local, "mudar configuração" é local; seguindo o padrão, é global.
+        # Arquivos anteriores à divisão global/local não tinham escopo; eles
+        # são conexões locais do workspace por compatibilidade.
+        scope = getattr(info, "activation_scope", SCOPE_LOCAL) if info is not None else SCOPE_LOCAL
         if scope not in {SCOPE_GLOBAL, SCOPE_LOCAL}:
             scope = SCOPE_LOCAL
         with Container(id="mcp_editor_dialog"):
@@ -209,7 +291,7 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
                     id="mcp_editor_name",
                 )
 
-                yield Label("Escopo · global entra no catálogo e é ativada aqui")
+                yield Label("Escopo · global entra no catálogo e liga em todos os workspaces")
                 yield Select(
                     SCOPE_OPTIONS,
                     value=scope,
@@ -337,7 +419,11 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
 
     def _save_succeeded(self, name: str, scope: str) -> None:
         self._busy = False
-        where = "no catálogo global" if scope == SCOPE_GLOBAL else "neste workspace"
+        where = (
+            "no catálogo global · ligado em todos os workspaces"
+            if scope == SCOPE_GLOBAL
+            else "neste workspace"
+        )
         self.parent_app.notify(
             f"MCP '{name}' salvo {where} · conectando em background.",
             severity="information",
@@ -662,7 +748,7 @@ class MCPConnectionsScreen(ModalScreen[None]):
         ("escape", "close", "Fechar"),
         ("ctrl+n", "new_connection", "Adicionar servidor"),
         ("ctrl+e", "edit_connection", "Editar servidor"),
-        ("ctrl+t", "toggle_active", "Ativar/desativar neste workspace"),
+        ("ctrl+t", "toggle_active", "Ativar/desativar"),
         ("ctrl+r", "reconnect", "Reconectar"),
         ("ctrl+o", "authorize", "Autorizar no navegador"),
     ]
@@ -742,9 +828,10 @@ class MCPConnectionsScreen(ModalScreen[None]):
 
     def on_mount(self) -> None:
         incoming = self.query_one("#mcp_incoming_table", DataTable)
-        # "Escopo OAuth" são os scopes do token; o escopo global/local não se
-        # aplica aqui: o cadastro é sempre global e a liberação é por workspace.
-        incoming.add_columns("Cliente", "Transporte", "Escopo OAuth", "Estado")
+        # "Escopo OAuth" são os scopes do token; "Escopo" é quem decide a
+        # liberação (padrão global ou exceção deste workspace). O cadastro em
+        # si é sempre global.
+        incoming.add_columns("Cliente", "Transporte", "Escopo OAuth", "Estado", "Escopo")
         table = self.query_one("#mcp_table", DataTable)
         # Mantém a ordem histórica das quatro primeiras colunas para que
         # extensões/fixtures legadas continuem lendo o estado em ``[3]``;
@@ -862,7 +949,7 @@ class MCPConnectionsScreen(ModalScreen[None]):
         else:
             provider = getattr(http_server, "known_clients", None)
             clients = provider() if callable(provider) else http_server.connected_clients()
-        groups = group_clients_by_name(clients, self._http_store().active_clients())
+        groups = group_clients_by_name(clients, self._http_store().client_decision)
         self._client_groups = {group.name: group for group in groups}
         authorized_count = sum(1 for group in groups if group.authorized)
         active_count = sum(1 for group in groups if group.authorized and group.active)
@@ -876,6 +963,7 @@ class MCPConnectionsScreen(ModalScreen[None]):
                 "http/oauth",
                 group.scope,
                 self._client_state_cell(group),
+                group.activation_scope,
                 key=group.name,
             )
             if group.name == self._selected_client:
@@ -917,7 +1005,7 @@ class MCPConnectionsScreen(ModalScreen[None]):
                 info.transport,
                 self._short_endpoint(info.endpoint),
                 self._state_cell(info),
-                info.scope,
+                info.activation_scope,
                 key=info.name,
             )
             if info.name == self._selected_name:
@@ -984,13 +1072,24 @@ class MCPConnectionsScreen(ModalScreen[None]):
             )
             if not group.authorized:
                 self._set_activity(f"{group.name}: sem autorização válida{registrations}")
-            elif not group.active:
-                self._set_activity(
-                    f"{group.name}: inativo neste workspace · Ativar libera o acesso ao "
-                    f"servidor MCP HTTP{registrations}"
+                return
+            local = group.activation_scope == SCOPE_LOCAL
+            if group.active:
+                origin = (
+                    "liberado por decisão deste workspace"
+                    if local
+                    else "liberado em todos os workspaces (padrão global)"
                 )
+                self._set_activity(f"{group.name}: {origin}{registrations}")
             else:
-                self._set_activity(f"{group.name}: ativo neste workspace{registrations}")
+                origin = (
+                    "bloqueado por decisão deste workspace"
+                    if local
+                    else "inativo · o padrão global não o libera"
+                )
+                self._set_activity(
+                    f"{group.name}: {origin} · Ativar pergunta o escopo{registrations}"
+                )
             return
         if event.data_table.id != "mcp_table":
             return
@@ -1003,7 +1102,7 @@ class MCPConnectionsScreen(ModalScreen[None]):
         self._update_action_state()
         info = self._find_info(name)
         if info is not None and not info.active:
-            self._set_activity(f"{name}: inativo neste workspace · Ativar liga e conecta.")
+            self._set_activity(f"{name}: {self._activation_note(info)} · Ativar pergunta o escopo.")
             return
         if info is not None and info.auth_pending:
             self._set_activity(f"{name}: autorização pendente · {info.auth_url}")
@@ -1011,7 +1110,31 @@ class MCPConnectionsScreen(ModalScreen[None]):
         if info is not None and info.detail and (info.failed or info.in_progress):
             self._set_activity(f"{name}: {info.detail}")
             return
+        if info is not None and info.is_global:
+            self._set_activity(f"{name}: {self._activation_note(info)}")
+            return
         self._set_activity(f"Servidor selecionado: {name}")
+
+    @staticmethod
+    def _activation_note(info: MCPConnectionInfo) -> str:
+        """Quem decidiu o estado de uma conexão do catálogo, em linguagem de usuário."""
+        if info.activation_scope == SCOPE_GLOBAL:
+            return (
+                "ativo em todos os workspaces (padrão global)"
+                if info.active
+                else "inativo · o padrão global não o liga"
+            )
+        if info.active:
+            return (
+                "ativo por decisão deste workspace · o padrão global também o liga"
+                if info.default_active
+                else "ativo só neste workspace · o padrão global não o liga"
+            )
+        return (
+            "desligado só neste workspace · o padrão global o liga"
+            if info.default_active
+            else "desligado por decisão deste workspace · o padrão global também não o liga"
+        )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Ativação explícita reaproveita a mesma semântica do destaque visual."""
@@ -1107,8 +1230,17 @@ class MCPConnectionsScreen(ModalScreen[None]):
         if name:
             self._set_activity(f"Servidor '{name}' salvo · conectando em background.")
 
+    def _ask_scope(self, title: str, detail: str, apply) -> None:
+        """Pergunta o escopo de uma ativação e chama ``apply(scope)`` se não for cancelada."""
+
+        def chosen(scope: str | None) -> None:
+            if scope in (SCOPE_LOCAL, SCOPE_GLOBAL) and not self._busy:
+                apply(scope)
+
+        self.app.push_screen(MCPScopePromptScreen(title, detail), chosen)
+
     def action_toggle_active(self) -> None:
-        """Liga ou desliga, neste workspace, o item selecionado na aba ativa."""
+        """Liga ou desliga o item selecionado na aba ativa, no escopo escolhido."""
         if self._busy:
             return
         if self._active_tab == "clients":
@@ -1127,27 +1259,42 @@ class MCPConnectionsScreen(ModalScreen[None]):
             )
             return
         enable = not info.active
-        self._start_busy(f"{'Ativando' if enable else 'Desativando'} {name} neste workspace…")
-        self._toggle_worker(name, enable)
+        verb = "Ativar" if enable else "Desativar"
+
+        def apply(scope: str) -> None:
+            where = "em todos os workspaces" if scope == SCOPE_GLOBAL else "neste workspace"
+            self._start_busy(f"{'Ativando' if enable else 'Desativando'} {name} {where}…")
+            self._toggle_worker(name, enable, scope)
+
+        self._ask_scope(
+            f"{verb} '{name}'",
+            "Neste workspace: exceção só daqui; o padrão global não a desfaz.\n"
+            "Em todos: muda o padrão global e este workspace volta a segui-lo; "
+            "os já abertos aplicam ao reiniciar.",
+            apply,
+        )
 
     @work(thread=True, exclusive=True, group="mcp-management")
-    def _toggle_worker(self, name: str, enable: bool) -> None:
+    def _toggle_worker(self, name: str, enable: bool, scope: str) -> None:
         try:
-            self.manager.set_active(name, enable)
+            self.manager.set_active(name, enable, scope)
         except Exception as exc:
             verb = "ativar" if enable else "desativar"
             self.app.call_from_thread(
                 self._finish_busy, f"Falha ao {verb} {name}: {exc}", "error", name
             )
             return
-        self.app.call_from_thread(self._finish_toggle, name, enable)
+        self.app.call_from_thread(self._finish_toggle, name, enable, scope)
 
-    def _finish_toggle(self, name: str, enable: bool) -> None:
+    def _finish_toggle(self, name: str, enable: bool, scope: str) -> None:
+        where = "em todos os workspaces" if scope == SCOPE_GLOBAL else "neste workspace"
         if enable:
             self._pending_connections.add(name)
-            message = f"MCP '{name}' ativado neste workspace · conectando em background."
+            message = f"MCP '{name}' ativado {where} · conectando em background."
         else:
-            message = f"MCP '{name}' desativado neste workspace."
+            message = f"MCP '{name}' desativado {where}."
+        if scope == SCOPE_GLOBAL:
+            message = f"{message} Os outros workspaces abertos aplicam ao reiniciar."
         self._finish_busy(message, "information", name)
 
     def action_toggle_server(self) -> None:
@@ -1420,16 +1567,26 @@ class MCPConnectionsScreen(ModalScreen[None]):
             )
             return
         enable = not group.active
-        self._start_busy(
-            f"{'Ativando' if enable else 'Desativando'} {group.name} neste workspace…"
+        verb = "Ativar" if enable else "Desativar"
+
+        def apply(scope: str) -> None:
+            where = "em todos os workspaces" if scope == SCOPE_GLOBAL else "neste workspace"
+            self._start_busy(f"{'Ativando' if enable else 'Desativando'} {group.name} {where}…")
+            self._client_toggle_worker(group, enable, scope)
+
+        self._ask_scope(
+            f"{verb} o client '{group.name}'",
+            "Neste workspace: só aqui; o padrão global não desfaz a escolha.\n"
+            "Em todos: muda o padrão global, e vale na próxima requisição de cada workspace "
+            "aberto. Quem tem acesso usa as tools do workspace, inclusive shell e escrita.",
+            apply,
         )
-        self._client_toggle_worker(group, enable)
 
     @work(thread=True, exclusive=True, group="mcp-management")
-    def _client_toggle_worker(self, group: MCPClientGroup, enable: bool) -> None:
+    def _client_toggle_worker(self, group: MCPClientGroup, enable: bool, scope: str) -> None:
         closed = 0
         try:
-            self._http_store().set_client_active(group.name, enable)
+            self._http_store().set_client_active(group.name, enable, scope)
             if not enable:
                 http_server = getattr(self.quimera_app, "external_mcp_http_server", None)
                 close = getattr(http_server, "close_client_sessions", None)
@@ -1444,12 +1601,11 @@ class MCPConnectionsScreen(ModalScreen[None]):
                 group.name,
             )
             return
+        where = "em todos os workspaces" if scope == SCOPE_GLOBAL else "neste workspace"
         if enable:
-            message = (
-                f"Client '{group.name}' ativado neste workspace · pode usar o servidor MCP HTTP."
-            )
+            message = f"Client '{group.name}' ativado {where} · pode usar o servidor MCP HTTP."
         else:
-            message = f"Client '{group.name}' desativado neste workspace."
+            message = f"Client '{group.name}' desativado {where}."
             if closed:
                 message = f"{message} · {closed} sessão(ões) encerrada(s)."
         self.app.call_from_thread(self._finish_client_action, message, "information", group.name)

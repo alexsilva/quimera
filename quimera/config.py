@@ -268,8 +268,16 @@ class ConfigManager:
         self._update(mcp_active=list(names) if names else None)
 
     @property
+    def mcp_inactive(self) -> list[str] | None:
+        """Nomes de conexões globais desligadas só neste workspace, contra o padrão global."""
+        value = self._load().get("mcp_inactive")
+        if isinstance(value, list) and all(isinstance(s, str) for s in value):
+            return value
+        return None
+
+    @property
     def mcp_http_clients_active(self) -> list[str] | None:
-        """Nomes dos clients OAuth liberados a usar o servidor MCP HTTP deste workspace."""
+        """Nomes dos clients OAuth liberados a usar o servidor MCP HTTP (neste arquivo)."""
         value = self._load().get("http_clients_active")
         if isinstance(value, list) and all(isinstance(s, str) for s in value):
             return value
@@ -278,6 +286,14 @@ class ConfigManager:
     def set_mcp_http_clients_active(self, names: list[str] | None) -> None:
         """Persiste os clients OAuth liberados; lista vazia remove a chave."""
         self._update(http_clients_active=list(names) if names else None)
+
+    @property
+    def mcp_http_clients_inactive(self) -> list[str] | None:
+        """Nomes de clients OAuth bloqueados só neste workspace, contra o padrão global."""
+        value = self._load().get("http_clients_inactive")
+        if isinstance(value, list) and all(isinstance(s, str) for s in value):
+            return value
+        return None
 
     @property
     def mcp_http_settings(self) -> dict:

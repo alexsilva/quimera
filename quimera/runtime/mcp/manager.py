@@ -50,8 +50,13 @@ class MCPConnectionInfo:
     auth_url: str = ""
     #: Onde a spec em vigor está gravada: ``global`` (catálogo) ou ``local``.
     scope: str = SCOPE_LOCAL
-    #: Entra nesta sessão. Locais são sempre ativas; globais dependem do workspace.
+    #: Entra nesta sessão. Locais são sempre ativas; as globais seguem o padrão
+    #: global, a menos que o workspace tenha uma exceção.
     active: bool = True
+    #: Quem decidiu ``active``: ``global`` (o padrão) ou ``local`` (este workspace).
+    activation_scope: str = SCOPE_LOCAL
+    #: Padrão global de ativação da conexão, para explicar uma exceção local.
+    default_active: bool = False
 
     @property
     def is_global(self) -> bool:
@@ -100,6 +105,8 @@ def describe_mcp_client_spec(
     state: MCPConnectionState | None = None,
     scope: str = SCOPE_LOCAL,
     active: bool = True,
+    activation_scope: str = SCOPE_LOCAL,
+    default_active: bool = False,
 ) -> MCPConnectionInfo:
     """Converte a spec persistida em campos amigáveis sem abrir conexão."""
     name = _spec_name(spec)
@@ -123,6 +130,8 @@ def describe_mcp_client_spec(
         auth_url=state.auth_url if state is not None else "",
         scope=scope,
         active=active,
+        activation_scope=activation_scope,
+        default_active=default_active,
     )
 
 
@@ -179,6 +188,8 @@ class MCPConnectionManager:
             state=state,
             scope=entry.scope,
             active=entry.active,
+            activation_scope=entry.activation_scope,
+            default_active=entry.default_active,
         )
 
     def subscribe(self, listener) -> Any:
@@ -189,15 +200,19 @@ class MCPConnectionManager:
         self,
         name: str,
         active: bool,
+        scope: str = SCOPE_LOCAL,
         *,
         thread_factory: Callable[..., threading.Thread] = threading.Thread,
     ) -> MCPConnectionInfo:
-        """Liga ou desliga uma conexão do catálogo neste workspace e aplica na sessão.
+        """Liga ou desliga uma conexão do catálogo e aplica na sessão.
 
-        Ativar persiste e conecta em background; desativar derruba a sessão e
-        esquece o estado. Conexões locais não têm ativação (``ValueError``).
+        ``scope`` diz onde a decisão vale: neste workspace (``local``) ou como
+        padrão de todos (``global``, o que este workspace também passa a
+        seguir). Ativar persiste e conecta em background; desativar derruba a
+        sessão e esquece o estado. Conexões locais não têm ativação
+        (``ValueError``).
         """
-        entry = self.store.set_active(name, active)
+        entry = self.store.set_active(name, active, scope)
         if active:
             self.bridge.mark_pending(name, spec_transport_type(entry.spec))
             self._start_connection_thread(entry.spec, thread_factory=thread_factory)
@@ -258,8 +273,8 @@ class MCPConnectionManager:
         A configuração é gravada antes do handshake: uma conexão que exige
         autorização OAuth não pode segurar o editor até o usuário concluir no
         navegador. Specs inválidas levantam ``ValueError`` antes de qualquer
-        persistência. No escopo global a conexão entra no catálogo e é ativada
-        neste workspace; os demais workspaces a veem inativa até ativá-la.
+        persistência. No escopo global a conexão entra no catálogo e no padrão
+        de ativação de todos os workspaces; os já abertos a aplicam ao reiniciar.
         """
         name = _spec_name(spec)
         if not name:

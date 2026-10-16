@@ -5,23 +5,31 @@ Cada parte do MCP tem um par de arquivos com o mesmo nome, um em
 
 * ``mcp-connections.json`` — servidores MCP externos (conexões cliente). O
   global é o catálogo: specs e ambiente de cada conexão, compartilhados por
-  todos os workspaces. O do workspace é um overlay: ``mcp_active`` lista os
-  nomes do catálogo ligados aqui; ``mcp_clients``/``mcp_client_env`` guardam
-  conexões locais, que valem só neste workspace e estão sempre ativas. Uma
-  local com o nome de uma global a sobrepõe (ex.: a porta do IDE desta janela).
+  todos os workspaces, e ``mcp_active`` lista as ligadas em todos eles. O do
+  workspace é um overlay: ``mcp_active`` liga aqui uma conexão que o padrão
+  global deixa desligada, ``mcp_inactive`` desliga aqui uma que ele liga;
+  ``mcp_clients``/``mcp_client_env`` guardam conexões locais, que valem só
+  neste workspace e estão sempre ativas. Uma local com o nome de uma global a
+  sobrepõe (ex.: a porta do IDE desta janela).
 * ``mcp-server.json`` — servidor MCP HTTP do Quimera. O global guarda os
-  padrões (host, porta, allowlist); o do workspace sobrepõe chave a chave, e
-  é onde normalmente fica ``http_enabled``, porque é o workspace que decide
-  expor o servidor. O overlay também lista em ``http_clients_active`` os
-  clients OAuth liberados a usar o servidor deste workspace.
+  padrões (host, porta, allowlist); o do workspace sobrepõe chave a chave. Ligar
+  o servidor (``http_enabled``) é sempre decisão do workspace, nunca herdada:
+  todo Quimera aberto disputaria a mesma porta. Os clients OAuth liberados a
+  usar o servidor seguem a mesma regra das conexões: ``http_clients_active``
+  global é o padrão de todos os workspaces, e o overlay liga
+  (``http_clients_active``) ou bloqueia (``http_clients_inactive``) aqui.
+
+Em ambos os casos a decisão tem escopo. Ativar ou desativar em escopo global
+muda o padrão e faz este workspace voltar a segui-lo; em escopo local grava uma
+exceção que vale só aqui e que o padrão global não desfaz.
 
 O estado OAuth do servidor (clients e tokens) segue em
 ``<base_dir>/state/mcp-server.json``; é estado, não configuração. O cadastro
-é global, como o catálogo de conexões; o que é por workspace é a liberação.
+é global, como o catálogo de conexões; o que tem escopo é a liberação.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from quimera.config import ConfigManager
@@ -68,6 +76,22 @@ def _set_list(data: dict, key: str, values: list[str]) -> None:
         data.pop(key, None)
 
 
+def _with(names: list[str], name: str, present: bool) -> list[str]:
+    """``names`` com ``name`` ao fim, se ``present`` e ainda não estiver; senão sem ele."""
+    if present:
+        return names if name in names else [*names, name]
+    return [item for item in names if item != name]
+
+
+def _resolve_activation(default: bool, pinned_on: bool, pinned_off: bool) -> tuple[bool, str]:
+    """``(ativo, quem decide)``: a exceção do workspace vence; sem ela, vale o padrão global."""
+    if pinned_off:
+        return False, SCOPE_LOCAL
+    if pinned_on:
+        return True, SCOPE_LOCAL
+    return default, SCOPE_GLOBAL
+
+
 def env_pairs(env_spec: str) -> dict[str, str]:
     """Pares ``KEY=valor`` de uma spec ``nome=KEY=valor,KEY2=valor2``."""
     rest = env_spec.split("=", 1)[1] if "=" in env_spec else ""
@@ -87,8 +111,10 @@ class MCPConnectionEntry:
     """Uma conexão cliente resolvida para o workspace atual.
 
     ``scope`` diz onde a spec em vigor está gravada; ``active`` diz se ela
-    entra nesta sessão. Locais são sempre ativas; globais dependem de
-    ``mcp_active`` no overlay do workspace.
+    entra nesta sessão. Locais são sempre ativas; as globais seguem o padrão
+    global, a menos que este workspace tenha uma exceção. ``activation_scope``
+    diz quem decidiu ``active`` (``global``: o padrão; ``local``: este
+    workspace) e ``default_active`` guarda o padrão global para explicá-lo.
     """
 
     name: str
@@ -96,6 +122,8 @@ class MCPConnectionEntry:
     env_spec: str = ""
     scope: str = SCOPE_LOCAL
     active: bool = True
+    activation_scope: str = SCOPE_LOCAL
+    default_active: bool = False
 
     @property
     def is_global(self) -> bool:
@@ -163,7 +191,9 @@ class MCPConnectionStore:
         catalog = read_json_object(self.global_file)
         catalog_specs = _by_name(_specs(catalog, "mcp_clients"))
         catalog_env = _by_name(_specs(catalog, "mcp_client_env"))
-        active = set(_specs(overlay, "mcp_active"))
+        default_on = set(_specs(catalog, "mcp_active"))
+        pinned_on = set(_specs(overlay, "mcp_active"))
+        pinned_off = set(_specs(overlay, "mcp_inactive"))
 
         entries: list[MCPConnectionEntry] = []
         for name, spec in catalog_specs.items():
@@ -175,9 +205,14 @@ class MCPConnectionStore:
                         local_env.get(name, catalog_env.get(name, "")),
                         SCOPE_LOCAL,
                         True,
+                        SCOPE_LOCAL,
+                        name in default_on,
                     )
                 )
             else:
+                active, decided_by = _resolve_activation(
+                    name in default_on, name in pinned_on, name in pinned_off
+                )
                 entries.append(
                     MCPConnectionEntry(
                         name,
@@ -187,7 +222,9 @@ class MCPConnectionStore:
                         # conexão global em ``mcp_clients``.
                         local_env.get(name, catalog_env.get(name, "")),
                         SCOPE_GLOBAL,
-                        name in active,
+                        active,
+                        decided_by,
+                        name in default_on,
                     )
                 )
         for name, spec in local_specs.items():
@@ -210,8 +247,17 @@ class MCPConnectionStore:
 
     # ── escrita ──────────────────────────────────────────────────────
 
-    def set_active(self, name: str, active: bool) -> MCPConnectionEntry:
-        """Liga ou desliga uma conexão do catálogo neste workspace."""
+    def set_active(
+        self, name: str, active: bool, scope: str = SCOPE_LOCAL
+    ) -> MCPConnectionEntry:
+        """Liga ou desliga uma conexão do catálogo e devolve a entrada resolvida.
+
+        Em escopo local grava uma exceção deste workspace, que o padrão global
+        não desfaz. Em escopo global muda o padrão de todos os workspaces e
+        este volta a segui-lo; os demais, já abertos, só o aplicam na próxima
+        partida.
+        """
+        _check_scope(scope)
         entry = self.entry(name)
         if entry is None:
             raise KeyError(f"Conexão MCP não configurada: {name}")
@@ -220,18 +266,36 @@ class MCPConnectionStore:
                 f"A conexão '{name}' é local a este workspace e está sempre ativa; "
                 "remova-a para desligá-la."
             )
-        self._set_active(name, active)
-        return replace(entry, active=active)
+        if scope == SCOPE_GLOBAL:
+            update_json_object(
+                self.global_file,
+                lambda data: _set_list(
+                    data, "mcp_active", _with(_specs(data, "mcp_active"), name, active)
+                ),
+            )
+            self._decide_here(name, None)
+        else:
+            self._decide_here(name, active)
+        return self.entry(name)
 
-    def _set_active(self, name: str, active: bool, *, drop_local: bool = False) -> None:
+    def _decide_here(self, name: str, active: bool | None, *, drop_local: bool = False) -> None:
+        """Grava a decisão do workspace: exceção ligada, exceção desligada ou, com ``None``, seguir o padrão.
+
+        Seguir o padrão só apaga exceções; sem nenhuma a apagar, o overlay nem
+        é criado.
+        """
+        keys = ("mcp_active", "mcp_inactive") + (("mcp_clients", "mcp_client_env") if drop_local else ())
+        if active is None:
+            snapshot = read_json_object(self.workspace_file)
+            if all(name not in _by_name(_specs(snapshot, key)) for key in keys):
+                return
+
         def update(data):
             if drop_local:
                 for key in ("mcp_clients", "mcp_client_env"):
                     _set_list(data, key, _without(_specs(data, key), name))
-            names = [item for item in _specs(data, "mcp_active") if item != name]
-            if active:
-                names.append(name)
-            _set_list(data, "mcp_active", names)
+            _set_list(data, "mcp_active", _with(_specs(data, "mcp_active"), name, active is True))
+            _set_list(data, "mcp_inactive", _with(_specs(data, "mcp_inactive"), name, active is False))
 
         update_json_object(self.workspace_file, update)
 
@@ -245,11 +309,13 @@ class MCPConnectionStore:
         """Grava a conexão no escopo pedido e devolve a entrada resolvida.
 
         ``env_spec`` ``None`` preserva o ambiente já gravado naquele escopo;
-        vazio o remove. No escopo global a conexão também é ativada aqui, e um
-        override local de mesmo nome deixa de existir (senão a edição ficaria
-        invisível). No escopo local, uma cópia idêntica ao catálogo não é
-        gravada: a conexão global é apenas ativada; e um ambiente local igual
-        ao do catálogo não é gravado, fica herdado.
+        vazio o remove. Escopo global quer dizer "em todos os workspaces": a
+        spec entra no catálogo e no padrão de ativação, como Ativar em escopo
+        global, e este workspace larga a exceção que tinha e volta a seguir o
+        padrão; um override local de mesmo nome deixa de existir (senão a
+        edição ficaria invisível). No escopo local, uma cópia idêntica ao
+        catálogo não é gravada: a conexão global é apenas ligada aqui; e um
+        ambiente local igual ao do catálogo não é gravado, fica herdado.
         """
         name = _spec_name(spec)
         if not name:
@@ -262,8 +328,8 @@ class MCPConnectionStore:
             existing = self.entry(name)
             if env_spec is None and existing is not None:
                 env_spec = existing.env_spec
-            self._write(self.global_file, name, spec, env_spec)
-            self._set_active(name, True, drop_local=True)
+            self._write(self.global_file, name, spec, env_spec, activate=True)
+            self._decide_here(name, None, drop_local=True)
             return self.entry(name)
 
         catalog_specs = _by_name(self.global_config.mcp_clients)
@@ -275,7 +341,7 @@ class MCPConnectionStore:
             local_pairs = env_pairs(env_spec)
         inherits_env = name in catalog_specs and local_pairs == catalog_env
         if catalog_specs.get(name) == spec and inherits_env:
-            self._set_active(name, True, drop_local=True)
+            self._decide_here(name, True, drop_local=True)
             return self.entry(name)
         if env_spec is not None and not local_pairs and catalog_env:
             # Uma entrada vazia explícita bloqueia a herança de credenciais.
@@ -286,18 +352,19 @@ class MCPConnectionStore:
     def remove(self, name: str) -> MCPConnectionEntry | None:
         """Remove a conexão do escopo em que vive.
 
-        Uma global sai do catálogo e da lista de ativas deste workspace. Uma
-        local sai do workspace; se o catálogo tiver uma de mesmo nome, ela
-        volta a valer e é devolvida (ativa ou não, conforme ``mcp_active``).
+        Uma global sai do catálogo, do padrão de ativas e das exceções deste
+        workspace. Uma local sai do workspace; se o catálogo tiver uma de mesmo
+        nome, ela volta a valer e é devolvida (ativa ou não, conforme a
+        decisão em vigor).
         """
         entry = self.entry(name)
         if entry is None:
             raise KeyError(f"Conexão MCP não configurada: {name}")
         if entry.is_global:
-            self._drop(self.global_file, name)
+            self._drop(self.global_file, name, ("mcp_clients", "mcp_client_env", "mcp_active"))
             # Inclui overrides só de ambiente, que não devem vazar para uma
             # conexão futura que reutilize o nome removido.
-            self._set_active(name, False, drop_local=True)
+            self._decide_here(name, None, drop_local=True)
             return None
         self._drop(self.workspace_file, name)
         return self.entry(name)
@@ -347,6 +414,7 @@ class MCPConnectionStore:
                 _set_list(data, key, [item for item in _specs(data, key) if _spec_name(item) not in absorbed])
             active = _specs(data, "mcp_active")
             _set_list(data, "mcp_active", active + [name for name in absorbed if name not in active])
+            _set_list(data, "mcp_inactive", [item for item in _specs(data, "mcp_inactive") if item not in absorbed])
 
         # Evita criar um overlay quando o workspace ainda não tem conexões.
         if not candidates(read_json_object(self.workspace_file)):
@@ -355,24 +423,26 @@ class MCPConnectionStore:
         return absorbed
 
     @staticmethod
-    def _write(path: Path, name: str, spec: str, env_spec: str | None) -> None:
+    def _write(path: Path, name: str, spec: str, env_spec: str | None, *, activate: bool = False) -> None:
         def update(data):
             data["mcp_clients"] = merge_specs_by_name(_specs(data, "mcp_clients"), [spec])
             if env_spec is not None:
                 env_specs = _specs(data, "mcp_client_env")
                 env_specs = merge_specs_by_name(env_specs, [env_spec]) if env_spec.strip() else _without(env_specs, name)
                 _set_list(data, "mcp_client_env", env_specs)
+            if activate:
+                _set_list(data, "mcp_active", _with(_specs(data, "mcp_active"), name, True))
 
         update_json_object(path, update)
 
     @staticmethod
-    def _drop(path: Path, name: str) -> None:
+    def _drop(path: Path, name: str, keys: tuple[str, ...] = ("mcp_clients", "mcp_client_env")) -> None:
         snapshot = read_json_object(path)
-        if all(name not in _by_name(_specs(snapshot, key)) for key in ("mcp_clients", "mcp_client_env")):
+        if all(name not in _by_name(_specs(snapshot, key)) for key in keys):
             return
 
         def update(data):
-            for key in ("mcp_clients", "mcp_client_env"):
+            for key in keys:
                 _set_list(data, key, _without(_specs(data, key), name))
 
         update_json_object(path, update)
@@ -448,15 +518,27 @@ class MCPHttpSettingsStore:
         """Chaves gravadas naquele escopo, sem herança."""
         return self._config(scope).mcp_http_settings
 
+    def _inherited(self, scope: str) -> dict:
+        """Chaves que um escopo contribui à configuração efetiva.
+
+        ``enabled`` só vale no workspace: um ``http_enabled`` no arquivo global
+        é ignorado, senão todo Quimera sem override subiria o servidor e
+        disputaria a mesma porta.
+        """
+        layer = self.layer(scope)
+        if scope == SCOPE_GLOBAL:
+            layer.pop("enabled", None)
+        return layer
+
     def load(self) -> MCPHttpSettings:
         """Configuração efetiva: padrões ← global ← workspace."""
-        return MCPHttpSettings(**{**self.layer(SCOPE_GLOBAL), **self.layer(SCOPE_LOCAL)})
+        return MCPHttpSettings(**{**self._inherited(SCOPE_GLOBAL), **self._inherited(SCOPE_LOCAL)})
 
     def sources(self) -> dict[str, str]:
         """Escopo de origem de cada chave efetiva: ``global``, ``local`` ou ``default``."""
         origin = {key: "default" for key in MCPHttpSettings.__dataclass_fields__}
         for scope in (SCOPE_GLOBAL, SCOPE_LOCAL):
-            for key in self.layer(scope):
+            for key in self._inherited(scope):
                 origin[key] = scope
         return origin
 
@@ -464,42 +546,72 @@ class MCPHttpSettingsStore:
         """Atualiza as chaves informadas naquele escopo (``None`` apaga) e devolve o efetivo."""
         config = self._config(scope)
         validated = validate_http_settings(**values)
+        if scope == SCOPE_GLOBAL and validated.get("enabled") is not None:
+            raise ValueError("Ligar o servidor MCP HTTP é decisão de cada workspace, não global.")
         config.set_mcp_http_settings(**validated)
         return self.load()
 
-    # ── clients OAuth liberados neste workspace ──────────────────────
+    # ── clients OAuth liberados a usar o servidor ────────────────────
 
-    def active_clients(self) -> list[str]:
-        """Nomes dos clients OAuth que podem usar o servidor HTTP deste workspace.
+    def client_decision(self, name: str) -> tuple[bool, str]:
+        """``(liberado, quem decide)`` para o client de nome ``name`` neste workspace.
 
-        O cadastro OAuth (clients e tokens) é global e vale para todos os
-        workspaces; esta lista é o overlay local, como ``mcp_active`` para as
-        conexões: sem a chave, nenhum client entra. A identidade é o nome que
-        o client declara ao se registrar, porque ChatGPT e similares recebem
-        um ``client_id`` novo a cada registro dinâmico, e o nome é o que o
-        usuário reconhece na tela de consentimento e no Hub.
+        O cadastro OAuth (clients e tokens) é global, mas a liberação tem
+        escopo, como ``mcp_active`` nas conexões: ``http_clients_active`` do
+        arquivo global é o padrão de todos os workspaces, e o overlay o
+        contraria com uma exceção, ligando (``http_clients_active``) ou
+        bloqueando (``http_clients_inactive``) o client aqui. Sem nenhuma das
+        duas, nenhum client entra. A identidade é o nome que o client declara
+        ao se registrar, porque ChatGPT e similares recebem um ``client_id``
+        novo a cada registro dinâmico, e o nome é o que o usuário reconhece na
+        tela de consentimento e no Hub.
         """
-        return list(self._config(SCOPE_LOCAL).mcp_http_clients_active or [])
+        name = str(name or "").strip()
+        overlay = read_json_object(self.workspace_file)
+        return _resolve_activation(
+            name in _specs(read_json_object(self.global_file), "http_clients_active"),
+            name in _specs(overlay, "http_clients_active"),
+            name in _specs(overlay, "http_clients_inactive"),
+        )
 
     def is_client_active(self, name: str) -> bool:
         """``True`` se o client de nome ``name`` está liberado neste workspace."""
-        return str(name or "").strip() in self.active_clients()
+        return self.client_decision(name)[0]
 
-    def set_client_active(self, name: str, active: bool) -> list[str]:
-        """Libera ou bloqueia o client neste workspace e devolve a lista resultante."""
+    def set_client_active(self, name: str, active: bool, scope: str = SCOPE_LOCAL) -> tuple[bool, str]:
+        """Libera ou bloqueia o client e devolve ``client_decision`` resultante.
+
+        Em escopo local grava a exceção deste workspace. Em escopo global muda
+        o padrão de todos os workspaces e este volta a segui-lo.
+        """
+        _check_scope(scope)
         name = str(name or "").strip()
         if not name:
             raise ValueError("Client OAuth exige um nome")
-        result: list[str] = []
+        if self.global_file == self.workspace_file:
+            # Fixture legada de arquivo único: só existe a camada do workspace.
+            # Gravar o padrão e em seguida "apagar a exceção" no mesmo arquivo
+            # desfaria a própria gravação.
+            scope = SCOPE_LOCAL
 
-        def update(data):
-            current = data.get("http_clients_active")
-            names = [item for item in current if isinstance(item, str) and item != name] if isinstance(current, list) else []
-            if active:
-                names.append(name)
-            _set_list(data, "http_clients_active", names)
-            result[:] = names
+        if scope == SCOPE_GLOBAL:
+            update_json_object(
+                self.global_file,
+                lambda data: _set_list(
+                    data, "http_clients_active", _with(_specs(data, "http_clients_active"), name, active)
+                ),
+            )
 
-        update_json_object(self.workspace_file, update)
-        return result
+        def update_here(data):
+            pin = None if scope == SCOPE_GLOBAL else active
+            _set_list(data, "http_clients_active", _with(_specs(data, "http_clients_active"), name, pin is True))
+            _set_list(data, "http_clients_inactive", _with(_specs(data, "http_clients_inactive"), name, pin is False))
 
+        # Em escopo global o workspace só volta a seguir o padrão: sem exceção
+        # a apagar, o overlay nem é criado.
+        overlay = read_json_object(self.workspace_file)
+        if scope == SCOPE_LOCAL or any(
+            name in _specs(overlay, key) for key in ("http_clients_active", "http_clients_inactive")
+        ):
+            update_json_object(self.workspace_file, update_here)
+        return self.client_decision(name)

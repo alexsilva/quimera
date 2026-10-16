@@ -17,64 +17,82 @@ arquivos de configuração com o mesmo nome no global e no workspace:
 
 | Arquivo relativo ao diretório base | Conteúdo |
 |---|---|
-| `mcp-connections.json` | Catálogo global de conexões a servidores externos, com `mcp_clients` e `mcp_client_env`. |
-| `workspaces/<hash>/mcp-connections.json` | Ativações do catálogo (`mcp_active`) e conexões/ambiente locais. |
-| `mcp-server.json` | Padrões globais do servidor HTTP: `http_host`, `http_port`, `http_allow_tools` e, opcionalmente, `http_enabled`. |
-| `workspaces/<hash>/mcp-server.json` | Valores que sobrepõem os padrões globais para esse workspace, inclusive `http_enabled`, e a lista `http_clients_active` dos clients OAuth liberados a usar o servidor deste workspace. |
+| `mcp-connections.json` | Catálogo global de conexões a servidores externos, com `mcp_clients` e `mcp_client_env`, e `mcp_active`: as conexões ligadas em todos os workspaces. |
+| `workspaces/<hash>/mcp-connections.json` | Exceções deste workspace ao padrão global (`mcp_active` liga, `mcp_inactive` desliga) e conexões/ambiente locais. |
+| `mcp-server.json` | Padrões globais do servidor HTTP: `http_host`, `http_port`, `http_allow_tools` e `http_clients_active`, os clients OAuth liberados em todos os workspaces. `http_enabled` não vale aqui. |
+| `workspaces/<hash>/mcp-server.json` | Valores que sobrepõem os padrões globais para esse workspace, inclusive `http_enabled`, e as exceções de clients OAuth ao padrão global: `http_clients_active` libera e `http_clients_inactive` bloqueia o uso do servidor deste workspace. |
 | `state/mcp-server.json` | Estado OAuth global: cadastros de clientes e tokens, preservados entre sessões e workspaces. |
 
 O `config.json` do workspace continua reservado às opções gerais, como o sandbox.
 Os arquivos de conexões podem conter credenciais: são gravados com modo `0600`
 e protegidos pelo sandbox junto com o estado OAuth.
 
-### Catálogo global e ativação por workspace
+### Catálogo global e ativação por escopo
 
 No MCP Hub (`F9`), a aba **Servidores** lista todo o catálogo global e as
-conexões locais; a coluna **Escopo** mostra onde está gravada a spec em vigor
-(`global` ou `local`). **Ativar/Desativar** (`Ctrl+T`) liga ou desliga uma
-conexão global somente no workspace atual; a escolha vale imediatamente e nas
-próximas sessões. Uma conexão global desligada aparece como `inativo`, com
-**Reconectar** e **Desconectar** indisponíveis. Uma conexão que entra no
-catálogo começa inativa nos demais workspaces. Conexões locais estão sempre
-ativas; para desligá-las, use **Remover**.
+conexões locais. **Ativar/Desativar** (`Ctrl+T`) pergunta onde a decisão vale:
+
+- **Neste workspace** (`L`) grava uma exceção só daqui: `mcp_active` liga e
+  `mcp_inactive` desliga, no `mcp-connections.json` do workspace. O padrão
+  global não a desfaz.
+- **Em todos** (`G`) muda o padrão: `mcp_active` no `mcp-connections.json`
+  global. Este workspace apaga a exceção que tinha e volta a segui-lo. Os
+  workspaces já abertos aplicam a mudança ao reiniciar.
+
+O foco inicial fica em **Neste workspace**, para o caminho curto nunca ampliar o
+alcance sozinho, e `Esc` cancela. A coluna **Escopo** diz quem decide o estado
+aqui: `global` quando o workspace segue o padrão e `local` quando tem uma
+exceção ou a conexão é local. A linha de status explica a origem, por exemplo
+"desligado só neste workspace · o padrão global o liga". Uma conexão global
+desligada aparece como `inativo`, com **Reconectar** e **Desconectar**
+indisponíveis. Conexões locais estão sempre ativas; para desligá-las, use
+**Remover**.
 
 Por exemplo, o global pode conter:
 
 ```json
 {
   "mcp_clients": ["github=remote:https://api.githubcopilot.com/mcp"],
-  "mcp_client_env": ["github=GITHUB_MCP_TOKEN=exemplo"]
+  "mcp_client_env": ["github=GITHUB_MCP_TOKEN=exemplo"],
+  "mcp_active": ["github"]
 }
 ```
 
-E o workspace que usa essa conexão precisa apenas de:
+E um workspace que não quer essa conexão precisa apenas de:
 
 ```json
-{"mcp_active": ["github"]}
+{"mcp_inactive": ["github"]}
 ```
 
-**Adicionar/Editar** permite escolher escopo global ou local. A conexão global
-é compartilhada e ativada no workspace que a salvou; salvá-la no global também
-descarta o override local de mesmo nome desse workspace. Uma conexão local com
+**Adicionar/Editar** permite escolher escopo global ou local, com o mesmo
+sentido de **Ativar**: global é "em todos os workspaces" e local é "só neste".
+Salvar no global grava a spec no catálogo e a liga em todos os workspaces
+(`mcp_active` global); o workspace que salvou larga a exceção que tinha e segue
+o padrão, e os já abertos aplicam ao reiniciar. Salvá-la no global também
+descarta o override local de mesmo nome desse workspace. O editor abre no
+escopo que a coluna **Escopo** mostra para a linha: numa conexão do catálogo
+ligada por exceção local, a configuração também muda localmente, a menos que
+você troque o escopo. Uma conexão local com
 o mesmo nome substitui a spec global, por exemplo para usar a porta do IDE
 dessa janela. Salvar no local uma cópia idêntica à global, com a mesma spec e
-o mesmo ambiente, não duplica a conexão: apenas ativa a global. O ambiente
+o mesmo ambiente, não duplica a conexão: apenas a liga aqui. O ambiente
 local substitui o global por conexão, mesmo sem override da spec; quando
 ausente, ele é herdado. Com escopo local, limpar o campo de ambiente no editor
 grava um override vazio (`"github="`) no workspace, que bloqueia a herança das
 variáveis globais. Com escopo global, limpar o campo remove o ambiente do
 catálogo para todos os workspaces que o herdam.
 
-**Desconectar** encerra apenas a sessão viva. **Remover** apaga a definição do
-escopo mostrado na tabela. Numa conexão global, pede um segundo toque e a tira
-do catálogo, logo de todos os workspaces (**Desativar** só a desliga aqui).
+**Desconectar** encerra apenas a sessão viva. **Remover** apaga a definição em
+vigor. Numa conexão global, pede um segundo toque e a tira do catálogo,
+logo de todos os workspaces, com o padrão e as exceções dela; **Desativar** a
+desliga sem apagá-la.
 Num override local, a conexão global de mesmo nome volta a valer e reconecta,
 se estiver ativa neste workspace. Alterações no catálogo entram nas sessões de
 outros workspaces na partida seguinte ou ao usar **Reconectar**.
 
 Os arquivos anteriores continuam funcionando: conexões locais permanecem
 ativas. Na partida, cópias locais idênticas ao catálogo viram referências em
-`mcp_active`; portas ou credenciais locais diferentes são preservadas. O
+`mcp_active` do workspace; portas ou credenciais locais diferentes são preservadas. O
 catálogo não é montado automaticamente a partir dos workspaces existentes:
 uma conexão entra nele quando é salva com escopo global. `--mcp-client` grava a
 spec como conexão local do workspace ou, se ela for idêntica à do catálogo,
@@ -86,8 +104,9 @@ A linha **MCP HTTP OAuth** mostra o servidor ativo (URL e perfil de tools), a
 falha da última partida ou, com ele parado, a porta configurada e sua origem.
 **Ativar** e **Desativar** sobem e derrubam o servidor durante a sessão e
 gravam a escolha (`http_enabled`) no workspace: a partir daí ele sobe, ou não,
-junto com esse workspace. O socket interno dos agentes continua disponível ao
-parar ou reconfigurar o HTTP.
+junto com esse workspace. Ligar o servidor nunca tem escopo global, ao contrário
+das conexões e dos clients: todo Quimera aberto disputaria a mesma porta. O
+socket interno dos agentes continua disponível ao parar ou reconfigurar o HTTP.
 
 **Configurar** edita host, porta e perfil de tools (`read-local`, `read`,
 `agent`, `all` ou CSV) e grava no workspace (padrão) ou no global; cada chave
@@ -99,7 +118,8 @@ configurado para subir, como depois de uma falha de bind na partida, salvar já
 tenta subir com os valores novos; desativado, apenas grava a configuração, e
 **Ativar** sobe com ela. Se a partida falhar, ele fica parado e a falha aparece
 na linha de status. O Hub grava `http_enabled` sempre no workspace; no
-`mcp-server.json` global, essa chave só existe se for escrita à mão.
+`mcp-server.json` global ela é ignorada, mesmo escrita à mão, e a edição
+rejeita gravá-la ali.
 
 As flags `--mcp-http`, `--mcp-host`, `--mcp-port` e `--mcp-http-allow-tools`
 valem só para a sessão em que foram passadas: são validadas e aplicadas por
@@ -118,22 +138,36 @@ encerrado ao sair do app.
 ### Clients OAuth no Hub
 
 A aba **Clientes** segue o mesmo modelo da aba **Servidores**: o cadastro é
-global e a liberação é por workspace. Os clients vêm do estado OAuth global,
+global e a liberação tem escopo, como a ativação das conexões. Os clients vêm do estado OAuth global,
 inclusive com o servidor HTTP parado, agrupados pelo nome que declararam ao se
 registrar: ChatGPT e similares repetem o registro dinâmico e acumulam
 `client_id`, e a tabela mostra `ChatGPT ×3` como um único client. A coluna
-**Escopo OAuth** traz os scopes do token, não o escopo global/local do Hub.
+**Escopo OAuth** traz os scopes do token; a coluna **Escopo** diz quem decide a
+liberação aqui: `global` (o padrão) ou `local` (uma exceção deste workspace).
 
-Um client autorizado começa **inativo** em todos os workspaces. **Ativar**
-grava o nome em `http_clients_active` no `mcp-server.json` do workspace, e a
-partir da requisição seguinte ele pode usar o servidor HTTP desse workspace,
-sem reiniciar. Um client autenticado mas não liberado recebe `403` com código
+Um client autorizado começa **inativo** em todos os workspaces. **Ativar** e
+**Desativar** perguntam o escopo, com o foco em **Neste workspace** e `Esc`
+cancelando:
+
+- **Neste workspace** (`L`) grava o nome em `http_clients_active` (libera) ou
+  `http_clients_inactive` (bloqueia) no `mcp-server.json` do workspace. O padrão
+  global não desfaz essa exceção.
+- **Em todos** (`G`) grava ou remove o nome em `http_clients_active` no
+  `mcp-server.json` global, o padrão de todos os workspaces. Este workspace
+  apaga a exceção que tinha e volta a segui-lo.
+
+Cada servidor HTTP lê os dois arquivos a cada requisição, então a decisão vale
+na requisição seguinte, em todo workspace aberto, sem reiniciar. Liberar em
+todos expõe, em todo workspace, o que o perfil de tools permitir, inclusive
+shell e escrita nos perfis `agent` e `all`; por isso o caminho curto é o local.
+Um client autenticado mas não liberado recebe `403` com código
 `-32003` e uma mensagem apontando para o Hub; a resposta não traz
 `WWW-Authenticate`, porque o token é válido e um desafio só levaria o client a
 repetir uma autorização que seria concedida e barrada de novo. **Desativar**
-remove o nome e encerra as sessões MCP e streams SSE já abertos por esse client
-aqui, sem tocar nos tokens. A liberação é configuração do workspace e funciona
-com o servidor parado; o resumo da aba mostra `N autorizados · M ativos aqui`.
+encerra as sessões MCP e streams SSE já abertos por esse client neste Quimera,
+sem tocar nos tokens; nos outros workspaces abertos, as sessões dele recebem
+`403` na próxima requisição. A liberação é configuração e funciona com o
+servidor parado; o resumo da aba mostra `N autorizados · M ativos aqui`.
 
 **Revogar autorização** continua global: apaga o grant de todos os cadastros
 com aquele nome, em todos os workspaces, e só fica disponível com o servidor
@@ -318,8 +352,8 @@ Isso é suficiente para um cliente MCP OAuth-aware (Claude, Cursor, ChatGPT tunn
 
 A flag vale só para esta sessão. Para o servidor subir sempre com o workspace,
 use **Ativar** no MCP Hub (ver [Servidor HTTP pelo Hub](#servidor-http-pelo-hub)).
-Depois do consentimento, o client ainda precisa ser liberado neste workspace na
-aba **Clientes** do Hub; até lá, as chamadas MCP dele recebem `403` (ver
+Depois do consentimento, o client ainda precisa ser liberado, neste workspace ou
+em todos, na aba **Clientes** do Hub; até lá, as chamadas MCP dele recebem `403` (ver
 [Clients OAuth no Hub](#clients-oauth-no-hub)).
 
 ### Endpoints

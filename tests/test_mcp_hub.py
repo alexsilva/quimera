@@ -1,6 +1,7 @@
 """Fluxos do MCP Hub com persistência real e transportes isolados."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -13,7 +14,12 @@ from quimera.runtime.mcp.client import MCPClientBridge
 from quimera.runtime.mcp.manager import MCPConnectionManager
 from quimera.runtime.mcp.settings import MCPConnectionStore, MCPHttpSettingsStore
 from quimera.runtime.tools.mcp_clients import set_bridge
-from quimera.ui.textual.mcp_screen import MCPConnectionsScreen, MCPHttpSettingsEditorScreen, MCPServerEditorScreen
+from quimera.ui.textual.mcp_screen import (
+    MCPConnectionsScreen,
+    MCPHttpSettingsEditorScreen,
+    MCPScopePromptScreen,
+    MCPServerEditorScreen,
+)
 
 
 @pytest.fixture
@@ -34,7 +40,7 @@ def context(tmp_path):
     set_bridge_schemas([])
 
 
-def test_hub_toggle_changes_only_workspace_and_schedules_connection(context, monkeypatch):
+def test_hub_local_toggle_changes_only_workspace_and_schedules_connection(context, monkeypatch):
     store = MCPConnectionStore.from_workspace(context.workspace)
     store.global_config.set_mcp_configuration(["github=stdio:github"], ["github=TOKEN=test"])
     before = store.global_file.read_bytes()
@@ -55,18 +61,104 @@ def test_hub_toggle_changes_only_workspace_and_schedules_connection(context, mon
             assert str(screen.query_one("#mcp_table", DataTable).get_row_at(0)[3]) == "inativo"
             assert screen.query_one("#mcp_reconnect", Button).disabled
             await pilot.click("#mcp_toggle")
+            await pilot.pause()
+            # O foco inicial é "Neste workspace": o caminho curto não amplia o alcance.
+            assert isinstance(app.screen, MCPScopePromptScreen)
+            assert app.screen.focused.id == "mcp_scope_local"
+            await pilot.click("#mcp_scope_local")
             await app.workers.wait_for_complete()
             await pilot.pause()
             assert store.entry("github").active
+            assert store.entry("github").activation_scope == "local"
             assert str(screen.query_one("#mcp_toggle", Button).label) == "Desativar"
             assert connections == ["github=stdio:github"]
             await pilot.pause(0.25)
             await pilot.click("#mcp_toggle")
+            await pilot.pause()
+            await pilot.click("#mcp_scope_local")
             await app.workers.wait_for_complete()
             await pilot.pause()
             assert not store.entry("github").active
             assert screen.query_one("#mcp_reconnect", Button).disabled
             assert store.global_file.read_bytes() == before
+
+    asyncio.run(run())
+
+
+def test_hub_asks_scope_and_global_activation_changes_the_default(context, monkeypatch):
+    store = MCPConnectionStore.from_workspace(context.workspace)
+    store.global_config.set_mcp_configuration(["github=stdio:github"], None)
+    connections = []
+    monkeypatch.setattr(
+        MCPConnectionManager, "_start_connection_thread",
+        lambda self, spec, **kwargs: connections.append(spec),
+    )
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(100, 24)) as pilot:
+            app.push_screen(MCPConnectionsScreen(context, app))
+            await pilot.pause()
+            await pilot.click("#mcp_tab_servers")
+            await pilot.pause()
+            hub = app.screen
+            table = hub.query_one("#mcp_table", DataTable)
+            toggle = hub.query_one("#mcp_toggle", Button)
+            assert [str(cell) for cell in table.get_row_at(0)][3:] == ["inativo", "global"]
+
+            # Esc cancela sem gravar nada.
+            await pilot.click("#mcp_toggle")
+            await pilot.pause()
+            assert isinstance(app.screen, MCPScopePromptScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen is hub and not store.global_config.mcp_active and connections == []
+
+            # G liga o padrão global: todos os workspaces passam a ligar a conexão.
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            await pilot.press("g")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert store.global_config.mcp_active == ["github"]
+            assert store.workspace_config.mcp_active is None
+            assert str(table.get_row_at(0)[4]) == "global"
+            assert connections == ["github=stdio:github"]
+            assert str(toggle.label) == "Desativar"
+
+            # L desliga só aqui: o padrão segue ligado e a linha vira exceção local.
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            await pilot.press("l")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert store.global_config.mcp_active == ["github"]
+            assert store.workspace_config.mcp_inactive == ["github"]
+            assert [str(cell) for cell in table.get_row_at(0)][3:] == ["inativo", "local"]
+            assert "o padrão global o liga" in str(hub.query_one("#mcp_activity", Label).render())
+
+            # O editor abre no escopo que a coluna mostra: exceção local, configuração local.
+            await pilot.press("ctrl+e")
+            await pilot.pause()
+            assert isinstance(app.screen, MCPServerEditorScreen)
+            assert app.screen.query_one("#mcp_editor_scope", Select).value == "local"
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen is hub
+
+            # Ativar em todos faz este workspace voltar a seguir o padrão.
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            await pilot.press("g")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert store.workspace_config.mcp_inactive is None
+            assert str(table.get_row_at(0)[4]) == "global"
+            await pilot.press("ctrl+e")
+            await pilot.pause()
+            assert app.screen.query_one("#mcp_editor_scope", Select).value == "global"
+            await pilot.press("escape")
+            await pilot.pause()
 
     asyncio.run(run())
 
@@ -203,6 +295,7 @@ def test_hub_activates_clients_per_workspace_groups_registrations_and_closes_ses
     context.mcp_http_url = "http://127.0.0.1:9096/mcp"
     store = MCPHttpSettingsStore.from_workspace(context.workspace)
     store.set_client_active("Claude Code (quimera)", True)
+    store.set_client_active("Pendente", True, "global")
 
     async def run():
         app = App()
@@ -223,19 +316,27 @@ def test_hub_activates_clients_per_workspace_groups_registrations_and_closes_ses
                 assert region.right <= app.size.width, (selector, region, app.size)
                 assert region.bottom <= app.size.height, (selector, region, app.size)
 
+            assert [row[4] for row in rows] == ["global", "local", "global"]
             await pilot.click("#mcp_client_toggle")
+            await pilot.pause()
+            assert isinstance(app.screen, MCPScopePromptScreen)
+            await pilot.click("#mcp_scope_local")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert store.active_clients() == ["Claude Code (quimera)", "ChatGPT"]
+            assert store.client_decision("ChatGPT") == (True, "local")
             assert str(table.get_row_at(0)[3]) == "conectado"
+            assert str(table.get_row_at(0)[4]) == "local"
             assert str(toggle.label) == "Desativar"
             assert closed == []
 
             await pilot.pause(0.25)
             await pilot.click("#mcp_client_toggle")
+            await pilot.pause()
+            await pilot.click("#mcp_scope_local")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert store.active_clients() == ["Claude Code (quimera)"]
+            assert store.client_decision("ChatGPT") == (False, "local")
+            assert store.client_decision("Claude Code (quimera)") == (True, "local")
             assert closed == [("chatgpt-1", "chatgpt-2")]
             assert str(table.get_row_at(0)[3]) == "inativo"
 
@@ -250,8 +351,10 @@ def test_hub_activates_clients_per_workspace_groups_registrations_and_closes_ses
             table.move_cursor(row=2, animate=False)
             await pilot.pause()
             assert screen.query_one("#mcp_client_toggle", Button).disabled
-            # O cadastro global não foi tocado pela liberação.
-            assert not store.global_file.exists()
+            # As ativações locais não tocaram o padrão global, só o que o setup gravou.
+            assert json.loads(store.global_file.read_text(encoding="utf-8")) == {
+                "http_clients_active": ["Pendente"]
+            }
 
     asyncio.run(run())
 

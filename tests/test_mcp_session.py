@@ -357,6 +357,13 @@ def test_external_http_client_access_follows_the_workspace_overlay(tmp_path):
     MCPHttpSettingsStore.from_workspace(workspace).set_client_active("ChatGPT", True)
     assert gate("ChatGPT")
     assert not gate("Grok")
+    # O padrão global libera o client sem reiniciar; uma exceção local o fecha só aqui.
+    store = MCPHttpSettingsStore.from_workspace(workspace)
+    assert store.global_file != store.workspace_file
+    store.set_client_active("Grok", True, "global")
+    assert gate("Grok")
+    store.set_client_active("Grok", False)
+    assert not gate("Grok") and store.client_decision("Grok") == (False, "local")
     # Workspaces mínimos (fixtures) sem overlay não têm filtro: comportamento anterior.
     from quimera.runtime.mcp.session import workspace_client_access
 

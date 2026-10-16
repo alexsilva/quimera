@@ -200,7 +200,8 @@ O MCP interno via socket Unix é core do Quimera: ele inicia por padrão, é ent
 
 O MCP HTTP é uma extensão externa opcional para clientes remotos. Ele usa uma instância separada de `MCPServer`, com OAuth, CORS configurável e allowlist aplicada apenas ao HTTP. A allowlist HTTP nunca reduz as ferramentas disponíveis para o socket interno.
 
-O **MCP Hub** (`F9`) permite ativar conexões do catálogo global neste workspace,
+O **MCP Hub** (`F9`) permite ativar conexões do catálogo e clients OAuth em todos os
+workspaces ou só neste,
 adicionar e editar conexões globais/locais, e configurar, ativar ou desativar o
 servidor HTTP durante a sessão. Os arquivos `mcp-connections.json` e
 `mcp-server.json` ficam no diretório base (`~/.local/share/quimera`) e têm
