@@ -5920,7 +5920,7 @@ def test_mcp_server_editor_salva_e_conecta_em_background(tmp_path):
     asyncio.run(run_test())
 
     manager.upsert_in_background.assert_called_once_with(
-        "jira=remote:https://mcp.example.test/mcp", env_spec=""
+        "jira=remote:https://mcp.example.test/mcp", env_spec="", scope="local", previous_name=None
     )
     manager.upsert.assert_not_called()
     assert results == ["jira"]
@@ -5960,7 +5960,10 @@ def test_mcp_server_editor_mostra_ambiente_salvo_e_grava_o_campo_inteiro():
     asyncio.run(run_test())
 
     manager.upsert_in_background.assert_called_once_with(
-        "cua=stdio:node cua.mjs", env_spec="cua=TOKEN=abc,DISPLAY=:99,EXTRA=1"
+        "cua=stdio:node cua.mjs",
+        env_spec="cua=TOKEN=abc,DISPLAY=:99,EXTRA=1",
+        scope="local",
+        previous_name="cua",
     )
     manager.remove.assert_not_called()
 
@@ -5990,7 +5993,7 @@ def test_mcp_server_editor_campo_vazio_remove_ambiente_e_renomear_leva_o_ambient
             await pilot.pause()
             assert not isinstance(app.screen, MCPServerEditorScreen)
             manager.upsert_in_background.assert_called_once_with(
-                "cua=stdio:node cua.mjs", env_spec=""
+                "cua=stdio:node cua.mjs", env_spec="", scope="local", previous_name="cua"
             )
             manager.remove.assert_not_called()
 
@@ -6002,11 +6005,12 @@ def test_mcp_server_editor_campo_vazio_remove_ambiente_e_renomear_leva_o_ambient
             app.screen.action_save()
             await pilot.pause()
             assert not isinstance(app.screen, MCPServerEditorScreen)
-            # O ambiente entra sob o novo nome antes de o antigo ser descartado.
+            # O ambiente entra sob o novo nome; o manager recebe o nome antigo e
+            # cuida da troca (ativação e sessão), sem o editor remover nada.
             manager.upsert_in_background.assert_called_once_with(
-                "cua2=stdio:node cua.mjs", env_spec="cua2=TOKEN=abc"
+                "cua2=stdio:node cua.mjs", env_spec="cua2=TOKEN=abc", scope="local", previous_name="cua"
             )
-            manager.remove.assert_called_once_with("cua")
+            manager.remove.assert_not_called()
 
     asyncio.run(run_test())
 

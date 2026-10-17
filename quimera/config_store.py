@@ -65,9 +65,21 @@ def _locked_config(path: Path):
                 fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
-def update_json_object(path: Path, update: Callable[[dict], None]) -> None:
-    """Serialize read/modify/write and preserve damaged files for recovery."""
+def update_json_object(
+    path: Path,
+    update: Callable[[dict], None],
+    *,
+    after_write: Callable[[], None] | None = None,
+) -> None:
+    """Serialize read/modify/write and preserve damaged files for recovery.
+
+    ``after_write`` runs after a successful write while the lock is still
+    held, for follow-up work that must not interleave with other writers of
+    ``path`` (an exception in ``update`` cancels the write and skips it).
+    """
     with _locked_config(path):
         data = read_json_object(path, strict=True)
         update(data)
         write_json_object(path, data)
+        if after_write is not None:
+            after_write()

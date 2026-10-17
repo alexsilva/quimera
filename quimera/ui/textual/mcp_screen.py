@@ -267,12 +267,12 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
         transport = info.transport if info is not None else "remote"
         if transport not in {"remote", "http", "stdio", "socket"}:
             transport = "http"
-        # O editor abre no escopo que a coluna Escopo mostra para a linha: quem
-        # decide a ativação aqui. Numa conexão do catálogo ligada por exceção
-        # local, "mudar configuração" é local; seguindo o padrão, é global.
-        # Arquivos anteriores à divisão global/local não tinham escopo; eles
-        # são conexões locais do workspace por compatibilidade.
-        scope = getattr(info, "activation_scope", SCOPE_LOCAL) if info is not None else SCOPE_LOCAL
+        # O escopo do editor é onde a configuração fica gravada: catálogo
+        # global ou só este workspace. Não é a ativação, que tem botão próprio
+        # e nunca muda ao salvar. Arquivos anteriores à divisão global/local
+        # não tinham escopo; eles são conexões locais do workspace por
+        # compatibilidade.
+        scope = getattr(info, "scope", SCOPE_LOCAL) if info is not None else SCOPE_LOCAL
         if scope not in {SCOPE_GLOBAL, SCOPE_LOCAL}:
             scope = SCOPE_LOCAL
         with Container(id="mcp_editor_dialog"):
@@ -291,7 +291,7 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
                     id="mcp_editor_name",
                 )
 
-                yield Label("Escopo · global entra no catálogo e liga em todos os workspaces")
+                yield Label("Escopo · onde a configuração fica: catálogo global ou só este workspace")
                 yield Select(
                     SCOPE_OPTIONS,
                     value=scope,
@@ -327,7 +327,7 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
 
             with Horizontal(id="mcp_editor_buttons"):
                 yield Button("Cancelar", id="mcp_editor_cancel")
-                yield Button("Conectar e salvar", id="mcp_editor_save", variant="primary")
+                yield Button("Salvar", id="mcp_editor_save", variant="primary")
             yield Label(self._HINT, id="mcp_editor_activity")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -341,11 +341,14 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
             self.dismiss(None)
 
     def action_save(self) -> None:
-        """Valida, persiste e dispara o handshake em background.
+        """Valida, persiste e aplica a configuração em background.
 
-        O editor não espera o servidor responder: uma conexão ``remote:`` pode
-        ficar minutos aguardando a autorização OAuth no navegador, e a tabela
-        do hub mostra o progresso depois que o editor fecha.
+        Salvar não liga nem desliga a conexão: o manager preserva a decisão
+        de ativação e só refaz o handshake se ela está ativa aqui e a
+        configuração mudou. O editor não espera o servidor responder: uma
+        conexão ``remote:`` pode ficar minutos aguardando a autorização OAuth
+        no navegador, e a tabela do hub mostra o progresso depois que o
+        editor fecha.
         """
         if self._busy:
             return
@@ -358,18 +361,13 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
         self._busy = True
         self.query_one("#mcp_editor_activity", Label).update(f"Salvando {name}…")
         try:
-            save_kwargs = {"env_spec": env_spec}
-            # ``local`` é o contrato histórico e também o default do manager;
-            # só explicitar o novo escopo global no caminho novo.
-            if scope == SCOPE_GLOBAL:
-                save_kwargs["scope"] = scope
-            self.manager.upsert_in_background(spec, **save_kwargs)
-            if previous_name and previous_name != name:
-                self.manager.remove(previous_name)
+            info = self.manager.upsert_in_background(
+                spec, env_spec=env_spec, scope=scope, previous_name=previous_name
+            )
         except Exception as exc:
             self._save_failed(name, str(exc))
             return
-        self._save_succeeded(name, scope)
+        self._save_succeeded(name, scope, info)
 
     def _build_specs(self) -> tuple[str, str, str, str]:
         name = self.query_one("#mcp_editor_name", Input).value.strip()
@@ -417,17 +415,24 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
         self.query_one("#mcp_editor_activity", Label).update(message)
         self.parent_app.notify(message, severity="error")
 
-    def _save_succeeded(self, name: str, scope: str) -> None:
+    def _save_succeeded(self, name: str, scope: str, info) -> None:
         self._busy = False
-        where = (
-            "no catálogo global · ligado em todos os workspaces"
-            if scope == SCOPE_GLOBAL
-            else "neste workspace"
-        )
-        self.parent_app.notify(
-            f"MCP '{name}' salvo {where} · conectando em background.",
-            severity="information",
-        )
+        where = "no catálogo global" if scope == SCOPE_GLOBAL else "neste workspace"
+        if not getattr(info, "active", True):
+            state = (
+                "continua inativo neste workspace"
+                if self.info is not None
+                else "inativo até Ativar, aqui ou em todos os workspaces"
+            )
+        elif getattr(info, "in_progress", False):
+            state = (
+                "reconectando em background"
+                if self.info is not None
+                else "conectando em background"
+            )
+        else:
+            state = "conexão ativa mantida"
+        self.parent_app.notify(f"MCP '{name}' salvo {where} · {state}.", severity="information")
         self.dismiss(name)
 
 
@@ -1005,7 +1010,7 @@ class MCPConnectionsScreen(ModalScreen[None]):
                 info.transport,
                 self._short_endpoint(info.endpoint),
                 self._state_cell(info),
-                info.activation_scope,
+                self._scope_cell(info),
                 key=info.name,
             )
             if info.name == self._selected_name:
@@ -1044,6 +1049,13 @@ class MCPConnectionsScreen(ModalScreen[None]):
         if len(endpoint) <= limit:
             return endpoint
         return endpoint[: limit - 1] + "…"
+
+    @staticmethod
+    def _scope_cell(info: MCPConnectionInfo) -> str:
+        """Onde a configuração vive; uma global com decisão própria deste workspace é marcada."""
+        if info.is_global and info.activation_scope == SCOPE_LOCAL:
+            return "global (exceção local)"
+        return info.scope
 
     @staticmethod
     def _state_cell(info: MCPConnectionInfo) -> Text:
@@ -1102,7 +1114,8 @@ class MCPConnectionsScreen(ModalScreen[None]):
         self._update_action_state()
         info = self._find_info(name)
         if info is not None and not info.active:
-            self._set_activity(f"{name}: {self._activation_note(info)} · Ativar pergunta o escopo.")
+            hint = "Ativar pergunta o escopo" if info.is_global else "Ativar religa aqui"
+            self._set_activity(f"{name}: {self._activation_note(info)} · {hint}.")
             return
         if info is not None and info.auth_pending:
             self._set_activity(f"{name}: autorização pendente · {info.auth_url}")
@@ -1110,14 +1123,20 @@ class MCPConnectionsScreen(ModalScreen[None]):
         if info is not None and info.detail and (info.failed or info.in_progress):
             self._set_activity(f"{name}: {info.detail}")
             return
-        if info is not None and info.is_global:
+        if info is not None:
             self._set_activity(f"{name}: {self._activation_note(info)}")
             return
         self._set_activity(f"Servidor selecionado: {name}")
 
     @staticmethod
     def _activation_note(info: MCPConnectionInfo) -> str:
-        """Quem decidiu o estado de uma conexão do catálogo, em linguagem de usuário."""
+        """Quem decidiu o estado de uma conexão, em linguagem de usuário."""
+        if not info.is_global:
+            return (
+                "conexão local · ativa só neste workspace"
+                if info.active
+                else "conexão local · desligada neste workspace"
+            )
         if info.activation_scope == SCOPE_GLOBAL:
             return (
                 "ativo em todos os workspaces (padrão global)"
@@ -1223,12 +1242,24 @@ class MCPConnectionsScreen(ModalScreen[None]):
         )
 
     def _on_editor_closed(self, name: str | None) -> None:
-        if name:
-            self._selected_name = name
+        if not name:
+            self._refresh_view()
+            return
+        self._selected_name = name
+        info = self._find_info(name)
+        if info is not None and info.active and info.in_progress:
+            # Ativo e com configuração nova: o manager refez o handshake.
             self._pending_connections.add(name)
         self._refresh_view()
-        if name:
+        if info is None:
+            self._set_activity(f"Servidor '{name}' salvo.")
+        elif info.active and info.in_progress:
             self._set_activity(f"Servidor '{name}' salvo · conectando em background.")
+        elif info.active:
+            self._set_activity(f"Servidor '{name}' salvo · {self._activation_note(info)}.")
+        else:
+            hint = "Ativar pergunta o escopo" if info.is_global else "Ativar religa aqui"
+            self._set_activity(f"Servidor '{name}' salvo · {self._activation_note(info)} · {hint}.")
 
     def _ask_scope(self, title: str, detail: str, apply) -> None:
         """Pergunta o escopo de uma ativação e chama ``apply(scope)`` se não for cancelada."""
@@ -1252,12 +1283,6 @@ class MCPConnectionsScreen(ModalScreen[None]):
         info = self._find_info(name)
         if info is None:
             return
-        if not info.is_global:
-            self.parent_app.notify(
-                f"'{name}' é local a este workspace e está sempre ativa; use Remover.",
-                severity="warning",
-            )
-            return
         enable = not info.active
         verb = "Ativar" if enable else "Desativar"
 
@@ -1266,6 +1291,11 @@ class MCPConnectionsScreen(ModalScreen[None]):
             self._start_busy(f"{'Ativando' if enable else 'Desativando'} {name} {where}…")
             self._toggle_worker(name, enable, scope)
 
+        if not info.is_global:
+            # Conexão local não tem padrão global: a decisão é sempre deste
+            # workspace, sem perguntar o escopo.
+            apply(SCOPE_LOCAL)
+            return
         self._ask_scope(
             f"{verb} '{name}'",
             "Neste workspace: exceção só daqui; o padrão global não a desfaz.\n"
@@ -1353,16 +1383,28 @@ class MCPConnectionsScreen(ModalScreen[None]):
         )
 
     def _on_http_editor_closed(self, settings: MCPHttpSettings | None) -> None:
+        """Aplica a configuração salva ao estado já decidido; nunca decide ativação.
+
+        Com o servidor de pé, reinicia só se host, porta ou tools efetivos
+        mudaram. Ativado neste workspace mas parado (porta ocupada na partida,
+        por exemplo), tenta subir com os valores novos: a ativação já era a
+        escolha do workspace. Desativado, apenas grava.
+        """
         if settings is None:
             return
         if self._http_server_running():
+            live = getattr(self.quimera_app, "mcp_http_settings", None)
+            effective = (settings.host, settings.port, settings.allow_tools)
+            if live is not None and (live.host, live.port, live.allow_tools) == effective:
+                self._refresh_roles()
+                self._set_activity(
+                    f"Servidor MCP HTTP: configuração salva · segue em {settings.url} sem mudança efetiva."
+                )
+                return
             self._start_busy(f"Reiniciando servidor MCP HTTP em {settings.url}…")
             self._restart_server_worker(settings)
             return
         if settings.enabled:
-            # Configurado para subir com o workspace, mas sem processo vivo
-            # (porta ocupada na partida, por exemplo): a correção já foi feita
-            # no editor, então tenta subir com os valores novos.
             self._start_busy(f"Subindo servidor MCP HTTP em {settings.url}…")
             self._restart_server_worker(settings)
             return
@@ -1524,8 +1566,8 @@ class MCPConnectionsScreen(ModalScreen[None]):
         for widget_id in ("#mcp_reconnect", "#mcp_disconnect"):
             self.query_one(widget_id, Button).disabled = busy_or_empty or inactive
         toggle = self.query_one("#mcp_toggle", Button)
-        toggle.label = "Desativar" if info is not None and info.is_global and info.active else "Ativar"
-        toggle.disabled = busy_or_empty or not info.is_global
+        toggle.label = "Desativar" if info is not None and info.active else "Ativar"
+        toggle.disabled = busy_or_empty
         self.query_one("#mcp_new", Button).disabled = self._busy
         self._update_auth_row()
 

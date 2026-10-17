@@ -40,13 +40,14 @@ conexões locais. **Ativar/Desativar** (`Ctrl+T`) pergunta onde a decisão vale:
   workspaces já abertos aplicam a mudança ao reiniciar.
 
 O foco inicial fica em **Neste workspace**, para o caminho curto nunca ampliar o
-alcance sozinho, e `Esc` cancela. A coluna **Escopo** diz quem decide o estado
-aqui: `global` quando o workspace segue o padrão e `local` quando tem uma
-exceção ou a conexão é local. A linha de status explica a origem, por exemplo
-"desligado só neste workspace · o padrão global o liga". Uma conexão global
-desligada aparece como `inativo`, com **Reconectar** e **Desconectar**
-indisponíveis. Conexões locais estão sempre ativas; para desligá-las, use
-**Remover**.
+alcance sozinho, e `Esc` cancela. A coluna **Escopo** diz onde a configuração
+da linha vive: `global` (catálogo) ou `local` (este workspace); uma global com
+decisão própria deste workspace aparece como `global (exceção local)`. A linha
+de status explica a origem, por exemplo "desligado só neste workspace · o
+padrão global o liga". Uma conexão desligada aparece como `inativo`, com
+**Reconectar** e **Desconectar** indisponíveis. Conexões locais começam ativas
+e não têm padrão global: **Ativar/Desativar** nelas não pergunta o escopo e
+grava a decisão (`mcp_inactive`) só neste workspace, sem apagar a spec.
 
 Por exemplo, o global pode conter:
 
@@ -64,30 +65,46 @@ E um workspace que não quer essa conexão precisa apenas de:
 {"mcp_inactive": ["github"]}
 ```
 
-**Adicionar/Editar** permite escolher escopo global ou local, com o mesmo
-sentido de **Ativar**: global é "em todos os workspaces" e local é "só neste".
-Salvar no global grava a spec no catálogo e a liga em todos os workspaces
-(`mcp_active` global); o workspace que salvou larga a exceção que tinha e segue
-o padrão, e os já abertos aplicam ao reiniciar. Salvá-la no global também
-descarta o override local de mesmo nome desse workspace. O editor abre no
-escopo que a coluna **Escopo** mostra para a linha: numa conexão do catálogo
-ligada por exceção local, a configuração também muda localmente, a menos que
-você troque o escopo. Uma conexão local com
-o mesmo nome substitui a spec global, por exemplo para usar a porta do IDE
-dessa janela. Salvar no local uma cópia idêntica à global, com a mesma spec e
-o mesmo ambiente, não duplica a conexão: apenas a liga aqui. O ambiente
-local substitui o global por conexão, mesmo sem override da spec; quando
-ausente, ele é herdado. Com escopo local, limpar o campo de ambiente no editor
+**Adicionar/Editar** escolhe o escopo da configuração: global grava a spec e o
+ambiente no catálogo, para todos os workspaces; local grava só neste. **Salvar**
+é só configuração e nunca liga nem desliga nada, em nenhum escopo: a decisão de
+ativação deste workspace é preservada (se a resolução nova a mudaria, o Hub
+grava uma exceção local que a mantém), o padrão global não muda e os outros
+workspaces não são ligados. Uma conexão global nova entra no catálogo
+desligada em todos, inclusive aqui, até **Ativar** (decisões órfãs com esse
+nome, de uma conexão removida, saem de todos os overlays antes); uma local
+nova começa ativa aqui. Se a conexão está ativa aqui e a spec ou o ambiente mudaram, o
+handshake é refeito em background com a configuração nova; inativa, fica só
+gravada. Renomear leva ao nome novo o ambiente, o padrão global e a decisão
+deste workspace, e a sessão antiga é derrubada; numa conexão do catálogo, as
+exceções e o ambiente herdado dos outros workspaces também acompanham o nome
+(um override local de spec com o nome antigo é conexão daquele workspace e
+fica; um overlay que não puder ser lido ou gravado fica como estava, aquele
+workspace passa a seguir o padrão e o aviso vai ao log). Renomear para um nome
+já em uso é recusado, inclusive se ele surgir no catálogo durante a gravação. A
+decisão de ativação deste workspace é gravada antes do catálogo e o rename
+dentro dele é uma escrita só, para uma falha no meio não deixar duas conexões
+nem mudar o estado em vigor. O editor abre no escopo em que
+a configuração está gravada, o mesmo da coluna **Escopo**. Salvar no global
+descarta o override local de mesmo nome desse workspace (senão a edição ficaria
+invisível). Uma conexão local com o mesmo nome substitui a spec global, por
+exemplo para usar a porta do IDE dessa janela. Salvar no local uma cópia
+idêntica à global, com a mesma spec e o mesmo ambiente, não duplica a conexão
+nem a liga: a global continua referida aqui como estava. O ambiente local
+substitui o global por conexão; quando ausente, ele é herdado. Com escopo
+local, limpar o campo de ambiente no editor
 grava um override vazio (`"github="`) no workspace, que bloqueia a herança das
 variáveis globais. Com escopo global, limpar o campo remove o ambiente do
 catálogo para todos os workspaces que o herdam.
 
 **Desconectar** encerra apenas a sessão viva. **Remover** apaga a definição em
 vigor. Numa conexão global, pede um segundo toque e a tira do catálogo,
-logo de todos os workspaces, com o padrão e as exceções dela; **Desativar** a
-desliga sem apagá-la.
+logo de todos os workspaces, com o padrão, as exceções e o ambiente herdado
+dela em cada overlay, para nada disso ditar o estado de uma conexão futura com
+o mesmo nome; **Desativar** a desliga sem apagá-la.
 Num override local, a conexão global de mesmo nome volta a valer e reconecta,
-se estiver ativa neste workspace. Alterações no catálogo entram nas sessões de
+se estiver ativa neste workspace; numa local sem par no catálogo, a decisão de
+ativação dela também sai. Alterações no catálogo entram nas sessões de
 outros workspaces na partida seguinte ou ao usar **Reconectar**.
 
 Os arquivos anteriores continuam funcionando: conexões locais permanecem
@@ -96,7 +113,8 @@ ativas. Na partida, cópias locais idênticas ao catálogo viram referências em
 catálogo não é montado automaticamente a partir dos workspaces existentes:
 uma conexão entra nele quando é salva com escopo global. `--mcp-client` grava a
 spec como conexão local do workspace ou, se ela for idêntica à do catálogo,
-apenas ativa a global.
+apenas ativa a global; nos dois casos a conexão entra nesta sessão, mesmo que
+estivesse desligada aqui.
 
 ### Servidor HTTP pelo Hub
 
@@ -112,9 +130,11 @@ socket interno dos agentes continua disponível ao parar ou reconfigurar o HTTP.
 `agent`, `all` ou CSV) e grava no workspace (padrão) ou no global; cada chave
 local tem precedência sobre a global, e o editor mostra a origem de cada valor
 (`local`, `global` ou `default`). **Usar global** remove os overrides locais de
-host, porta e tools, mantendo a escolha de ativação do workspace. Com o
-servidor ativo, salvar o reinicia com os valores novos. Com ele parado mas
-configurado para subir, como depois de uma falha de bind na partida, salvar já
+host, porta e tools, mantendo a escolha de ativação do workspace. Salvar nunca
+decide ativação; aplica a configuração ao estado já escolhido: com o servidor
+de pé, reinicia só se host, porta ou tools efetivos mudaram (gravar no global
+valores que o workspace sobrepõe não reinicia nada). Com ele parado mas
+ativado neste workspace, como depois de uma falha de bind na partida, salvar
 tenta subir com os valores novos; desativado, apenas grava a configuração, e
 **Ativar** sobe com ela. Se a partida falhar, ele fica parado e a falha aparece
 na linha de status. O Hub grava `http_enabled` sempre no workspace; no

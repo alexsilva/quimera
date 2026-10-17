@@ -50,8 +50,8 @@ class MCPConnectionInfo:
     auth_url: str = ""
     #: Onde a spec em vigor está gravada: ``global`` (catálogo) ou ``local``.
     scope: str = SCOPE_LOCAL
-    #: Entra nesta sessão. Locais são sempre ativas; as globais seguem o padrão
-    #: global, a menos que o workspace tenha uma exceção.
+    #: Entra nesta sessão. Locais começam ativas e podem ser desligadas aqui;
+    #: as globais seguem o padrão global, a menos que o workspace tenha uma exceção.
     active: bool = True
     #: Quem decidiu ``active``: ``global`` (o padrão) ou ``local`` (este workspace).
     activation_scope: str = SCOPE_LOCAL
@@ -204,13 +204,13 @@ class MCPConnectionManager:
         *,
         thread_factory: Callable[..., threading.Thread] = threading.Thread,
     ) -> MCPConnectionInfo:
-        """Liga ou desliga uma conexão do catálogo e aplica na sessão.
+        """Liga ou desliga uma conexão e aplica na sessão.
 
         ``scope`` diz onde a decisão vale: neste workspace (``local``) ou como
         padrão de todos (``global``, o que este workspace também passa a
         seguir). Ativar persiste e conecta em background; desativar derruba a
-        sessão e esquece o estado. Conexões locais não têm ativação
-        (``ValueError``).
+        sessão e esquece o estado. Conexões locais só aceitam o escopo local
+        (``ValueError`` no global: não têm padrão global).
         """
         entry = self.store.set_active(name, active, scope)
         if active:
@@ -266,32 +266,49 @@ class MCPConnectionManager:
         *,
         env_spec: str | None = None,
         scope: str = SCOPE_LOCAL,
+        previous_name: str | None = None,
         thread_factory: Callable[..., threading.Thread] = threading.Thread,
     ) -> MCPConnectionInfo:
-        """Valida e persiste a conexão no escopo pedido, depois conecta em background.
+        """Valida e persiste a configuração no escopo pedido e a aplica à sessão.
 
-        A configuração é gravada antes do handshake: uma conexão que exige
-        autorização OAuth não pode segurar o editor até o usuário concluir no
-        navegador. Specs inválidas levantam ``ValueError`` antes de qualquer
-        persistência. No escopo global a conexão entra no catálogo e no padrão
-        de ativação de todos os workspaces; os já abertos a aplicam ao reiniciar.
+        Salvar não liga nem desliga: a decisão de ativação deste workspace é
+        preservada pelo store (ver :meth:`MCPConnectionStore.upsert`) e só
+        :meth:`set_active` a muda. Se a conexão está ativa aqui e a spec ou o
+        ambiente mudaram, o handshake refaz a sessão em background com a
+        configuração nova; inativa, fica só gravada. A configuração é gravada
+        antes do handshake: uma conexão que exige autorização OAuth não pode
+        segurar o editor até o usuário concluir no navegador. Specs inválidas
+        levantam ``ValueError`` antes de qualquer persistência.
+        ``previous_name`` é o nome anterior de uma conexão renomeada: a sessão
+        antiga é derrubada e a ativação passa ao nome novo.
         """
         name = _spec_name(spec)
         if not name:
             raise ValueError("Conexão MCP exige um nome")
         if env_spec is None:
-            existing = self.store.entry(name)
+            existing = self.store.entry(previous_name or name)
             env_specs = [existing.env_spec] if existing is not None and existing.env_spec else None
         else:
             env_specs = [env_spec] if env_spec.strip() else None
-        parsed_name, transport = parse_mcp_client_spec(
+        _parsed_name, transport = parse_mcp_client_spec(
             spec,
             parse_mcp_client_env_specs(env_specs),
             workspace=self.workspace,
         )
-        entry = self.store.upsert(spec, env_spec=env_spec, scope=scope)
-        self.bridge.mark_pending(parsed_name, transport.transport_type)
-        self._start_connection_thread(entry.spec, thread_factory=thread_factory)
+        before = self.store.entry(name)
+        entry = self.store.upsert(spec, env_spec=env_spec, scope=scope, replaces=previous_name)
+        if previous_name and previous_name != entry.name:
+            self.bridge.disconnect_connection(previous_name, forget=True)
+        changed = before is None or (before.spec, before.env_spec) != (entry.spec, entry.env_spec)
+        if entry.active and changed:
+            self.bridge.mark_pending(entry.name, transport.transport_type)
+            self._start_connection_thread(entry.spec, thread_factory=thread_factory)
+        elif not entry.active:
+            # Inativa aqui: nenhuma sessão fica viva com a configuração antiga.
+            self.bridge.disconnect_connection(entry.name, forget=True)
+            refresh_registration(self.executor, self.bridge)
+        elif previous_name and previous_name != entry.name:
+            refresh_registration(self.executor, self.bridge)
         return self._describe(entry)
 
     def _start_connection_thread(

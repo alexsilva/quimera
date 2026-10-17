@@ -9,8 +9,9 @@ Cada parte do MCP tem um par de arquivos com o mesmo nome, um em
   workspace é um overlay: ``mcp_active`` liga aqui uma conexão que o padrão
   global deixa desligada, ``mcp_inactive`` desliga aqui uma que ele liga;
   ``mcp_clients``/``mcp_client_env`` guardam conexões locais, que valem só
-  neste workspace e estão sempre ativas. Uma local com o nome de uma global a
-  sobrepõe (ex.: a porta do IDE desta janela).
+  neste workspace e começam ativas; ``mcp_inactive`` também as desliga aqui.
+  Uma local com o nome de uma global a sobrepõe (ex.: a porta do IDE desta
+  janela).
 * ``mcp-server.json`` — servidor MCP HTTP do Quimera. O global guarda os
   padrões (host, porta, allowlist); o do workspace sobrepõe chave a chave. Ligar
   o servidor (``http_enabled``) é sempre decisão do workspace, nunca herdada:
@@ -21,7 +22,9 @@ Cada parte do MCP tem um par de arquivos com o mesmo nome, um em
 
 Em ambos os casos a decisão tem escopo. Ativar ou desativar em escopo global
 muda o padrão e faz este workspace voltar a segui-lo; em escopo local grava uma
-exceção que vale só aqui e que o padrão global não desfaz.
+exceção que vale só aqui e que o padrão global não desfaz. Salvar configuração
+(spec, ambiente, host, porta) é outra operação: nunca liga nem desliga nada, em
+nenhum escopo; o estado em vigor é preservado.
 
 O estado OAuth do servidor (clients e tokens) segue em
 ``<base_dir>/state/mcp-server.json``; é estado, não configuração. O cadastro
@@ -29,12 +32,15 @@ O estado OAuth do servidor (clients e tokens) segue em
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from quimera.config import ConfigManager
 from quimera.config_store import read_json_object, update_json_object
 from quimera.runtime.mcp.client import _spec_name, merge_specs_by_name
+
+logger = logging.getLogger(__name__)
 
 SCOPE_GLOBAL = "global"
 SCOPE_LOCAL = "local"
@@ -43,6 +49,10 @@ MCP_SCOPES = (SCOPE_GLOBAL, SCOPE_LOCAL)
 DEFAULT_MCP_HTTP_HOST = "127.0.0.1"
 DEFAULT_MCP_HTTP_PORT = 9090
 DEFAULT_MCP_HTTP_ALLOW_TOOLS = "read"
+
+
+def _taken(name: str) -> str:
+    return f"Já existe uma conexão MCP chamada '{name}'; escolha outro nome ou remova-a antes."
 
 
 def _check_scope(scope: str) -> None:
@@ -111,8 +121,9 @@ class MCPConnectionEntry:
     """Uma conexão cliente resolvida para o workspace atual.
 
     ``scope`` diz onde a spec em vigor está gravada; ``active`` diz se ela
-    entra nesta sessão. Locais são sempre ativas; as globais seguem o padrão
-    global, a menos que este workspace tenha uma exceção. ``activation_scope``
+    entra nesta sessão. Locais começam ativas e só ``mcp_inactive`` deste
+    workspace as desliga; as globais seguem o padrão global, a menos que este
+    workspace tenha uma exceção. ``activation_scope``
     diz quem decidiu ``active`` (``global``: o padrão; ``local``: este
     workspace) e ``default_active`` guarda o padrão global para explicá-lo.
     """
@@ -176,16 +187,20 @@ class MCPConnectionStore:
 
         Spec e ambiente são resolvidos pelo nome, cada um de forma
         independente, e o workspace vence: um override local sem ambiente
-        próprio herda o ambiente do catálogo.
+        próprio herda o ambiente do catálogo. Uma conexão local começa ativa
+        e só ``mcp_inactive`` deste workspace a desliga.
         """
         # Cada arquivo é lido uma só vez: spec e ambiente devem vir da mesma
         # revisão, inclusive enquanto outro workspace edita o catálogo.
         overlay = read_json_object(self.workspace_file)
         local_specs = _by_name(_specs(overlay, "mcp_clients"))
         local_env = _by_name(_specs(overlay, "mcp_client_env"))
+        pinned_off = set(_specs(overlay, "mcp_inactive"))
         if self.global_file == self.workspace_file:
             return [
-                MCPConnectionEntry(name, spec, local_env.get(name, ""))
+                MCPConnectionEntry(
+                    name, spec, local_env.get(name, ""), active=name not in pinned_off
+                )
                 for name, spec in local_specs.items()
             ]
         catalog = read_json_object(self.global_file)
@@ -193,7 +208,6 @@ class MCPConnectionStore:
         catalog_env = _by_name(_specs(catalog, "mcp_client_env"))
         default_on = set(_specs(catalog, "mcp_active"))
         pinned_on = set(_specs(overlay, "mcp_active"))
-        pinned_off = set(_specs(overlay, "mcp_inactive"))
 
         entries: list[MCPConnectionEntry] = []
         for name, spec in catalog_specs.items():
@@ -204,7 +218,7 @@ class MCPConnectionStore:
                         local_specs[name],
                         local_env.get(name, catalog_env.get(name, "")),
                         SCOPE_LOCAL,
-                        True,
+                        name not in pinned_off,
                         SCOPE_LOCAL,
                         name in default_on,
                     )
@@ -230,7 +244,9 @@ class MCPConnectionStore:
         for name, spec in local_specs.items():
             if name not in catalog_specs:
                 entries.append(
-                    MCPConnectionEntry(name, spec, local_env.get(name, ""), SCOPE_LOCAL, True)
+                    MCPConnectionEntry(
+                        name, spec, local_env.get(name, ""), SCOPE_LOCAL, name not in pinned_off
+                    )
                 )
         return entries
 
@@ -250,54 +266,86 @@ class MCPConnectionStore:
     def set_active(
         self, name: str, active: bool, scope: str = SCOPE_LOCAL
     ) -> MCPConnectionEntry:
-        """Liga ou desliga uma conexão do catálogo e devolve a entrada resolvida.
+        """Liga ou desliga uma conexão e devolve a entrada resolvida.
 
         Em escopo local grava uma exceção deste workspace, que o padrão global
         não desfaz. Em escopo global muda o padrão de todos os workspaces e
         este volta a segui-lo; os demais, já abertos, só o aplicam na próxima
-        partida.
+        partida. Uma conexão local não tem padrão global: aceita só o escopo
+        local, e desligá-la grava ``mcp_inactive`` sem apagar a spec.
         """
         _check_scope(scope)
         entry = self.entry(name)
         if entry is None:
             raise KeyError(f"Conexão MCP não configurada: {name}")
         if not entry.is_global:
-            raise ValueError(
-                f"A conexão '{name}' é local a este workspace e está sempre ativa; "
-                "remova-a para desligá-la."
-            )
+            if scope == SCOPE_GLOBAL:
+                raise ValueError(
+                    f"A conexão '{name}' é local a este workspace e não tem padrão global; "
+                    "salve-a no escopo global para decidir em todos."
+                )
+            self._decide_here(name, active, catalog=False)
+            return self.entry(name)
         if scope == SCOPE_GLOBAL:
-            update_json_object(
-                self.global_file,
-                lambda data: _set_list(
-                    data, "mcp_active", _with(_specs(data, "mcp_active"), name, active)
-                ),
-            )
+            self._set_global_default(name, active)
             self._decide_here(name, None)
         else:
             self._decide_here(name, active)
         return self.entry(name)
 
-    def _decide_here(self, name: str, active: bool | None, *, drop_local: bool = False) -> None:
-        """Grava a decisão do workspace: exceção ligada, exceção desligada ou, com ``None``, seguir o padrão.
+    def _set_global_default(self, name: str, active: bool) -> None:
+        """Inclui ou tira ``name`` do ``mcp_active`` do catálogo, o padrão de todos os workspaces."""
+        update_json_object(
+            self.global_file,
+            lambda data: _set_list(
+                data, "mcp_active", _with(_specs(data, "mcp_active"), name, active)
+            ),
+        )
 
-        Seguir o padrão só apaga exceções; sem nenhuma a apagar, o overlay nem
-        é criado.
+    def _decide_here(
+        self,
+        name: str,
+        active: bool | None,
+        *,
+        drop_local: bool = False,
+        catalog: bool = True,
+    ) -> None:
+        """Grava a decisão deste workspace sobre ``name``.
+
+        Para uma conexão do catálogo, ``True``/``False`` é uma exceção ligada
+        ou desligada ao padrão global e ``None`` é segui-lo. Para uma local
+        (``catalog=False``), ligada é a ausência de ``mcp_inactive``.
+        ``drop_local`` apaga também a spec e o ambiente locais. Sem nada a
+        mudar, o overlay nem é criado.
         """
-        keys = ("mcp_active", "mcp_inactive") + (("mcp_clients", "mcp_client_env") if drop_local else ())
-        if active is None:
-            snapshot = read_json_object(self.workspace_file)
-            if all(name not in _by_name(_specs(snapshot, key)) for key in keys):
-                return
+        pin_on = active is True and catalog
+        pin_off = active is False
+        wanted = {"mcp_active": pin_on, "mcp_inactive": pin_off}
+        if drop_local:
+            wanted.update({"mcp_clients": False, "mcp_client_env": False})
+        snapshot = read_json_object(self.workspace_file)
+        if all(
+            (name in _by_name(_specs(snapshot, key))) == present
+            for key, present in wanted.items()
+        ):
+            return
 
         def update(data):
             if drop_local:
                 for key in ("mcp_clients", "mcp_client_env"):
                     _set_list(data, key, _without(_specs(data, key), name))
-            _set_list(data, "mcp_active", _with(_specs(data, "mcp_active"), name, active is True))
-            _set_list(data, "mcp_inactive", _with(_specs(data, "mcp_inactive"), name, active is False))
+            _set_list(data, "mcp_active", _with(_specs(data, "mcp_active"), name, pin_on))
+            _set_list(data, "mcp_inactive", _with(_specs(data, "mcp_inactive"), name, pin_off))
 
         update_json_object(self.workspace_file, update)
+
+    def _keep_activation(self, name: str, was_active: bool | None) -> None:
+        """Mantém o estado que ``name`` tinha aqui; se a resolução nova o mudaria, grava uma exceção local."""
+        if was_active is None:
+            return
+        entry = self.entry(name)
+        if entry is not None and entry.active != was_active:
+            self._decide_here(name, was_active, catalog=entry.is_global)
 
     def upsert(
         self,
@@ -305,49 +353,184 @@ class MCPConnectionStore:
         *,
         env_spec: str | None = None,
         scope: str = SCOPE_LOCAL,
+        replaces: str | None = None,
     ) -> MCPConnectionEntry:
-        """Grava a conexão no escopo pedido e devolve a entrada resolvida.
+        """Grava a configuração da conexão no escopo pedido e devolve a entrada resolvida.
 
-        ``env_spec`` ``None`` preserva o ambiente já gravado naquele escopo;
-        vazio o remove. Escopo global quer dizer "em todos os workspaces": a
-        spec entra no catálogo e no padrão de ativação, como Ativar em escopo
-        global, e este workspace larga a exceção que tinha e volta a seguir o
-        padrão; um override local de mesmo nome deixa de existir (senão a
-        edição ficaria invisível). No escopo local, uma cópia idêntica ao
-        catálogo não é gravada: a conexão global é apenas ligada aqui; e um
-        ambiente local igual ao do catálogo não é gravado, fica herdado.
+        Salvar é só configuração: a decisão de ativação deste workspace não
+        muda (nem a dos outros); só :meth:`set_active` a muda. Uma conexão
+        nova segue o padrão do escopo: local começa ativa aqui; global entra
+        no catálogo desligada em todos os workspaces, e referências órfãs ao
+        nome (de uma conexão removida) saem antes, aqui e nos outros overlays.
+        ``env_spec`` ``None`` preserva o ambiente em vigor; vazio o remove. No
+        escopo global a spec vai para o catálogo e o override local de mesmo
+        nome deixa de existir (senão a edição ficaria invisível); as exceções
+        de ativação daqui ficam e, se a resolução nova mudaria o estado em
+        vigor, uma exceção local o mantém. No escopo local, uma cópia idêntica
+        ao catálogo não é gravada (a conexão global continua referida aqui) e
+        um ambiente local igual ao do catálogo não é gravado, fica herdado.
+        ``replaces`` é o nome anterior de uma conexão renomeada: a configuração
+        antiga sai do escopo em que vivia e a ativação dela (padrão global e
+        decisão deste workspace) passa ao nome novo, inclusive nos overlays dos
+        outros workspaces; renomear para um nome já em uso é recusado
+        (``ValueError``), também se ele surgir no catálogo durante a gravação.
+
+        A ordem das escritas faz cada estado intermediário ser inócuo: os dois
+        arquivos são lidos em modo estrito antes de tudo (corrompidos, nada é
+        gravado); referências órfãs ao nome saem antes de ele entrar no catálogo
+        (depois, poderiam ser decisão nova de outro workspace); a decisão deste
+        workspace para ``name`` é gravada antes do catálogo (se o catálogo
+        falhar, sobra um pin para um nome que não entrou nele); o rename dentro
+        do catálogo é uma escrita só; e o que vem depois (overlays alheios,
+        limpeza do nome antigo) é melhor esforço com aviso no log.
         """
         name = _spec_name(spec)
         if not name:
             raise ValueError("Conexão MCP exige um nome")
         _check_scope(scope)
+        # Um arquivo corrompido lido como vazio faria referências válidas
+        # parecerem órfãs; a leitura estrita recusa antes de qualquer escrita.
+        read_json_object(self.global_file, strict=True)
+        overlay_before = read_json_object(self.workspace_file, strict=True)
+        previous = self.entry(replaces) if replaces and replaces != name else None
+        current = self.entry(name)
+        if previous is not None and current is not None:
+            raise ValueError(_taken(name))
+        before = previous if previous is not None else current
+        was_active = before.active if before is not None else None
+        if env_spec is None and before is not None:
+            env_spec = (
+                before.env_spec
+                if before.name == name
+                else (f"{name}={before.env_text}" if before.env_text else "")
+            )
         if self.global_file == self.workspace_file:
-            self._write(self.workspace_file, name, spec, env_spec)
-            return self.entry(name)
-        if scope == SCOPE_GLOBAL:
-            existing = self.entry(name)
-            if env_spec is None and existing is not None:
-                env_spec = existing.env_spec
-            self._write(self.global_file, name, spec, env_spec, activate=True)
-            self._decide_here(name, None, drop_local=True)
+            self._write(self.workspace_file, name, spec, env_spec, must_not_exist=previous is not None)
+            if previous is not None:
+                self.remove(previous.name)
+            self._keep_activation(name, was_active)
             return self.entry(name)
 
-        catalog_specs = _by_name(self.global_config.mcp_clients)
-        catalog_env = env_pairs(_by_name(self.global_config.mcp_client_env).get(name, ""))
-        if env_spec is None:
-            local_env = _by_name(self.workspace_config.mcp_client_env).get(name)
-            local_pairs = env_pairs(local_env) if local_env is not None else catalog_env
+        renaming_global = previous is not None and previous.is_global and scope == SCOPE_GLOBAL
+        if scope == SCOPE_GLOBAL:
+            identical = False
+            default_after = (
+                previous.default_active
+                if renaming_global
+                else (current.default_active if current is not None else False)
+            )
+            pin = None if was_active is None or was_active == default_after else was_active
         else:
-            local_pairs = env_pairs(env_spec)
-        inherits_env = name in catalog_specs and local_pairs == catalog_env
-        if catalog_specs.get(name) == spec and inherits_env:
-            self._decide_here(name, True, drop_local=True)
-            return self.entry(name)
-        if env_spec is not None and not local_pairs and catalog_env:
-            # Uma entrada vazia explícita bloqueia a herança de credenciais.
-            env_spec = f"{name}="
-        self._write(self.workspace_file, name, spec, "" if inherits_env else env_spec)
+            catalog_specs = _by_name(self.global_config.mcp_clients)
+            catalog_env = env_pairs(_by_name(self.global_config.mcp_client_env).get(name, ""))
+            local_pairs = env_pairs(env_spec or "")
+            inherits_env = name in catalog_specs and local_pairs == catalog_env
+            identical = catalog_specs.get(name) == spec and inherits_env
+            pin = False if was_active is False and not identical else None
+        prepared = False
+
+        def prepare() -> None:
+            # Fase 1: a decisão deste workspace para ``name``. Com ``current``
+            # ausente, também limpa referências órfãs ao nome, aqui e nos outros
+            # overlays; com ``current`` presente e nada a pinar, as decisões
+            # ficam como estão. No escopo global roda sob o lock do catálogo,
+            # depois da checagem de colisão: enquanto o lock é nosso, o nome
+            # está comprovadamente ausente e ninguém o publica, então toda
+            # referência a ele é órfã; publicado, apagar seria perder uma
+            # decisão que outro workspace acabou de tomar.
+            nonlocal prepared
+            if current is None or pin is not None:
+                self._decide_here(name, pin, drop_local=current is None)
+                prepared = True
+            if current is None and scope == SCOPE_GLOBAL:
+                self._forget_in_overlays(name)
+
+        published = False
+
+        def finish() -> None:
+            # Ainda sob o lock do catálogo, logo após a publicação: nenhum outro
+            # processo reutiliza o nome antigo nem decide sobre ele antes de as
+            # referências migrarem. Tudo aqui é melhor esforço: a publicação
+            # está feita e não pode ser desfeita por um overlay.
+            nonlocal published
+            published = True
+            if renaming_global:
+                self._best_effort(
+                    lambda: self._rename_in_overlays(previous.name, name),
+                    f"migrar os outros workspaces de '{previous.name}' para '{name}'",
+                )
+                self._best_effort(
+                    lambda: self._decide_here(previous.name, None, drop_local=True),
+                    f"apagar as referências a '{previous.name}'",
+                )
+            # O override local do nome salvo sai, senão esconderia a edição; mas
+            # só o que estava aqui quando lemos: um override que outro processo
+            # deste workspace gravou depois da publicação é dele e fica.
+            self._best_effort(
+                lambda: self._drop_observed(name, overlay_before),
+                f"descartar o override local de '{name}'",
+            )
+
+        try:
+            if scope == SCOPE_GLOBAL:
+                # Rename dentro do catálogo é uma escrita só: o nome novo entra e
+                # o antigo sai juntos, para nenhuma falha deixar as duas conexões.
+                self._write(
+                    self.global_file,
+                    name,
+                    spec,
+                    env_spec,
+                    default_active=renaming_global and previous.default_active,
+                    drop=previous.name if renaming_global else None,
+                    must_not_exist=current is None,
+                    before_write=prepare,
+                    after_write=finish,
+                )
+            elif identical:
+                prepare()
+                self._drop(self.workspace_file, name)
+            else:
+                prepare()
+                if env_spec is not None and not local_pairs and catalog_env:
+                    # Uma entrada vazia explícita bloqueia a herança de credenciais.
+                    env_spec = f"{name}="
+                self._write(
+                    self.workspace_file,
+                    name,
+                    spec,
+                    "" if inherits_env else env_spec,
+                    must_not_exist=previous is not None,
+                )
+        except (OSError, ValueError):
+            if prepared and current is None and not published:
+                # Nada entrou no catálogo: o pin da fase 1 não pode ficar. (Se a
+                # fase 1 nem rodou, as decisões daqui são de quem publicou antes.)
+                self._best_effort(lambda: self._decide_here(name, None), f"desfazer a decisão de '{name}'")
+            raise
+        if previous is not None and not renaming_global:
+            self.remove(previous.name)
+        self._keep_activation(name, was_active)
         return self.entry(name)
+
+    def _best_effort(self, action, what: str) -> None:
+        """Executa ``action`` no overlay deste workspace sem derrubar uma operação já feita no catálogo."""
+        try:
+            action()
+        except Exception as exc:  # noqa: BLE001 - passo pós-publicação: só avisa
+            logger.warning("MCP: overlay %s não atualizado ao %s: %s", self.workspace_file, what, exc)
+
+    def _drop_observed(self, name: str, snapshot: dict) -> None:
+        """Tira spec e ambiente locais de ``name`` só se ainda forem os de ``snapshot`` (compare-and-delete)."""
+        observed = {key: _by_name(_specs(snapshot, key)).get(name) for key in ("mcp_clients", "mcp_client_env")}
+        if all(value is None for value in observed.values()):
+            return
+
+        def update(data):
+            for key, value in observed.items():
+                if value is not None and _by_name(_specs(data, key)).get(name) == value:
+                    _set_list(data, key, _without(_specs(data, key), name))
+
+        update_json_object(self.workspace_file, update)
 
     def remove(self, name: str) -> MCPConnectionEntry | None:
         """Remove a conexão do escopo em que vive.
@@ -355,29 +538,53 @@ class MCPConnectionStore:
         Uma global sai do catálogo, do padrão de ativas e das exceções deste
         workspace. Uma local sai do workspace; se o catálogo tiver uma de mesmo
         nome, ela volta a valer e é devolvida (ativa ou não, conforme a
-        decisão em vigor).
+        decisão em vigor); senão a decisão local também sai, para não vazar a
+        uma conexão futura com o mesmo nome.
         """
         entry = self.entry(name)
         if entry is None:
             raise KeyError(f"Conexão MCP não configurada: {name}")
         if entry.is_global:
-            self._drop(self.global_file, name, ("mcp_clients", "mcp_client_env", "mcp_active"))
-            # Inclui overrides só de ambiente, que não devem vazar para uma
-            # conexão futura que reutilize o nome removido.
-            self._decide_here(name, None, drop_local=True)
+
+            def update(data):
+                if _by_name(_specs(data, "mcp_clients")).get(name) != entry.spec:
+                    raise ValueError(
+                        f"A conexão '{name}' mudou no catálogo enquanto isso; recarregue antes de remover."
+                    )
+                for key in ("mcp_clients", "mcp_client_env", "mcp_active"):
+                    _set_list(data, key, _without(_specs(data, key), name))
+
+            def cleanup():
+                # Ainda sob o lock do catálogo: ninguém reutiliza o nome antes de
+                # as referências a ele (inclusive overrides só de ambiente, que
+                # não devem vazar para uma conexão futura) saírem daqui e dos
+                # outros overlays. Melhor esforço: o catálogo já está gravado.
+                self._best_effort(
+                    lambda: self._decide_here(name, None, drop_local=True),
+                    f"apagar as referências a '{name}'",
+                )
+                self._forget_in_overlays(name)
+
+            update_json_object(self.global_file, update, after_write=cleanup)
             return None
         self._drop(self.workspace_file, name)
-        return self.entry(name)
+        fallback = self.entry(name)
+        if fallback is None:
+            self._decide_here(name, None)
+        return fallback
 
     def add_local(self, specs: list[str] | None, env_specs: list[str] | None) -> None:
         """Mescla specs da linha de comando como conexões deste workspace.
 
-        Mesmo precedente de ``--mcp-client``: a spec fica persistida. O
-        ambiente de uma conexão não citada em ``env_specs`` é preservado.
+        Mesmo precedente de ``--mcp-client``: a spec fica persistida e a
+        conexão entra nesta sessão, por cima de uma exceção desligada daqui.
+        O ambiente de uma conexão não citada em ``env_specs`` é preservado.
         """
         env_by_name = _by_name(env_specs)
         for spec in specs or []:
-            self.upsert(spec, env_spec=env_by_name.get(_spec_name(spec)), scope=SCOPE_LOCAL)
+            entry = self.upsert(spec, env_spec=env_by_name.get(_spec_name(spec)), scope=SCOPE_LOCAL)
+            if not entry.active:
+                self._decide_here(entry.name, True, catalog=entry.is_global)
 
     def normalize(self) -> list[str]:
         """Converte cópias locais idênticas ao catálogo em ativações.
@@ -413,8 +620,13 @@ class MCPConnectionStore:
             for key in ("mcp_clients", "mcp_client_env"):
                 _set_list(data, key, [item for item in _specs(data, key) if _spec_name(item) not in absorbed])
             active = _specs(data, "mcp_active")
-            _set_list(data, "mcp_active", active + [name for name in absorbed if name not in active])
-            _set_list(data, "mcp_inactive", [item for item in _specs(data, "mcp_inactive") if item not in absorbed])
+            inactive = _specs(data, "mcp_inactive")
+            # Uma cópia desligada aqui vira referência desligada: ``mcp_inactive`` fica.
+            _set_list(
+                data,
+                "mcp_active",
+                active + [name for name in absorbed if name not in active and name not in inactive],
+            )
 
         # Evita criar um overlay quando o workspace ainda não tem conexões.
         if not candidates(read_json_object(self.workspace_file)):
@@ -422,18 +634,156 @@ class MCPConnectionStore:
         update_json_object(self.workspace_file, update)
         return absorbed
 
-    @staticmethod
-    def _write(path: Path, name: str, spec: str, env_spec: str | None, *, activate: bool = False) -> None:
+    # ── overlays dos outros workspaces ───────────────────────────────
+
+    def _sibling_overlays(self) -> list[Path]:
+        """Overlays dos outros workspaces: ``<base>/workspaces/*/<arquivo>``, sem o deste e sem o catálogo."""
+        if self.global_file == self.workspace_file:
+            return []
+        own = {self.workspace_file.resolve(), self.global_file.resolve()}
+        root = self.workspace_file.resolve().parent.parent
+        return sorted(
+            path
+            for path in root.glob(f"*/{self.workspace_file.name}")
+            if path.is_file() and path.resolve() not in own
+        )
+
+    _REFERENCE_KEYS = ("mcp_active", "mcp_inactive", "mcp_client_env")
+
+    @classmethod
+    def _refers_to_catalog(cls, data: dict, name: str) -> bool:
+        """``True`` se o overlay cita ``name`` como conexão do catálogo: pins ou ambiente sem spec local própria."""
+        if name in _by_name(_specs(data, "mcp_clients")):
+            return False
+        return any(name in _by_name(_specs(data, key)) for key in cls._REFERENCE_KEYS)
+
+    @classmethod
+    def _drop_references(cls, data: dict, name: str) -> None:
+        for key in cls._REFERENCE_KEYS:
+            _set_list(data, key, _without(_specs(data, key), name))
+
+    def _update_overlays(self, names: tuple[str, ...], update, action: str) -> None:
+        """Aplica ``update`` nos overlays dos outros workspaces que mencionam algum de ``names``, em melhor esforço.
+
+        O filtro fora do lock só poupa overlays que não citam o nome em chave
+        alguma; toda decisão é de ``update``, sobre os dados lidos sob o lock.
+        Um overlay ilegível ou que não possa ser gravado fica como estava
+        (aquele workspace perde a referência, o que vale como seguir o padrão)
+        e o problema vai ao log: a operação no catálogo já está feita e não
+        pode ficar pela metade por causa de um workspace alheio.
+        """
+        keys = ("mcp_clients",) + self._REFERENCE_KEYS
+        try:
+            overlays = self._sibling_overlays()
+        except OSError as exc:
+            logger.warning("MCP: overlays dos outros workspaces não listados ao %s: %s", action, exc)
+            return
+        for path in overlays:
+            try:
+                snapshot = read_json_object(path, strict=True)
+                if not any(name in _by_name(_specs(snapshot, key)) for key in keys for name in names):
+                    continue
+                update_json_object(path, update)
+            except Exception as exc:  # noqa: BLE001 - overlay alheio nunca derruba a operação
+                logger.warning("MCP: overlay %s não atualizado ao %s: %s", path, action, exc)
+
+    def _rename_in_overlays(self, old: str, new: str) -> None:
+        """Renomeia nos outros workspaces as referências a uma conexão do catálogo.
+
+        Exceções de ativação e override só de ambiente acompanham a conexão,
+        para o rename não ligar nem desligar nada em workspace algum. As
+        referências órfãs a ``new`` já saíram antes de ele entrar no catálogo;
+        uma decisão ou ambiente para ``new`` que exista agora foi tomada depois
+        da publicação e prevalece: as referências a ``old`` então só saem. Um
+        override local de spec com o nome antigo é uma conexão daquele
+        workspace e fica como está; num workspace com conexão local chamada
+        ``new`` (que esconde a global ali), as referências ao nome antigo só saem.
+        """
+
         def update(data):
+            local = _by_name(_specs(data, "mcp_clients"))
+            if old in local or not self._refers_to_catalog(data, old):
+                return
+            if new in local:
+                self._drop_references(data, old)
+                return
+            decided_new = any(new in _specs(data, key) for key in ("mcp_active", "mcp_inactive"))
+            for key in ("mcp_active", "mcp_inactive"):
+                names = _specs(data, key)
+                if old not in names:
+                    continue
+                renamed = (
+                    [item for item in names if item != old]
+                    if decided_new
+                    else [new if item == old else item for item in names]
+                )
+                _set_list(data, key, list(dict.fromkeys(renamed)))
+            env_specs = _specs(data, "mcp_client_env")
+            if new in _by_name(env_specs):
+                _set_list(data, "mcp_client_env", _without(env_specs, old))
+            else:
+                _set_list(
+                    data,
+                    "mcp_client_env",
+                    [
+                        f"{new}={item.split('=', 1)[1] if '=' in item else ''}"
+                        if _spec_name(item) == old
+                        else item
+                        for item in env_specs
+                    ],
+                )
+
+        self._update_overlays((old, new), update, f"renomear '{old}' para '{new}'")
+
+    def _forget_in_overlays(self, name: str) -> None:
+        """Apaga nos outros workspaces as referências a um nome sem conexão no catálogo (removida ou órfãs)."""
+
+        def update(data):
+            if self._refers_to_catalog(data, name):
+                self._drop_references(data, name)
+
+        self._update_overlays((name,), update, f"apagar as referências a '{name}'")
+
+    @staticmethod
+    def _write(
+        path: Path,
+        name: str,
+        spec: str,
+        env_spec: str | None,
+        *,
+        default_active: bool = False,
+        drop: str | None = None,
+        must_not_exist: bool = False,
+        before_write=None,
+        after_write=None,
+    ) -> None:
+        """Grava spec e ambiente de ``name`` numa escrita só.
+
+        ``drop`` tira o nome antigo de um rename na mesma escrita;
+        ``default_active`` herda o padrão ligado; ``must_not_exist`` recusa,
+        sob o lock, um nome que outro processo acabou de gravar no arquivo;
+        ``before_write`` roda sob o lock, depois dessa checagem e antes da
+        gravação (uma exceção dele cancela a escrita); ``after_write`` roda
+        sob o lock depois da gravação bem-sucedida.
+        """
+
+        def update(data):
+            if drop:
+                for key in ("mcp_clients", "mcp_client_env", "mcp_active"):
+                    _set_list(data, key, _without(_specs(data, key), drop))
+            if must_not_exist and name in _by_name(_specs(data, "mcp_clients")):
+                raise ValueError(_taken(name))
+            if before_write is not None:
+                before_write()
             data["mcp_clients"] = merge_specs_by_name(_specs(data, "mcp_clients"), [spec])
             if env_spec is not None:
                 env_specs = _specs(data, "mcp_client_env")
                 env_specs = merge_specs_by_name(env_specs, [env_spec]) if env_spec.strip() else _without(env_specs, name)
                 _set_list(data, "mcp_client_env", env_specs)
-            if activate:
+            if default_active:
                 _set_list(data, "mcp_active", _with(_specs(data, "mcp_active"), name, True))
 
-        update_json_object(path, update)
+        update_json_object(path, update, after_write=after_write)
 
     @staticmethod
     def _drop(path: Path, name: str, keys: tuple[str, ...] = ("mcp_clients", "mcp_client_env")) -> None:
