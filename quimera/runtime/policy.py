@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from ..shared_state import MAX_AGENT_UPDATE_KEYS
 from .config import ToolRuntimeConfig
@@ -48,7 +48,7 @@ class ToolPolicy:
     """Valida chamadas de ferramentas contra regras de segurança, permissão de path e aprovação."""
 
     _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "|", "`", "$(")
-    _POLICY_BYPASS_TOOLS: set[str] = set()
+    _POLICY_BYPASS_TOOLS: ClassVar[set[str]] = set()
     #: Compatibilidade para consumidores históricos. A fonte canônica de
     #: approval é TOOL_METADATA.
     _MUTATION_TOOLS: frozenset[str] = frozenset(

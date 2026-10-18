@@ -44,7 +44,7 @@ _quimera_root.setLevel(numeric_level)
 
 def set_app_log_file(path: "Path | str") -> None:
     """Redireciona o FileHandler para o path definitivo do workspace."""
-    global _file_handler
+    global _file_handler  # noqa: PLW0603 - handler único do processo, trocado ao abrir o workspace
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     for lg in (logger, mcp_server_logger, _quimera_root):

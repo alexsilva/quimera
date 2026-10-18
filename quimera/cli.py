@@ -161,8 +161,8 @@ def _expand_patterns(agents: list[str], available: list[str]) -> list[str]:
     """Executa expand patterns."""
     result = []
     seen = set()
-    for a in agents:
-        a = a.strip().lower()
+    for raw_a in agents:
+        a = raw_a.strip().lower()
         if "*" in a:
             prefix = a.replace("*", "")
             matches = [n for n in available if n.startswith(prefix)]
@@ -583,7 +583,7 @@ def _connect_agent(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
 def _run_driver_repl(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """Sobe o REPL de um profile openai_compat (``--driver-repl``)."""
     _ensure_required_runtime_dependencies()
-    global DriverRepl
+    global DriverRepl  # noqa: PLW0603 - import tardio no nome do módulo, que os testes substituem
     if DriverRepl is None:
         from .runtime.drivers.repl import DriverRepl as _DriverRepl
 
@@ -606,7 +606,7 @@ def _run_driver_repl(parser: argparse.ArgumentParser, args: argparse.Namespace) 
         repl.run(one_shot_prompt=args.repl_prompt)
     except (RuntimeError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from exc
     finally:
         _stop_test_fake_openai_backend(fake_openai_backend)
 

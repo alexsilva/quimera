@@ -48,7 +48,13 @@ extend-exclude = ["tmp", ".claude"]
 [tool.ruff.lint]
 # Conjunto bloqueante: erros de sintaxe/semântica e pyflakes. Regras novas
 # entram aqui só com a base limpa, para o gate continuar sendo zero erro.
-select = ["E4", "E7", "E9", "F"]
+select = [
+    "E4", "E7", "E9", "F",
+    "B904",     # raise dentro de except sem from: perde a causa original
+    "PLW0603",  # global: só com noqa e a justificativa na linha
+    "PLW2901",  # variável do laço reatribuída dentro do laço
+    "RUF012",   # mutável como atributo de classe: exige ClassVar explícito
+]
 
 [tool.mypy]
 python_version = "3.10"

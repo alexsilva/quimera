@@ -23,8 +23,8 @@ class EnvConfig:
         data: dict[str, str] = {}
         if not self._path.exists():
             return data
-        for line in self._path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
+        for raw_line in self._path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
             if "=" in line:

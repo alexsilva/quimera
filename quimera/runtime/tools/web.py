@@ -104,8 +104,8 @@ def fetch_url_text(url: str, *, timeout: int = 30) -> str:
             text=True,
             timeout=timeout + 5,
         )
-    except subprocess.TimeoutExpired:
-        raise TimeoutError(f"curl excedeu o tempo limite de {timeout}s.")
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"curl excedeu o tempo limite de {timeout}s.") from exc
     return WebTool._strip_html(result.stdout)
 
 
@@ -366,8 +366,8 @@ class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)
                 timeout=timeout + 5,
             )
             return result.stdout
-        except subprocess.TimeoutExpired:
-            raise TimeoutError(f"curl excedeu o tempo limite de {timeout}s.")
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(f"curl excedeu o tempo limite de {timeout}s.") from exc
 
     def _write_and_curl(self, url: str, payload: str, content_type: str = "application/json", timeout: int = 30) -> str:
         """Escreve payload em um arquivo temporário e faz POST via curl."""
@@ -396,8 +396,8 @@ class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)
                 timeout=timeout + 5,
             )
             return result.stdout
-        except subprocess.TimeoutExpired:
-            raise TimeoutError(f"curl excedeu o tempo limite de {timeout}s.")
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(f"curl excedeu o tempo limite de {timeout}s.") from exc
         finally:
             Path(tmp.name).unlink(missing_ok=True)
 

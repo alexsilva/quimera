@@ -5,6 +5,7 @@ import json
 import os
 import threading
 from dataclasses import dataclass, asdict
+from typing import ClassVar
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
@@ -24,8 +25,8 @@ class TodoItem:
 
 
 class TodoRegistry:
-    _todos: dict[int, list[TodoItem]] = {}
-    _counter: dict[int, int] = {}
+    _todos: ClassVar[dict[int, list[TodoItem]]] = {}
+    _counter: ClassVar[dict[int, int]] = {}
     _lock = threading.Lock()
 
     @classmethod

@@ -1,7 +1,10 @@
 """Janela modal para inspecionar o prompt final de um agente."""
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
+from textual.binding import BindingType
 from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Button, Label, RichLog
@@ -57,7 +60,7 @@ class PromptPreviewScreen(ModalScreen[None]):
     }
     """
 
-    BINDINGS = [("escape", "close", "Fechar")]
+    BINDINGS: ClassVar[list[BindingType]] = [("escape", "close", "Fechar")]
     AUTO_FOCUS = "#prompt_preview_content"
 
     def __init__(self, agent: str, preview: str, *, title: str | None = None) -> None:

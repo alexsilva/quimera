@@ -5,12 +5,12 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, ClassVar, Iterable
 
 from rich.highlighter import Highlighter
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import VerticalScroll
 from textual.geometry import clamp
 from textual.worker import WorkerCancelled
@@ -214,7 +214,7 @@ class _PrefixDimHighlighter(Highlighter):
 class _CompletionInput(Input):
     """Input com prefixo fixo (>>>: ), autocomplete inline e histórico."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "escape", "Fechar popup"),
         Binding("ctrl+v", "paste_clipboard", "Colar clipboard"),
         Binding("f8", "paste_clipboard", "Colar clipboard"),
@@ -379,8 +379,8 @@ class _CompletionInput(Input):
         except OSError:
             return
         entries = []
-        for line in lines:
-            line = line.strip()
+        for raw_line in lines:
+            line = raw_line.strip()
             if not line:
                 continue
             try:

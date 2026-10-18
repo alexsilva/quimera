@@ -94,7 +94,8 @@ def _update_process_metrics(
     stime_ticks: int = 0,
 ) -> None:
     lines = []
-    for line in (root / "status").read_text(encoding="utf-8").splitlines():
+    for raw_line in (root / "status").read_text(encoding="utf-8").splitlines():
+        line = raw_line
         if line.startswith("VmRSS:"):
             line = f"VmRSS:\t{rss_kb} kB"
         elif line.startswith("VmHWM:"):

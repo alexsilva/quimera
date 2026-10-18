@@ -1,8 +1,9 @@
 """Janela popup de configuração do Quimera."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 from textual.app import ComposeResult
+from textual.binding import BindingType
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select
@@ -81,7 +82,7 @@ class ConfigScreen(ModalScreen[None]):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel", "Cancelar"),
         ("ctrl+s", "save", "Aplicar"),
     ]

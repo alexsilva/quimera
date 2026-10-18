@@ -153,7 +153,8 @@ class DisplayService:
 
         result: list = []
 
-        for idx, item in enumerate(deferred):
+        for idx, raw_item in enumerate(deferred):
+            item = raw_item
             msg = item[1] if isinstance(item, tuple) and len(item) == 2 else str(item)
             task_id = DisplayService._extract_task_id(msg)
 

@@ -6,7 +6,7 @@ import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from quimera.evidence.models import Evidence
 
@@ -132,7 +132,7 @@ class ThinkExtractor:
 class FileReadExtractor:
     """Captura padrões de leitura de arquivos no output."""
 
-    _PATTERNS = [
+    _PATTERNS: ClassVar[list[re.Pattern[str]]] = [
         re.compile(r"Read file:\s*([^\s]+)", re.IGNORECASE),
         re.compile(r"Lendo\s+([^\s]+)", re.IGNORECASE),
         re.compile(r"Read\s+([^\s]+)"),
@@ -165,7 +165,7 @@ class FileReadExtractor:
 class FileEditExtractor:
     """Captura padrões de edição de arquivos no output."""
 
-    _PATTERNS = [
+    _PATTERNS: ClassVar[list[re.Pattern[str]]] = [
         re.compile(r"\u2713\s*Edit\s+([^\s]+)"),
         re.compile(r"Edit\s+([^\s]+)"),
         re.compile(r"Wrote\s+([^\s]+)"),

@@ -11,7 +11,7 @@ import re
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 from quimera.app.submission_tracker import TERMINAL_SUBMISSION_STATUSES
 from quimera.ui.commands import USER_ROLE
@@ -103,13 +103,13 @@ class TextualFeedChange:
 class TextualFeedModel:
     """Modelo testável do feed: transitórios por agente são substituíveis."""
 
-    _TRANSIENT_KINDS = {"stream_start", "stream_chunk", "stream_abort", "agent_update", "agent_lifecycle", "pending_input"}
+    _TRANSIENT_KINDS: ClassVar[set[str]] = {"stream_start", "stream_chunk", "stream_abort", "agent_update", "agent_lifecycle", "pending_input"}
     _MCP_HTTP_TOOL_MARKER = "◇"
     # Máximo de linhas de tools visíveis no bloco transitório; o excedente
     # colapsa na linha "⋮ +N ferramentas anteriores".
     _MAX_VISIBLE_TOOL_LINES = 5
 
-    _IGNORED_KINDS = {
+    _IGNORED_KINDS: ClassVar[set[str]] = {
         "prompt",
         "prompt_clear",
         "input_active",

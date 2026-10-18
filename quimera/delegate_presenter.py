@@ -1,7 +1,10 @@
+from typing import ClassVar
+
+
 class DelegatePresenter:
     """Formata dados de delegação para inserção no prompt."""
 
-    ROLE_LABELS = {
+    ROLE_LABELS: ClassVar[dict[str, str]] = {
         "planner": "planejador",
         "executor": "executor",
         "reviewer": "revisor",
@@ -9,7 +12,7 @@ class DelegatePresenter:
         "synthesizer": "sintetizador",
     }
 
-    ROLE_CONTRACTS = {
+    ROLE_CONTRACTS: ClassVar[dict[str, str]] = {
         "planner": "Planeje a abordagem, decomponha o trabalho e não aplique mudanças.",
         "executor": "Implemente a tarefa, valide o resultado e reporte evidências.",
         "reviewer": "Revise, aponte riscos e não edite o código.",
@@ -17,7 +20,7 @@ class DelegatePresenter:
         "synthesizer": "Sintetize os resultados, resolva conflitos e produza uma conclusão final.",
     }
 
-    EMPTY_FIELDS = {
+    EMPTY_FIELDS: ClassVar[dict[str, str]] = {
         "delegation_present": "",
         "delegation_id": "",
         "delegation_request": "",

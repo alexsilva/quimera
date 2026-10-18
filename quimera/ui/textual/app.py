@@ -8,6 +8,7 @@ import sys
 import threading
 import traceback
 from pathlib import Path
+from typing import ClassVar
 
 from quimera.clipboard_support import ClipboardManager
 
@@ -57,6 +58,7 @@ from quimera.ui.textual.styles import TEXTUAL_APP_CSS
 from collections.abc import Iterable
 
 from textual.app import App, ComposeResult, SystemCommand
+from textual.binding import BindingType
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.screen import Screen
@@ -128,7 +130,7 @@ class QuimeraTextualApp(App):
 
     TITLE = "Quimera"
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("ctrl+c", "cancel_or_exit", "Cancelar/Sair"),
         ("ctrl+q", "cancel_or_exit", "Sair"),
         ("ctrl+t", "cycle_theme", "Tema"),

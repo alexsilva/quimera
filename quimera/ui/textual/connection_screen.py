@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import json
 import shlex
+from typing import ClassVar
 
 from textual.app import ComposeResult
+from textual.binding import BindingType
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Switch
@@ -37,7 +39,7 @@ class ConnectionScreen(ModalScreen[None]):
     .hidden { display: none; }
     """
 
-    BINDINGS = [("escape", "cancel", "Cancelar"), ("ctrl+s", "save", "Salvar")]
+    BINDINGS: ClassVar[list[BindingType]] = [("escape", "cancel", "Cancelar"), ("ctrl+s", "save", "Salvar")]
     AUTO_FOCUS = "#conn_driver"
 
     def __init__(self, quimera_app, parent_app, agent_name: str, *, advanced: bool = False) -> None:

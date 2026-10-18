@@ -119,7 +119,7 @@ class ToolExecutorWiring:
 class ToolExecutor:
     """Executa chamadas estruturadas de ferramentas com validação e aprovação."""
 
-    _ALIASES = {
+    _ALIASES: ClassVar[dict[str, str]] = {
         "run": "run_shell",
         "execute_command": "exec_command",
     }

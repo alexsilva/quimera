@@ -553,9 +553,11 @@ def _compact_pair(assistant: dict, tools: list[dict]) -> tuple[dict, list[dict]]
     for tool in tools:
         tool_content = tool.get("content")
         if isinstance(tool_content, str) and len(tool_content) > _COMPACTED_TOOL_RESULT_CHARS:
-            tool = dict(tool)
-            tool["content"] = tool_content[:_COMPACTED_TOOL_RESULT_CHARS] + _COMPACTION_NOTE
-        compact_tools.append(tool)
+            compact_tool = dict(tool)
+            compact_tool["content"] = tool_content[:_COMPACTED_TOOL_RESULT_CHARS] + _COMPACTION_NOTE
+            compact_tools.append(compact_tool)
+        else:
+            compact_tools.append(tool)
     return compact_assistant, compact_tools
 
 

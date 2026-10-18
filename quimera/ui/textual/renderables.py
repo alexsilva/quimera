@@ -78,13 +78,13 @@ _DELEGATION_HINT_RE = re.compile(
 
 def advance_thinking_pulse() -> None:
     """Avança um frame da animação do marcador de pensamento."""
-    global _thinking_pulse_index
+    global _thinking_pulse_index  # noqa: PLW0603 - frame da animação, compartilhado por todo o feed
     _thinking_pulse_index = (_thinking_pulse_index + 1) % len(_THINKING_PULSE_FRAMES)
 
 
 def reset_thinking_pulse() -> None:
     """Volta o marcador de pensamento ao frame base (``✻``)."""
-    global _thinking_pulse_index
+    global _thinking_pulse_index  # noqa: PLW0603 - frame da animação, compartilhado por todo o feed
     _thinking_pulse_index = 0
 
 

@@ -1,5 +1,6 @@
 import threading
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -306,7 +307,7 @@ def test_cancel_background_work_cancels_live_background_clients(tmp_path, monkey
     services = build_task_services(app)
 
     class AgentClientStub:
-        instances = []
+        instances: ClassVar[list] = []
 
         def __init__(self, *args, **kwargs):
             del args, kwargs
@@ -345,7 +346,7 @@ def test_cancel_background_work_tolerates_client_failure(tmp_path, monkeypatch):
     services = build_task_services(app)
 
     class AgentClientStub:
-        instances = []
+        instances: ClassVar[list] = []
 
         def __init__(self, *args, **kwargs):
             del args, kwargs

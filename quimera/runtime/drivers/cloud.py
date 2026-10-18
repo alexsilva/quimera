@@ -83,7 +83,7 @@ def register_cloud_backend(provider: str, factory: CloudBackendFactory) -> None:
 
 
 def _load_builtin_backends() -> None:
-    global _BUILTINS_LOADED
+    global _BUILTINS_LOADED  # noqa: PLW0603 - carrega os backends embutidos uma vez por processo
     if _BUILTINS_LOADED:
         return
     # Os imports registram seus backends. São tardios para evitar ciclos com

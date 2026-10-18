@@ -1,9 +1,10 @@
 """Testes do fluxo de autocomplete do CompletionDropdown."""
 import asyncio
 import unittest
+from typing import ClassVar
 
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.widgets import Input
 
 from quimera.app.completion_dropdown import CompletionDropdown, history_suggestion_for
@@ -14,7 +15,7 @@ COMPLETIONS = ["/agents", "/agent-status", "/agent-run"]
 class _TestInput(Input):
     """Input com a mesma lógica de _CompletionInput (sem dependência do QuimeraApp)."""
 
-    BINDINGS = [Binding("escape", "escape", "Fechar popup")]
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "escape", "Fechar popup")]
 
     async def action_submit(self) -> None:
         dropdown = self.app.query_one(CompletionDropdown)

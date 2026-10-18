@@ -7,6 +7,7 @@ import os
 import sys
 import threading
 import time
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -698,7 +699,7 @@ def test_manager_disconnect_remove_tools_vivas_e_preserva_config(monkeypatch, tm
     config.set_mcp_configuration(["jira=stdio:jira-cmd"], [])
 
     class FakeSession:
-        tools = []
+        tools: ClassVar[list] = []
 
         def disconnect(self):
             captured["disconnected"] = True
@@ -1149,7 +1150,7 @@ def test_manager_reconnect_encaminha_autorizacao_oauth_e_silencia_stderr(
 class _GateSession:
     """Sessão cujo ``connect`` bloqueia até o teste liberar ou o transporte cair."""
 
-    instances: list["_GateSession"] = []
+    instances: ClassVar[list["_GateSession"]] = []
 
     def __init__(self, transport, name="external"):
         self._transport = transport
@@ -1180,7 +1181,7 @@ class _GateSession:
     def disconnect(self):
         self.closed = True
 
-    tools: list[dict] = []
+    tools: ClassVar[list[dict]] = []
 
 
 def _gated_transport(kind: str = "stdio") -> MagicMock:

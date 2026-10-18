@@ -11,8 +11,8 @@ def parse_stream_json(raw: str, agent: str, tool_event_callback=None) -> str | N
     """Parseia output em stream-json do CLI, extrai texto final e dispara callbacks de tool."""
     result_text = None
     text_parts: list[str] = []
-    for line in raw.splitlines():
-        line = line.strip()
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
         if not line:
             continue
         try:
@@ -60,8 +60,8 @@ def parse_stream_json(raw: str, agent: str, tool_event_callback=None) -> str | N
 def parse_codex_json(raw: str, agent: str, tool_event_callback=None) -> str | None:
     """Parseia output JSONL do `codex exec --json`, extrai último agent_message e registra tool calls."""
     result_text = None
-    for line in raw.splitlines():
-        line = line.strip()
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
         if not line:
             continue
         try:
@@ -85,8 +85,8 @@ def parse_codex_json(raw: str, agent: str, tool_event_callback=None) -> str | No
 def parse_opencode_json(raw: str, agent: str, tool_event_callback=None) -> str | None:
     """Parseia eventos JSON do `opencode run --format=json` e recompõe o texto final."""
     text_parts: list[str] = []
-    for line in raw.splitlines():
-        line = line.strip()
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
         if not line:
             continue
         try:

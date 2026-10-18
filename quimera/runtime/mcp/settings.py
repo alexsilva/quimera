@@ -106,8 +106,8 @@ def env_pairs(env_spec: str) -> dict[str, str]:
     """Pares ``KEY=valor`` de uma spec ``nome=KEY=valor,KEY2=valor2``."""
     rest = env_spec.split("=", 1)[1] if "=" in env_spec else ""
     pairs: dict[str, str] = {}
-    for part in rest.split(","):
-        part = part.strip()
+    for raw_part in rest.split(","):
+        part = raw_part.strip()
         if "=" not in part:
             continue
         key, value = part.split("=", 1)

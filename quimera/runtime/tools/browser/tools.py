@@ -7,7 +7,7 @@ import json
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from ...config import ToolRuntimeConfig
 from ...models import ToolCall, ToolResult
@@ -273,9 +273,9 @@ class BrowserTool(
 class BrowserToolValidator(ValidatableTool):
     """Validates browser sessions, selectors, URLs and output paths."""
 
-    _WAIT_UNTIL = {"commit", "domcontentloaded", "load", "networkidle"}
-    _MOUSE_ACTIONS = {"move", "down", "up", "click", "wheel"}
-    _BUTTONS = {"left", "middle", "right"}
+    _WAIT_UNTIL: ClassVar[set[str]] = {"commit", "domcontentloaded", "load", "networkidle"}
+    _MOUSE_ACTIONS: ClassVar[set[str]] = {"move", "down", "up", "click", "wheel"}
+    _BUTTONS: ClassVar[set[str]] = {"left", "middle", "right"}
 
     def _validate_browser_start(self, call: ToolCall) -> None:
         if call.arguments.get("url"):

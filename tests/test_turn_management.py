@@ -421,7 +421,7 @@ class TestTurnCycle(unittest.TestCase):
             try:
                 return next(reads)
             except StopIteration:
-                raise KeyboardInterrupt()
+                raise KeyboardInterrupt() from None
 
         app.read_user_input = interrupting_read_user_input
 

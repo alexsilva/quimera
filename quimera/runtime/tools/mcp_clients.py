@@ -37,7 +37,7 @@ class ExternalMCPToolValidator:
 
 
 def set_bridge(bridge: MCPClientBridge | None) -> None:
-    global _bridge
+    global _bridge  # noqa: PLW0603 - bridge MCP único do processo
     _bridge = bridge
 
 

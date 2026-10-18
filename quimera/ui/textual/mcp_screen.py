@@ -4,10 +4,12 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, replace
+from typing import ClassVar
 
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
+from textual.binding import BindingType
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Input, Label, Select
@@ -142,7 +144,7 @@ class MCPScopePromptScreen(ModalScreen[str | None]):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel", "Cancelar"),
         ("l", "choose('local')", "Neste workspace"),
         ("g", "choose('global')", "Em todos"),
@@ -244,7 +246,7 @@ class MCPServerEditorScreen(ModalScreen[str | None]):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel", "Cancelar"),
         ("ctrl+s", "save", "Salvar"),
     ]
@@ -502,7 +504,7 @@ class MCPHttpSettingsEditorScreen(ModalScreen[MCPHttpSettings | None]):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel", "Cancelar"),
         ("ctrl+s", "save", "Salvar"),
     ]
@@ -752,7 +754,7 @@ class MCPConnectionsScreen(ModalScreen[None]):
     .hidden { display: none; }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "close", "Fechar"),
         ("ctrl+n", "new_connection", "Adicionar servidor"),
         ("ctrl+e", "edit_connection", "Editar servidor"),

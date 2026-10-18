@@ -25,8 +25,8 @@ def _exchange(server, *msgs):
     out = io.StringIO()
     server.serve(stdin=inp, stdout=out)
     responses = []
-    for line in out.getvalue().splitlines():
-        line = line.strip()
+    for raw_line in out.getvalue().splitlines():
+        line = raw_line.strip()
         if not line:
             continue
         parsed = json.loads(line)

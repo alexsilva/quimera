@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from .prompt_kinds import PromptKind, coerce_prompt_kind
 
@@ -60,8 +61,8 @@ class PromptText(str):
 class PromptParser:
     """Parseia blocos estruturados de um prompt renderizado."""
 
-    _TRUE_STRINGS = {"1", "true", "yes", "on"}
-    _FALSE_STRINGS = {"0", "false", "no", "off", ""}
+    _TRUE_STRINGS: ClassVar[set[str]] = {"1", "true", "yes", "on"}
+    _FALSE_STRINGS: ClassVar[set[str]] = {"0", "false", "no", "off", ""}
 
     IF_PATTERN = re.compile(
         r"<!--\s*(NOT_IF|IF):([A-Za-z_][A-Za-z0-9_]*)\s*-->(.*?)<!--\s*END\1:\2\s*-->",

@@ -1933,7 +1933,7 @@ class AgentClient:
             api_key = "ollama"
             openai_driver_cls = None
             if not is_cloud_provider(provider):
-                global OpenAICompatDriver
+                global OpenAICompatDriver  # noqa: PLW0603 - import tardio no nome do módulo, que os testes substituem
                 if OpenAICompatDriver is None:
                     from quimera.runtime.drivers.openai_compat import OpenAICompatDriver as _OpenAICompatDriver
 

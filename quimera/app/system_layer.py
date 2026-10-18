@@ -209,7 +209,7 @@ class AppSystemLayer:
         try:
             return self.__display
         except AttributeError:
-            raise RuntimeError("DisplayService não inicializado")
+            raise RuntimeError("DisplayService não inicializado") from None
 
     @_display.setter
     def _display(self, value):

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 
 class ToolPreview:
     """Constrói previews de tools com variação apenas de contexto visual."""
 
-    _SENSITIVE_KEYS = {
+    _SENSITIVE_KEYS: ClassVar[set[str]] = {
         "token", "api_key", "password", "secret",
         "authorization", "cookie", "headers",
     }

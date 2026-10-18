@@ -10,6 +10,7 @@ from collections import deque
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import MagicMock, Mock, call, patch
 
 import quimera.app as app_module
@@ -688,7 +689,7 @@ class ProtocolTests(unittest.TestCase):
     def test_cli_runs_interactive_test_with_default_prompt(self):
         """Verifica que cli runs interactive test with default prompt."""
         class FakeRenderer(RendererBase):
-            instances = []
+            instances: ClassVar[list] = []
 
             def __init__(self):
                 self.system_messages = []
@@ -730,7 +731,7 @@ class ProtocolTests(unittest.TestCase):
         calls = []
 
         class FakeRenderer(RendererBase):
-            instances = []
+            instances: ClassVar[list] = []
 
             def __init__(self):
                 self.system_messages = []

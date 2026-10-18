@@ -1795,8 +1795,8 @@ def parse_mcp_client_env_specs(
         conn_name, rest = spec.split("=", 1)
         conn_name = conn_name.strip()
         pairs: dict[str, str] = {}
-        for part in rest.split(","):
-            part = part.strip()
+        for raw_part in rest.split(","):
+            part = raw_part.strip()
             if "=" in part:
                 k, v = part.split("=", 1)
                 pairs[k.strip()] = v.strip()
