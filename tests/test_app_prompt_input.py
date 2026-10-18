@@ -1,5 +1,7 @@
 """Tests for Textual UI input gate and renderer modules."""
 import asyncio
+
+import pytest
 import threading
 import time
 
@@ -568,3 +570,240 @@ def test_prompt_formatter():
     assert PromptFormatter.format_user_prompt("", None) == ">>> "
     assert PromptFormatter.format_user_prompt(">", None) == "> "
     assert PromptFormatter.format_user_prompt(">", "code") == "> [code]: "
+
+
+# ---------------------------------------------------------------------------
+# SimpleInputGate em pipe: dono único de stdin, consumo em ordem
+# ---------------------------------------------------------------------------
+
+
+def _pipe_gate(text: str):
+    import io
+
+    from quimera.app.simple_input_gate import SimpleInputGate
+    from quimera.ui import PlainTextRenderer
+
+    out = io.StringIO()
+    gate = SimpleInputGate(renderer=PlainTextRenderer(stream=out), stdin=io.StringIO(text))
+    return gate, out
+
+
+def test_simple_input_gate_pipe_is_sequential_and_echoes_consumed_lines():
+    gate, out = _pipe_gate("primeira\nsegunda\n")
+
+    assert gate.sequential is True
+    assert gate.read_chat_line(timeout=1, prompt="Alex: ") == "primeira"
+    assert gate("Alex: ") == "segunda"
+    assert out.getvalue() == "Alex: primeira\nAlex: segunda\n"
+    assert gate.is_active() is False
+
+
+def test_simple_input_gate_pipe_direct_read_has_priority_over_chat_poll():
+    """A linha seguinte vai para o ask_user/aprovação, não para o chat que espera."""
+    import threading
+
+    gate, out = _pipe_gate("2\nchat\n")
+    results = {}
+
+    def chat_poll():
+        results["chat"] = gate.read_chat_line(timeout=2, prompt="Alex: ")
+
+    # A reserva entra antes de qualquer linha ser consumida e vale durante a
+    # leitura direta, como o broker faz ao enfileirar um pedido.
+    reservation = gate.reserve_direct_input()
+    thread = threading.Thread(target=chat_poll)
+    thread.start()
+    selection = gate.read_selection_in_terminal("Qual?", ["Python", "Rust"], timeout=1)
+    reservation.release()
+    thread.join(timeout=2)
+
+    assert selection == (1, "Rust")
+    assert results["chat"] == "chat"
+    assert out.getvalue() == "Qual?\n  1. Python\n  2. Rust\nSelecione (1-2): 2\nAlex: chat\n"
+
+
+def test_simple_input_gate_pipe_direct_reads_parse_selection_and_approval():
+    gate, out = _pipe_gate("rust\n\n  Y \n")
+
+    assert gate.read_selection_in_terminal("Qual?", ["Python", "Rust"], timeout=1) == (1, "Rust")
+    assert gate.read_approval_in_terminal("Aprovar?", "  Executar? [y/N]: ", timeout=1) is None
+    assert gate.read_approval_in_terminal("Aprovar?", "  Executar? [y/N]: ", timeout=1) == "y"
+    assert "Aprovar?\n  Executar? [y/N]: \n" in out.getvalue()
+
+
+def test_simple_input_gate_pipe_timeout_and_eof():
+    gate, _out = _pipe_gate("")
+
+    assert gate.read_input_in_terminal("x: ", timeout=0.05) is None
+    assert gate.is_closed() is True
+    with pytest.raises(EOFError):
+        gate.read_chat_line(timeout=0.05)
+    with pytest.raises(EOFError):
+        gate("Alex: ")
+
+    import threading
+
+    from quimera.app.simple_input_gate import SimpleInputGate
+
+    class _SlowStdin:
+        """stdin que só entrega a linha depois de liberado."""
+
+        def __init__(self):
+            self.release = threading.Event()
+            self._done = False
+
+        def isatty(self):
+            return False
+
+        def readline(self):
+            if self._done:
+                return ""
+            self.release.wait(timeout=5)
+            self._done = True
+            return "tarde\n"
+
+    stdin = _SlowStdin()
+    slow = SimpleInputGate(stdin=stdin)
+    assert slow.read_chat_line(timeout=0.05) is None  # ainda sem linha: não é EOF
+    assert slow.is_closed() is False
+    stdin.release.set()
+    assert slow.read_chat_line(timeout=2) == "tarde"
+
+
+def test_simple_input_gate_tty_regime_uses_builtin_input():
+    """Em TTY (--driver-repl) cada leitura é um input() comum, sem thread leitora."""
+    from unittest.mock import patch
+
+    from quimera.app.simple_input_gate import SimpleInputGate
+
+    class _Tty:
+        def isatty(self):
+            return True
+
+        def readline(self):  # pragma: no cover - nunca deve ser chamado
+            raise AssertionError("regime TTY não lê stdin por readline")
+
+    gate = SimpleInputGate(stdin=_Tty())
+    assert gate.sequential is False
+    answers = iter(["olá", "y", "2"])
+    with patch("builtins.input", side_effect=lambda _prompt: next(answers)):
+        assert gate("Alex: ") == "olá"
+        assert gate.read_approval_in_terminal("Aprovar?", "  Executar? ", timeout=1) == "y"
+        assert gate.read_selection_in_terminal("Qual?", ["Python", "Rust"], timeout=1) == (1, "Rust")
+    assert gate._reader is None
+
+
+def test_simple_input_gate_without_renderer_prints_to_stdout(capsys):
+    import io
+
+    from quimera.app.simple_input_gate import SimpleInputGate
+
+    gate = SimpleInputGate(stdin=io.StringIO("1\n"))
+    assert gate.read_selection_in_terminal("Qual?", ["Python"], timeout=1) == (0, "Python")
+    assert capsys.readouterr().out == "Qual?\n  1. Python\nSelecione (1-1): 1\n"
+
+
+def test_simple_input_gate_reservation_holds_lines_for_direct_reads():
+    """Reserva feita antes da pergunta: o chat não consome a linha até o release."""
+    gate, out = _pipe_gate("2\nchat\n")
+
+    reservation = gate.reserve_direct_input()
+    assert gate.read_chat_line(timeout=0.1, prompt="Alex: ") is None  # linha reservada
+    assert gate.read_selection_in_terminal("Qual?", ["Python", "Rust"], timeout=1) == (1, "Rust")
+    assert gate.read_chat_line(timeout=0.1, prompt="Alex: ") is None  # ainda reservado
+    reservation.release()
+    reservation.release()  # idempotente
+    assert gate.read_chat_line(timeout=1, prompt="Alex: ") == "chat"
+    assert out.getvalue().endswith("Selecione (1-2): 2\nAlex: chat\n")
+
+
+def test_simple_input_gate_direct_read_aborts_without_consuming_the_line():
+    """Um pedido expirado acorda a leitura direta, que sai sem tomar a linha."""
+    import threading
+
+    import queue
+
+    from quimera.app.simple_input_gate import SimpleInputGate
+
+    class _OpenStdin:
+        """Pipe aberto sem dados: readline bloqueia até o teste fechar."""
+
+        def __init__(self):
+            self._lines = queue.Queue()
+
+        def isatty(self):
+            return False
+
+        def readline(self):
+            return self._lines.get()
+
+        def close(self):
+            self._lines.put("")
+
+    class _Ticket:
+        def __init__(self):
+            self.aborted = threading.Event()
+
+        def should_abort(self):
+            return self.aborted.is_set()
+
+        def claim(self):
+            return not self.aborted.is_set()
+
+    stdin = _OpenStdin()
+    gate = SimpleInputGate(stdin=stdin)
+    ticket = _Ticket()
+    aborted = ticket.aborted
+    reservation = gate.reserve_direct_input()
+    result = {}
+
+    reader = threading.Thread(
+        target=lambda: result.update(
+            line=gate.read_input_in_terminal("x: ", timeout=5, ticket=ticket)
+        )
+    )
+    reader.start()
+    assert _wait_for(lambda: gate._direct_waiters == 2)
+    aborted.set()
+    reservation.wake()
+    reader.join(timeout=2)
+
+    assert result == {"line": None}
+    reservation.release()
+    assert gate._direct_waiters == 0
+    stdin.close()
+
+
+def _wait_for(predicate, timeout: float = 2.0) -> bool:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_simple_input_gate_claims_the_line_before_taking_it():
+    """Um ticket que recusa o claim não consome a linha; um que aceita, consome."""
+    gate, _out = _pipe_gate("linha\n")
+
+    class _Ticket:
+        def __init__(self, accept):
+            self.accept = accept
+            self.claims = 0
+
+        def should_abort(self):
+            return False
+
+        def claim(self):
+            self.claims += 1
+            return self.accept
+
+    refusing = _Ticket(accept=False)
+    assert gate.read_input_in_terminal("x: ", timeout=0.5, ticket=refusing) is None
+    assert refusing.claims == 1
+    accepting = _Ticket(accept=True)
+    assert gate.read_input_in_terminal("x: ", timeout=0.5, ticket=accepting) == "linha"
+    assert accepting.claims == 1

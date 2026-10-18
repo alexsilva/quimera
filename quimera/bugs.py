@@ -336,21 +336,15 @@ class RenderBugDetector:
         *,
         session_id: str,
         events_path: Path | None,
-        ansi_path: Path | None = None,
         agent: str = "",
     ) -> list[BugReport]:
-        """Analisa logs de render e ANSI em busca de anomalias operacionais."""
+        """Analisa o log estruturado de render em busca de anomalias operacionais."""
         reports: list[BugReport] = []
-        if events_path is not None:
-            events_file = Path(events_path)
-        else:
-            events_file = None
-        if events_file is not None and events_file.is_file():
+        if events_path is None:
+            return reports
+        events_file = Path(events_path)
+        if events_file.is_file():
             reports.extend(self._scan_events_file(session_id=session_id, path=events_file, agent=agent))
-        if ansi_path is not None:
-            ansi_file = Path(ansi_path)
-            if ansi_file.is_file():
-                reports.extend(self._scan_ansi_file(session_id=session_id, path=ansi_file, agent=agent))
         return reports
 
     def _parse_ts(self, ts: str) -> datetime | None:
@@ -519,29 +513,6 @@ class RenderBugDetector:
                         )
                     )
             i = max(i + 1, j - threshold + 1)
-
-    def _scan_ansi_file(self, *, session_id: str, path: Path, agent: str) -> list[BugReport]:
-        payload = path.read_text(encoding="utf-8", errors="replace")
-        if "KeyboardInterrupt:" not in payload or "_python_exit" not in payload:
-            return []
-        marker = "KeyboardInterrupt:"
-        offset = payload.find(marker)
-        summary = "KeyboardInterrupt durante shutdown de threads"
-        report = self._build_report(
-            session_id=session_id,
-            category="interrupt_shutdown_traceback",
-            summary=summary,
-            severity="high",
-            confidence=0.95,
-            agent=agent,
-            evidence=BugEvidenceRef(
-                kind="render_ansi",
-                path=str(path),
-                offset=max(0, offset),
-                preview=summary,
-            ),
-        )
-        return [report]
 
     @staticmethod
     def _build_report(

@@ -28,14 +28,7 @@ Interface Textual ativa. A tool `tui_screenshot` devolve a tela atual em texto, 
 - cada captura → tui_screenshot (path)
 <!-- ENDIF:tui_screenshot_available -->
 <!-- NOT_IF:tui_screenshot_available -->
-Stream ANSI bruto: {render_ansi_path}
-
-- flicker → queue_depth>0 ou transient_coalesced>10
-- ghosting → transient_replace, prev_lines≠new_lines do evento anterior; ou \033[A sem \033[J no ansi
-- prompt colado → print com prompt_active=true
-- rolagem sumiu → prev_lines > term_lines-2
-- texto repetido → ansi_duplicate_suppressed
-- overlay preso → transient_clear (prev_lines≠0)
+Sem interface Textual (stdin em pipe): o renderer de texto puro grava um evento `print` por linha escrita, com `kind` e `preview`.
 <!-- ENDNOT_IF:tui_screenshot_available -->
 
 Contar eventos: `python3 -c "import collections,json;c=collections.Counter(json.loads(l)['event'] for l in open('{render_log_path}') if l.strip());print(dict(c))"`

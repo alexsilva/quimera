@@ -563,6 +563,76 @@ class TestTurnCycle(unittest.TestCase):
         app.session_services.shutdown.assert_called_once_with(interrupted=False)
         app.agent_client.close.assert_called_once()
 
+    def test_run_with_sequential_input_waits_for_active_work_before_reading_again(self):
+        """Stdin em pipe: enquanto um prompt executa, o chat não consome a linha seguinte."""
+        from types import SimpleNamespace
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
+        app.renderer = DummyRenderer()
+        app.threads = 2
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.session_services = Mock()
+        app.turn_manager = TurnManager()
+        app._format_user_prompt = lambda: "User: "
+        app.system_layer = Mock(show_muted_message=MagicMock())
+        app._refresh_parallel_toolbar = Mock()
+        app.runtime_state.chat_inflight_count = 0
+        app.runtime_state.chat_inflight_lock = threading.Lock()
+        app.input_services = SimpleNamespace(
+            sequential_input=True,
+            set_nonblocking_tty=lambda _enabled: None,
+            set_wakeup_event=lambda _event: None,
+        )
+
+        app.agent_client = Mock()
+        app.agent_client.has_active_work = lambda: False
+
+        process_started = threading.Event()
+        release_process = threading.Event()
+        process_finished = threading.Event()
+        read_calls = []
+
+        def mock_read_user_input(prompt, timeout):
+            read_calls.append((prompt, timeout, process_finished.is_set()))
+            if len(read_calls) == 1:
+                return "mensagem-ativa"
+            raise EOFError
+
+        def queued_process(user):
+            process_started.set()
+            release_process.wait(timeout=10)
+            process_finished.set()
+
+        app.read_user_input = mock_read_user_input
+        app._do_process_chat_message = queued_process
+        app.bug_services = Mock()
+        _materialize_ui_event_handler(app)
+
+        run_thread = threading.Thread(target=QuimeraApp.run, args=(app,), daemon=True)
+        run_thread.start()
+        self.assertTrue(process_started.wait(timeout=5))
+        time.sleep(0.2)
+        self.assertEqual(len(read_calls), 1, "o chat não deve ler stdin enquanto o agente trabalha")
+        release_process.set()
+        run_thread.join(timeout=5)
+
+        self.assertFalse(run_thread.is_alive(), "EOF do stdin deveria encerrar o loop")
+        self.assertEqual(len(read_calls), 2)
+        self.assertTrue(read_calls[1][2], "a segunda leitura só pode acontecer após o trabalho terminar")
+        app.session_services.shutdown.assert_called_once_with(interrupted=False)
+
     def test_run_keeps_chat_alive_when_only_openai_drain_is_active(self):
         """Ctrl+C no CLI não pode sair enquanto has_active_work rastreia HTTP tardio."""
         app = QuimeraApp.__new__(QuimeraApp)

@@ -98,9 +98,8 @@ def test_bug_store_query_skips_record_with_invalid_types(tmp_path):
         store.close()
 
 
-def test_render_bug_detector_scans_events_and_ansi(tmp_path):
+def test_render_bug_detector_scans_events(tmp_path):
     events_path = tmp_path / "render-sessao-1.jsonl"
-    ansi_path = tmp_path / "render-sessao-1.ansi"
     events = [
         {"ts": "2026-05-20T00:00:00.000+00:00", "event": "ansi_duplicate_suppressed", "repeats": 3},
         {
@@ -110,36 +109,26 @@ def test_render_bug_detector_scans_events_and_ansi(tmp_path):
         },
     ]
     events_path.write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in events), encoding="utf-8")
-    ansi_path.write_text("... _python_exit ... KeyboardInterrupt: ...", encoding="utf-8")
 
     detector = RenderBugDetector(repeat_threshold=2)
     reports = detector.analyze_session(
         session_id="sessao-1",
         events_path=events_path,
-        ansi_path=ansi_path,
         agent="codex",
     )
 
     categories = {report.category for report in reports}
     assert "render_repeat_block" in categories
     assert "prompt_line_collision" in categories
-    assert "interrupt_shutdown_traceback" in categories
 
 
 def test_render_bug_detector_accepts_missing_events_path(tmp_path):
-    ansi_path = tmp_path / "render-sessao-1.ansi"
-    ansi_path.write_text("... _python_exit ... KeyboardInterrupt: ...", encoding="utf-8")
-
     detector = RenderBugDetector(repeat_threshold=2)
-    reports = detector.analyze_session(
-        session_id="sessao-1",
-        events_path=None,
-        ansi_path=ansi_path,
-        agent="codex",
-    )
 
-    assert len(reports) == 1
-    assert reports[0].category == "interrupt_shutdown_traceback"
+    assert detector.analyze_session(session_id="sessao-1", events_path=None, agent="codex") == []
+    assert detector.analyze_session(
+        session_id="sessao-1", events_path=tmp_path / "ausente.jsonl", agent="codex"
+    ) == []
 
 
 def test_agent_runtime_bug_detector_scans_metrics_and_prompt_pressure(tmp_path):
@@ -424,7 +413,6 @@ def test_render_bug_detector_detects_long_gap(tmp_path):
     reports = detector.analyze_session(
         session_id="sessao-1",
         events_path=events_path,
-        ansi_path=None,
         agent="codex",
     )
 
@@ -447,7 +435,6 @@ def test_render_bug_detector_detects_rapid_burst(tmp_path):
     reports = detector.analyze_session(
         session_id="sessao-1",
         events_path=events_path,
-        ansi_path=None,
         agent="codex",
     )
 

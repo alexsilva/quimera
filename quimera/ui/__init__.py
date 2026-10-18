@@ -1,14 +1,15 @@
-"""API pública de `quimera.ui`."""
+"""API pública de `quimera.ui`.
+
+Dois renderers implementam o contrato de :class:`RendererBase`:
+``TextualRenderer`` (em ``quimera.ui.textual``) para a TUI e
+:class:`PlainTextRenderer` para stdin em pipe e ``--interactive-test``.
+"""
 
 from .audit import RenderAuditLogger
-from . import renderer as _renderer
-from .renderer import TerminalRenderer
-from .renderer import _RICH_AVAILABLE
-from .renderer import _agent_style
-from .renderer import _is_interactive_terminal
-from .renderer import os
-from .renderer import sys
+from .base import RendererBase
+from .plain import PlainTextRenderer
 from .text import (
+    _agent_style,
     _apply_stream_diff,
     _extract_text_from_renderable,
     _highlight_tags,
@@ -16,42 +17,14 @@ from .text import (
     strip_ansi,
 )
 
-if hasattr(_renderer, "Console"):
-    Console = _renderer.Console
-if hasattr(_renderer, "Group"):
-    Group = _renderer.Group
-if hasattr(_renderer, "Live"):
-    Live = _renderer.Live
-if hasattr(_renderer, "Markdown"):
-    Markdown = _renderer.Markdown
-if hasattr(_renderer, "markup_escape"):
-    markup_escape = _renderer.markup_escape
-if hasattr(_renderer, "Panel"):
-    Panel = _renderer.Panel
-if hasattr(_renderer, "Rule"):
-    Rule = _renderer.Rule
-if hasattr(_renderer, "Text"):
-    Text = _renderer.Text
-
 __all__ = [
-    "Console",
-    "Group",
-    "Live",
-    "Markdown",
-    "Panel",
-    "Rule",
+    "PlainTextRenderer",
     "RenderAuditLogger",
-    "TerminalRenderer",
-    "Text",
-    "_RICH_AVAILABLE",
+    "RendererBase",
     "_agent_style",
     "_apply_stream_diff",
     "_extract_text_from_renderable",
     "_highlight_tags",
-    "_is_interactive_terminal",
     "_normalize_stream_diff",
-    "markup_escape",
-    "os",
     "strip_ansi",
-    "sys",
 ]

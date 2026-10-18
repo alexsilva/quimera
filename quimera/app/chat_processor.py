@@ -55,6 +55,16 @@ class _WakeupQueue(queue.Queue):
         self._wakeup_event.set()
 
 
+def _chat_is_busy(app) -> bool:
+    """True enquanto há submissão pendente/em voo ou agente com trabalho ativo."""
+    runtime_state = getattr(app, "runtime_state", None)
+    outstanding = getattr(runtime_state, "get_chat_outstanding_count", None)
+    if callable(outstanding) and outstanding() > 0:
+        return True
+    has_active_work = getattr(getattr(app, "agent_client", None), "has_active_work", None)
+    return bool(callable(has_active_work) and has_active_work())
+
+
 def run_chat_loop(
     app,
     *,
@@ -158,6 +168,12 @@ def run_chat_loop(
         app.runtime_state.chat_queue = chat_queue
 
     _pending_async_slot = False
+    # Stdin em pipe é consumido em ordem: enquanto um prompt executa, a
+    # próxima linha pertence a quem perguntar (ask_user, aprovação), não a
+    # uma segunda submissão em paralelo. O fim do stdin encerra o loop.
+    sequential_input = bool(
+        getattr(getattr(app, "input_services", None), "sequential_input", False)
+    )
     try:
         while True:
             chat_lifecycle.drain_ui_events(_ui_event_queue)
@@ -209,11 +225,18 @@ def run_chat_loop(
                     continue
             app._turn_blocked_warning_shown = False
 
+            if sequential_input and threaded_chat and _chat_is_busy(app):
+                _ui_wakeup.wait(timeout=0.01)
+                _ui_wakeup.clear()
+                continue
+
             try:
                 user = app.read_user_input(app._format_user_prompt(), timeout=0)
                 if user is not None:
                     swallow_threaded_input_interrupt = False
                     ctrl_c_cancelled = False
+            except EOFError:
+                break
             except KeyboardInterrupt:
                 if threaded_chat and swallow_threaded_input_interrupt:
                     swallow_threaded_input_interrupt = False
@@ -229,7 +252,7 @@ def run_chat_loop(
                         continue
                 raise
             if user is None:
-                if not sys.stdin.isatty():
+                if not sequential_input and not sys.stdin.isatty():
                     break
                 continue
 

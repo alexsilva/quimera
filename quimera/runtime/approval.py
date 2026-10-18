@@ -101,7 +101,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
             input_fn: Função de input (fallback: builtins.input).
                       Se None, usa input() dinamicamente para
                       compatibilidade com @patch('builtins.input').
-            renderer: TerminalRenderer opcional para exibir prompts.
+            renderer: renderer opcional (contrato RendererBase) para exibir prompts.
             suspend_fn: Callback chamado antes de input() bloqueante
                         para suspender estado não-bloqueante do app.
             resume_fn: Callback chamado após input() bloqueante

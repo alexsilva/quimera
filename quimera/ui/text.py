@@ -29,6 +29,27 @@ def strip_ansi(text: str) -> str:
     return text
 
 
+def _coerce_agent_name(agent: Any) -> str:
+    """Normaliza identificador de agente para uso seguro na UI."""
+    if isinstance(agent, str):
+        candidate = strip_ansi(agent).strip()
+    elif agent is None:
+        candidate = ""
+    else:
+        candidate = strip_ansi(str(agent)).strip()
+    return candidate or "unknown"
+
+
+def _agent_style(agent: Any, get_profile_style=None) -> tuple[str, str]:
+    """Retorna (cor, rótulo) do agente; sem perfil, branco e nome capitalizado."""
+    agent_name = _coerce_agent_name(agent)
+    if get_profile_style:
+        result = get_profile_style(agent_name.lower())
+        if result:
+            return result
+    return ("white", f"🤖  {agent_name.capitalize()}")
+
+
 def _normalize_completed_content(text: str) -> str:
     normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
     return "\n".join(line.rstrip() for line in normalized.split("\n")).strip()

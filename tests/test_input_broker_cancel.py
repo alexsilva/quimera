@@ -9,6 +9,7 @@ negados automaticamente sem exibir prompt.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import threading
 import time
 from unittest.mock import MagicMock
@@ -147,3 +148,244 @@ class TestConsoleApprovalCancelledRun:
         result = manager.approve(tool_name="run_shell", summary="pwd")
         assert result is True
         assert legacy.calls == [("run_shell", "pwd", "aprovação")]
+
+
+def test_interactive_window_does_not_write_escape_codes(capsys):
+    """O renderer é dono do terminal; em pipe nada pode vazar ANSI para stdout."""
+    broker = InputBroker(renderer=None, input_gate=_InactiveGate())
+    with broker._with_interactive_terminal_window(lambda: nullcontext()):
+        pass
+    assert capsys.readouterr().out == ""
+
+
+def _sequential_setup(stdin_text: str):
+    import io
+
+    from quimera.app.simple_input_gate import SimpleInputGate
+    from quimera.ui import PlainTextRenderer
+
+    out = io.StringIO()
+    gate = SimpleInputGate(renderer=PlainTextRenderer(stream=out), stdin=io.StringIO(stdin_text))
+    broker = InputBroker(renderer=gate._renderer, input_gate=gate)
+    return broker, gate, out
+
+
+def _wait_until(predicate, timeout: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_background_ask_user_owns_the_next_stdin_line_in_pipe_mode():
+    """Pedido de produtor em background com o chat ocioso: a linha é do ask_user."""
+    broker, gate, out = _sequential_setup("2\nchat\n")
+    result = {}
+
+    worker = threading.Thread(
+        target=lambda: result.update(
+            ask=broker.request_ask_user("Qual?", ["Python", "Rust"], source="tarefa", timeout=2)
+        )
+    )
+    worker.start()
+    # A reserva precede a fila: assim que o pedido existe, o chat já não lê.
+    assert _wait_until(lambda: gate._direct_waiters > 0)
+    chat_line = gate.read_chat_line(timeout=1, prompt="Alex: ")
+    worker.join(timeout=5)
+
+    assert result["ask"] == (1, "Rust")
+    assert chat_line == "chat"
+    assert "Selecione (1-2): 2" in out.getvalue()
+    assert gate._direct_waiters == 0
+
+
+def test_background_approval_owns_the_next_stdin_line_in_pipe_mode():
+    broker, gate, out = _sequential_setup("y\nchat\n")
+    result = {}
+
+    worker = threading.Thread(
+        target=lambda: result.update(ok=broker.request_approval("run_shell", "rm -rf /tmp/x", timeout=2))
+    )
+    worker.start()
+    assert _wait_until(lambda: gate._direct_waiters > 0)
+    chat_line = gate.read_chat_line(timeout=1, prompt="Alex: ")
+    worker.join(timeout=5)
+
+    assert result["ok"] is True
+    assert chat_line == "chat"
+    assert "Executar? [y/N/a=todas]: y" in out.getvalue()
+    assert gate._direct_waiters == 0
+
+
+def test_timed_out_request_releases_the_stdin_reservation():
+    broker, gate, _out = _sequential_setup("")
+    # stdin vazio: o pedido expira e não pode deixar o chat preso na reserva.
+    assert broker.request_ask_user("Qual?", ["Python", "Rust"], timeout=0.3) == (0, "Python")
+    assert _wait_until(lambda: gate._direct_waiters == 0)
+
+
+class _LiveStdin:
+    """stdin de pipe vivo: só entrega linhas quando o teste as escreve."""
+
+    def __init__(self) -> None:
+        import queue
+
+        self._lines: "queue.Queue[str]" = queue.Queue()
+
+    def isatty(self) -> bool:
+        return False
+
+    def readline(self) -> str:
+        return self._lines.get()
+
+    def write_line(self, text: str) -> None:
+        self._lines.put(text + "\n")
+
+    def close(self) -> None:
+        self._lines.put("")
+
+
+def _live_setup():
+    import io
+
+    from quimera.app.simple_input_gate import SimpleInputGate
+    from quimera.ui import PlainTextRenderer
+
+    out = io.StringIO()
+    stdin = _LiveStdin()
+    gate = SimpleInputGate(renderer=PlainTextRenderer(stream=out), stdin=stdin)
+    broker = InputBroker(renderer=gate._renderer, input_gate=gate)
+    return broker, gate, stdin, out
+
+
+def test_expired_request_does_not_consume_a_later_line():
+    """Pipe aberto sem dados: o pedido expira e a linha que chega depois é do chat."""
+    broker, gate, stdin, out = _live_setup()
+    try:
+        started = time.monotonic()
+        assert broker.request_ask_user("Qual?", ["Python", "Rust"], timeout=0.3) == (0, "Python")
+        assert time.monotonic() - started < 1.5
+        assert _wait_until(lambda: gate._direct_waiters == 0)
+
+        stdin.write_line("2")
+        assert gate.read_chat_line(timeout=2, prompt="Alex: ") == "2"
+        assert "Selecione (1-2): 2" not in out.getvalue()
+        assert out.getvalue().endswith("Alex: 2\n")
+    finally:
+        stdin.close()
+
+
+def test_answer_arriving_at_the_deadline_is_not_lost():
+    """Se a leitura já tomou a linha quando o produtor expira, a resposta vale."""
+    broker, gate, stdin, out = _live_setup()
+    try:
+        results = []
+        worker = threading.Thread(
+            target=lambda: results.append(
+                broker.request_ask_user("Qual?", ["Python", "Rust"], timeout=0.4)
+            )
+        )
+        worker.start()
+        assert _wait_until(lambda: "Qual?" in out.getvalue())
+        time.sleep(0.3)
+        stdin.write_line("2")
+        worker.join(timeout=5)
+        # Ou a resposta chegou a tempo (Rust) ou expirou antes (Python): nunca
+        # as duas coisas, e a linha nunca sobra para o chat se foi consumida.
+        assert results in ([(1, "Rust")], [(0, "Python")])
+        if results == [(0, "Python")]:
+            assert gate.read_chat_line(timeout=2, prompt="Alex: ") == "2"
+        else:
+            assert gate.read_chat_line(timeout=0.2, prompt="Alex: ") is None
+        assert gate._direct_waiters == 0
+    finally:
+        stdin.close()
+
+
+def test_concurrent_resolution_releases_the_reservation_exactly_once():
+    """Produtor (timeout) e consumidor (resposta) concluindo juntos: uma só liberação."""
+    import io
+
+    from quimera.app.simple_input_gate import SimpleInputGate
+
+    gate = SimpleInputGate(stdin=io.StringIO(""))
+    for _ in range(100):
+        req = _InputRequest(
+            kind="ask_user", source="t", question="q", options=["a", "b"], timeout=1, default=(0, "a")
+        )
+        req.reservation = gate.reserve_direct_input()
+        barrier = threading.Barrier(2)
+        outcomes = []
+
+        def resolve(value):
+            barrier.wait()
+            outcomes.append(req.set_result(value))
+
+        threads = [threading.Thread(target=resolve, args=(value,)) for value in ((0, "a"), (1, "b"))]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert sorted(outcomes) == [False, True]
+        assert gate._direct_waiters == 0
+        assert req.wait() in ((0, "a"), (1, "b"))
+
+
+def test_sequential_gate_keeps_requests_in_fifo_order_and_disables_manual_pump():
+    """Dois pedidos: cada um recebe a sua linha, na ordem; o pump manual não interfere."""
+    broker, gate, out = _sequential_setup("2\n1\n")
+    results = {}
+
+    def ask(name, options):
+        results[name] = broker.request_ask_user(name, options, timeout=3)
+
+    assert broker.process_pending_once() is False  # gate sequencial: sem pump manual
+    first = threading.Thread(target=ask, args=("Pergunta A", ["A1", "A2"]))
+    first.start()
+    assert _wait_until(lambda: "Pergunta A" in out.getvalue())
+    second = threading.Thread(target=ask, args=("Pergunta B", ["B1", "B2"]))
+    second.start()
+    assert broker.process_pending_once() is False
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert results == {"Pergunta A": (1, "A2"), "Pergunta B": (0, "B1")}
+    assert gate._direct_waiters == 0
+
+
+def test_claimed_line_wins_even_if_the_echo_blocks_past_the_grace():
+    """Linha reclamada antes do eco: o pedido não expira, por mais que a saída trave."""
+    import io
+
+    from quimera.app.simple_input_gate import SimpleInputGate
+    from quimera.ui import PlainTextRenderer
+
+    class _BlockingStream(io.StringIO):
+        def __init__(self):
+            super().__init__()
+            self.gate_open = threading.Event()
+
+        def write(self, text):
+            if "Selecione" in text and not self.gate_open.is_set():
+                self.gate_open.wait(timeout=10)
+            return super().write(text)
+
+    stream = _BlockingStream()
+    gate = SimpleInputGate(renderer=PlainTextRenderer(stream=stream), stdin=io.StringIO("2\nchat\n"))
+    broker = InputBroker(renderer=gate._renderer, input_gate=gate)
+    results = []
+    worker = threading.Thread(
+        target=lambda: results.append(broker.request_ask_user("Qual?", ["Python", "Rust"], timeout=0.15))
+    )
+    worker.start()
+    # O eco "Selecione (1-2): 2" fica travado bem além do timeout e da graça.
+    time.sleep(_InputRequest._EXPIRY_GRACE_SECONDS + 0.5)
+    assert worker.is_alive(), "com linha reclamada o produtor espera a resposta real"
+    stream.gate_open.set()
+    worker.join(timeout=5)
+
+    assert results == [(1, "Rust")]
+    assert gate.read_chat_line(timeout=1, prompt="Alex: ") == "chat"
+    assert gate._direct_waiters == 0

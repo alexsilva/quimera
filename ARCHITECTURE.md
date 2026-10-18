@@ -140,16 +140,13 @@ quimera/
 │   └── spy_utils.py                  # Utilitários de espionagem/observação de profiles
 │
 ├── ui/                               # Camada de apresentação
-│   ├── renderer.py                   # TerminalRenderer (Rich + Rich.Live, ~1200 linhas)
-│   ├── audit.py                       # Logger de auditoria de eventos de renderização
-│   ├── compositor.py                  # Compositor de layouts de UI
-│   ├── overlay.py                    # Gerenciamento de sobreposições na tela
+│   ├── base.py                       # RendererBase: contrato único dos renderers
+│   ├── plain.py                      # PlainTextRenderer: texto puro em stdout (pipe, --interactive-test)
+│   ├── audit.py                       # Logger de auditoria de eventos de renderização (--debug)
+│   ├── messages.py                   # Mensagens/formatters pt-BR compartilhados
+│   ├── boot_status.py                # Bloco de status de boot
 │   ├── text.py                        # Utilitários de texto para UI
-│   ├── events.py                     # Eventos da camada de UI
-│   ├── window_manager.py             # Gerenciamento de janelas
-│   ├── windows.py                    # Definição de janelas da UI
-│   ├── agent_window_controller.py    # Controle de janelas de agentes
-│   └── textual/                      # Interface Textual (TUI moderna)
+│   └── textual/                      # Interface Textual (TUI)
 │       ├── app.py                    # Aplicação Textual principal
 │       ├── bridge.py                 # Ponte entre o loop legacy e Textual
 │       ├── input_gate.py             # InputGate baseado em Textual
@@ -219,7 +216,8 @@ quimera/
 - **`core.py`**: Orquestrador central. Loop principal, estado da aplicação, coordenação de componentes, despacho para agentes e tasks. Reduzido de ~2300 para ~1611 linhas após extração de módulos especializados (ver abaixo).
 - **`runtime_state.py`** (`AppRuntimeState`): Container de estado de runtime: status de input não-bloqueante, contadores de chat, semáforo de slots, executor de threads. Substitui o `_BACKWARD_MAP` legado que redirecionava atributos privados.
 - **`session_bootstrap.py`**: Inicialização da sessão: resolução de paths (logs, bugs, debug), análise de bugs de sessão anterior. Extraído de `core.py` para isolar lógica de startup.
-- **`tty_control.py`**: Controle de TTY: suspend e resume do renderer durante operações bloqueantes (editor, aprovação interativa). Coordena `TerminalRenderer` + `InputGate`.
+- **`tty_control.py`**: Controle de TTY: suspend e resume do renderer durante operações bloqueantes (editor, aprovação interativa). Coordena renderer + `InputGate`.
+- **`simple_input_gate.py`** (`SimpleInputGate`): Gate de input sem TUI. Em TTY (`--driver-repl`) usa `input()`; com stdin em pipe é o único leitor do stdin: uma thread lê as linhas em ordem e cada linha vai para quem perguntou (leitura direta de `ask_user`/aprovação tem prioridade sobre o chat, que só lê quando não há prompt em execução).
 - **`toolbar.py`** (`ToolbarManager`): Geração e atualização da toolbar dinâmica. Renderiza estado atual (agentes, turno, tema, métricas).
 - **`bug_services.py`** (`BugServices`): Detecção, correlação e reporte de bugs de runtime (burst de falhas, timeouts). Extraído de `AppBugServices` via rename + flatten.
 - **`command_router.py`**: Roteamento de comandos slash internos. Mantém o mapeamento de `/cmd` → handler sem exposição direta ao `core.py`.
@@ -261,8 +259,10 @@ Executor de tools e agentes em ambiente potencialmente sandboxed.
 
 ### 3.5 Camada de Apresentação (`ui/`)
 
-- **`renderer.py`** (`TerminalRenderer`): Renderizador terminal usando `Rich` e `Rich.Live`. Gerencia buffer de streaming, temas, scrollback e atualizações em tempo real. Deve ser acessado **apenas** da main thread.
-- **`audit.py`**: Registra eventos de renderização para depuração.
+- **`base.py`** (`RendererBase`): Contrato único dos renderers, com defaults no-op/fallback textual para tudo que a camada de aplicação chama (`show_*`, janelas interativas, `reset_visual_state`, temas).
+- **`textual/renderer.py`** (`TextualRenderer`): Renderer da TUI. Converte cada chamada do contrato em `TextualUiEvent`; a `TextualUiBridge` entrega os eventos ao app Textual, dono do terminal. Thread-safe por construção: só enfileira.
+- **`plain.py`** (`PlainTextRenderer`): Texto puro em stdout, uma linha por mensagem, sem cores nem transitórios; thread-safe (lock por escrita). Usado com stdin em pipe, no `--interactive-test` e como padrão de `QuimeraApp` sem `renderer_override`.
+- **`audit.py`**: Registra eventos estruturados de renderização (`--debug`) em `data/logs/render/render-<sessão>.jsonl`.
 
 ### 3.6 Domínio (`domain/`)
 
@@ -381,7 +381,7 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 
 - Executa o loop principal (`core.py:run()`).
 - Lê input do usuário via `InputGate` (`TextualInputGate` na TUI, `SimpleInputGate` em modo pipe).
-- Drena a `ui_event_queue` e atualiza o `TerminalRenderer` — acesso exclusivo.
+- Drena a `ui_event_queue` e encaminha ao renderer (`TextualRenderer` enfileira para a thread do Textual; `PlainTextRenderer` escreve sob lock).
 - Gerencia o `TurnManager` (alternância humano ↔ agente).
 - Processa comandos de sistema via `AppSystemLayer`.
 
@@ -418,7 +418,7 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 
 ### 4.4 Problemas Conhecidos de Threading
 
-- `TerminalRenderer` não é thread-safe. Apesar da `ui_event_queue`, alguns caminhos em `display_service.py` e `agent_gateway.py` ainda chamam métodos do renderer diretamente de worker threads.
+- Alguns caminhos em `display_service.py` e `agent_gateway.py` chamam métodos do renderer diretamente de worker threads, fora da `ui_event_queue`. Os dois renderers toleram isso (o Textual só enfileira; o de texto escreve sob lock), mas a ordem relativa aos eventos drenados pela main thread não é garantida.
 - O `TextualRenderer` não gerencia overlay ou cursor positioning — eventos são emitidos para o bridge Textual que gerencia o ciclo de renderização.
 - A toolbar do Textual (`#toolbar` Static) só é atualizada via eventos `prompt` do bridge.
 
@@ -529,7 +529,7 @@ Imports diretos de `profiles/` que existiam em módulos da camada de runtime/san
 | `runtime/task_planning.py` | importava `ExecutionProfile` de `profiles.base` | **Resolvido** (8a) |
 | `runtime/drivers/repl.py` | chamava `_profile_registry.all_profiles()` diretamente | **Resolvido** (8b) |
 | `app/core.py` | `delegate_for_parallel` exposto via wrapper desnecessário | **Resolvido** (8e) |
-| `ui/renderer.py` | consultava `quimera.profiles.get(...)` para metadados | **Resolvido** (8d) |
+| `ui/renderer.py` (removido em 2026-10) | consultava `quimera.profiles.get(...)` para metadados | **Resolvido** (8d) |
 
 ### 7.4 Lookups de Profile Distribuídos (Resolvidos)
 
@@ -540,7 +540,6 @@ Os lookups dispersos de `quimera.profiles.get(...)` em `app/dispatch.py`, `app/t
 - **Adaptadores legados em `system_layer.py`**: `_LegacyProfileResolver` e `_LegacyAgentPoolAdapter` indicam migração de contrato incompleta.
 - **Cobertura de testes**: 2740+ testes passando. Lacunas em testes de integração de tasks (criação → execução → revisão), concorrência e cenários de falha.
 - **Logging**: feito via `print` estruturado; sem níveis de gravidade padronizados ou saída JSON.
-- **`renderer.py`** (~1200 linhas): beneficiaria divisão em módulos menores.
 
 ---
 

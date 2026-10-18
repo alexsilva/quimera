@@ -105,15 +105,13 @@ class BugServices:
         if not session_id:
             return
         events_path = self.session_paths.render_log_path_for(session_id)
-        ansi_path = self.session_paths.render_ansi_path_for(session_id)
         metrics_path = self.session_paths.metrics_path_for(session_id)
         try:
             all_reports: list[BugReport] = []
-            if self.bug_detector is not None and (events_path is not None or ansi_path is not None):
+            if self.bug_detector is not None and events_path is not None:
                 reports = self.bug_detector.analyze_session(
                     session_id=session_id,
                     events_path=events_path,
-                    ansi_path=ansi_path,
                 )
                 for report in reports:
                     self.bug_store.file(report)
@@ -224,12 +222,10 @@ class BugServices:
                         self.show_warning_message("[bugs] detector de render não disponível.")
                         return True
                     events_path = self.session_paths.render_log_path_for(session_id)
-                    ansi_path = self.session_paths.render_ansi_path_for(session_id)
                     reports.extend(
                         self.bug_detector.analyze_session(
                             session_id=session_id,
                             events_path=events_path,
-                            ansi_path=ansi_path,
                         )
                     )
                 if mode in {"agents", "all"}:

@@ -108,7 +108,7 @@ Importante: esse contexto **não deve ser montado pelo modelo ou cliente MCP**. 
 
 ### Observação sobre saída processada por tools
 
-As respostas das ferramentas são processadas pelo `ToolExecutor`, que aplica estilo e formatação através do `TerminalRenderer`. Recentemente, mudanças na renderização (renderer.py:401, 1611-1613) afetaram como o texto de tools é processado, incluindo a aplicação de estilos `dim`/`muted`. Problemas no pipeline de estilo podem afetar a visibilidade de output de ferramentas críticas, especialmente o resumo final de turn.
+As respostas das ferramentas passam pelo `ToolExecutor` e chegam ao renderer da sessão pelo contrato de `RendererBase` (`show_feed`, `show_tool_run_state`, `show_turn_summary`): na TUI viram itens do feed com o estilo do tema; em modo pipe viram linhas de texto puro.
 
 ## O que é `run_id`
 

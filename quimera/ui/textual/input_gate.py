@@ -373,8 +373,14 @@ class TextualInputGate:
         """Lê uma linha simples pelo mesmo input Textual."""
         return self(prompt)
 
-    def read_input_in_terminal(self, prompt: str, timeout: float = 300.0) -> str | None:
-        """Compatibilidade: lê pelo input fixo do Textual, sem stdin direto."""
+    def read_input_in_terminal(
+        self, prompt: str, timeout: float = 300.0, ticket=None
+    ) -> str | None:
+        """Lê pelo input fixo do Textual, sem stdin direto.
+
+        ``ticket`` existe pelo contrato comum com o gate sequencial; aqui a
+        leitura tem timeout próprio alinhado ao deadline do pedido.
+        """
         return self._read_with_textual_prompt(prompt, timeout=timeout)
 
     def read_selection_in_terminal(
@@ -383,6 +389,7 @@ class TextualInputGate:
         options: list[str],
         timeout: float = 300.0,
         owner: str | None = None,
+        ticket=None,
     ) -> tuple[int, str] | None:
         """Lê seleção por número/texto no input Textual."""
         raw = self._read_with_textual_prompt(
@@ -413,6 +420,7 @@ class TextualInputGate:
         prompt: str,
         timeout: float = 300.0,
         owner: str | None = None,
+        ticket=None,
     ) -> str | None:
         """Lê aprovação pelo input Textual."""
         return self._read_with_textual_prompt(

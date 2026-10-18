@@ -105,7 +105,7 @@ class TextualRenderer(RendererBase):
         return self._theme.name
 
     def cycle_theme(self) -> str:
-        """Avança para o próximo tema compartilhado com o renderer legado."""
+        """Avança para o próximo tema de `themes.py` e notifica a UI."""
         all_names = themes.names()
         try:
             idx = all_names.index(self._theme.name)
@@ -294,15 +294,14 @@ class TextualRenderer(RendererBase):
         )
 
     def set_prompt_integration(self, is_active_fn, run_above_fn) -> None:
-        """Compatibilidade com TerminalRenderer."""
+        """Parte do contrato de RendererBase."""
         return None
 
     def set_audit_logger(self, audit_logger) -> None:
         """Liga o audit de render (``--debug``) a este renderer.
 
-        O ``TerminalRenderer`` recebe o logger no construtor; aqui ele chega
-        depois, porque a TUI cria o renderer antes de o app saber se está em
-        debug. Sem esta ligação ``log_debug_event`` era no-op e o jsonl da
+        O logger chega depois da construção, porque a TUI cria o renderer
+        antes de o app saber se está em debug. Sem esta ligação ``log_debug_event`` era no-op e o jsonl da
         sessão ficava vazio no modo Textual.
         """
         self._audit_logger = audit_logger
@@ -443,7 +442,7 @@ class TextualRenderer(RendererBase):
     def show_boot_message(self, message: str) -> None:
         """Exibe uma linha compacta pertencente apenas ao cabeçalho de boot.
 
-        Quebras de linha nas bordas saem, como no renderer clássico: um
+        Quebras de linha nas bordas saem: um
         ``\\n`` final (ex.: na linha do audit de render) viraria uma linha
         vazia entre o cabeçalho e a régua que o fecha.
         """
@@ -693,7 +692,7 @@ class TextualRenderer(RendererBase):
         self.show_message(agent, final_content, render_mode=render_mode)
 
     def commit_agent_stream(self, agent, render_mode: str = "auto") -> bool:
-        """Compatibilidade com TerminalRenderer."""
+        """Parte do contrato de RendererBase."""
         agent_name = str(agent)
         payload = self._agent_event_payload(agent_name)
         agent_key = self._stream_key_from_payload(agent_name, payload)
@@ -776,7 +775,7 @@ class TextualRenderer(RendererBase):
         delegation_id: str = "",
         transport: str = "",
     ) -> None:
-        """Compatibilidade com TerminalRenderer."""
+        """Parte do contrato de RendererBase."""
         agent_name = str(agent)
         extra = {
             key: value

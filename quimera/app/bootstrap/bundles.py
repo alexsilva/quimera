@@ -37,7 +37,6 @@ class PlatformBundle:
     bug_correlator: Any
     session_id: str
     render_log_path: Path
-    render_ansi_path: Path
     metrics_file: Path | None
     app_log_path: Path | None
 

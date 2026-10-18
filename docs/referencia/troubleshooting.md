@@ -127,37 +127,8 @@ para liberar todas as próximas mutações da sessão. Revise o risco antes de u
 
 ## UI ou prompt desorganizado
 
-Rode com `--debug` e colete logs em `data/logs/render/`. Testes de baseline visual existem em `tests/fixtures/ui_baseline/` e ajudam a comparar regressões.
+Rode com `--debug`: o audit de render fica em `data/logs/render/render-<sessão>.jsonl` (eventos `tui_resize`, `tui_clear_chat`, `tui_scroll_clamped`, `tui_screenshot` na TUI; `print` por linha em modo pipe) e os agentes ganham a tool `tui_screenshot`, que devolve a tela atual em texto com a geometria do feed. Use a captura antes de teorizar sobre layout: é o que o humano vê.
 
-## Estilo dim/muted ausente do output de ferramentas
+## Saída de ferramentas sem o estilo esperado
 
-**Sintomas:** Mensagens do assistente e output de ferramentas não aparecem com opacidade reduzida (`dim`) como esperado.
-
-**Causa provável:** Mudanças recentes em `renderer.py` (401, 1611-1613) que quebraram o pipeline de estilo.
-
-**Passos de diagnóstico:**
-
-1. Execute o app no modo de teste:
-   ```bash
-   python quimera.py --test --agents fake-openai --visibility full 2>&1 | rg -i "TOOLS:"
-   ```
-
-2. Procure por estilo `dim` ANSI (`\033[2m`) no output. Se estiver ausente:
-   - **Problema 1:** Terminal pode não suportar SGR 2
-   - **Problema 2:** Estilo pode estar perdido entre `show_plain` e o writer
-   - **Problema 3:** `Live`/`TransientOverlay` pode estar sobrepondo com seu próprio estilo
-
-3. Para inspecionar o pipeline de estilo, adicione logging debug no `TerminalRenderer`:
-
-   ```python
-   # Em quimera/ui/renderer.py:
-   def debug_show_plain(self, message, style=None, **kwargs):
-       logger.debug(f"show_plain: message={repr(message[:50])}..., style={style}")
-       super().show_plain(message, style, **kwargs)
-   ```
-
-4. Arquivos relevantes:
-   - `quimera/ui/renderer.py:401` - `build_replace` aplica `\033[2m...\033[0m`
-   - `quimera/ui/renderer.py:1611-1613` - `show_turn_summary` passa `muted=True`
-
-**Solução conhecida:** Se o terminal suportar SGR 2, o problema está no pipeline de estilo entre `show_plain` e o writer. Fornecer evidência concreta para localização do bug.
+Na TUI o estilo vem dos renderables Textual (`ui/textual/renderables.py`) e do tema ativo (`/theme`). Em modo pipe não há estilo: o `PlainTextRenderer` escreve texto puro, sem cores nem `dim`, de propósito, para `tee`, logs e testes lerem a saída na ordem. Se um atributo some só na TUI, compare o renderable com a captura de `tui_screenshot` do mesmo turno.

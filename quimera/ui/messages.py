@@ -23,7 +23,7 @@ FAILOVER_DEFAULT_MESSAGE = "não respondeu"
 def format_retry_message(reason: str, attempt: int, limit: int, detail: str = "") -> str:
     """Formata frase pt-BR de nova tentativa para renderers sem canal estruturado.
 
-    Usado só como fallback (ex.: TerminalRenderer legado); renderers ricos
+    Usado só como fallback (ex.: PlainTextRenderer); renderers ricos
     recebem os campos separados via ``notify_agent_retry``.
     """
     label = RETRY_REASON_LABELS.get(str(reason), str(reason))
@@ -41,6 +41,31 @@ def format_failover_message(
 ) -> str:
     """Formata frase pt-BR de failover para renderers sem canal estruturado."""
     return f"{agent} {message}, continuando com {target}"
+
+
+def format_error_message(
+    message: str,
+    *,
+    agent: str | None = None,
+    command_name: str | None = None,
+    error_kind: str | None = None,
+    return_code: int | None = None,
+) -> str:
+    """Texto pt-BR de um erro estruturado de agente para renderers sem canal próprio.
+
+    ``AgentClient`` envia ``error_kind`` (``agent_exit``, ``agent_comm``,
+    ``agent_invalid_output``) com a mensagem possivelmente vazia; sem kind
+    conhecido a mensagem volta como veio.
+    """
+    subject = str(agent or command_name or "").strip() or "unknown"
+    text = str(message or "")
+    if error_kind == "agent_exit" and return_code is not None:
+        return f"[erro] agente {subject} retornou código {return_code}"
+    if error_kind == "agent_comm":
+        return f"[erro] falha ao comunicar com {subject}: {text}"
+    if error_kind == "agent_invalid_output":
+        return f"[erro] agente {subject} não retornou saída válida"
+    return text
 
 
 def format_duration(duration_ms: int | None) -> str:

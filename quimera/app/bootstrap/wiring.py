@@ -77,7 +77,7 @@ from ...tasks.executor import create_executor
 from ...tasks.services import AppTaskServices
 from ...tasks.repository import TaskRepository
 from ...runtime.tools.tui import TuiScreenshotProvider
-from ...ui import RenderAuditLogger, TerminalRenderer
+from ...ui import PlainTextRenderer, RenderAuditLogger
 
 
 def normalize_agent_name(agent):
@@ -244,7 +244,6 @@ class AppAssembler:
         bug_correlator = BugCorrelator(window_seconds=60.0)
         session_id = storage.session_id
         render_log_path = session_paths.render_log_path_for(session_id)
-        render_ansi_path = session_paths.render_ansi_path_for(session_id)
         metrics_file = session_paths.metrics_path_for(session_id) if opts.debug else None
         app_log_path = session_paths.app_log_path_for(session_id)
         if app_log_path:
@@ -273,7 +272,6 @@ class AppAssembler:
             bug_correlator=bug_correlator,
             session_id=session_id,
             render_log_path=render_log_path,
-            render_ansi_path=render_ansi_path,
             metrics_file=metrics_file,
             app_log_path=app_log_path,
         )
@@ -329,23 +327,19 @@ class AppAssembler:
             density = getattr(plat.config, "density", None)
             if callable(set_density) and density:
                 set_density(density)
-            # O audit de render nascia aqui e era entregue só ao renderer
-            # clássico: no Textual o jsonl da sessão ficava em 0 bytes. O
-            # Textual escreve no terminal pelo driver próprio, então só os
-            # eventos estruturados existem nesse modo (sem stream ANSI).
+            # O audit de render (``--debug``) só tem eventos estruturados: o
+            # Textual escreve no terminal pelo driver próprio e o renderer de
+            # texto puro escreve direto em stdout, sem stream capturável.
             set_audit_logger = getattr(renderer, "set_audit_logger", None)
             if opts.debug and callable(set_audit_logger):
                 set_audit_logger(RenderAuditLogger(plat.render_log_path))
         else:
-            renderer = TerminalRenderer(
+            # Sem renderer explícito (embedding, testes) vale o mesmo renderer
+            # do modo pipe: texto puro em stdout.
+            renderer = PlainTextRenderer(
                 theme=plat.active_theme,
                 get_profile_style=app._resolve_profile_style,
-                density=plat.config.density,
-                audit_logger=(
-                    RenderAuditLogger(plat.render_log_path, plat.render_ansi_path)
-                    if opts.debug
-                    else None
-                ),
+                audit_logger=RenderAuditLogger(plat.render_log_path) if opts.debug else None,
             )
         agent_run_sink = AgentRunController(renderer)
         event_sink = EventSink()
@@ -636,13 +630,6 @@ class AppAssembler:
             "os_info": f"{platform_info.system()} {platform_info.release()}",
             "render_debug_active": opts.debug,
             "render_log_path": str(plat.render_log_path) if opts.debug else "",
-            # O stream ANSI só existe no renderer clássico; a TUI Textual
-            # oferece a tool tui_screenshot no lugar.
-            "render_ansi_path": (
-                str(plat.render_ansi_path)
-                if opts.debug and opts.renderer_override is None
-                else ""
-            ),
             "tui_screenshot_available": tui_screenshot_available,
             "render_screenshots_dir": (
                 str(plat.session_paths.render_screenshots_dir)

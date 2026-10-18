@@ -41,14 +41,10 @@ from .workspace import Workspace
 from .prompt_templates import PromptText
 from .version import __version__
 
-DriverRepl = None
+from .ui import PlainTextRenderer
+from .agents import AgentClient
 
-try:
-    from .ui import TerminalRenderer
-    from .agents import AgentClient
-except ImportError:
-    TerminalRenderer = None
-    AgentClient = None
+DriverRepl = None
 
 
 _REQUIRED_RUNTIME_DEPENDENCIES = {
@@ -144,9 +140,15 @@ def _is_tty() -> bool:
     return bool(callable(isatty_callable) and isatty_callable())
 
 
-def _run_app_ui(app, bridge: TextualUiBridge, isatty: bool) -> None:
-    """Executa a UI principal do Quimera."""
-    if not isatty:
+def _run_app_ui(app, bridge: TextualUiBridge | None) -> None:
+    """Executa a UI principal do Quimera.
+
+    Com TTY, a TUI Textual é dona do terminal e drena o renderer pela
+    ``bridge``. Sem TTY (stdin em pipe) não há app Textual para drenar nada:
+    o app roda o loop de chat direto, com o :class:`PlainTextRenderer`
+    escrevendo em stdout.
+    """
+    if bridge is None:
         app.run()
         return
     run_textual_quimera_app(app, bridge)
@@ -677,12 +679,18 @@ def main():
             MCPHttpSettingsStore.from_workspace(workspace).load(), **explicit_http
         )
 
-        isatty = _is_tty()
-        textual_bridge = TextualUiBridge()
-        input_gate_factory = (
-            textual_bridge.create_input_gate if isatty
-            else (lambda **kw: SimpleInputGate(**kw))
-        )
+        # Sem TTY o renderer Textual só enfileiraria eventos que ninguém
+        # drena (não há app Textual de pé): o modo pipe usa o renderer de
+        # texto puro e lê o prompt por input(). O --interactive-test é
+        # automação: mesmo renderer, sem TUI.
+        use_textual = _is_tty() and not args.interactive_test
+        textual_bridge = TextualUiBridge() if use_textual else None
+        if textual_bridge is not None:
+            renderer = textual_bridge.create_renderer()
+            input_gate_factory = textual_bridge.create_input_gate
+        else:
+            renderer = PlainTextRenderer()
+            input_gate_factory = SimpleInputGate
         app = QuimeraApp(cwd,
                          debug=args.debug,
                          history_window=args.history_window,
@@ -692,7 +700,7 @@ def main():
                          workspace=workspace,
                          visibility=visibility,
                          theme=args.theme,
-                         renderer_override=textual_bridge.create_renderer(),
+                         renderer_override=renderer,
                          input_gate_factory=input_gate_factory)
         connect_mcp_clients_in_background(
             mcp_client_runtime,
@@ -700,8 +708,6 @@ def main():
             workspace=workspace,
         )
         if args.interactive_test:
-            if TerminalRenderer is None or AgentClient is None:
-                raise RuntimeError("Modo interativo não disponível: dependências de UI não instaladas.")
             default_agent = agents[0] if args.agents is not None and agents else "claude"
             default_prompt = "Use uma ferramenta de shell para executar o comando `pwd` e me diga o diretório atual. Se a ferramenta pedir aprovação, mostre o prompt normalmente."
 
@@ -715,7 +721,6 @@ def main():
             else:
                 prompt = PromptText(default_prompt, strict=False)
 
-            renderer = TerminalRenderer()
             client = AgentClient(renderer, workspace=workspace)
             try:
                 result = client.call(agent_name, prompt)
@@ -749,6 +754,10 @@ def main():
             ),
         )
 
-        _run_app_ui(app, textual_bridge, isatty)
+        _run_app_ui(app, textual_bridge)
     finally:
         _stop_test_fake_openai_backend(fake_openai_backend)
+
+
+if __name__ == "__main__":
+    main()

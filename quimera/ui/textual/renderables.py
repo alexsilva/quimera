@@ -1049,7 +1049,7 @@ def _build_boot_status_renderable(payload):
 
 
 def _render_themed_agent_block(theme_name: str, label: str, style: str, body, *, streaming: bool = False):
-    """Renderiza bloco de agente na Textual usando os mesmos nomes de tema do renderer legado."""
+    """Renderiza bloco de agente na Textual pelos nomes de tema de `themes.py`."""
     name = themes.get(theme_name).name
     if name == "panel":
         title = f"[bold {style}]{label}[/bold {style}]"

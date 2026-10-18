@@ -13,7 +13,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, call, patch
 
 import quimera.app as app_module
-import quimera.cli as cli_module
 import quimera.profiles as profiles
 from quimera.agents import AgentClient
 from quimera.app import QuimeraApp
@@ -681,10 +680,6 @@ class ProtocolTests(unittest.TestCase):
     def setUp(self):
         importlib.reload(profiles)
 
-    @unittest.skipUnless(
-        hasattr(cli_module, "TerminalRenderer") and hasattr(cli_module, "AgentClient"),
-        "interactive-test CLI não está disponível nesta versão",
-    )
     def test_cli_runs_interactive_test_with_default_prompt(self):
         """Verifica que cli runs interactive test with default prompt."""
         class FakeRenderer(RendererBase):
@@ -714,7 +709,7 @@ class ProtocolTests(unittest.TestCase):
             def close(self):
                 pass
 
-        with patch("quimera.cli.TerminalRenderer", FakeRenderer), patch(
+        with patch("quimera.cli.PlainTextRenderer", FakeRenderer), patch(
                 "quimera.cli.AgentClient", FakeAgentClient
         ), patch("sys.argv", ["quimera", "--interactive-test"]):
             cli_main()
@@ -725,10 +720,6 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(FakeRenderer.instances[0].system_messages)
         self.assertEqual(FakeRenderer.instances[0].plain_messages, ["\n--- RESULTADO LIMPO ---\n", "saida limpa"])
 
-    @unittest.skipUnless(
-        hasattr(cli_module, "TerminalRenderer") and hasattr(cli_module, "AgentClient"),
-        "interactive-test CLI não está disponível nesta versão",
-    )
     def test_cli_runs_interactive_test_with_custom_prompt(self):
         """Verifica que cli runs interactive test with custom prompt."""
         calls = []
@@ -759,7 +750,7 @@ class ProtocolTests(unittest.TestCase):
                 pass
 
         with patch("quimera.cli.ConfigManager", DummyConfigManager), patch(
-                "quimera.cli.TerminalRenderer", FakeRenderer
+                "quimera.cli.PlainTextRenderer", FakeRenderer
         ), patch("quimera.cli.AgentClient", FakeAgentClient), patch(
             "sys.argv", ["quimera", "--interactive-test", "codex", "--test-prompt", "rode", "pwd"]
         ):
@@ -788,11 +779,20 @@ class ProtocolTests(unittest.TestCase):
 
         with patch("quimera.cli.QuimeraApp", FakeApp), patch(
             "quimera.cli.start_embedded_mcp"
-        ), patch("sys.argv", ["quimera", "--visibility", "full"]):
+        ), patch("quimera.cli._is_tty", return_value=False), patch(
+            "sys.argv", ["quimera", "--visibility", "full"]
+        ):
             cli_main()
 
         self.assertEqual(captured["visibility"], Visibility.FULL)
         self.assertTrue(captured["ran"])
+        # Sem TTY não há app Textual para drenar a bridge: o app recebe o
+        # renderer de texto puro e lê o prompt por input().
+        from quimera.app.simple_input_gate import SimpleInputGate
+        from quimera.ui import PlainTextRenderer
+
+        self.assertIsInstance(captured["renderer_override"], PlainTextRenderer)
+        self.assertIs(captured["input_gate_factory"], SimpleInputGate)
 
     def test_cli_rejects_legacy_spy_flag(self):
         """Verifica que cli rejects legacy spy flag."""

@@ -32,6 +32,9 @@ def read_user_input(
     flush_deferred_messages=lambda: None,
 ) -> str | None:
     """Lê entrada do usuário respeitando timeout e modo não-bloqueante."""
+    read_chat_line = getattr(input_fn, "read_chat_line", None)
+    if callable(read_chat_line) and getattr(input_fn, "sequential", False) is True:
+        return _read_sequential_input(renderer, read_chat_line, prompt, timeout)
     if timeout and timeout > 0:
         value = _tty.read_user_input_with_timeout(prompt, timeout, input_fn=input_fn)
         if value is None:
@@ -80,6 +83,22 @@ def read_user_input(
         set_prompt_visible(False)
         print()
         raise
+
+
+def _read_sequential_input(renderer: IRenderer, read_chat_line, prompt, timeout) -> str | None:
+    """Stdin em pipe: o gate é o único leitor; nada aqui toca ``sys.stdin``.
+
+    ``None`` significa "nenhuma linha ainda" (o chamador volta a perguntar);
+    o fim do stdin chega como ``EOFError`` do gate.
+    """
+    if timeout and timeout > 0:
+        value = read_chat_line(timeout=timeout, prompt=prompt)
+        if value is None:
+            renderer.show_system(f"*idle* ({timeout}s sem activity)")
+        return value
+    if timeout == 0:
+        return read_chat_line(timeout=0.01, prompt=prompt)
+    return read_chat_line(timeout=None, prompt=prompt)
 
 
 def read_user_input_with_timeout(prompt: str, timeout: int, input_fn=input):
@@ -178,6 +197,15 @@ class AppInputServices:
 
     def set_nonblocking_tty(self, enabled: bool) -> None:
         self._nonblocking_tty = enabled
+
+    @property
+    def sequential_input(self) -> bool:
+        """True quando o gate consome stdin em ordem (pipe, sem TUI)."""
+        try:
+            gate = self.input_resolver()
+        except Exception:
+            return False
+        return bool(getattr(gate, "sequential", False))
 
     def set_wakeup_event(self, event: threading.Event | None) -> None:
         self._wakeup_event = event

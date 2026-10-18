@@ -193,10 +193,6 @@ class TestWorkspace(unittest.TestCase):
                     tmp.render_log_path_for("sessao-2026-05-14-225819"),
                     tmp.render_logs_dir / "render-sessao-2026-05-14-225819.jsonl",
                 )
-                self.assertEqual(
-                    tmp.render_ansi_path_for("sessao-2026-05-14-225819"),
-                    tmp.render_logs_dir / "render-sessao-2026-05-14-225819.ansi",
-                )
                 self.assertTrue(tmp.render_logs_dir.exists())
                 self.assertTrue(tmp.clipboard_dir.exists())
                 self.assertTrue(tmp.artifacts_dir.exists())

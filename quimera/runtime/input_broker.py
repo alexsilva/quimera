@@ -41,12 +41,71 @@ class _InputRequest:
     default: Any
     on_approve_all: Callable[[], None] | None = None
     cancel_event: Any = None
+    #: Reserva de stdin no gate sequencial (pipe); None sem reserva.
+    reservation: Any = None
     _result: list[Any] = field(default_factory=lambda: [_UNSET], init=False)
     _done: threading.Event = field(default_factory=threading.Event, init=False)
+    _expired: threading.Event = field(default_factory=threading.Event, init=False)
+    _claimed: bool = field(default=False, init=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
-    def set_result(self, value: Any) -> None:
-        self._result[0] = value
-        self._done.set()
+    #: Após expirar sem linha reclamada, quanto esperar a leitura em curso
+    #: abortar antes de resolver pelo default (a leitura direta do gate
+    #: sequencial aborta na hora; outros gates têm timeout próprio).
+    _EXPIRY_GRACE_SECONDS = 1.0
+    #: Com linha já reclamada a resposta é dela: quanto esperar o consumidor
+    #: concluir (eco, parse) antes de desistir e resolver pelo default.
+    _CLAIMED_WAIT_SECONDS = 30.0
+
+    def set_result(self, value: Any) -> bool:
+        """Conclui o pedido; só a primeira conclusão vale. Libera a reserva."""
+        with self._lock:
+            if self._done.is_set():
+                return False
+            self._result[0] = value
+            self._done.set()
+        self._release_reservation()
+        return True
+
+    def _release_reservation(self) -> None:
+        reservation = self.reservation
+        if reservation is None:
+            return
+        self.reservation = None
+        try:
+            reservation.release()
+        except Exception:
+            return
+
+    def try_expire(self) -> bool:
+        """Expira o pedido e acorda a leitura em curso; False se uma linha já é dele.
+
+        A decisão é atômica com ``claim``: depois de reclamada uma linha o
+        pedido não expira mais, e a resposta lida é a que vale.
+        """
+        with self._lock:
+            if self._done.is_set() or self._claimed:
+                return False
+            self._expired.set()
+        wake = getattr(self.reservation, "wake", None)
+        if callable(wake):
+            try:
+                wake()
+            except Exception:
+                return True
+        return True
+
+    def claim(self) -> bool:
+        """Reclama a próxima linha para este pedido (chamado pelo gate sob o lock dele)."""
+        with self._lock:
+            if self._done.is_set() or self._expired.is_set() or self.is_cancelled():
+                return False
+            self._claimed = True
+            return True
+
+    def should_abort(self) -> bool:
+        """True quando a leitura em curso não deve mais consumir linha."""
+        return self._done.is_set() or self._expired.is_set() or self.is_cancelled()
 
     def is_cancelled(self) -> bool:
         """True quando a execução que originou o pedido já foi cancelada."""
@@ -65,11 +124,19 @@ class _InputRequest:
         deadline = time.monotonic() + self.timeout
         while not self._done.wait(0.1):
             if self.is_cancelled():
+                self.set_result(self.default)
                 break
             if time.monotonic() >= deadline:
+                if self.try_expire():
+                    # Expirou sem linha reclamada: a leitura em curso aborta
+                    # sem consumir; passada a graça, vale o default.
+                    if not self._done.wait(self._EXPIRY_GRACE_SECONDS):
+                        self.set_result(self.default)
+                elif not self._done.wait(self._CLAIMED_WAIT_SECONDS):
+                    # Linha reclamada no limite: a resposta é dela; só um
+                    # consumidor travado por muito tempo cai no default.
+                    self.set_result(self.default)
                 break
-        if not self._done.is_set():
-            self.set_result(self.default)
         return self._result[0]
 
     def is_done(self) -> bool:
@@ -161,7 +228,7 @@ class InputBroker:
         )
         if req.is_cancelled():
             return False
-        self._queue.put(req)
+        self._enqueue(req)
         return bool(req.wait())
 
     def request_ask_user(
@@ -189,8 +256,20 @@ class InputBroker:
             timeout=timeout,
             default=default_val,
         )
-        self._queue.put(req)
+        self._enqueue(req)
         return req.wait()  # type: ignore[return-value]
+
+    def _enqueue(self, req: _InputRequest) -> None:
+        """Publica o pedido; no gate sequencial (pipe) reserva o stdin antes.
+
+        A reserva precede a fila e a renderização da pergunta: a linha
+        seguinte do stdin já pertence ao pedido antes de o chat ocioso poder
+        consumi-la. ``set_result`` (resposta, cancelamento, timeout) libera.
+        """
+        reserve = getattr(self._input_gate, "reserve_direct_input", None)
+        if callable(reserve) and getattr(self._input_gate, "sequential", False) is True:
+            req.reservation = reserve()
+        self._queue.put(req)
 
     # ------------------------------------------------------------------
     # Consumidor — thread dedicada, serializa tudo
@@ -217,6 +296,12 @@ class InputBroker:
         gate = self._input_gate
         if gate is None:
             return True
+        if getattr(gate, "sequential", False) is True:
+            # Gate sequencial (pipe): as leituras diretas são thread-safe e
+            # não disputam um prompt; a thread do broker atende na hora, sem
+            # depender da main thread drenar a fila (com o chat ocioso ela
+            # não drena, e um pedido de produtor em background expiraria).
+            return True
         is_active = getattr(gate, "is_active", None)
         return bool(callable(is_active) and is_active())
 
@@ -227,6 +312,10 @@ class InputBroker:
         background. Nesse modo é seguro usar InputGate(prompt), porque estamos
         no fluxo principal do shell, não na thread consumidora do broker.
         """
+        if getattr(self._input_gate, "sequential", False) is True:
+            # Gate sequencial: a thread do broker atende em ordem; um pump
+            # paralelo tiraria um segundo pedido e disputaria a linha seguinte.
+            return False
         try:
             req = self._queue.get_nowait()
         except queue.Empty:
@@ -325,7 +414,9 @@ class InputBroker:
                             renderer, gate, req.question, prompt, timeout=remaining
                         )
                     else:
-                        answer = read_fn(req.question, prompt, timeout=remaining)
+                        answer = read_fn(
+                            req.question, prompt, timeout=remaining, ticket=req
+                        )
                     if answer is None:
                         elapsed = time.monotonic() - start
                         self._emit(
@@ -350,7 +441,10 @@ class InputBroker:
             metadata={"question": req.question, "owner": req.source},
         ):
             self._emit(req.question)
-            answer = self._read_line(prompt, deadline=deadline, allow_direct_gate=allow_direct_gate)
+            answer = self._read_line(
+                prompt, deadline=deadline, allow_direct_gate=allow_direct_gate,
+                ticket=req,
+            )
         if answer is None:
             elapsed = time.monotonic() - start
             self._emit(
@@ -376,12 +470,12 @@ class InputBroker:
         if req.options:
             result = self._read_selection(
                 req.question, req.options, deadline=deadline, agent=req.source,
-                allow_direct_gate=allow_direct_gate,
+                allow_direct_gate=allow_direct_gate, ticket=req,
             )
         else:
             result = self._read_free_text(
                 req.question, deadline=deadline, agent=req.source,
-                allow_direct_gate=allow_direct_gate,
+                allow_direct_gate=allow_direct_gate, ticket=req,
             )
         if result is None:
             idx, val = req.default
@@ -406,6 +500,7 @@ class InputBroker:
         deadline: float,
         agent: str = "agente",
         allow_direct_gate: bool = False,
+        ticket=None,
     ) -> tuple[int, str] | None:
         """Lê uma resposta em texto livre com deadline. Retorna (-1, texto)."""
         remaining_s = max(0, int(deadline - time.monotonic()))
@@ -430,7 +525,7 @@ class InputBroker:
             self._emit(f"\n{question}")
             answer = self._read_line(
                 f"  Resposta (auto em {remaining_s}s): ", deadline=deadline,
-                allow_direct_gate=allow_direct_gate,
+                allow_direct_gate=allow_direct_gate, ticket=ticket,
             )
         if answer is None:
             return None
@@ -441,7 +536,7 @@ class InputBroker:
     # ------------------------------------------------------------------
 
     def _read_line(
-        self, prompt: str, *, deadline: float, allow_direct_gate: bool = False
+        self, prompt: str, *, deadline: float, allow_direct_gate: bool = False, ticket=None
     ) -> str | None:
         """Lê uma linha somente pelo InputGate seguro.
 
@@ -458,7 +553,7 @@ class InputBroker:
         read_fn = getattr(gate, "read_input_in_terminal", None)
         remaining = max(0.5, deadline - time.monotonic())
         if callable(read_fn):
-            answer = read_fn(prompt, timeout=remaining)
+            answer = read_fn(prompt, timeout=remaining, ticket=ticket)
             if answer is not None:
                 return answer
         if not allow_direct_gate or deadline - time.monotonic() <= 0:
@@ -481,6 +576,7 @@ class InputBroker:
         deadline: float,
         agent: str = "agente",
         allow_direct_gate: bool = False,
+        ticket=None,
     ) -> tuple[int, str] | None:
         """Seleção interativa com deadline. Usa input_gate se pt ativo."""
         gate = self._input_gate
@@ -496,12 +592,12 @@ class InputBroker:
                     if result is not None:
                         return result
                 else:
-                    result = read_fn(question, options, timeout=remaining)
+                    result = read_fn(question, options, timeout=remaining, ticket=ticket)
                     if result is not None:
                         return result
         return self._line_select(
             question, options, deadline=deadline, agent=agent,
-            allow_direct_gate=allow_direct_gate,
+            allow_direct_gate=allow_direct_gate, ticket=ticket,
         )
 
     def _line_select(
@@ -512,6 +608,7 @@ class InputBroker:
         deadline: float,
         agent: str = "agente",
         allow_direct_gate: bool = False,
+        ticket=None,
     ) -> tuple[int, str] | None:
         """Seleção numerada usando apenas _read_line/InputGate."""
         if self._input_gate is None:
@@ -531,7 +628,8 @@ class InputBroker:
                     return None
                 prompt = f"  Selecione (1-{len(options)}): "
                 answer = self._read_line(
-                    prompt, deadline=deadline, allow_direct_gate=allow_direct_gate
+                    prompt, deadline=deadline, allow_direct_gate=allow_direct_gate,
+                    ticket=ticket,
                 )
                 if answer is None:
                     return None
@@ -548,11 +646,10 @@ class InputBroker:
 
     @contextmanager
     def _with_interactive_terminal_window(self, window_factory: Callable[[], Any]):
-        """Suspende Rich Live dentro de uma janela interativa explícita.
+        """Suspende o spinner dentro de uma janela interativa explícita.
 
-        Para o Live display e mostra o cursor, evitando que o refresh
-        do Live sobrescreva o texto da pergunta ou que o cursor oculto
-        impeça o usuário de ver onde digitar.
+        O renderer é dono do terminal (a TUI pelo driver Textual; em pipe
+        não há terminal): nada aqui escreve escapes em stdout.
         """
         suspend_spinner = self._suspend_spinner_fn
         if callable(suspend_spinner):
@@ -562,7 +659,6 @@ class InputBroker:
                 pass
         try:
             with window_factory():
-                print("\033[?25h", end="", flush=True)
                 yield
         finally:
             resume_spinner = self._resume_spinner_fn

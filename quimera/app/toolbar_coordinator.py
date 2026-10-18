@@ -78,7 +78,7 @@ class ToolbarCoordinator:
         return self._format_agent_label(responder) or responder
 
     def cycle_renderer_theme(self) -> None:
-        """Avança para o próximo tema no TerminalRenderer e persiste na config."""
+        """Avança para o próximo tema do renderer e persiste na config."""
         self._toolbar.cycle_renderer_theme(self._renderer, self._config)
 
     def build_input_toolbar_context(self) -> dict[str, str]:

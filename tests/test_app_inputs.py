@@ -468,3 +468,66 @@ class TestStdin:
         """Verifica que _stdin retorna sys.stdin."""
         from quimera.app.inputs import _stdin
         assert _stdin() is sys.stdin
+
+
+class TestSequentialGateInput:
+    """Stdin em pipe: read_user_input delega ao gate sequencial e nunca toca stdin."""
+
+    class _Gate:
+        sequential = True
+
+        def __init__(self, lines):
+            self.lines = list(lines)
+            self.calls = []
+
+        def read_chat_line(self, timeout=None, prompt=""):
+            self.calls.append((timeout, prompt))
+            if not self.lines:
+                raise EOFError
+            value = self.lines.pop(0)
+            return value
+
+    def test_timeout_zero_polls_gate_briefly(self, mock_app, input_kwargs):
+        from quimera.app.inputs import read_user_input
+
+        gate = self._Gate(["linha"])
+        with patch("quimera.app.inputs._tty._stdin", side_effect=AssertionError("stdin não deve ser lido")):
+            assert read_user_input(mock_app.renderer, "Alex: ", 0, input_fn=gate, **input_kwargs) == "linha"
+        assert gate.calls == [(0.01, "Alex: ")]
+
+    def test_positive_timeout_reports_idle(self, mock_app, input_kwargs):
+        from quimera.app.inputs import read_user_input
+
+        gate = self._Gate([None])
+        assert read_user_input(mock_app.renderer, "Alex: ", 5, input_fn=gate, **input_kwargs) is None
+        mock_app.renderer.show_system.assert_called_once_with("*idle* (5s sem activity)")
+        assert gate.calls == [(5, "Alex: ")]
+
+    def test_eof_propagates(self, mock_app, input_kwargs):
+        from quimera.app.inputs import read_user_input
+
+        gate = self._Gate([])
+        with pytest.raises(EOFError):
+            read_user_input(mock_app.renderer, "Alex: ", 0, input_fn=gate, **input_kwargs)
+
+    def test_only_a_true_sequential_flag_selects_the_gate_path(self, mock_app, input_kwargs):
+        """MagicMock tem todo atributo: só ``sequential is True`` ativa o caminho."""
+        from quimera.app.inputs import read_user_input
+
+        mock_stdin = MagicMock()
+        mock_stdin.isatty.return_value = False
+        mock_stdin.readline.return_value = "line\n"
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
+            with patch("select.select", return_value=([True], [], [])):
+                assert read_user_input(mock_app.renderer, ">", 0, input_fn=MagicMock(), **input_kwargs) == "line"
+
+    def test_services_expose_sequential_flag(self, mock_app):
+        from quimera.app.inputs import AppInputServices
+
+        gate = self._Gate([])
+        services = AppInputServices(mock_app.renderer, lambda: gate)
+        assert services.sequential_input is True
+        services_tui = AppInputServices(mock_app.renderer, lambda: MagicMock(sequential=False))
+        assert services_tui.sequential_input is False
+        broken = AppInputServices(mock_app.renderer, lambda: (_ for _ in ()).throw(RuntimeError()))
+        assert broken.sequential_input is False

@@ -9,8 +9,8 @@ eliminando a necessidade de capability-sniffing via ``getattr``. Regras:
 - Capacidades de infraestrutura (``flush``, ``set_summarizing``, ...) são
   no-op.
 - Capacidades booleanas são atributos de classe (``supports_agent_feed``).
-- Janelas interativas (``selection_window``, ``approval_window``) devolvem um
-  context manager nulo.
+- Janelas interativas (``selection_window``, ``approval_window``,
+  ``input_window``, ``external_window``) devolvem um context manager nulo.
 - Internals (``_audit_logger``, ``_console``, ``_window_manager``) NÃO fazem
   parte do contrato; as capacidades públicas equivalentes são
   ``log_debug_event``, ``print_direct`` e ``agent_window_controller``.
@@ -241,6 +241,17 @@ class RendererBase:
 
     def approval_window(self, **kwargs):
         return nullcontext()
+
+    def input_window(self, **kwargs):
+        return nullcontext()
+
+    def external_window(self, window_id, title="", metadata=None):
+        """Cede o terminal a um processo externo (editor); sem janela, no-op."""
+        return nullcontext()
+
+    def reset_visual_state(self, agent=None):
+        """Limpa estados visuais transitórios após cancelamento."""
+        return None
 
     def agent_window_controller(self, agent):
         """Controller de janela do agente; None quando não há janela dedicada."""

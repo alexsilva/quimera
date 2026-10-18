@@ -122,9 +122,8 @@ def test_debug_attaches_events_only_audit_logger_to_the_tui_renderer(make_app):
     audit = renderer.audit_logger
     assert audit is not None
     assert audit.events_path == app.session_paths.render_log_path_for(app.storage.session_id)
-    # O Textual escreve no terminal pelo driver próprio: não há stream ANSI.
-    assert audit.ansi_path is None
-    assert not app.session_paths.render_ansi_path_for(app.storage.session_id).exists()
+    # O Textual escreve no terminal pelo driver próprio: só eventos estruturados.
+    assert list(audit.events_path.parent.iterdir()) == [audit.events_path]
 
     renderer.log_debug_event("tui_resize", width=80, height=24)
     audit.close()
@@ -150,7 +149,7 @@ def test_debug_exposes_tui_screenshot_and_points_the_prompt_at_it(make_app):
     assert state["render_debug_active"] is True
     assert state["tui_screenshot_available"] is True
     assert state["render_screenshots_dir"] == str(screenshots_dir)
-    assert state["render_ansi_path"] == ""
+    assert "render_ansi_path" not in state
     assert "tui_screenshot" in app.prompt_builder.build(
         agent="codex", history=[{"role": "human", "content": "olhe a tela"}]
     )

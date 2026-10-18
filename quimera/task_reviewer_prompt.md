@@ -17,9 +17,6 @@ Esta é uma revisão isolada de task, não uma conversa normal.
 <debug_state title="Debug de render ativo">
 - Auditoria de renderização ativa nesta sessão.
 - Eventos estruturados: {render_log_path}
-<!-- IF:render_ansi_path -->
-- Stream ANSI bruto: {render_ansi_path}
-<!-- ENDIF:render_ansi_path -->
 <!-- IF:tui_screenshot_available -->
 - Interface Textual ativa: a tool `tui_screenshot` devolve a tela atual em texto com a geometria do feed e salva o SVG em {render_screenshots_dir}.
 <!-- ENDIF:tui_screenshot_available -->

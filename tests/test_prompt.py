@@ -2,7 +2,6 @@ from unittest.mock import MagicMock
 import re
 
 import pytest
-from rich.console import Console
 
 from quimera.context import ContextManager
 from quimera.constants import Visibility
@@ -13,7 +12,7 @@ from quimera.prompt import PromptBuilder
 from quimera.prompt_kinds import PromptKind
 from quimera.prompt_templates import PromptParser, PromptTemplate, PromptText, get_prompt_template
 from quimera.runtime.drivers.prompt_adapter import _build_openai_messages_from_prompt
-from quimera.ui import TerminalRenderer
+from quimera.ui import PlainTextRenderer
 
 
 def _extract_block(prompt: str, tag: str) -> str:
@@ -115,7 +114,6 @@ def test_prompt_includes_render_debug_block_when_active():
         "current_dir": ".",
         "render_debug_active": True,
         "render_log_path": "/tmp/test/data/logs/render/render.jsonl",
-        "render_ansi_path": "/tmp/test/data/logs/render/render.ansi",
         "metrics_path": "/tmp/test/data/logs/metrics/test-session.jsonl",
         "app_log_path": "/tmp/test/data/logs/app-test-session.log",
     }
@@ -131,12 +129,12 @@ def test_prompt_includes_render_debug_block_when_active():
     debug_block = _extract_block(prompt, "debug_state")
     assert debug_block.startswith("Logs:")
     assert "/tmp/test/data/logs/render/render.jsonl" in debug_block
-    assert "/tmp/test/data/logs/render/render.ansi" in debug_block
     assert "/tmp/test/data/logs/metrics/test-session.jsonl" in debug_block
     assert "Counter" in debug_block
-    # Renderer clássico: dicas do compositor de terminal, sem a tool da TUI.
-    assert "queue_depth" in debug_block
+    # Sem TUI (modo pipe): só o renderer de texto puro, sem a tool da TUI.
+    assert "renderer de texto puro" in debug_block
     assert "tui_screenshot" not in debug_block
+    assert "render.ansi" not in debug_block
     assert "<!--" not in debug_block
     session_block = _extract_block(prompt, "session_state")
     assert "LOG DA APLICAÇÃO: /tmp/test/data/logs/app-test-session.log" in session_block
@@ -151,7 +149,6 @@ def test_prompt_debug_block_describes_tui_screenshot_when_textual_is_active():
         "current_dir": ".",
         "render_debug_active": True,
         "render_log_path": "/tmp/test/data/logs/render/render.jsonl",
-        "render_ansi_path": "",
         "tui_screenshot_available": True,
         "render_screenshots_dir": "/tmp/test/data/logs/render/screenshots",
         "metrics_path": "/tmp/test/data/logs/metrics/test-session.jsonl",
@@ -792,12 +789,14 @@ def test_prompt_does_not_query_evidence_store_without_debug():
 
 
 def test_prompt_evidence_pipeline_is_identical_across_compact_and_wide_tool_rendering(tmp_path):
-    """Verifica que prompt evidence pipeline is identical across compact and wide tool rendering."""
+    """A evidência gravada não depende do renderer que mostrou o resumo."""
+    import io
+
     from quimera.spy_output_presenter import SpyOutputPresenter
 
-    def _collect_evidence_section(session_id: str, width: int) -> tuple[str, str]:
-        renderer = TerminalRenderer(theme="rule")
-        renderer._console = Console(width=width, record=True, force_terminal=False)
+    def _collect_evidence_section(session_id: str, theme: str) -> tuple[str, str]:
+        stream = io.StringIO()
+        renderer = PlainTextRenderer(stream=stream, theme=theme)
         presenter = SpyOutputPresenter(
             renderer,
             Visibility.SUMMARY,
@@ -821,11 +820,10 @@ def test_prompt_evidence_pipeline_is_identical_across_compact_and_wide_tool_rend
             session_state={"evidence_base_dir": str(tmp_path)},
         )
         evidence_section = builder._build_evidence_section({"session_id": session_id}, session_id)
-        rendered_summary = renderer._console.export_text()
-        return evidence_section, rendered_summary
+        return evidence_section, stream.getvalue()
 
-    compact_evidence, compact_render = _collect_evidence_section("sessao-compact", 40)
-    wide_evidence, wide_render = _collect_evidence_section("sessao-wide", 120)
+    compact_evidence, compact_render = _collect_evidence_section("sessao-compact", "minimal")
+    wide_evidence, wide_render = _collect_evidence_section("sessao-wide", "panel")
 
     assert compact_evidence == wide_evidence
     assert "exec_command: ok | cmd: pytest -q" in compact_evidence

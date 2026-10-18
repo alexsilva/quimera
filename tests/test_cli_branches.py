@@ -1,13 +1,11 @@
 import io
-import builtins
-import importlib.util
 import os
 import sys
 import tempfile
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -219,24 +217,6 @@ def test_prompt_bool_accepts_negative_forms(monkeypatch):
     """Verifica que prompt bool accepts negative forms."""
     monkeypatch.setattr(cli, "_read_input", lambda _text: "não")
     assert cli._prompt_bool("Confirma", default=True) is False
-
-
-def test_cli_import_fallback_without_ui_dependencies():
-    """Verifica que cli import fallback without ui dependencies."""
-    real_import = builtins.__import__
-
-    def _import(name, *args, **kwargs):
-        if name in {"ui", "agents", "quimera.ui", "quimera.agents"}:
-            raise ImportError("interactive deps missing")
-        return real_import(name, *args, **kwargs)
-
-    spec = importlib.util.spec_from_file_location("quimera.cli_no_ui", cli.__file__)
-    module = importlib.util.module_from_spec(spec)
-    with patch("builtins.__import__", side_effect=_import):
-        spec.loader.exec_module(module)
-
-    assert module.TerminalRenderer is None
-    assert module.AgentClient is None
 
 
 def test_configure_connection_interactively_cli_branch(monkeypatch):
@@ -944,17 +924,6 @@ def test_main_set_theme_persists_and_prints(monkeypatch):
     mock_print.assert_called_once_with("Tema padrão definido: sunny — Tema claro")
 
 
-def test_main_interactive_test_requires_terminal_renderer_and_agent_client(monkeypatch):
-    """Verifica que main interactive test requires terminal renderer and agent client."""
-    _patch_main_basics(monkeypatch)
-    monkeypatch.setattr(sys, "argv", ["quimera", "--interactive-test"])
-    monkeypatch.setattr(cli, "TerminalRenderer", None)
-    monkeypatch.setattr(cli, "AgentClient", None)
-
-    with pytest.raises(RuntimeError, match="Modo interativo não disponível"):
-        cli.main()
-
-
 def test_main_ignores_stdin_reconfigure_errors_and_still_runs(monkeypatch):
     """Verifica que main ignores stdin reconfigure errors and still runs."""
     class _BrokenStdin:
@@ -1301,3 +1270,28 @@ def test_main_connects_mcp_clients_in_background_after_app_creation(monkeypatch)
     assert captured["executor"] is app.tool_executor
     assert captured["workspace"] is app.workspace
     assert app.ran is True
+
+
+def test_run_app_ui_without_bridge_runs_the_chat_loop_directly(monkeypatch):
+    """Sem TTY não há bridge: o loop de chat roda direto, sem app Textual."""
+    app = MagicMock()
+    textual = MagicMock()
+    monkeypatch.setattr(cli, "run_textual_quimera_app", textual)
+
+    cli._run_app_ui(app, None)
+
+    app.run.assert_called_once_with()
+    textual.assert_not_called()
+
+
+def test_run_app_ui_with_bridge_hands_the_app_to_textual(monkeypatch):
+    """Com TTY a TUI Textual é dona do loop; app.run() não é chamado aqui."""
+    app = MagicMock()
+    bridge = object()
+    textual = MagicMock()
+    monkeypatch.setattr(cli, "run_textual_quimera_app", textual)
+
+    cli._run_app_ui(app, bridge)
+
+    textual.assert_called_once_with(app, bridge)
+    app.run.assert_not_called()

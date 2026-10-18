@@ -1,10 +1,9 @@
-"""Auditoria de renderização do terminal."""
+"""Auditoria de renderização: eventos estruturados por sessão (``--debug``)."""
 
 from __future__ import annotations
 
 import json
 import threading
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,31 +22,21 @@ def _json_safe(value: Any) -> Any:
 
 
 class RenderAuditLogger:
-    """Grava eventos estruturados e, opcionalmente, o stream ANSI bruto.
+    """Grava eventos estruturados de render em ``render-<sessão>.jsonl``.
 
-    O stream ANSI só existe para o renderer clássico, que escreve no terminal
-    por um console próprio. No Textual o driver escreve direto em stdout, sem
-    passar pelo renderer; nesse modo ``ansi_path`` fica ``None`` e nenhum
-    arquivo ``.ansi`` é criado (antes nascia vazio e sugeria captura).
+    Os renderers em uso escrevem no terminal por conta própria (o Textual pelo
+    driver, o de texto puro direto em stdout), então não há stream capturável:
+    o audit é só o que cada renderer e os serviços de exibição registram com
+    ``log_debug_event``.
     """
 
-    _ANSI_BURST_DEDUP_WINDOW_SEC = 0.05
-    _ANSI_BURST_MIN_BYTES = 64
-
-    def __init__(self, events_path: Path, ansi_path: Path | None = None):
+    def __init__(self, events_path: Path):
         self.events_path = Path(events_path)
-        self.ansi_path = Path(ansi_path) if ansi_path is not None else None
         self.log_dir = self.events_path.parent
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._closed = False
         self._events_handle = self.events_path.open("w", encoding="utf-8")
-        self._ansi_handle = (
-            self.ansi_path.open("wb") if self.ansi_path is not None else None
-        )
-        self._last_ansi_payload: bytes | None = None
-        self._last_ansi_ts: float = 0.0
-        self._suppressed_ansi_burst_repeats: int = 0
 
     def log_event(self, event: str, **payload: Any) -> None:
         record = {
@@ -64,77 +53,11 @@ class RenderAuditLogger:
             self._events_handle.write("\n")
             self._events_handle.flush()
 
-    def write_ansi(self, data: bytes | str) -> None:
-        if isinstance(data, str):
-            payload = data.encode("utf-8", errors="replace")
-        else:
-            payload = data
-        now = time.monotonic()
-        with self._lock:
-            if self._closed or self._ansi_handle is None:
-                return
-            if (
-                self._last_ansi_payload is not None
-                and payload == self._last_ansi_payload
-                and len(payload) >= self._ANSI_BURST_MIN_BYTES
-                and (now - self._last_ansi_ts) <= self._ANSI_BURST_DEDUP_WINDOW_SEC
-            ):
-                self._suppressed_ansi_burst_repeats += 1
-                self._last_ansi_ts = now
-                return
-            self._flush_suppressed_ansi_burst_locked()
-            self._ansi_handle.write(payload)
-            self._ansi_handle.flush()
-            self._last_ansi_payload = payload
-            self._last_ansi_ts = now
-
-    def _flush_suppressed_ansi_burst_locked(self) -> None:
-        if self._suppressed_ansi_burst_repeats <= 0:
-            return
-        repeats = int(self._suppressed_ansi_burst_repeats)
-        payload_size = len(self._last_ansi_payload or b"")
-        record = {
-            "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-            "event": "ansi_duplicate_suppressed",
-            "repeats": repeats,
-            "payload_bytes": payload_size,
-        }
-        line = json.dumps(record, ensure_ascii=False)
-        self._events_handle.write(line)
-        self._events_handle.write("\n")
-        self._events_handle.flush()
-        self._suppressed_ansi_burst_repeats = 0
-
-    def start_queue_sampler(self, queue, interval: float = 1.0) -> None:
-        """Amostra o tamanho da fila do writer a cada `interval` segundos (ativado por --debug)."""
-        stop_event = threading.Event()
-        self._sampler_stop = stop_event
-
-        def _sample():
-            _last_active = False
-            while not stop_event.wait(interval):
-                size = queue.qsize()
-                if size > 0:
-                    self.log_event("queue_depth", size=size)
-                    _last_active = True
-                elif _last_active:
-                    self.log_event("queue_depth", size=0)
-                    _last_active = False
-
-        t = threading.Thread(target=_sample, daemon=True, name="audit-queue-sampler")
-        t.start()
-
     def close(self) -> None:
         with self._lock:
             if self._closed:
                 return
-            sampler_stop = getattr(self, "_sampler_stop", None)
-            if sampler_stop is not None:
-                sampler_stop.set()
-            self._flush_suppressed_ansi_burst_locked()
             self._events_handle.close()
-            if self._ansi_handle is not None:
-                self._ansi_handle.close()
             self._closed = True
 
     def __enter__(self) -> "RenderAuditLogger":

@@ -10,7 +10,7 @@ CLI
      ├─ ChatRound / Dispatch / ToolLoop
      ├─ Task services / repository / review / failover
      ├─ RuntimeState / SessionState / SessionMetrics
-     └─ TerminalRenderer
+     └─ Renderer (TextualRenderer na TUI; PlainTextRenderer em pipe)
 Runtime
  ├─ Drivers CLI e OpenAI-compatible
  ├─ Parser de tool calls
@@ -67,26 +67,12 @@ O pacote `runtime/mcp` contém:
 
 ## UI
 
-A renderização usa `TerminalRenderer`, temas em `themes.py` e auditoria opcional em `ui/audit.py`. Handlers de stderr são prompt-aware para evitar quebrar input interativo quando logs assíncronos chegam.
+Há um único contrato de renderer, `RendererBase` (`ui/base.py`), e dois renderers que o implementam:
 
-### TerminalRenderer e estilo
+- `TextualRenderer` (`ui/textual/renderer.py`): a TUI. O `cli` sempre o injeta quando stdin é um terminal; ele converte cada chamada do contrato em `TextualUiEvent` e a `TextualUiBridge` entrega os eventos ao app Textual, que é dono do terminal.
+- `PlainTextRenderer` (`ui/plain.py`): texto puro em stdout, uma linha por mensagem, sem cores nem transitórios. É o renderer de stdin em pipe (`echo "..." | quimera`), do `--interactive-test` e o padrão de `QuimeraApp` quando ninguém passa `renderer_override` (embedding, testes).
 
-O `TerminalRenderer` aplica estilos visuais como `dim`, `bold` e cores ANSI ao output. Recentemente, foram feitas as seguintes mudanças:
-
-1. **build_replace** (renderer.py:401): Adicionou `\033[2m...\033[0m` para aplicar estilo dim a texto transitório.
-2. **show_turn_summary** (renderer.py:1611-1613): Passa `muted=True` para `show_feed()` para aplicar estilo dim a resumos de ferramentas.
-
-O efeito dim/muted aparece no output quando terminal suporta SGR 2 (ANSI dim) e o pipeline de estilo não perde o atributo.
-
-### Problemas recentes no estilo
-
-O estilo `dim` foi quebrado após mudanças no pipeline de renderização:
-
-1. O pipeline de estilo (show_plain → writer) pode estar perdendo o atributo dim antes de chegar ao writer
-2. Alguns terminais Linux podem ignorar SGR 2 (dim)
-3. O estilo `dim` aplicado via Rich Style pode ser sobreposto por Live/TransientOverlay com estilo próprio
-
-Solução: Investigar o pipeline de estilo linha a linha para identificar onde o `dim` está sendo perdido. Fornecer evidência concreta para localização e correção do bug.
+Temas vivem em `themes.py`; a TUI os aplica, o renderer de texto só guarda o nome para `/theme` persistir. Com `--debug`, `ui/audit.py` grava eventos estruturados em `data/logs/render/render-<sessão>.jsonl`: a TUI registra `tui_*` e os serviços de exibição registram os seus; o renderer de texto grava um `print` por linha escrita. Não há stream ANSI capturado: nenhum dos dois escreve o terminal por um console interceptável. Handlers de stderr são prompt-aware para evitar quebrar input interativo quando logs assíncronos chegam.
 
 ### Usuário usando MCP
 

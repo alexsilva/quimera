@@ -1,10 +1,15 @@
+"""`RenderAuditLogger`: eventos estruturados de render por sessão (``--debug``)."""
 import json
-from unittest.mock import patch
+
+from rich.console import Group
+from rich.rule import Rule
+from rich.table import Table
+from rich.text import Text
 
 from quimera.agent_events import SpyEvent
 from quimera.constants import Visibility
 from quimera.spy_output_presenter import SpyOutputPresenter
-from quimera.ui import RenderAuditLogger, TerminalRenderer
+from quimera.ui import PlainTextRenderer, RenderAuditLogger
 
 
 def _read_jsonl(path):
@@ -12,12 +17,42 @@ def _read_jsonl(path):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def test_renderer_audit_logs_static_print_and_ansi(tmp_path):
-    """Verifica que o audit logger registra eventos de print e ANSI."""
-    log_dir = tmp_path / "render"
-    events_path = log_dir / "render-test-session.jsonl"
-    ansi_path = log_dir / "render-test-session.ansi"
-    renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
+def _plain_renderer(events_path):
+    import io
+
+    return PlainTextRenderer(stream=io.StringIO(), audit_logger=RenderAuditLogger(events_path))
+
+
+def test_audit_logger_records_events_only(tmp_path):
+    """Só o jsonl existe: nenhum stream ANSI é criado ao lado."""
+    events_path = tmp_path / "render" / "render-sessao.jsonl"
+    with RenderAuditLogger(events_path) as logger:
+        logger.log_event("tui_resize", width=80, height=24, path=tmp_path / "x.svg", extra={"a": (1, 2)})
+
+    events = _read_jsonl(events_path)
+    assert [event["event"] for event in events] == ["tui_resize"]
+    assert events[0]["width"] == 80
+    assert events[0]["path"] == str(tmp_path / "x.svg")
+    assert events[0]["extra"] == {"a": [1, 2]}
+    assert "ts" in events[0]
+    assert list((tmp_path / "render").iterdir()) == [events_path]
+
+
+def test_audit_logger_ignores_events_after_close(tmp_path):
+    events_path = tmp_path / "render" / "render-sessao.jsonl"
+    logger = RenderAuditLogger(events_path)
+    logger.log_event("print", preview="antes")
+    logger.close()
+    logger.close()  # idempotente
+    logger.log_event("print", preview="depois")
+
+    assert [event["preview"] for event in _read_jsonl(events_path)] == ["antes"]
+
+
+def test_renderer_audit_logs_print_with_preview(tmp_path):
+    """O renderer de texto puro grava um evento print por escrita."""
+    events_path = tmp_path / "render" / "render-test-session.jsonl"
+    renderer = _plain_renderer(events_path)
     try:
         renderer.show_system("System message")
         renderer.flush()
@@ -25,75 +60,38 @@ def test_renderer_audit_logs_static_print_and_ansi(tmp_path):
         renderer.close(timeout=1.0)
 
     events = _read_jsonl(events_path)
-    event_names = [event["event"] for event in events]
-    assert "print" in event_names
-    assert any("System message" in event.get("preview", "") for event in events)
-    assert "System message" in ansi_path.read_text(encoding="utf-8")
+    assert [event["event"] for event in events] == ["print"]
+    assert events[0]["kind"] == "system"
+    assert "System message" in events[0]["preview"]
 
 
 def test_renderer_show_approval_logs_distinct_preview(tmp_path):
     """Verifica que approval usa evento/texto próprio no renderer."""
-    log_dir = tmp_path / "render"
-    events_path = log_dir / "render-approval-test.jsonl"
-    ansi_path = log_dir / "render-approval-test.ansi"
-    renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
+    events_path = tmp_path / "render" / "render-approval-test.jsonl"
+    renderer = _plain_renderer(events_path)
     try:
         renderer.show_approval("Aprovar exec_command\ncmd=rm -rf /tmp/demo")
-        renderer.flush()
     finally:
         renderer.close(timeout=1.0)
 
     events = _read_jsonl(events_path)
-    assert any(event.get("preview", "").startswith("⚠ Aprovar exec_command") for event in events if event["event"] == "print")
-    ansi = ansi_path.read_text(encoding="utf-8")
-    assert "Aprovar exec_command" in ansi
-    assert "cmd=rm -rf /tmp/demo" in ansi
-
-
-def test_renderer_audit_logs_stream_lifecycle(tmp_path):
-    """Verifica que o audit logger registra o ciclo de vida do stream (start/chunk/stop)."""
-    log_dir = tmp_path / "render"
-    events_path = log_dir / "render-test-session.jsonl"
-    ansi_path = log_dir / "render-test-session.ansi"
-    with patch("quimera.ui._is_interactive_terminal", return_value=True):
-        renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
-        try:
-            renderer.start_message_stream("codex")
-            renderer.update_message_stream("codex", {"text": "partial"})
-            renderer.finish_message_stream("codex", "final")
-            renderer.flush()
-        finally:
-            renderer.close(timeout=1.0)
-
-    events = _read_jsonl(events_path)
-    event_names = [event["event"] for event in events]
-    assert "stream_start" in event_names
-    assert "stream_chunk" in event_names
-    assert "stream_stop" in event_names
-    assert any(event.get("agent") == "codex" for event in events if event["event"].startswith("stream_"))
-    assert ansi_path.read_bytes()
+    assert [event["kind"] for event in events] == ["approval"]
+    assert events[0]["preview"].startswith("⚠ Aprovar exec_command")
+    assert "cmd=rm -rf /tmp/demo" in events[0]["preview"]
 
 
 def test_audit_preview_extracts_text_from_rich_group(tmp_path):
-    """Verifica que previews extraem texto legível de objetos Rich Group."""
-    from rich.console import Group
-    from rich.text import Text
-
-    log_dir = tmp_path / "render"
-    events_path = log_dir / "render-group-test.jsonl"
-    ansi_path = log_dir / "render-group-test.ansi"
-    renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
+    """Previews extraem texto legível de objetos Rich, sem repr."""
+    events_path = tmp_path / "render" / "render-group-test.jsonl"
+    renderer = _plain_renderer(events_path)
     try:
-        group = Group(Text("Hello"), Text("World"))
-        renderer._print(group)
-        renderer.flush()
+        renderer.show_plain(Group(Text("Hello"), Text("World")))
     finally:
         renderer.close(timeout=1.0)
 
-    events = _read_jsonl(events_path)
-    print_events = [e for e in events if e["event"] == "print"]
+    print_events = [e for e in _read_jsonl(events_path) if e["event"] == "print"]
     assert len(print_events) == 1
-    preview = print_events[0].get("preview", "")
+    preview = print_events[0]["preview"]
     assert "Hello" in preview
     assert "World" in preview
     assert "<rich.console.Group" not in preview
@@ -101,175 +99,51 @@ def test_audit_preview_extracts_text_from_rich_group(tmp_path):
 
 
 def test_audit_preview_extracts_text_from_table_and_rule_group(tmp_path):
-    """Verifica que previews de grupos com tabelas não mostram representações Rich."""
-    from rich.console import Group
-    from rich.rule import Rule
-    from rich.table import Table
-
-    log_dir = tmp_path / "render"
-    events_path = log_dir / "render-table-rule-test.jsonl"
-    ansi_path = log_dir / "render-table-rule-test.ansi"
-    renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
+    events_path = tmp_path / "render" / "render-table-rule-test.jsonl"
+    renderer = _plain_renderer(events_path)
     try:
         table = Table()
         table.add_column("Tool")
         table.add_column("Status")
         table.add_row("exec", "ok")
-        renderer._print(Group(table, Rule("Prompt Preview")))
-        renderer.flush()
+        renderer.show_plain(Group(table, Rule("Prompt Preview")))
     finally:
         renderer.close(timeout=1.0)
 
-    events = _read_jsonl(events_path)
-    print_events = [e for e in events if e["event"] == "print"]
+    print_events = [e for e in _read_jsonl(events_path) if e["event"] == "print"]
     assert len(print_events) == 1
-    preview = print_events[0].get("preview", "")
-    assert "Tool" in preview
-    assert "Status" in preview
-    assert "exec" in preview
-    assert "ok" in preview
-    assert "Prompt Preview" in preview
+    preview = print_events[0]["preview"]
+    for token in ("Tool", "Status", "exec", "ok", "Prompt Preview"):
+        assert token in preview
     assert "object at" not in preview
 
 
 def test_audit_no_empty_print_events(tmp_path):
-    """Verifica que prints vazios não geram entradas de audit."""
-
-    log_dir = tmp_path / "render"
-    events_path = log_dir / "render-empty-test.jsonl"
-    ansi_path = log_dir / "render-empty-test.ansi"
-    renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
+    """Prints vazios não geram entradas de audit."""
+    events_path = tmp_path / "render" / "render-empty-test.jsonl"
+    renderer = _plain_renderer(events_path)
     try:
-        renderer._print("")
-        renderer.flush()
+        renderer.show_plain("")
+        renderer.show_system("   ")
     finally:
         renderer.close(timeout=1.0)
 
-    events = _read_jsonl(events_path)
-    print_events = [e for e in events if e["event"] == "print"]
-    assert len(print_events) == 0
-
-
-def test_audit_no_noop_events(tmp_path):
-    """Verifica que NoopEvent não gera entradas de audit."""
-
-    log_dir = tmp_path / "render"
-    events_path = log_dir / "render-noop-test.jsonl"
-    ansi_path = log_dir / "render-noop-test.ansi"
-    renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
-    try:
-        renderer.show_system("test")
-        renderer.flush()
-    finally:
-        renderer.close(timeout=1.0)
-
-    events = _read_jsonl(events_path)
-    noop_events = [e for e in events if e["event"] == "noop"]
-    assert len(noop_events) == 0
-
-
-def test_ansi_burst_duplicates_are_suppressed_and_logged(tmp_path):
-    """Verifica que explosões de ANSI duplicadas são suprimidas e registradas."""
-    log_dir = tmp_path / "render"
-    events_path = log_dir / "render-dedup-test.jsonl"
-    ansi_path = log_dir / "render-dedup-test.ansi"
-    logger = RenderAuditLogger(events_path, ansi_path)
-    payload = ("⚙ Audit de render:\n  /tmp/quimera/render-session.jsonl\n" * 2).encode("utf-8")
-    with patch("quimera.ui.audit.time.monotonic", side_effect=[1.0, 1.01, 1.02, 1.03, 2.0]):
-        logger.write_ansi(payload)
-        logger.write_ansi(payload)
-        logger.write_ansi(payload)
-        logger.write_ansi(payload)
-        logger.write_ansi(b"next\n")
-    logger.close()
-
-    assert ansi_path.read_bytes() == payload + b"next\n"
-    events = _read_jsonl(events_path)
-    dedup_events = [e for e in events if e.get("event") == "ansi_duplicate_suppressed"]
-    assert len(dedup_events) == 1
-    assert dedup_events[0].get("repeats") == 3
-    assert int(dedup_events[0].get("payload_bytes", 0)) == len(payload)
-
-
-def test_ansi_dedup_does_not_suppress_short_payload(tmp_path):
-    """Verifica que a deduplicação ANSI não suprime payloads curtos."""
-    log_dir = tmp_path / "render"
-    events_path = log_dir / "render-dedup-short-test.jsonl"
-    ansi_path = log_dir / "render-dedup-short-test.ansi"
-    logger = RenderAuditLogger(events_path, ansi_path)
-    payload = b"short\n"
-    with patch("quimera.ui.audit.time.monotonic", side_effect=[1.0, 1.01]):
-        logger.write_ansi(payload)
-        logger.write_ansi(payload)
-    logger.close()
-
-    assert ansi_path.read_bytes() == payload + payload
-    events = _read_jsonl(events_path)
-    dedup_events = [e for e in events if e.get("event") == "ansi_duplicate_suppressed"]
-    assert len(dedup_events) == 0
-
-
-def test_renderer_audit_logs_transient_updates_and_chunk_previews(tmp_path):
-    """Verifica que o audit logger registra atualizações transientes e previews de chunks."""
-    log_dir = tmp_path / "render"
-    events_path = log_dir / "render-transient-test.jsonl"
-    ansi_path = log_dir / "render-transient-test.ansi"
-    with patch("quimera.ui._is_interactive_terminal", return_value=True):
-        renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
-        try:
-            renderer.update_agent_transient("codex", "pensando: validar renderer")
-            renderer.clear_agent_transient("codex")
-            renderer.flush()
-        finally:
-            renderer.close(timeout=1.0)
-
-    events = _read_jsonl(events_path)
-    transient_updates = [e for e in events if e.get("event") == "transient_update"]
-    assert transient_updates
-    assert transient_updates[0].get("agent") == "codex"
-    assert "pensando: validar renderer" in str(transient_updates[0].get("preview", ""))
-
-    stream_chunks = [e for e in events if e.get("event") == "stream_chunk"]
-    assert stream_chunks
-    previews = stream_chunks[0].get("previews")
-    assert isinstance(previews, list)
-    assert any("pensando: validar renderer" in str(item) for item in previews)
+    assert _read_jsonl(events_path) == []
 
 
 def test_spy_presenter_events_are_logged_in_render_audit(tmp_path):
-    """Verifica que eventos do SpyOutputPresenter são registrados no audit de render."""
-    log_dir = tmp_path / "render"
-    events_path = log_dir / "render-spy-event-test.jsonl"
-    ansi_path = log_dir / "render-spy-event-test.ansi"
-    renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
+    """Eventos do SpyOutputPresenter chegam ao audit via log_debug_event."""
+    events_path = tmp_path / "render" / "render-spy-event-test.jsonl"
+    renderer = _plain_renderer(events_path)
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
     try:
         presenter.emit("codex", SpyEvent(kind="context", text="raciocínio em progresso", transient=True))
-        renderer.flush()
     finally:
         renderer.close(timeout=1.0)
 
-    events = _read_jsonl(events_path)
-    spy_events = [e for e in events if e.get("event") == "spy_event"]
+    spy_events = [e for e in _read_jsonl(events_path) if e.get("event") == "spy_event"]
     assert spy_events
-    assert spy_events[0].get("agent") == "codex"
-    assert spy_events[0].get("kind") == "context"
-    assert spy_events[0].get("transient") is True
-    assert "raciocínio em progresso" in str(spy_events[0].get("preview", ""))
-
-
-def test_audit_logger_without_ansi_path_records_events_only(tmp_path):
-    """Modo Textual: só eventos estruturados; nenhum .ansi vazio é criado."""
-    events_path = tmp_path / "render" / "render-textual.jsonl"
-    logger = RenderAuditLogger(events_path)
-    try:
-        logger.log_event("tui_resize", width=80, height=24)
-        logger.write_ansi(b"\x1b[2J")  # ignorado sem stream
-    finally:
-        logger.close()
-
-    events = _read_jsonl(events_path)
-    assert [event["event"] for event in events] == ["tui_resize"]
-    assert events[0]["width"] == 80
-    assert logger.ansi_path is None
-    assert list((tmp_path / "render").iterdir()) == [events_path]
+    assert spy_events[0]["agent"] == "codex"
+    assert spy_events[0]["kind"] == "context"
+    assert spy_events[0]["transient"] is True
+    assert "raciocínio em progresso" in str(spy_events[0]["preview"])

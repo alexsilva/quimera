@@ -84,7 +84,7 @@ Principais flags:
 - `--model MODELO`: modelo do LLM.
 - `--base-url URL`: URL base da API.
 - `--api-key-env VAR`: variável de ambiente da API key.
-- `--debug`: modo debug: audit de render em `data/logs/render/` (eventos jsonl; o stream `.ansi` só existe no renderer clássico, em modo pipe), métricas de prompt e, na TUI Textual, a tool `tui_screenshot`, com que os agentes veem a tela atual em texto e salvam o SVG em `data/logs/render/screenshots/`.
+- `--debug`: modo debug: audit de render em `data/logs/render/` (eventos jsonl), métricas de prompt e, na TUI Textual, a tool `tui_screenshot`, com que os agentes veem a tela atual em texto e salvam o SVG em `data/logs/render/screenshots/`.
 - `--test`: modo de teste com agents fake.
 - `--cmd COMANDO`: comando para driver=cli.
 - `--working-dir DIR`: diretório de trabalho.
@@ -328,7 +328,7 @@ Por workspace (hash do `cwd`):
 Execução rápida (núcleo):
 
 ```bash
-pytest -q tests/test_public_api.py tests/test_runtime_task_planning.py tests/test_runtime_tools_tasks.py tests/test_ui.py
+pytest -q tests/test_public_api.py tests/test_runtime_task_planning.py tests/test_runtime_tools_tasks.py tests/test_ui_plain.py tests/test_renderer_base.py
 ```
 
 Testes MCP:

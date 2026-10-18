@@ -28,39 +28,31 @@ A suíte inclui testes para:
 - roteamento, execução, review e failover de tasks;
 - prompt, modos, contexto, estado compartilhado e TTL;
 - app interativa, handlers, dispatch e turn management;
-- UI, temas, wrapping e fixtures de baseline visual;
+- UI: contrato de renderer, renderer de texto puro e interface Textual;
 - configuração, profiles, conexões e workspace;
 - evidências, storage, métricas e bugs.
 
-## Testes de UI relacionados a estilos (debug para bug de dim/muted)
+## Testes de UI
 
-Recentemente, mudanças no `renderer.py` (401, 1611-1613) afetaram como saída de tools é estilizada. Para validar a renderização, execute:
-
-```bash
-# Mostrar saída de teste de UI com nível de log INFO para detalhes
-python quimera.py --test --agents fake-openai --visibility full 2>&1 | rg -i "TOOLS:"
-```
-
-Observar: saída de ferramentas com estilo `dim`/`muted` aparece com `dim` no terminal se o terminal suportar SGR 2. Se o estilo `dim` estiver ausente, pode ser:
-
-1. um problema no pipeline de estilo entre `show_plain` e o writer
-2. o terminal ignorando SGR 2 (`\033[2m`)
-3. o estilo sendo sobreposto por `Live`/`TransientOverlay`
-
-## Testar o pipeline de estilo
-
-Para inspecionar onde o estilo `dim` está sendo perdido, modifique o pipeline de estilo no `TerminalRenderer` (renderer.py) para adicionar debug:
+Os dois renderers implementam `RendererBase` (`tests/test_renderer_base.py` fixa o contrato). Para testar comportamento que passa pelo renderer sem subir a TUI, use o `PlainTextRenderer` com um stream em memória:
 
 ```python
-# Adicionar logging debug em render.py para trace de estilo
-def debug_show_plain(self, message, style=None, **kwargs):
-    logger.debug(f"show_plain chamado: message={message[:50]}..., style={style}")
-    super().show_plain(message, style, **kwargs)
+import io
+from quimera.ui import PlainTextRenderer
+
+stream = io.StringIO()
+renderer = PlainTextRenderer(stream=stream)
+renderer.show_message("codex", "resposta")
+assert stream.getvalue() == "🤖  Codex: resposta\n"
 ```
 
-## Fixtures visuais
+Para a TUI, `TextualUiBridge().create_renderer()` devolve o `TextualRenderer`; sem app Textual anexado os eventos ficam na fila e `bridge.drain_pending_events()` os expõe ao teste (`tests/test_app_prompt_input.py`). Layout e geometria se testam com o `Pilot` do Textual e `capture_textual_screenshot` (`tests/test_textual_ui.py`).
 
-`tests/fixtures/ui_baseline/` contém snapshots textuais por tema/densidade/largura. Ao alterar renderização, rode testes de UI e revise diffs com cuidado.
+Em modo pipe o app imprime em stdout, então uma rodada inteira pode ser observada sem terminal:
+
+```bash
+echo "/help" | python -m quimera --test --agents fake-openai --visibility full 2>&1 | rg -i "TOOLS:"
+```
 
 ## Boas práticas de contribuição
 

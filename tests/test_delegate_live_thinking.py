@@ -646,34 +646,6 @@ def test_concurrent_delegate_runs_are_scoped_in_textual_renderer():
     assert resets[1].payload["parent_run_id"] == "run:parent-B"
 
 
-def test_terminal_renderer_scopes_delegate_transient_cleanup_by_run():
-    """No terminal, cleanup antigo não apaga o thinking do run mais novo."""
-    from rich.console import Console
-    from quimera.ui import TerminalRenderer
-
-    renderer = TerminalRenderer(theme="line")
-    renderer._console = Console(width=100, record=True, force_terminal=False)
-    try:
-        renderer.update_agent_transient(
-            "codexcloud-gpt-5-6", "thinking A", run_id="run:A"
-        )
-        renderer.update_agent_transient(
-            "codexcloud-gpt-5-6", "thinking B", run_id="run:B"
-        )
-
-        renderer.clear_agent_transient("codexcloud-gpt-5-6", run_id="run:A")
-        container = renderer._deck.get("codexcloud-gpt-5-6")
-        assert container is not None
-        assert container.transient_run_id == "run:B"
-        assert container.transient == ["thinking B"]
-
-        renderer.clear_agent_transient("codexcloud-gpt-5-6", run_id="run:B")
-        assert container.transient_run_id == ""
-        assert container.transient == []
-    finally:
-        renderer.close(timeout=1.0)
-
-
 def test_gateway_does_not_render_cli_semantic_chunk_twice():
     """O spy do AgentClient já renderiza CLI; gateway só registra seu delta."""
     from tests.test_agent_run_events import FakeAgentClient, RecordingSink, make_gateway

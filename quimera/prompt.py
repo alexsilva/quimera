@@ -131,7 +131,6 @@ class PromptBuilder:
         os_info = ""
         render_debug_active = False
         render_log_path = ""
-        render_ansi_path = ""
         tui_screenshot_available = False
         render_screenshots_dir = ""
         metrics_path = ""
@@ -153,7 +152,6 @@ class PromptBuilder:
             os_info = self.session_state.get("os_info", "")
             render_debug_active = bool(self.session_state.get("render_debug_active", False))
             render_log_path = self.session_state.get("render_log_path", "")
-            render_ansi_path = self.session_state.get("render_ansi_path", "")
             tui_screenshot_available = render_debug_active and bool(
                 self.session_state.get("tui_screenshot_available", False)
             )
@@ -227,7 +225,6 @@ class PromptBuilder:
             os_info=os_info,
             render_debug_active=render_debug_active,
             render_log_path=render_log_path,
-            render_ansi_path=render_ansi_path,
             tui_screenshot_available=tui_screenshot_available,
             render_screenshots_dir=render_screenshots_dir,
             metrics_path=metrics_path,

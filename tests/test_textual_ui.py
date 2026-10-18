@@ -3769,35 +3769,6 @@ def test_textual_feed_keeps_regular_agent_message_persistent():
     assert model.items[0].transient is False
 
 
-def test_transient_overlay_replace_reads_previous_lines_when_executed():
-    from quimera.ui.overlay import TransientOverlay
-
-    lines = [1]
-    overlay = TransientOverlay(lines)
-    audits = []
-
-    replace = overlay.build_replace(
-        "novo",
-        version=1,
-        get_version_fn=lambda: 1,
-        audit_fn=lambda event, **payload: audits.append((event, payload)),
-    )
-    lines[0] = 4
-
-    class FakeStdout:
-        def write(self, _value):
-            return None
-
-        def flush(self):
-            return None
-
-    with patch("quimera.ui.overlay.sys.stdout", FakeStdout()):
-        replace()
-
-    assert audits[0][0] == "transient_replace"
-    assert audits[0][1]["prev_lines"] == 4
-
-
 def test_textual_renderer_formats_agent_error_metadata():
     bridge = TextualUiBridge()
     emitted = []

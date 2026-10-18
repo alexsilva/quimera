@@ -32,7 +32,7 @@ class TestAppHistory(unittest.TestCase):
 
     @patch("quimera.tasks.api.init_db")
     @patch("quimera.tasks.api.add_job")
-    @patch("quimera.app.bootstrap.wiring.TerminalRenderer")
+    @patch("quimera.app.bootstrap.wiring.PlainTextRenderer")
     @patch("quimera.app.bootstrap.wiring.RenderAuditLogger")
     @patch("quimera.app.bootstrap.wiring.ConfigManager")
     @patch("quimera.app.bootstrap.wiring.ContextManager")
@@ -83,7 +83,7 @@ class TestAppHistory(unittest.TestCase):
 
     @patch("quimera.tasks.api.init_db")
     @patch("quimera.tasks.api.add_job")
-    @patch("quimera.app.bootstrap.wiring.TerminalRenderer")
+    @patch("quimera.app.bootstrap.wiring.PlainTextRenderer")
     @patch("quimera.app.bootstrap.wiring.ConfigManager")
     @patch("quimera.app.bootstrap.wiring.ContextManager")
     @patch("quimera.app.bootstrap.wiring.SessionStorage")
@@ -133,7 +133,7 @@ class TestAppHistory(unittest.TestCase):
 
     @patch("quimera.tasks.api.init_db")
     @patch("quimera.tasks.api.add_job")
-    @patch("quimera.app.bootstrap.wiring.TerminalRenderer")
+    @patch("quimera.app.bootstrap.wiring.PlainTextRenderer")
     @patch("quimera.app.bootstrap.wiring.RenderAuditLogger")
     @patch("quimera.app.bootstrap.wiring.ConfigManager")
     @patch("quimera.app.bootstrap.wiring.ContextManager")
@@ -178,7 +178,6 @@ class TestAppHistory(unittest.TestCase):
 
         mock_audit_logger.assert_called_once_with(
             app.session_paths.render_log_path_for("test"),
-            app.session_paths.render_ansi_path_for("test"),
         )
         _, kwargs = mock_term.call_args
         self.assertIs(kwargs["audit_logger"], audit_instance)

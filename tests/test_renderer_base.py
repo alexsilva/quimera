@@ -2,7 +2,7 @@
 import unittest
 
 from quimera.ui.base import RendererBase
-from quimera.ui.renderer import TerminalRenderer
+from quimera.ui.plain import PlainTextRenderer
 from quimera.ui.textual.constants import (
     format_failover_message,
     format_retry_message,
@@ -50,6 +50,9 @@ CONTRACT = [
     "clear_screen",
     "selection_window",
     "approval_window",
+    "input_window",
+    "external_window",
+    "reset_visual_state",
     "agent_window_controller",
     "set_profile_resolver",
     "set_orchestrator",
@@ -156,6 +159,12 @@ class TestRendererBaseContract(unittest.TestCase):
             pass
         with renderer.approval_window(title="t"):
             pass
+        with renderer.input_window(owner="codex", metadata={"question": "q"}):
+            pass
+        with renderer.external_window("external:editor", title="Editor", metadata={}) as window:
+            self.assertIsNone(window)
+        self.assertIsNone(renderer.reset_visual_state())
+        self.assertIsNone(renderer.reset_visual_state("codex"))
         self.assertEqual(renderer.system_messages, [])
 
     def test_show_plain_and_turn_summary_fall_back_to_show_system(self):
@@ -177,12 +186,12 @@ class TestRendererBaseContract(unittest.TestCase):
         self.assertFalse(RendererBase.supports_agent_feed)
         self.assertFalse(RendererBase.supports_structured_agent_activity)
         self.assertTrue(TextualRenderer.supports_structured_agent_activity)
-        self.assertFalse(TerminalRenderer.supports_structured_agent_activity)
+        self.assertFalse(PlainTextRenderer.supports_structured_agent_activity)
         self.assertEqual(_RecordingRenderer().theme_name, "")
         self.assertIsNone(_RecordingRenderer().cycle_theme())
 
     def test_production_renderers_inherit_base(self):
-        self.assertTrue(issubclass(TerminalRenderer, RendererBase))
+        self.assertTrue(issubclass(PlainTextRenderer, RendererBase))
         self.assertTrue(issubclass(TextualRenderer, RendererBase))
 
 
