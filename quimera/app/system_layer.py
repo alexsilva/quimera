@@ -73,7 +73,6 @@ class SystemLayerDependencies:
     redisplay_prompt: Callable | None = None
     output_lock: Any = None
     prompt_owner_thread_id_getter: Callable | None = None
-    run_above_active_prompt: Callable | None = None
     read_user_input: Callable | None = None
     task_command_handler: Callable | None = None
     debate_command_handler: Callable | None = None
@@ -137,7 +136,6 @@ class AppSystemLayer:
         redisplay_prompt=None,
         output_lock=None,
         prompt_owner_thread_id_getter=None,
-        run_above_active_prompt=None,
         read_user_input=None,
         task_command_handler=None,
         debate_command_handler=None,
@@ -169,7 +167,6 @@ class AppSystemLayer:
                 redisplay_prompt=redisplay_prompt,
                 output_lock=output_lock,
                 prompt_owner_thread_id_getter=prompt_owner_thread_id_getter,
-                run_above_active_prompt=run_above_active_prompt,
                 deferred_messages_getter=deferred_messages_getter,
                 max_deferred_messages_getter=max_deferred_messages_getter,
             )
@@ -186,7 +183,6 @@ class AppSystemLayer:
         self.prompt_owner_thread_id_getter = (
             prompt_owner_thread_id_getter or (lambda: None)
         )
-        self.run_above_active_prompt = run_above_active_prompt
         self.read_user_input = read_user_input
         self.task_command_handler = task_command_handler
         self.debate_command_handler = debate_command_handler

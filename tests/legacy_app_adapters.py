@@ -51,7 +51,7 @@ def dispatch_services_from_app(app, **kwargs):
         )(),
         agent_run_sink=getattr(app, 'agent_run_sink', None),
         debug_prompt_metrics=lambda: getattr(app, 'debug_prompt_metrics', False),
-        redisplay_prompt=lambda **kw: getattr(app, '_redisplay_user_prompt_if_needed', lambda **kw_: None)(**kw),
+        redisplay_prompt=lambda: getattr(app, '_redisplay_user_prompt_if_needed', lambda: None)(),
         output_lock=lambda: getattr(app, '_output_lock', None),
         counter_lock=lambda: getattr(app, '_counter_lock', None),
         session_metrics=lambda: getattr(app, 'session_metrics', None),
@@ -125,33 +125,21 @@ class LegacyAgentPoolAdapter:
         return name in self.agents
 
 
-def _get_runtime_or_legacy_attr(app, runtime_name: str, legacy_name: str, default=None):
-    runtime_state = getattr(app, "runtime_state", None)
-    if runtime_state is not None:
-        return getattr(runtime_state, runtime_name, default)
-    return getattr(app, legacy_name, default)
-
-
-def _get_input_gate_status(app) -> bool | None:
+def resolve_input_status_from_app(app) -> bool:
+    """Estado do prompt vem só do ``app.input_gate`` (``is_active``), como em produção."""
     input_gate = getattr(app, "input_gate", None)
-    if input_gate is None:
-        return None
     is_active = getattr(input_gate, "is_active", None)
     if not callable(is_active):
-        return None
+        return False
     try:
-        status = is_active()
+        return is_active() is True
     except Exception:
-        return None
-    if isinstance(status, bool):
-        return status
-    return None
+        return False
 
 
-def _get_input_gate_owner_thread_id(app):
+def resolve_prompt_owner_thread_id_from_app(app) -> int | None:
+    """Thread dona do prompt vem só do ``app.input_gate`` (``get_owner_thread_id``)."""
     input_gate = getattr(app, "input_gate", None)
-    if input_gate is None:
-        return None
     getter = getattr(input_gate, "get_owner_thread_id", None)
     if not callable(getter):
         return None
@@ -159,38 +147,11 @@ def _get_input_gate_owner_thread_id(app):
         owner = getter()
     except Exception:
         return None
-    if isinstance(owner, int):
-        return owner
-    return None
-
-
-def resolve_input_status_from_app(app):
-    gate_status = _get_input_gate_status(app)
-    if gate_status is not None:
-        return gate_status
-    return _get_runtime_or_legacy_attr(
-        app,
-        runtime_name="nonblocking_input_status",
-        legacy_name="_nonblocking_input_status",
-        default="idle",
-    )
-
-
-def resolve_prompt_owner_thread_id_from_app(app):
-    gate_owner_thread_id = _get_input_gate_owner_thread_id(app)
-    if gate_owner_thread_id is not None:
-        return gate_owner_thread_id
-    return _get_runtime_or_legacy_attr(
-        app,
-        runtime_name="prompt_owning_thread_id",
-        legacy_name="_prompt_owning_thread_id",
-        default=None,
-    )
+    return owner if isinstance(owner, int) else None
 
 
 def system_layer_from_app(app, **overrides):
     """Constrói AppSystemLayer a partir de um objeto app-like."""
-    input_gate = getattr(app, "input_gate", None)
     task_services = getattr(app, "task_services", None)
     display_service = DisplayService(
         renderer=lambda: getattr(app, "renderer", None),
@@ -198,7 +159,6 @@ def system_layer_from_app(app, **overrides):
         redisplay_prompt=getattr(app, "_redisplay_user_prompt_if_needed", None),
         output_lock=lambda: getattr(app, "_output_lock", nullcontext()),
         prompt_owner_thread_id_getter=lambda: resolve_prompt_owner_thread_id_from_app(app),
-        run_above_active_prompt=getattr(input_gate, "run_in_terminal_message", None),
         deferred_messages_getter=lambda: getattr(app, "_deferred_system_messages", []),
         max_deferred_messages_getter=lambda: getattr(app, "_MAX_DEFERRED_SYSTEM_MESSAGES", 20),
     )
@@ -218,7 +178,6 @@ def system_layer_from_app(app, **overrides):
         clear_screen=lambda: getattr(app, "clear_terminal_screen", lambda: None)(),
         redisplay_prompt=getattr(app, "_redisplay_user_prompt_if_needed", None),
         prompt_owner_thread_id_getter=lambda: resolve_prompt_owner_thread_id_from_app(app),
-        run_above_active_prompt=getattr(input_gate, "run_in_terminal_message", None),
         read_user_input=getattr(app, "read_user_input", None),
         task_command_handler=getattr(task_services, "handle_task_command", None),
         debate_command_handler=getattr(getattr(app, "debate_service", None), "handle_command", None),

@@ -466,9 +466,8 @@ class CoreFacadeMixin:
             return
         cleanup_agent_transient_if_unowned(renderer, agent_name)
 
-    def _redisplay_user_prompt_if_needed(self, clear_first: bool = True) -> None:
-        """Executa redisplay user prompt if needed."""
-        _ = clear_first  # Mantido por compatibilidade de assinatura.
+    def _redisplay_user_prompt_if_needed(self) -> None:
+        """Pede ao InputGate ativo que reapresente toolbar e sugestões (só em TTY)."""
         stdin = _core_sys().stdin
         if stdin is None or not stdin.isatty():
             return
@@ -732,14 +731,6 @@ class CoreFacadeMixin:
             os.environ.pop("QUIMERA_CURRENT_JOB_ID", None)
         else:
             os.environ["QUIMERA_CURRENT_JOB_ID"] = previous
-
-    def _should_render_ui_event_above_prompt(self) -> bool:
-        """Retorna True quando há prompt ativo controlado por outra thread."""
-        return self._ui_event_handler._should_render_ui_event_above_prompt()
-
-    def _run_ui_event_above_prompt(self, callback) -> bool:
-        """Tenta renderizar callback acima do prompt ativo via InputGate."""
-        return self._ui_event_handler._run_ui_event_above_prompt(callback)
 
     def run(self):
         """Executa o loop interativo do chat multiagente."""

@@ -4,7 +4,6 @@ from __future__ import annotations
 import sys
 import threading
 import queue
-from contextlib import nullcontext
 
 from .render_event import RenderEvent
 from ..tasks.events import (
@@ -31,7 +30,6 @@ class UiEventHandler:
         *,
         renderer,
         input_gate,
-        runtime_state,
         system_layer,
         event_sink,
         show_muted_message,
@@ -39,11 +37,9 @@ class UiEventHandler:
         show_warning_message,
         show_error_message,
         redisplay_user_prompt,
-        output_lock,
     ):
         self._renderer = renderer
         self._input_gate = input_gate
-        self._runtime_state = runtime_state
         self._system_layer = system_layer
         self._event_sink = event_sink
         self._show_muted_message = show_muted_message
@@ -51,7 +47,6 @@ class UiEventHandler:
         self._show_warning_message = show_warning_message
         self._show_error_message = show_error_message
         self._redisplay_user_prompt = redisplay_user_prompt
-        self._output_lock = output_lock
         self._subscriptions: list = []
 
     # ------------------------------------------------------------------
@@ -108,7 +103,7 @@ class UiEventHandler:
         return self._subscriptions
 
     # ------------------------------------------------------------------
-    # Auxiliares de renderização acima do prompt
+    # Auxiliares de renderização
     # ------------------------------------------------------------------
 
     def _render_agent_activity(self, agent, activity: str, meta: dict) -> None:
@@ -142,55 +137,39 @@ class UiEventHandler:
                 format_retry_message(reason, attempt, limit, detail)
             )
 
-    def _should_render_ui_event_above_prompt(self) -> bool:
-        """Retorna True quando há prompt ativo controlado por outra thread."""
+    def _prompt_owned_by_other_thread(self) -> bool:
+        """Retorna True quando outra thread está bloqueada lendo input no gate.
+
+        Em TTY o loop principal lê o input numa thread leitora; quando a main
+        thread renderiza um evento nessa condição, o gate precisa reapresentar
+        toolbar e sugestões (``redisplay``). Sem TTY, sem gate ou com o prompt
+        na própria thread, nada a fazer.
+        """
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
             return False
         input_gate = self._input_gate
-        if input_gate is not None:
-            is_active = getattr(input_gate, "is_active", None)
-            get_owner_thread_id = getattr(input_gate, "get_owner_thread_id", None)
-            if callable(is_active) and callable(get_owner_thread_id):
-                try:
-                    active_state = is_active()
-                    if not isinstance(active_state, bool) or not active_state:
-                        return False
-                    owner_thread_id = get_owner_thread_id()
-                except Exception as exc:
-                    logger.debug("input gate: owner_thread_id indisponível: %s", exc)
-                    owner_thread_id = None
-                if not isinstance(owner_thread_id, int):
-                    return False
-                return owner_thread_id != threading.get_ident()
-        status_lock = getattr(self._runtime_state, "nonblocking_input_status_lock", nullcontext())
-        with status_lock:
-            if self._runtime_state.nonblocking_input_status != "reading":
+        if input_gate is None:
+            return False
+        is_active = getattr(input_gate, "is_active", None)
+        get_owner_thread_id = getattr(input_gate, "get_owner_thread_id", None)
+        if not callable(is_active) or not callable(get_owner_thread_id):
+            return False
+        try:
+            if is_active() is not True:
                 return False
-        owner_thread_id = getattr(self._runtime_state, "prompt_owning_thread_id", None)
-        if owner_thread_id is None:
+            owner_thread_id = get_owner_thread_id()
+        except Exception as exc:
+            logger.debug("input gate: estado do prompt indisponível: %s", exc)
+            return False
+        if not isinstance(owner_thread_id, int):
             return False
         return owner_thread_id != threading.get_ident()
 
-    def _run_ui_event_above_prompt(self, callback) -> bool:
-        """Tenta renderizar callback acima do prompt ativo via InputGate."""
-        if not callable(callback):
-            return False
-        run_in_terminal_message = getattr(self._input_gate, "run_in_terminal_message", None)
-        if not callable(run_in_terminal_message):
-            return False
-        output_lock = self._output_lock
-
-        def _render_callback() -> None:
-            with output_lock:
-                callback()
-                self._renderer.flush()
-
-        try:
-            return bool(run_in_terminal_message(_render_callback))
-        except Exception as exc:
-            logger.debug("render acima do prompt falhou: %s", exc)
-            return False
+    def _redisplay_after_render(self) -> None:
+        """Pede redisplay ao gate quando o evento saiu fora da thread dona do prompt."""
+        if self._prompt_owned_by_other_thread():
+            self._redisplay_user_prompt()
 
     # ------------------------------------------------------------------
     # Drenagem da fila de UI
@@ -217,94 +196,36 @@ class UiEventHandler:
                             self._show_muted_message(payload)
                         continue
 
-                    payload = event.payload
-
-                    def _render_text_event(
-                        _no_response=no_response,
-                        _agent_name=agent_name,
-                        _payload=payload,
-                    ) -> None:
-                        if _no_response:
-                            self._renderer.show_no_response(_agent_name)
-                        else:
-                            self._renderer.show_message(_agent_name, _payload)
-
-                    if self._should_render_ui_event_above_prompt():
-                        if not self._run_ui_event_above_prompt(_render_text_event):
-                            _render_text_event()
-                            self._redisplay_user_prompt(clear_first=False)
-                        continue
-                    _render_text_event()
+                    if no_response:
+                        self._renderer.show_no_response(agent_name)
+                    else:
+                        self._renderer.show_message(agent_name, event.payload)
+                    self._redisplay_after_render()
                 elif event_type == RenderEvent.WARNING:
                     self._show_warning_message(event.payload)
                 elif event_type == RenderEvent.ERROR:
                     self._show_error_message(event.payload)
                 elif event_type == RenderEvent.DELEGATION:
                     meta = event.metadata or {}
-                    delegation_agent = event.agent
-                    delegation_to = meta.get("to")
-                    delegation_task = meta.get("task")
-                    delegation_id = meta.get("delegation_id")
-                    delegation_chain = meta.get("chain")
-
-                    def _render_delegation_event(
-                        _agent=delegation_agent,
-                        _to=delegation_to,
-                        _task=delegation_task,
-                        _delegation_id=delegation_id,
-                        _chain=delegation_chain,
-                    ) -> None:
-                        self._renderer.show_delegation(
-                            _agent,
-                            _to,
-                            task=_task,
-                            delegation_id=_delegation_id,
-                            chain=_chain,
-                        )
-
-                    if self._should_render_ui_event_above_prompt():
-                        if not self._run_ui_event_above_prompt(_render_delegation_event):
-                            _render_delegation_event()
-                            self._redisplay_user_prompt(clear_first=False)
-                        continue
-                    _render_delegation_event()
+                    self._renderer.show_delegation(
+                        event.agent,
+                        meta.get("to"),
+                        task=meta.get("task"),
+                        delegation_id=meta.get("delegation_id"),
+                        chain=meta.get("chain"),
+                    )
+                    self._redisplay_after_render()
                 elif event_type == RenderEvent.AGENT_ACTIVITY:
                     meta = event.metadata or {}
                     activity = str(meta.get("activity") or "").strip().lower()
-                    activity_agent = event.agent
-
-                    def _render_agent_activity_event(
-                        _agent=activity_agent,
-                        _activity=activity,
-                        _meta=meta,
-                    ) -> None:
-                        self._render_agent_activity(_agent, _activity, _meta)
-
-                    if self._should_render_ui_event_above_prompt():
-                        if not self._run_ui_event_above_prompt(_render_agent_activity_event):
-                            _render_agent_activity_event()
-                            self._redisplay_user_prompt(clear_first=False)
-                        continue
-                    _render_agent_activity_event()
+                    self._render_agent_activity(event.agent, activity, meta)
+                    self._redisplay_after_render()
                 elif event_type == RenderEvent.TURN_SUMMARY:
-                    summary_agent = event.agent
-                    summary_payload = event.payload
-
-                    def _render_turn_summary_event(
-                        _agent=summary_agent,
-                        _payload=summary_payload,
-                    ) -> None:
-                        self._renderer.show_turn_summary(_agent, _payload)
-
-                    if self._should_render_ui_event_above_prompt():
-                        if not self._run_ui_event_above_prompt(_render_turn_summary_event):
-                            _render_turn_summary_event()
-                            self._redisplay_user_prompt(clear_first=False)
-                        continue
-                    _render_turn_summary_event()
+                    self._renderer.show_turn_summary(event.agent, event.payload)
+                    self._redisplay_after_render()
                 elif event_type == RenderEvent.REDISPLAY:
                     self._renderer.flush()
-                    self._redisplay_user_prompt(clear_first=False)
+                    self._redisplay_user_prompt()
                 elif event_type == RenderEvent.EVENT:
                     meta = event.metadata or {}
                     event_obj = meta.get("event_obj")

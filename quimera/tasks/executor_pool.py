@@ -129,8 +129,6 @@ class TaskExecutorPool:
         session_paths: Any = None,
         renderer: Any = None,
         get_renderer: Callable[[], Any] | None = None,
-        input_services: Any = None,
-        get_input_services: Callable[[], Any] | None = None,
         input_gate: Any = None,
         get_input_gate: Callable[[], Any] | None = None,
         event_sink: Any = None,
@@ -195,8 +193,6 @@ class TaskExecutorPool:
         self._session_paths = session_paths
         self._renderer = renderer
         self._get_renderer = get_renderer
-        self._input_services = input_services
-        self._get_input_services = get_input_services
         self._input_gate = input_gate
         self._get_input_gate = get_input_gate
         self._event_sink = event_sink
@@ -369,7 +365,6 @@ class TaskExecutorPool:
     ) -> ToolExecutor:
         """Cria o executor de ferramentas com configuração padrão."""
         renderer = self.get_renderer()
-        input_services = self.get_input_services()
         input_gate = self.get_input_gate()
         workspace = self.get_workspace()
         rt_config = ToolRuntimeConfig(
@@ -382,8 +377,6 @@ class TaskExecutorPool:
         approval_handler = ApprovalManager(
             rt_config,
             renderer=renderer,
-            suspend_fn=input_services.suspend_nonblocking if input_services else None,
-            resume_fn=input_services.resume_nonblocking if input_services else None,
             input_gate=input_gate,
         )
         if register_as_primary:
@@ -471,11 +464,6 @@ class TaskExecutorPool:
         if self._renderer is not None:
             return self._renderer
         return self._get_renderer() if self._get_renderer else None
-
-    def get_input_services(self):
-        if self._input_services is not None:
-            return self._input_services
-        return self._get_input_services() if self._get_input_services else None
 
     def get_input_gate(self):
         if self._input_gate is not None:
@@ -727,10 +715,10 @@ class TaskExecutorPool:
         if not self._register_background_agent_client(background_agent_client):
             return None
 
-        def _redisplay_prompt(**kw):
+        def _redisplay_prompt():
             callback = self.get_redisplay_prompt()
             if callable(callback):
-                callback(**kw)
+                callback()
 
         get_session_services = self._get_session_services or (lambda: None)
 

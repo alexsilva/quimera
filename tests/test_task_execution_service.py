@@ -109,7 +109,6 @@ def build_task_services(app):
         get_task_executors=lambda: list(app.task_executors),
         set_task_executors=lambda executors: setattr(app, "task_executors", list(executors)),
         get_renderer=lambda: app.renderer,
-        get_input_services=lambda: app.input_services,
         get_input_gate=lambda: app.input_gate,
         get_event_sink=lambda: app.event_sink,
         get_agent_run_sink=lambda: app.agent_run_sink,

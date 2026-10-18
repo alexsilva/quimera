@@ -106,13 +106,11 @@ def _materialize_chat_lifecycle(app):
 def _materialize_ui_event_handler(app):
     """Cria UiEventHandler a partir dos atributos já setados no app (test helper)."""
     from quimera.app.ui_event_handler import UiEventHandler
-    from contextlib import nullcontext
     if getattr(app, "session_state_mgr", None) is None:
         app.session_state_mgr = Mock()
     app._ui_event_handler = UiEventHandler(
         renderer=getattr(app, "renderer", None),
         input_gate=getattr(app, "input_gate", None),
-        runtime_state=getattr(app, "runtime_state", None),
         system_layer=getattr(app, "system_layer", None),
         event_sink=getattr(app, "event_sink", None),
         show_muted_message=(
@@ -132,7 +130,6 @@ def _materialize_ui_event_handler(app):
             or getattr(getattr(app, "system_layer", None), "show_error_message", lambda msg: None)
         ),
         redisplay_user_prompt=getattr(app, "_redisplay_user_prompt_if_needed", lambda: None),
-        output_lock=getattr(app, "_output_lock", nullcontext()),
     )
     if getattr(app, "chat_lifecycle", None) is None:
         _materialize_chat_lifecycle(app)
@@ -733,32 +730,31 @@ class TestTurnCycle(unittest.TestCase):
         self.assertTrue(app.turn_manager.is_human_turn)
         app.agent_client._show_cancelled_once.assert_called_once_with()
 
-    def test_drain_ui_events_routes_agent_text_above_active_prompt(self):
-        """Eventos TEXT devem usar run_in_terminal quando o prompt humano está ativo."""
+    def _prompt_owned_by(self, thread_id):
+        class InputGate:
+            def is_active(self):
+                return True
+
+            def get_owner_thread_id(self):
+                return thread_id
+
+        return InputGate()
+
+    def test_drain_ui_events_renders_text_and_redisplays_when_other_thread_owns_prompt(self):
+        """TEXT renderiza na hora; com o prompt em outra thread, o gate recebe redisplay."""
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
         rendered_messages = []
-        scheduled_callbacks = []
 
         class Renderer(RendererBase):
             def show_message(self, agent, payload):
                 rendered_messages.append((agent, payload))
 
-            def flush(self):
-                return None
-
-        class InputGate:
-            def run_in_terminal_message(self, callback):
-                scheduled_callbacks.append(callback)
-                return True
-
         app.renderer = Renderer()
-        app.input_gate = InputGate()
+        app.input_gate = self._prompt_owned_by(threading.get_ident() + 1)
         app._output_lock = threading.Lock()
-        app.runtime_state.nonblocking_input_status_lock = threading.Lock()
-        app.runtime_state.nonblocking_input_status = "reading"
-        app.runtime_state.prompt_owning_thread_id = object()
+        app._redisplay_user_prompt_if_needed = Mock()
 
         ui_queue = queue.Queue()
         ui_queue.put(RenderEvent(RenderEvent.TEXT, "mensagem do agente", agent="codex"))
@@ -766,24 +762,49 @@ class TestTurnCycle(unittest.TestCase):
         _materialize_ui_event_handler(app)
         _materialize_chat_lifecycle(app)
 
-        with patch("quimera.app.core.sys.stdin") as mock_stdin:
+        with patch("quimera.app.ui_event_handler.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
             app.chat_lifecycle.drain_ui_events(ui_queue)
 
-        self.assertEqual(rendered_messages, [])
-        self.assertEqual(len(scheduled_callbacks), 1)
-
-        scheduled_callbacks[0]()
         self.assertEqual(rendered_messages, [("codex", "mensagem do agente")])
+        app._redisplay_user_prompt_if_needed.assert_called_once_with()
 
-    def test_drain_ui_events_keeps_text_callback_payload_isolated_when_scheduled(self):
-        """Callbacks TEXT agendados devem preservar payload/agent da iteração de origem."""
+    def test_drain_ui_events_does_not_redisplay_when_prompt_belongs_to_current_thread(self):
+        """Com o prompt na própria thread não há redisplay a pedir."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
+        rendered_messages = []
+
+        class Renderer(RendererBase):
+            def show_message(self, agent, payload):
+                rendered_messages.append((agent, payload))
+
+        app.renderer = Renderer()
+        app.input_gate = self._prompt_owned_by(threading.get_ident())
+        app._output_lock = threading.Lock()
+        app._redisplay_user_prompt_if_needed = Mock()
+
+        ui_queue = queue.Queue()
+        ui_queue.put(RenderEvent(RenderEvent.TEXT, "mensagem do agente", agent="codex"))
+
+        _materialize_ui_event_handler(app)
+        _materialize_chat_lifecycle(app)
+
+        with patch("quimera.app.ui_event_handler.sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = True
+            app.chat_lifecycle.drain_ui_events(ui_queue)
+
+        self.assertEqual(rendered_messages, [("codex", "mensagem do agente")])
+        app._redisplay_user_prompt_if_needed.assert_not_called()
+
+    def test_drain_ui_events_renders_each_text_event_in_order(self):
+        """Dois TEXT seguidos: cada um renderiza com seu payload e pede um redisplay."""
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
         rendered_messages = []
         no_response_calls = []
-        scheduled_callbacks = []
 
         class Renderer(RendererBase):
             def show_message(self, agent, payload):
@@ -792,20 +813,10 @@ class TestTurnCycle(unittest.TestCase):
             def show_no_response(self, agent):
                 no_response_calls.append(agent)
 
-            def flush(self):
-                return None
-
-        class InputGate:
-            def run_in_terminal_message(self, callback):
-                scheduled_callbacks.append(callback)
-                return True
-
         app.renderer = Renderer()
-        app.input_gate = InputGate()
+        app.input_gate = self._prompt_owned_by(threading.get_ident() + 1)
         app._output_lock = threading.Lock()
-        app.runtime_state.nonblocking_input_status_lock = threading.Lock()
-        app.runtime_state.nonblocking_input_status = "reading"
-        app.runtime_state.prompt_owning_thread_id = object()
+        app._redisplay_user_prompt_if_needed = Mock()
 
         ui_queue = queue.Queue()
         ui_queue.put(RenderEvent(RenderEvent.TEXT, "primeira", agent="codex"))
@@ -821,46 +832,29 @@ class TestTurnCycle(unittest.TestCase):
         _materialize_ui_event_handler(app)
         _materialize_chat_lifecycle(app)
 
-        with patch("quimera.app.core.sys.stdin") as mock_stdin:
+        with patch("quimera.app.ui_event_handler.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
             app.chat_lifecycle.drain_ui_events(ui_queue)
 
-        self.assertEqual(len(scheduled_callbacks), 2)
-        self.assertEqual(rendered_messages, [])
-        self.assertEqual(no_response_calls, [])
-
-        scheduled_callbacks[0]()
-        scheduled_callbacks[1]()
-
         self.assertEqual(rendered_messages, [("codex", "primeira")])
         self.assertEqual(no_response_calls, ["claude"])
+        self.assertEqual(app._redisplay_user_prompt_if_needed.call_count, 2)
 
-    def test_drain_ui_events_keeps_delegation_callback_payload_isolated_when_scheduled(self):
-        """Callbacks DELEGATION agendados devem manter metadata da iteração correta."""
+    def test_drain_ui_events_renders_each_delegation_event_in_order(self):
+        """Dois DELEGATION seguidos: cada um renderiza com a própria metadata."""
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
         delegation_calls = []
-        scheduled_callbacks = []
 
         class Renderer(RendererBase):
             def show_delegation(self, from_agent, to_agent, task=None, **_kwargs):
                 delegation_calls.append((from_agent, to_agent, task))
 
-            def flush(self):
-                return None
-
-        class InputGate:
-            def run_in_terminal_message(self, callback):
-                scheduled_callbacks.append(callback)
-                return True
-
         app.renderer = Renderer()
-        app.input_gate = InputGate()
+        app.input_gate = self._prompt_owned_by(threading.get_ident() + 1)
         app._output_lock = threading.Lock()
-        app.runtime_state.nonblocking_input_status_lock = threading.Lock()
-        app.runtime_state.nonblocking_input_status = "reading"
-        app.runtime_state.prompt_owning_thread_id = object()
+        app._redisplay_user_prompt_if_needed = Mock()
 
         ui_queue = queue.Queue()
         ui_queue.put(
@@ -883,15 +877,9 @@ class TestTurnCycle(unittest.TestCase):
         _materialize_ui_event_handler(app)
         _materialize_chat_lifecycle(app)
 
-        with patch("quimera.app.core.sys.stdin") as mock_stdin:
+        with patch("quimera.app.ui_event_handler.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
             app.chat_lifecycle.drain_ui_events(ui_queue)
-
-        self.assertEqual(len(scheduled_callbacks), 2)
-        self.assertEqual(delegation_calls, [])
-
-        scheduled_callbacks[0]()
-        scheduled_callbacks[1]()
 
         self.assertEqual(
             delegation_calls,
@@ -900,6 +888,80 @@ class TestTurnCycle(unittest.TestCase):
                 ("claude", "gemini", "T2"),
             ],
         )
+        self.assertEqual(app._redisplay_user_prompt_if_needed.call_count, 2)
+
+    def test_drain_ui_events_redisplays_after_agent_activity_and_turn_summary(self):
+        """AGENT_ACTIVITY e TURN_SUMMARY seguem a mesma regra dos eventos TEXT."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
+        failovers = []
+        summaries = []
+
+        class Renderer(RendererBase):
+            supports_structured_agent_activity = True
+
+            def notify_agent_failover(self, agent, *, target, message=""):
+                failovers.append((agent, target, message))
+
+            def show_turn_summary(self, agent, payload):
+                summaries.append((agent, payload))
+
+        app.renderer = Renderer()
+        app.input_gate = self._prompt_owned_by(threading.get_ident() + 1)
+        app._output_lock = threading.Lock()
+        app._redisplay_user_prompt_if_needed = Mock()
+
+        ui_queue = queue.Queue()
+        ui_queue.put(
+            RenderEvent(
+                RenderEvent.AGENT_ACTIVITY,
+                "",
+                agent="codex",
+                metadata={"activity": "failover", "target": "claude", "message": "timeout"},
+            )
+        )
+        ui_queue.put(RenderEvent(RenderEvent.TURN_SUMMARY, "resumo", agent="claude"))
+
+        _materialize_ui_event_handler(app)
+        _materialize_chat_lifecycle(app)
+
+        with patch("quimera.app.ui_event_handler.sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = True
+            app.chat_lifecycle.drain_ui_events(ui_queue)
+
+        self.assertEqual(failovers, [("codex", "claude", "timeout")])
+        self.assertEqual(summaries, [("claude", "resumo")])
+        self.assertEqual(app._redisplay_user_prompt_if_needed.call_count, 2)
+
+    def test_drain_ui_events_does_not_redisplay_without_tty(self):
+        """Sem TTY (pipe) não há prompt a reapresentar, mesmo com o gate em outra thread."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
+        rendered_messages = []
+
+        class Renderer(RendererBase):
+            def show_message(self, agent, payload):
+                rendered_messages.append((agent, payload))
+
+        app.renderer = Renderer()
+        app.input_gate = self._prompt_owned_by(threading.get_ident() + 1)
+        app._output_lock = threading.Lock()
+        app._redisplay_user_prompt_if_needed = Mock()
+
+        ui_queue = queue.Queue()
+        ui_queue.put(RenderEvent(RenderEvent.TEXT, "mensagem do agente", agent="codex"))
+
+        _materialize_ui_event_handler(app)
+        _materialize_chat_lifecycle(app)
+
+        with patch("quimera.app.ui_event_handler.sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = False
+            app.chat_lifecycle.drain_ui_events(ui_queue)
+
+        self.assertEqual(rendered_messages, [("codex", "mensagem do agente")])
+        app._redisplay_user_prompt_if_needed.assert_not_called()
 
     def test_drain_ui_events_text_without_agent_is_rendered_as_system_message(self):
         """Evento TEXT sem agente não deve renderizar card 'Unknown'."""
@@ -909,9 +971,6 @@ class TestTurnCycle(unittest.TestCase):
         app.renderer = Mock()
         app.show_muted_message = Mock()
         app._output_lock = threading.Lock()
-        app.runtime_state.nonblocking_input_status_lock = threading.Lock()
-        app.runtime_state.nonblocking_input_status = "idle"
-        app.runtime_state.prompt_owning_thread_id = None
 
         ui_queue = queue.Queue()
         ui_queue.put(RenderEvent(RenderEvent.TEXT, "Responda para CODEX:", agent=None))

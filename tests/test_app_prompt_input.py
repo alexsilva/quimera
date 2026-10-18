@@ -516,7 +516,6 @@ def test_simple_input_gate_basic():
     assert gate.is_active() is False
     assert gate.get_owner_thread_id() is None
     assert gate.get_line_buffer() == ""
-    assert gate.run_in_terminal_message(lambda: None) is False
 
 
 def test_simple_input_gate_setters():

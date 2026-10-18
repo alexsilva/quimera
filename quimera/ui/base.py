@@ -199,9 +199,6 @@ class RendererBase:
     def set_summarizing(self, active):
         return None
 
-    def set_prompt_integration(self, is_active_fn, run_above_fn):
-        return None
-
     def log_debug_event(self, event, **payload):
         return None
 

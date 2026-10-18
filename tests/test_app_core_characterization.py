@@ -35,11 +35,6 @@ class FakeInputGate:
     def get_owner_thread_id(self):
         return None
 
-    def run_in_terminal_message(self, callback=None, *args, **kwargs):
-        if callable(callback):
-            return callback()
-        return None
-
     def set_toolbar_context_resolver(self, resolver):
         self.toolbar_context_resolver = resolver
 

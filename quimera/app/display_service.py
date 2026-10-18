@@ -45,16 +45,14 @@ class DisplayService:
         redisplay_prompt=None,
         output_lock=None,
         prompt_owner_thread_id_getter=None,
-        run_above_active_prompt=None,
         deferred_messages_getter=None,
         max_deferred_messages_getter=None,
     ):
         self.renderer = renderer
-        self.input_status_getter = input_status_getter or (lambda: "idle")
-        self.redisplay_prompt = redisplay_prompt or (lambda clear_first=True: None)
+        self.input_status_getter = input_status_getter or (lambda: False)
+        self.redisplay_prompt = redisplay_prompt or (lambda: None)
         self.output_lock = output_lock or nullcontext()
         self.prompt_owner_thread_id_getter = prompt_owner_thread_id_getter or (lambda: None)
-        self.run_above_active_prompt = run_above_active_prompt
         self._deferred_system_messages: list[tuple[str, str]] = []
         self._deferred_messages_getter = deferred_messages_getter
         self._max_deferred_messages_getter = max_deferred_messages_getter
@@ -216,21 +214,9 @@ class DisplayService:
 
         return result
 
-    def _is_input_reading(self) -> bool:
-        """Normaliza leitura de estado de prompt ativo (bool moderno ou string legada)."""
-        status = self.input_status_getter()
-        if isinstance(status, bool):
-            return status
-        return status == "reading"
-
     def _is_prompt_active(self) -> bool:
-        """Retorna se há um prompt interativo ativo no momento."""
-        return self._is_input_reading()
-
-    def _is_prompt_owner_thread(self) -> bool:
-        """Retorna se a thread atual é a dona do prompt interativo."""
-        current_thread_id = self.prompt_owner_thread_id_getter()
-        return current_thread_id is not None and current_thread_id == threading.get_ident()
+        """Retorna se o InputGate está ativo (aguardando input humano)."""
+        return self.input_status_getter() is True
 
     def _is_foreign_prompt_thread(self) -> bool:
         """Retorna se outra thread é a dona do prompt interativo."""
@@ -274,22 +260,6 @@ class DisplayService:
             return
         renderer.flush()
 
-    def _show_above_active_prompt(self, message: str, *, level: str) -> bool:
-        """Tenta publicar a mensagem acima do prompt ativo via InputGate."""
-        run_in_terminal_message = self.run_above_active_prompt
-        if not callable(run_in_terminal_message):
-            return False
-        renderer = self._get_renderer()
-        if renderer is None:
-            return False
-
-        def _render_callback() -> None:
-            with self._get_output_lock():
-                self._render_message(renderer, level, message)
-                self._flush_renderer(renderer)
-
-        return bool(run_in_terminal_message(_render_callback))
-
     def show_system_message(self, message: str) -> None:
         """Exibe system message."""
         renderer = self._get_renderer()
@@ -301,17 +271,15 @@ class DisplayService:
             if self._enqueue_deferred_message(message, level="system"):
                 return
         if self._is_prompt_active() and self._is_foreign_prompt_thread():
-            if self._show_above_active_prompt(message, level="system"):
-                return
-            if self._enqueue_deferred_message(message, level="system"):
-                return
+            self._enqueue_deferred_message(message, level="system")
+            return
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
             is_owning = current_thread_id is None or current_thread_id == threading.get_ident()
             renderer.show_system(message)
             self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
-                self.redisplay_prompt(clear_first=False)
+                self.redisplay_prompt()
 
     def show_muted_message(self, message: str) -> None:
         """Exibe mensagem em estilo neutro (dim) via writer thread do renderer."""
@@ -319,17 +287,15 @@ class DisplayService:
         if renderer is None:
             return
         if self._is_prompt_active() and self._is_foreign_prompt_thread():
-            if self._show_above_active_prompt(message, level="neutral"):
-                return
-            if self._enqueue_deferred_message(message, level="neutral"):
-                return
+            self._enqueue_deferred_message(message, level="neutral")
+            return
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
             is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
             renderer.show_system_neutral(message)
             self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
-                self.redisplay_prompt(clear_first=False)
+                self.redisplay_prompt()
 
     def show_warning_message(self, message: str) -> None:
         """Exibe warning de forma compatível com prompt ativo e background threads."""
@@ -337,17 +303,15 @@ class DisplayService:
         if renderer is None:
             return
         if self._is_prompt_active() and self._is_foreign_prompt_thread():
-            if self._show_above_active_prompt(message, level="warning"):
-                return
-            if self._enqueue_deferred_message(message, level="warning"):
-                return
+            self._enqueue_deferred_message(message, level="warning")
+            return
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
             is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
             renderer.show_warning(message)
             self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
-                self.redisplay_prompt(clear_first=False)
+                self.redisplay_prompt()
 
     def notify_agent_retry(
         self,
@@ -378,7 +342,7 @@ class DisplayService:
             )
             self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
-                self.redisplay_prompt(clear_first=False)
+                self.redisplay_prompt()
 
     def notify_agent_failover(
         self,
@@ -404,7 +368,7 @@ class DisplayService:
             renderer.notify_agent_failover(agent, target=target, message=message)
             self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
-                self.redisplay_prompt(clear_first=False)
+                self.redisplay_prompt()
 
     def show_error_message(self, message: str) -> None:
         """Exibe error de forma compatível com prompt ativo e background threads."""
@@ -412,17 +376,15 @@ class DisplayService:
         if renderer is None:
             return
         if self._is_prompt_active() and self._is_foreign_prompt_thread():
-            if self._show_above_active_prompt(message, level="error"):
-                return
-            if self._enqueue_deferred_message(message, level="error"):
-                return
+            self._enqueue_deferred_message(message, level="error")
+            return
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
             is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
             renderer.show_error(message)
             self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
-                self.redisplay_prompt(clear_first=False)
+                self.redisplay_prompt()
 
     def show_prompt_preview(self, agent: str, preview: str) -> None:
         """Exibe preview de prompt via renderer."""

@@ -633,7 +633,7 @@ class AppDispatchServices:
                     renderer.show_no_response(agent)
                 renderer.flush()
             if redisplay_prompt is not None:
-                redisplay_prompt(clear_first=False)
+                redisplay_prompt()
 
     def consume_last_run_failure(self) -> dict | None:
         """Retorna e limpa o diagnóstico estruturado da última falha do client."""

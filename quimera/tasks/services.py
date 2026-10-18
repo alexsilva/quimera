@@ -65,8 +65,6 @@ class AppTaskServices:
         set_task_executors: Callable[[list[Any]], None] | None = None,
         renderer: Any = None,
         get_renderer: Callable[[], Any] | None = None,
-        input_services: Any = None,
-        get_input_services: Callable[[], Any] | None = None,
         input_gate: Any = None,
         get_input_gate: Callable[[], Any] | None = None,
         event_sink: Any = None,
@@ -149,8 +147,6 @@ class AppTaskServices:
         self._task_executors_setter = set_task_executors
         self._renderer = renderer
         self._renderer_getter = get_renderer
-        self._input_services = input_services
-        self._input_services_getter = get_input_services
         self._input_gate = input_gate
         self._input_gate_getter = get_input_gate
         self._event_sink = event_sink
@@ -259,8 +255,6 @@ class AppTaskServices:
             session_paths=self._session_paths,
             renderer=renderer,
             get_renderer=self._get_renderer,
-            input_services=input_services,
-            get_input_services=self._get_input_services,
             input_gate=input_gate,
             get_input_gate=self._get_input_gate,
             event_sink=event_sink,
@@ -392,11 +386,6 @@ class AppTaskServices:
         if self._renderer is not None:
             return self._renderer
         return self._renderer_getter() if self._renderer_getter else None
-
-    def _get_input_services(self):
-        if self._input_services is not None:
-            return self._input_services
-        return self._input_services_getter() if self._input_services_getter else None
 
     def _get_input_gate(self):
         if self._input_gate is not None:

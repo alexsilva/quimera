@@ -28,13 +28,14 @@ def read_user_input(
     timeout: int,
     *,
     input_fn=input,
-    set_input_status=lambda _v: None,
-    set_prompt_text=lambda _v: None,
-    set_prompt_owner=lambda _v: None,
-    set_prompt_visible=lambda _v: None,
     flush_deferred_messages=lambda: None,
 ) -> str | None:
-    """Lê entrada do usuário respeitando timeout e modo não-bloqueante."""
+    """Lê entrada do usuário respeitando timeout e modo não-bloqueante.
+
+    Em TTY com ``timeout == 0`` as mensagens diferidas são liberadas antes e
+    depois da leitura bloqueante, para o humano ver o que chegou enquanto o
+    prompt estava ocupado.
+    """
     read_chat_line = getattr(input_fn, "read_chat_line", None)
     if callable(read_chat_line) and getattr(input_fn, "sequential", False) is True:
         return _read_sequential_input(renderer, read_chat_line, prompt, timeout)
@@ -51,9 +52,6 @@ def read_user_input(
             if stdin is None:
                 return None
             if stdin.isatty():
-                set_input_status("reading")
-                set_prompt_text(prompt)
-                set_prompt_owner(threading.get_ident())
                 flush_deferred_messages()
                 try:
                     return input_fn(prompt)
@@ -61,9 +59,6 @@ def read_user_input(
                     print()
                     raise
                 finally:
-                    set_input_status("idle")
-                    set_prompt_text("")
-                    set_prompt_owner(None)
                     flush_deferred_messages()
             if _tty.select.select([stdin], [], [], 0)[0]:
                 line = stdin.readline()
@@ -77,14 +72,12 @@ def read_user_input(
             return None
 
     try:
-        set_prompt_visible(False)
         return input_fn(prompt)
     except EOFError:
         if timeout == 0:
             return None
         raise
     except KeyboardInterrupt:
-        set_prompt_visible(False)
         print()
         raise
 
@@ -177,24 +170,13 @@ class AppInputServices:
         renderer: IRenderer,
         input_resolver,
         *,
-        get_input_status=None,
-        set_input_status=None,
-        set_prompt_owner=None,
-        set_prompt_text=None,
-        set_prompt_visible=None,
         flush_deferred_messages=None,
         output_lock=None,
     ):
         self._renderer = renderer
         self.input_resolver = input_resolver
-        self._get_input_status = get_input_status or (lambda: "idle")
-        self._set_input_status = set_input_status or (lambda _v: None)
-        self._set_prompt_owner = set_prompt_owner or (lambda _v: None)
-        self._set_prompt_text = set_prompt_text or (lambda _v: None)
-        self._set_prompt_visible = set_prompt_visible or (lambda _v: None)
         self._flush_deferred_messages = flush_deferred_messages or (lambda: None)
         self._output_lock = output_lock
-        self._suspended = False
         self._nonblocking_tty = False
         self._input_queue: queue.Queue | None = None
         self._input_thread: threading.Thread | None = None
@@ -226,10 +208,6 @@ class AppInputServices:
             prompt,
             timeout,
             input_fn=self.input_resolver(),
-            set_input_status=self._set_input_status,
-            set_prompt_text=self._set_prompt_text,
-            set_prompt_owner=self._set_prompt_owner,
-            set_prompt_visible=self._set_prompt_visible,
             flush_deferred_messages=self._flush_deferred_messages,
         )
 
@@ -261,9 +239,6 @@ class AppInputServices:
         input_fn = self.input_resolver()
 
         def _reader() -> None:
-            self._set_input_status("reading")
-            self._set_prompt_text(prompt)
-            self._set_prompt_owner(threading.get_ident())
             try:
                 value = input_fn(prompt)
             except EOFError:
@@ -274,10 +249,6 @@ class AppInputServices:
                 self._input_queue.put(("error", None))
             else:
                 self._input_queue.put(("line", value))
-            finally:
-                self._set_input_status("idle")
-                self._set_prompt_text("")
-                self._set_prompt_owner(None)
 
         self._input_thread = threading.Thread(target=_reader, daemon=True)
         self._input_thread.start()
@@ -287,21 +258,6 @@ class AppInputServices:
 
     def read_from_file(self, path_str):
         return read_from_file(self._renderer, path_str)
-
-    def suspend_nonblocking(self):
-        was_reading = self._get_input_status() == "reading"
-        self._suspended = was_reading
-        if was_reading:
-            self._set_input_status("idle")
-            self._set_prompt_text("")
-            self._set_prompt_owner(None)
-
-    def resume_nonblocking(self):
-        if self._suspended:
-            self._set_input_status("reading")
-            self._set_prompt_text("")
-            self._set_prompt_owner(threading.get_ident())
-            self._suspended = False
 
 
 class AskUserPrompter:

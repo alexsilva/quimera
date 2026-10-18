@@ -54,6 +54,26 @@ class DummyRenderer(RendererBase):
     def reset_visual_state(self, *a, **kw): pass
 
 
+class FakeInputGate:
+    """Só o que DisplayService consulta no gate: ativo e thread dona do prompt."""
+
+    def __init__(self):
+        self.active = False
+        self.owner_thread_id = None
+
+    def is_active(self):
+        return self.active
+
+    def get_owner_thread_id(self):
+        return self.owner_thread_id
+
+
+def prompt_owned_by_other_thread(app):
+    """Simula outra thread bloqueada lendo input no gate."""
+    app.input_gate.active = True
+    app.input_gate.owner_thread_id = threading.get_ident() + 1
+
+
 def make_profile(name="codex", prefix="/codex", aliases=None):
     return ExecutionProfile(
         name=name,
@@ -69,8 +89,7 @@ def make_app(renderer=None):
     app = SimpleNamespace(
         renderer=renderer,
         _output_lock=threading.Lock(),
-        _nonblocking_input_status=None,
-        _prompt_owning_thread_id=None,
+        input_gate=FakeInputGate(),
         _deferred_system_messages=[],
         _MAX_DEFERRED_SYSTEM_MESSAGES=2,
         active_agents=[],
@@ -134,7 +153,7 @@ def test_show_system_message_returns_when_renderer_missing():
 def test_show_system_message_defer_queue_none_is_noop():
     """Verifica que Test show system message defer queue none is noop."""
     app = make_app()
-    app._nonblocking_input_status = "reading"
+    app.input_gate.active = True
     app._deferred_system_messages = None
 
     system_layer_from_app(app).show_system_message("[task 1] codex:\nresultado")
@@ -143,7 +162,7 @@ def test_show_system_message_defer_queue_none_is_noop():
 def test_show_system_message_defer_overflow_drops_oldest():
     """Verifica que Test show system message defer overflow drops oldest."""
     app = make_app()
-    app._nonblocking_input_status = "reading"
+    app.input_gate.active = True
     app._MAX_DEFERRED_SYSTEM_MESSAGES = 2
     app._deferred_system_messages = [("system", "old-1"), ("system", "old-2")]
 
@@ -163,7 +182,7 @@ def test_show_system_message_standard_path_flushes_and_redraws():
 
     assert app.renderer.system_messages == ["mensagem"]
     assert app.renderer.flush_calls == 1
-    app._redisplay_user_prompt_if_needed.assert_called_once_with(clear_first=False)
+    app._redisplay_user_prompt_if_needed.assert_called_once_with()
 
 
 def test_show_system_message_prefers_quick_flush_on_prompt_owner_thread():
@@ -187,7 +206,7 @@ def test_show_system_message_prefers_quick_flush_on_prompt_owner_thread():
 
     assert renderer.system_messages == ["mensagem"]
     assert renderer.flush_quick_calls == 1
-    app._redisplay_user_prompt_if_needed.assert_called_once_with(clear_first=False)
+    app._redisplay_user_prompt_if_needed.assert_called_once_with()
 
 
 def test_show_muted_message_returns_when_renderer_missing():
@@ -212,8 +231,7 @@ def test_show_muted_message_prefers_neutral_and_flushes():
 def test_show_muted_message_defers_from_background_thread_while_prompt_active():
     """Verifica que Test show muted message defers from background thread while prompt active."""
     app = make_app()
-    app._nonblocking_input_status = "reading"
-    app._prompt_owning_thread_id = object()
+    prompt_owned_by_other_thread(app)
 
     system_layer_from_app(app).show_muted_message("neutro")
 
@@ -225,8 +243,7 @@ def test_show_muted_message_defers_from_background_thread_while_prompt_active():
 def test_show_muted_message_defers_task_completion_from_background_thread():
     """Verifica que Test show muted message defers task completion from background thread."""
     app = make_app()
-    app._nonblocking_input_status = "reading"
-    app._prompt_owning_thread_id = object()
+    prompt_owned_by_other_thread(app)
 
     system_layer_from_app(app).show_muted_message("[task 252] concluída: Commit criado")
 
@@ -235,55 +252,10 @@ def test_show_muted_message_defers_task_completion_from_background_thread():
     assert app.renderer.flush_calls == 0
 
 
-def test_show_system_message_shows_above_prompt_when_input_gate_supports_it():
-    """Verifica que Test show system message shows above prompt when input gate supports it."""
-    app = make_app()
-    app._nonblocking_input_status = "reading"
-    app._prompt_owning_thread_id = object()
-    callbacks = []
-
-    def run_in_terminal_message(callback):
-        callbacks.append(callback)
-        callback()
-        return True
-
-    app.input_gate = SimpleNamespace(run_in_terminal_message=run_in_terminal_message)
-
-    system_layer_from_app(app).show_system_message("sys msg")
-
-    assert app._deferred_system_messages == []
-    assert app.renderer.system_messages == ["sys msg"]
-    assert app.renderer.flush_calls == 1
-    assert len(callbacks) == 1
-
-
-def test_show_muted_message_shows_task_completion_above_prompt_when_input_gate_supports_it():
-    """Verifica que Test show muted message shows task completion above prompt when input gate supports it."""
-    app = make_app()
-    app._nonblocking_input_status = "reading"
-    app._prompt_owning_thread_id = object()
-    callbacks = []
-
-    def run_in_terminal_message(callback):
-        callbacks.append(callback)
-        callback()
-        return True
-
-    app.input_gate = SimpleNamespace(run_in_terminal_message=run_in_terminal_message)
-
-    system_layer_from_app(app).show_muted_message("[task 252] concluída: Commit criado")
-
-    assert app._deferred_system_messages == []
-    assert app.renderer.neutral_messages == ["[task 252] concluída: Commit criado"]
-    assert app.renderer.flush_calls == 1
-    assert len(callbacks) == 1
-
-
 def test_show_warning_message_defers_from_background_thread_while_prompt_active():
     """Verifica que Test show warning message defers from background thread while prompt active."""
     app = make_app()
-    app._nonblocking_input_status = "reading"
-    app._prompt_owning_thread_id = object()
+    prompt_owned_by_other_thread(app)
 
     system_layer_from_app(app).show_warning_message("atenção")
 
@@ -292,61 +264,16 @@ def test_show_warning_message_defers_from_background_thread_while_prompt_active(
     assert app.renderer.flush_calls == 0
 
 
-def test_show_warning_message_shows_above_prompt_when_input_gate_supports_it():
-    """Verifica que Test show warning message shows above prompt when input gate supports it."""
-    app = make_app()
-    app._nonblocking_input_status = "reading"
-    app._prompt_owning_thread_id = object()
-    callbacks = []
-
-    def run_in_terminal_message(callback):
-        callbacks.append(callback)
-        callback()
-        return True
-
-    app.input_gate = SimpleNamespace(run_in_terminal_message=run_in_terminal_message)
-
-    system_layer_from_app(app).show_warning_message("atenção")
-
-    assert app._deferred_system_messages == []
-    assert app.renderer.warning_messages == ["atenção"]
-    assert app.renderer.flush_calls == 1
-    assert len(callbacks) == 1
-
-
 def test_show_error_message_defers_from_background_thread_while_prompt_active():
     """Verifica que Test show error message defers from background thread while prompt active."""
     app = make_app()
-    app._nonblocking_input_status = "reading"
-    app._prompt_owning_thread_id = object()
+    prompt_owned_by_other_thread(app)
 
     system_layer_from_app(app).show_error_message("erro")
 
     assert app._deferred_system_messages == [("error", "erro")]
     assert app.renderer.error_messages == []
     assert app.renderer.flush_calls == 0
-
-
-def test_show_error_message_shows_above_prompt_when_input_gate_supports_it():
-    """Verifica que Test show error message shows above prompt when input gate supports it."""
-    app = make_app()
-    app._nonblocking_input_status = "reading"
-    app._prompt_owning_thread_id = object()
-    callbacks = []
-
-    def run_in_terminal_message(callback):
-        callbacks.append(callback)
-        callback()
-        return True
-
-    app.input_gate = SimpleNamespace(run_in_terminal_message=run_in_terminal_message)
-
-    system_layer_from_app(app).show_error_message("erro")
-
-    assert app._deferred_system_messages == []
-    assert app.renderer.error_messages == ["erro"]
-    assert app.renderer.flush_calls == 1
-    assert len(callbacks) == 1
 
 
 def test_show_task_response_uses_strip_and_emits_only_non_empty():

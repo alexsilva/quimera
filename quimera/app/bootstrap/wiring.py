@@ -442,7 +442,6 @@ class AppAssembler:
             redisplay_prompt=app._redisplay_user_prompt_if_needed,
             output_lock=plat.output_lock,
             prompt_owner_thread_id_getter=ui.input_gate.get_owner_thread_id,
-            run_above_active_prompt=ui.input_gate.run_in_terminal_message,
         )
         profile_resolver = ProfileResolverAdapter(
             registry=plat.profile_registry,
@@ -480,17 +479,8 @@ class AppAssembler:
         input_services = AppInputServices(
             ui.renderer,
             input_resolver=app.resolve_input_gate,
-            get_input_status=ui.input_gate.is_active,
-            set_input_status=app.runtime_state.set_input_status,
-            set_prompt_text=app.runtime_state.set_prompt_text,
-            set_prompt_owner=app.runtime_state.set_prompt_owner,
-            set_prompt_visible=app.runtime_state.set_prompt_visible,
             flush_deferred_messages=system_layer.flush_deferred_messages,
             output_lock=plat.output_lock,
-        )
-        ui.renderer.set_prompt_integration(
-            is_active_fn=ui.input_gate.is_active,
-            run_above_fn=ui.input_gate.run_in_terminal_message,
         )
         migrated = plat.workspace.migrate_from_legacy(plat.workspace.cwd)
         for item in migrated:
@@ -713,7 +703,6 @@ class AppAssembler:
             agent_pool=plat.agent_pool,
             task_executors=app.task_executors,
             renderer=ui.renderer,
-            input_services=sess.input_services,
             input_gate=ui.input_gate,
             event_sink=ui.event_sink,
             agent_run_sink=ui.agent_run_sink,
@@ -870,7 +859,6 @@ class AppAssembler:
         ui_event_handler = UiEventHandler(
             renderer=ui.renderer,
             input_gate=ui.input_gate,
-            runtime_state=rt.runtime_state,
             system_layer=sess.system_layer,
             event_sink=ui.event_sink,
             show_muted_message=sess.system_layer.show_muted_message,
@@ -878,7 +866,6 @@ class AppAssembler:
             show_warning_message=sess.system_layer.show_warning_message,
             show_error_message=sess.system_layer.show_error_message,
             redisplay_user_prompt=app._redisplay_user_prompt_if_needed,
-            output_lock=plat.output_lock,
         )
         toolbar_coordinator = ToolbarCoordinator(
             toolbar_manager=plat.toolbar,

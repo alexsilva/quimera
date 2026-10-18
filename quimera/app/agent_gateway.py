@@ -169,7 +169,7 @@ class AgentGateway:
         self._increment_call_index = increment_call_index
         self._get_round_index = get_round_index
         self._debug_prompt_metrics = debug_prompt_metrics
-        self._redisplay_prompt = redisplay_prompt or (lambda **kw: None)
+        self._redisplay_prompt = redisplay_prompt or (lambda: None)
         self._update_session = update_session or (lambda *a: None)
         self._output_lock = output_lock
         self._counter_lock = counter_lock
@@ -558,7 +558,7 @@ class AgentGateway:
                     with (output_lock if output_lock is not None else nullcontext()):
                         if renderer is not None:
                             renderer.flush()
-                        self._redisplay_prompt(clear_first=False)
+                        self._redisplay_prompt()
 
             agent_client.flush_pending_summary()
             elapsed = time.time() - start

@@ -290,7 +290,7 @@ class InputBroker:
                 self._resolve_cancelled(req)
                 continue
             if not self._consumer_can_handle(req):
-                # Sem prompt_toolkit ativo, a thread do broker não deve negar nem
+                # Com o InputGate inativo, a thread do broker não deve negar nem
                 # chamar InputGate(prompt). Devolve para a fila para a main thread
                 # processar via process_pending_once() enquanto aguarda o driver.
                 self._queue.put(req)
@@ -405,9 +405,9 @@ class InputBroker:
         deadline = start + req.timeout
         prompt = "  Executar? [y/N/a=todas]: "
 
-        # Quando pt está ativo: questão + input num único run_in_terminal para
-        # evitar que o pt reexiba o CLI entre a exibição da pergunta e a leitura
-        # (que apagaria a pergunta antes do usuário responder).
+        # Com o InputGate ativo, pergunta e leitura vão juntas pelo gate
+        # (read_approval_in_terminal): a questão aparece no input da TUI e a
+        # resposta é lida sem disputar stdin.
         gate = self._input_gate
         if gate is not None:
             is_active = getattr(gate, "is_active", None)
@@ -441,7 +441,7 @@ class InputBroker:
                         return True
                     return ans in {"y", "yes", "s", "sim"}
 
-        # Sem pt ativo, não disputamos stdin diretamente. A leitura falha de
+        # Sem InputGate ativo, não disputamos stdin diretamente. A leitura falha de
         # forma segura e o pedido segue pelo default/timeout.
         with self._approval_terminal_window(
             owner=req.source,
@@ -524,7 +524,7 @@ class InputBroker:
                 if answer is None:
                     return None
                 return -1, answer.rstrip("\n\r")
-        # Sem pt ativo: emite a pergunta sob janela explícita de input.
+        # Sem InputGate ativo: emite a pergunta sob janela explícita de input.
         with self._input_terminal_window(
             owner=agent,
             metadata={"question": question, "owner": agent},
@@ -549,10 +549,10 @@ class InputBroker:
 
         Não faça fallback para leitura direta de stdin aqui. O broker pode
         rodar em thread de background enquanto o prompt principal pertence ao
-        ``prompt_toolkit``; disputar stdin diretamente nessa condição trava o
-        shell inteiro. Usa apenas o caminho ``run_in_terminal`` do gate;
-        chamar ``InputGate(prompt)`` daqui bloquearia porque o broker roda em
-        thread dedicada, fora do loop principal do prompt.
+        InputGate; disputar stdin diretamente nessa condição trava o shell
+        inteiro. Usa apenas ``read_input_in_terminal`` do gate; chamar
+        ``InputGate(prompt)`` daqui bloquearia porque o broker roda em thread
+        dedicada, fora do loop principal do prompt.
         """
         gate = self._input_gate
         if gate is None:
@@ -585,7 +585,7 @@ class InputBroker:
         allow_direct_gate: bool = False,
         ticket=None,
     ) -> tuple[int, str] | None:
-        """Seleção interativa com deadline. Usa input_gate se pt ativo."""
+        """Seleção interativa com deadline. Usa o InputGate quando ativo."""
         gate = self._input_gate
         if gate is not None:
             remaining = max(0.5, deadline - time.monotonic())
@@ -718,21 +718,7 @@ class InputBroker:
         )
 
     def _emit(self, message: str) -> None:
-        """Emite mensagem ao usuário mantendo cursor tracking do Rich correto.
-
-        Quando pt está ativo: usa run_in_terminal_message para exibir acima
-        do prompt sem corromper o layout do prompt_toolkit.
-        Quando pt não está ativo: usa renderer.print_direct() para que o Rich
-        rastreie a posição do cursor — evita que o Live reinicie sobrescrevendo
-        o texto da pergunta quando o agente retoma.
-        """
-        gate = self._input_gate
-        if gate is not None:
-            is_active_fn = getattr(gate, "is_active", None)
-            if callable(is_active_fn) and is_active_fn():
-                run_above = getattr(gate, "run_in_terminal_message", None)
-                if callable(run_above) and run_above(lambda: print(message)):
-                    return
+        """Emite mensagem ao usuário pelo renderer (``print_direct``); sem renderer, ``print``."""
         renderer = self._renderer
         if renderer is not None:
             renderer.print_direct(message)

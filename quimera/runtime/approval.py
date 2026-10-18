@@ -301,14 +301,14 @@ class ConsoleApprovalHandler(ApprovalHandler):
         """Aprovação interativa via input_gate ou input_fn (usado em testes/REPL).
 
         Serializada via _interactive_lock: se outra thread já estiver no meio
-        de um prompt de aprovação, esta chamada retorna False imediatamente
-        sem bloquear o executor, evitando prompts de aprovação concorrentes.
+        de um prompt de aprovação, esta chamada aguarda a vez, evitando prompts
+        de aprovação concorrentes.
 
-        Quando input_gate está disponível E a chamada vem da thread principal,
-        delega a ele — o InputGate coordena com o renderer via RichPromptSession,
-        dispensando suspend/resume.
-        Em threads de background (ex: servidor MCP), usa o caminho básico com
-        input() e suspend/resume do renderer para evitar conflito com prompt_toolkit.
+        Com input_gate utilizável (ativo, chamada da thread principal ou gate
+        com leitura cross-thread), delega a ele: a pergunta aparece no input da
+        TUI e a resposta é lida por lá. Sem InputGate utilizável (ex.: servidor
+        MCP em background, testes/REPL), usa input() entre os callbacks
+        suspend_fn/resume_fn.
         """
         # Lock bloqueante: se outra thread já está num prompt, aguarda.
         self._interactive_lock.acquire(blocking=True)
@@ -395,10 +395,9 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     if resume_fn:
                         resume_fn()
             else:
-                # Background thread sem prompt_toolkit ativo: usa o caminho
-                # padrão com suspend/resume. InputGate inativo não é prova de
-                # raw mode residual; no fluxo normal do app isso pode ocorrer
-                # durante tool approval fora do prompt.
+                # Background thread sem InputGate utilizável: usa o caminho
+                # padrão com input() entre suspend_fn/resume_fn. Gate inativo é
+                # normal durante tool approval fora do prompt.
                 renderer = self._renderer
                 input_fn = self._input_fn if self._input_fn is not None else input
                 if self._suspend_fn:
@@ -583,7 +582,7 @@ class NonBlockingConsoleApprovalHandler(ApprovalHandler):
 
         Best-effort, sem termios/raw-mode: em modo cooked o select só reporta
         readable após Enter, então só linhas completas são drenadas. Mantém o
-        terminal intocado para não conflitar com o input do prompt_toolkit.
+        terminal intocado para não conflitar com o leitor de input ativo.
 
         Limitado a um número máximo de iterações para nunca virar busy-loop:
         se o stdin ficar continuamente "pronto" sem nunca sinalizar EOF (ex.:

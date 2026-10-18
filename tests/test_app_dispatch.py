@@ -753,9 +753,7 @@ class TestCallAgentLowLevel:
         ll_app.agent_client.call = _call
         ds = dispatch_services_from_app(ll_app)
         ds.delegate_low_level("agent1")
-        ll_app._redisplay_user_prompt_if_needed.assert_called_once_with(
-            clear_first=False
-        )
+        ll_app._redisplay_user_prompt_if_needed.assert_called_once_with()
 
     def test_primary_false(self, ll_app):
         """Verifica que primary false."""
@@ -850,9 +848,7 @@ class TestPrintResponse:
         ds.print_response("agent1", "hello")
         dispatch_app.renderer.show_message.assert_called_once_with("agent1", "hello")
         dispatch_app.renderer.show_no_response.assert_not_called()
-        dispatch_app._redisplay_user_prompt_if_needed.assert_called_once_with(
-            clear_first=False
-        )
+        dispatch_app._redisplay_user_prompt_if_needed.assert_called_once_with()
 
     def test_print_response_without_text_shows_no_response(self, dispatch_app):
         """Verifica que print response without text shows no response."""
@@ -861,9 +857,7 @@ class TestPrintResponse:
         ds.print_response("agent1", None)
         dispatch_app.renderer.show_no_response.assert_called_once_with("agent1")
         dispatch_app.renderer.show_message.assert_not_called()
-        dispatch_app._redisplay_user_prompt_if_needed.assert_called_once_with(
-            clear_first=False
-        )
+        dispatch_app._redisplay_user_prompt_if_needed.assert_called_once_with()
 
 
 # =============================================================================

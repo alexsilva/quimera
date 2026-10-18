@@ -42,7 +42,6 @@ CONTRACT = [
     "flush_quick",
     "signal_restore_history",
     "set_summarizing",
-    "set_prompt_integration",
     "log_debug_event",
     "close",
     "running_status",
@@ -140,7 +139,6 @@ class TestRendererBaseContract(unittest.TestCase):
         self.assertTrue(renderer.flush_quick())
         self.assertIsNone(renderer.signal_restore_history())
         self.assertIsNone(renderer.set_summarizing(True))
-        self.assertIsNone(renderer.set_prompt_integration(None, None))
         self.assertIsNone(renderer.log_debug_event("evt", key="v"))
         self.assertIsNone(renderer.show_notification("mensagem"))
         self.assertIsNone(renderer.show_no_response("claude"))

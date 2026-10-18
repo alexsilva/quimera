@@ -23,7 +23,7 @@ class TestApprovalManagerSerialLock:
             gate_lock.wait(5)  # trava até a main thread liberar
             return "n"
 
-        # Background threads use input_fn path (not input_gate/prompt_toolkit).
+        # Background threads use the input_fn path (no input_gate).
         handler = ApprovalManager(None, input_fn=slow_gate)
 
         results = []
@@ -116,7 +116,7 @@ class TestApprovalManagerInputGateCancelDuringPrompt:
             can_continue.wait(5)
             return "n"
 
-        # Background threads use input_fn path (not input_gate/prompt_toolkit).
+        # Background threads use the input_fn path (no input_gate).
         handler = ApprovalManager(
             None, input_fn=gate_with_block,
             cancel_event=cancel_event,
@@ -178,7 +178,7 @@ class TestApprovalManagerParallelApproval:
             proceed.wait(5)
             return "n"
 
-        # Background threads use input_fn path (not input_gate/prompt_toolkit).
+        # Background threads use the input_fn path (no input_gate).
         handler = ApprovalManager(None, input_fn=blocking_gate)
         results = []
         threads = []

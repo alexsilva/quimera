@@ -52,7 +52,7 @@ class DirectReservation:
 
 
 class SimpleInputGate:
-    """Input gate sobre stdin, sem prompt_toolkit nem UI Textual."""
+    """Input gate sobre stdin, sem UI Textual."""
 
     def __init__(
         self,
@@ -104,9 +104,6 @@ class SimpleInputGate:
     def get_owner_thread_id(self) -> int | None:
         with self._active_lock:
             return self._owner_thread_id
-
-    def run_in_terminal_message(self, callback) -> bool:
-        return False
 
     def redisplay(self) -> None:
         pass

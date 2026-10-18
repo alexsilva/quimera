@@ -296,10 +296,6 @@ class TextualRenderer(RendererBase):
             target_style=target_style,
         )
 
-    def set_prompt_integration(self, is_active_fn, run_above_fn) -> None:
-        """Parte do contrato de RendererBase."""
-        return None
-
     def set_audit_logger(self, audit_logger) -> None:
         """Liga o audit de render (``--debug``) a este renderer.
 

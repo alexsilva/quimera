@@ -80,10 +80,6 @@ class TextualInputGate:
         with self._active_lock:
             return self._owner_thread_id
 
-    def run_in_terminal_message(self, callback) -> bool:
-        """Compatibilidade: Textual não usa run_in_terminal."""
-        return False
-
     def redisplay(self) -> None:
         """Atualiza toolbar/sugestões enquanto o input Textual está ativo."""
         if not self.is_active():
@@ -273,7 +269,7 @@ class TextualInputGate:
             return []
 
     def completions_for(self, value: str, cursor_position: int | None = None) -> list[str]:
-        """Retorna sugestões compatíveis com o autocomplete do prompt antigo."""
+        """Retorna sugestões de autocomplete para o input Textual."""
         if cursor_position is None:
             cursor_position = len(value)
         text_before_cursor = (value[:cursor_position] or "").lstrip()

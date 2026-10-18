@@ -8,7 +8,7 @@
 
 O Quimera é um orquestrador multiagente terminal-based que permite aos usuários interagirem com diversos agentes de IA (Claude, Codex, Gemini, Ollama, OpenCode, etc.) através de uma interface unificada. O sistema executa tarefas em paralelo, gerencia estado de sessão, fornece uma interface rica com suporte a markup, temas e auditoria, e oferece um runtime de execução de tools em ambiente sandboxed.
 
-A arquitetura é organizada em torno de um loop principal de eventos em `quimera/app/core.py`, com separação crescente de responsabilidades entre camadas. O desmonte incremental do monólito original extraiu módulos como `runtime_state`, `session_bootstrap`, `tty_control`, `toolbar`, `bug_services`, `command_router`, `chat_processor` e `ui_event_handler`. As violações de fronteira documentadas anteriormente foram resolvidas (seções 7.3 e 7.4).
+A arquitetura é organizada em torno de um loop principal de eventos em `quimera/app/core.py`, com separação crescente de responsabilidades entre camadas. O desmonte incremental do monólito original extraiu módulos como `runtime_state`, `session_bootstrap`, `tty_control`, `toolbar`, `bug_services`, `command_router`, `chat_processor` e `ui_event_handler`. As violações de fronteira documentadas anteriormente foram resolvidas (seções 7.2 e 7.3).
 
 ---
 
@@ -22,8 +22,8 @@ quimera/
 │   ├── session_bootstrap.py          # Bootstrap/inicialização da sessão (paths, debug, bugs)
 │   ├── session_paths.py              # Resolução de paths de sessão (logs, bugs, debug)
 │   ├── tty_control.py                # Controle de TTY (suspend/resume do renderer)
-│   ├── toolbar.py                    # ToolbarManager: toolbar dinâmica do prompt_toolkit
-│   ├── toolbar_coordinator.py        # Coordenação entre toolbars (prompt_toolkit ↔ Textual)
+│   ├── toolbar.py                    # ToolbarManager: conteúdo da toolbar da TUI
+│   ├── toolbar_coordinator.py        # ToolbarCoordinator: labels, paralelismo e ciclo de temas da toolbar
 │   ├── bug_services.py               # BugServices: detecção e correlação de bugs de runtime
 │   ├── command_router.py             # Roteamento de comandos slash (/task, /help, etc.)
 │   ├── chat_processor.py             # ChatProcessor: processamento de uma rodada de chat
@@ -214,7 +214,7 @@ quimera/
 ### 3.1 Camada de Aplicação (`app/`)
 
 - **`core.py`**: Orquestrador central. Loop principal, estado da aplicação, coordenação de componentes, despacho para agentes e tasks. Reduzido de ~2300 para ~1611 linhas após extração de módulos especializados (ver abaixo).
-- **`runtime_state.py`** (`AppRuntimeState`): Container de estado de runtime: status de input não-bloqueante, contadores de chat, semáforo de slots, executor de threads. Substitui o `_BACKWARD_MAP` legado que redirecionava atributos privados.
+- **`runtime_state.py`** (`AppRuntimeState`): Container de estado de runtime: contadores de chat (em execução e pendentes), semáforo de slots, executor de threads. O estado do prompt (ativo e thread dona) vive no `InputGate`.
 - **`session_bootstrap.py`**: Inicialização da sessão: resolução de paths (logs, bugs, debug), análise de bugs de sessão anterior. Extraído de `core.py` para isolar lógica de startup.
 - **`tty_control.py`**: Controle de TTY: suspend e resume do renderer durante operações bloqueantes (editor, aprovação interativa). Coordena renderer + `InputGate`.
 - **`simple_input_gate.py`** (`SimpleInputGate`): Gate de input sem TUI. Em TTY (`--driver-repl`) usa `input()`; com stdin em pipe é o único leitor do stdin: uma thread lê as linhas em ordem e cada linha vai para quem perguntou (leitura direta de `ask_user`/aprovação tem prioridade sobre o chat, que só lê quando não há prompt em execução).
@@ -512,14 +512,7 @@ Quando o MCP está ativo (padrão), os agentes usam a tool `tasks_delegate` expo
 - Muitos serviços em `app/` recebem a instância inteira de `app` e acessam atributos diretamente, em vez de dependências injetadas.
 - `interfaces.py` define Protocolos mas poucos componentes os usam; a maioria depende de classes concretas.
 
-### 7.2 Problemas de Renderização (Terminal)
-
-- **Conflito `rich.Live` × `prompt_toolkit`**: dois renderers escrevendo ANSI sem coordenação. Durante streaming, `Live.update()` é chamado sem `run_in_terminal`, competindo com o prompt.
-- **Resize (`SIGWINCH`)**: handlers dos dois sistemas intercalam sequências VT, corrompendo cursor e scroll.
-- **Toolbar extrapolando**: conteúdo sem clipping ultrapassa a largura do terminal em sessões com muitos campos.
-- **`refresh_interval=1.0`**: atualização da toolbar atrasada em até 1s após resize.
-
-### 7.3 Violações de Fronteira de Camadas (Resolvidas)
+### 7.2 Violações de Fronteira de Camadas (Resolvidas)
 
 Imports diretos de `profiles/` que existiam em módulos da camada de runtime/sandbox foram eliminados:
 
@@ -531,11 +524,11 @@ Imports diretos de `profiles/` que existiam em módulos da camada de runtime/san
 | `app/core.py` | `delegate_for_parallel` exposto via wrapper desnecessário | **Resolvido** (8e) |
 | `ui/renderer.py` (removido em 2026-10) | consultava `quimera.profiles.get(...)` para metadados | **Resolvido** (8d) |
 
-### 7.4 Lookups de Profile Distribuídos (Resolvidos)
+### 7.3 Lookups de Profile Distribuídos (Resolvidos)
 
 Os lookups dispersos de `quimera.profiles.get(...)` em `app/dispatch.py`, `app/task.py`, `app/system_layer.py` e `app/chat_round.py` foram resolvidos. Lookups remanescentes em `cli.py`, `agents/client.py` e `agents/text_filters.py` são legítimos — essas camadas têm acesso intencional ao registro de profiles.
 
-### 7.5 Outros Problemas
+### 7.4 Outros Problemas
 
 - **Adaptadores legados em `system_layer.py`**: `_LegacyProfileResolver` e `_LegacyAgentPoolAdapter` indicam migração de contrato incompleta.
 - **Cobertura de testes**: 2740+ testes passando. Lacunas em testes de integração de tasks (criação → execução → revisão), concorrência e cenários de falha.
@@ -551,7 +544,7 @@ Os lookups dispersos de `quimera.profiles.get(...)` em `app/dispatch.py`, `app/t
 - Input via `TextualInputGate` (TUI) ou `SimpleInputGate` (pipe); `InputGate.is_active()` como árbitro único de estado de prompt ativo.
 - `_BACKWARD_MAP` removido: estado de runtime acessado diretamente via `AppRuntimeState`.
 - Decomposição de `core.py` em andamento: 8 módulos extraídos, ~689 linhas reduzidas.
-- Violações de fronteira entre camadas (seções 7.3 e 7.4) resolvidas.
+- Violações de fronteira entre camadas (seções 7.2 e 7.3) resolvidas.
 - Sistema de tasks maduro (extraído para `tasks/`): revisão, failover, roteamento por especialidade.
 - Arquitetura orientada a goals com critérios de aceitação e regras de revisão.
 - Sistema de evidências para rastreamento de contexto verificável.

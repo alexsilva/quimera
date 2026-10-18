@@ -4,23 +4,17 @@ Encapsula locks, filas e contadores que antes viviam
 diretamente em ``QuimeraApp.__init__``, reduzindo o monólito.
 """
 
-import queue
 import threading
 
 
 class AppRuntimeState:
-    """Estado mutável de runtime: input não-bloqueante e controle de inflight do chat."""
+    """Estado mutável de runtime: contadores de inflight/pendentes do chat e slots.
+
+    O estado do prompt (ativo e thread dona) pertence ao ``InputGate``
+    (``is_active``/``get_owner_thread_id``), não a este container.
+    """
 
     def __init__(self) -> None:
-        # ── nonblocking input ──────────────────────────────────────────
-        self.nonblocking_prompt_visible = False
-        self.nonblocking_prompt_text = ""
-        self.nonblocking_input_thread: threading.Thread | None = None
-        self.nonblocking_input_queue: queue.Queue | None = None
-        self.nonblocking_input_status = "idle"
-        self.nonblocking_input_status_lock = threading.Lock()
-        self.prompt_owning_thread_id: int | None = None
-
         # ── chat inflight ──────────────────────────────────────────────
         self.chat_inflight_lock = threading.Lock()
         self.chat_inflight_count = 0
@@ -127,20 +121,6 @@ class AppRuntimeState:
             self.chat_inflight_count = active
         _run(refresh_callback)
         return active, pending
-
-    # ── setters for use as bound-method callbacks ──────────────────────
-
-    def set_input_status(self, v: str) -> None:
-        self.nonblocking_input_status = v
-
-    def set_prompt_text(self, v: str) -> None:
-        self.nonblocking_prompt_text = v
-
-    def set_prompt_owner(self, v: int | None) -> None:
-        self.prompt_owning_thread_id = v
-
-    def set_prompt_visible(self, v: bool) -> None:
-        self.nonblocking_prompt_visible = v
 
     def release_chat_slot(self) -> None:
         slot = getattr(self, "chat_slot_semaphore", None)

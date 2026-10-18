@@ -235,9 +235,8 @@ def test_input_broker_routes_selection_to_textual_input_gate():
 def test_approval_show_calls_renderer_show_system_from_background_thread():
     """Bug #3: _show() em thread de background usa renderer.show_system().
 
-    Garante que a mensagem de aprovação passa pelo renderer (que pode rotear
-    para run_in_terminal_message ou Rich.Live) em vez de ir direto para stdout
-    onde seria apagada pelo próximo refresh do Live context.
+    Garante que a mensagem de aprovação passa pelo renderer em vez de ir
+    direto para stdout, onde a TUI não a exibiria.
     """
     show_calls = []
     flush_calls = []

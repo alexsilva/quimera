@@ -11,11 +11,6 @@ def mock_app():
     app = MagicMock()
     app.renderer = MagicMock()
     app.system_layer = MagicMock()
-    app._nonblocking_input_status = "idle"
-    app._nonblocking_input_queue = None
-    app._nonblocking_input_thread = None
-    app._nonblocking_prompt_text = ""
-    app._nonblocking_prompt_visible = True
     app._output_lock = None
     return app
 
@@ -28,10 +23,6 @@ def resolver():
 @pytest.fixture
 def input_kwargs(mock_app):
     return {
-        "set_input_status": lambda v: setattr(mock_app, "_nonblocking_input_status", v),
-        "set_prompt_text": lambda v: setattr(mock_app, "_nonblocking_prompt_text", v),
-        "set_prompt_owner": lambda v: setattr(mock_app, "_prompt_owning_thread_id", v),
-        "set_prompt_visible": lambda v: setattr(mock_app, "_nonblocking_prompt_visible", v),
         "flush_deferred_messages": mock_app.system_layer.flush_deferred_messages,
     }
 
@@ -43,16 +34,11 @@ class TestAppInputServices:
         srv = AppInputServices(
             mock_app.renderer,
             resolver,
-            get_input_status=lambda: mock_app._nonblocking_input_status,
-            set_input_status=lambda v: setattr(mock_app, "_nonblocking_input_status", v),
-            set_prompt_text=lambda v: setattr(mock_app, "_nonblocking_prompt_text", v),
-            set_prompt_owner=lambda v: setattr(mock_app, "_prompt_owning_thread_id", v),
-            set_prompt_visible=lambda v: setattr(mock_app, "_nonblocking_prompt_visible", v),
             flush_deferred_messages=mock_app.system_layer.flush_deferred_messages,
             output_lock=mock_app._output_lock,
         )
         assert srv.input_resolver is resolver
-        assert srv._suspended is False
+        assert srv._flush_deferred_messages is mock_app.system_layer.flush_deferred_messages
 
     def test_read_user_input_delegates(self, mock_app, resolver):
         """Verifica que read_user_input delega para a função de leitura."""
@@ -80,66 +66,6 @@ class TestAppInputServices:
             mock_read.return_value = "content"
             result = srv.read_from_file("/some/path")
             assert result == "content"
-
-    def test_suspend_nonblocking_idle(self, mock_app, resolver):
-        """Verifica que suspender quando idle não altera o estado."""
-        from quimera.app.inputs import AppInputServices
-        srv = AppInputServices(
-            mock_app.renderer,
-            resolver,
-            get_input_status=lambda: mock_app._nonblocking_input_status,
-            set_input_status=lambda v: setattr(mock_app, "_nonblocking_input_status", v),
-            set_prompt_text=lambda v: setattr(mock_app, "_nonblocking_prompt_text", v),
-            set_prompt_owner=lambda v: setattr(mock_app, "_prompt_owning_thread_id", v),
-        )
-        mock_app._nonblocking_input_status = "idle"
-        srv.suspend_nonblocking()
-        assert srv._suspended is False
-
-    def test_suspend_nonblocking_reading(self, mock_app, resolver):
-        """Verifica que suspender durante leitura pausa a entrada não-bloqueante."""
-        from quimera.app.inputs import AppInputServices
-        srv = AppInputServices(
-            mock_app.renderer,
-            resolver,
-            get_input_status=lambda: mock_app._nonblocking_input_status,
-            set_input_status=lambda v: setattr(mock_app, "_nonblocking_input_status", v),
-            set_prompt_text=lambda v: setattr(mock_app, "_nonblocking_prompt_text", v),
-            set_prompt_owner=lambda v: setattr(mock_app, "_prompt_owning_thread_id", v),
-        )
-        mock_app._nonblocking_input_status = "reading"
-        with patch("sys.stdout"):
-            srv.suspend_nonblocking()
-        assert srv._suspended is True
-        assert mock_app._nonblocking_input_status == "idle"
-
-    def test_resume_nonblocking_suspended(self, mock_app, resolver):
-        """Verifica que retomar reativa a entrada não-bloqueante quando suspensa."""
-        from quimera.app.inputs import AppInputServices
-        srv = AppInputServices(
-            mock_app.renderer,
-            resolver,
-            set_input_status=lambda v: setattr(mock_app, "_nonblocking_input_status", v),
-            set_prompt_text=lambda v: setattr(mock_app, "_nonblocking_prompt_text", v),
-            set_prompt_owner=lambda v: setattr(mock_app, "_prompt_owning_thread_id", v),
-        )
-        srv._suspended = True
-        srv.resume_nonblocking()
-        assert mock_app._nonblocking_input_status == "reading"
-        assert srv._suspended is False
-
-    def test_resume_nonblocking_not_suspended(self, mock_app, resolver):
-        """Verifica que retomar quando não suspenso mantém estado idle."""
-        from quimera.app.inputs import AppInputServices
-        srv = AppInputServices(
-            mock_app.renderer,
-            resolver,
-            set_input_status=lambda v: setattr(mock_app, "_nonblocking_input_status", v),
-        )
-        srv._suspended = False
-        srv.resume_nonblocking()
-        assert mock_app._nonblocking_input_status == "idle"
-
 
 class TestReadUserInput:
     def test_timeout_positive_returns_value(self, mock_app, input_kwargs):
@@ -175,7 +101,6 @@ class TestReadUserInput:
         with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             result = read_user_input(mock_app.renderer, ">", 0, input_fn=mock_input_fn, **input_kwargs)
             assert result == "line"
-            assert mock_app._nonblocking_input_status == "idle"
             mock_input_fn.assert_called_once_with(">")
             assert mock_app.system_layer.flush_deferred_messages.call_count == 2
 
@@ -188,7 +113,6 @@ class TestReadUserInput:
         with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             with pytest.raises(KeyboardInterrupt):
                 read_user_input(mock_app.renderer, ">", 0, input_fn=mock_input_fn, **input_kwargs)
-            assert mock_app._nonblocking_input_status == "idle"
 
     def test_timeout_zero_non_tty_select_ready(self, mock_app, input_kwargs):
         """Verifica que read_user_input lê de stdin não-TTY quando select indica dados prontos."""
@@ -246,7 +170,6 @@ class TestReadUserInput:
         input_fn = MagicMock(side_effect=KeyboardInterrupt)
         with pytest.raises(KeyboardInterrupt):
             read_user_input(mock_app.renderer, ">", None, input_fn=input_fn, **input_kwargs)
-        assert mock_app._nonblocking_prompt_visible is False
 
     def test_timeout_none_normal(self, mock_app, input_kwargs):
         """Verifica que read_user_input retorna valor normalmente quando timeout é None."""
@@ -254,7 +177,6 @@ class TestReadUserInput:
         input_fn = MagicMock(return_value="hello")
         result = read_user_input(mock_app.renderer, ">", None, input_fn=input_fn, **input_kwargs)
         assert result == "hello"
-        assert mock_app._nonblocking_prompt_visible is False
 
     def test_timeout_zero_stdin_isatty_exception(self, mock_app, input_kwargs):
         """Verifica que read_user_input trata exceção em isatty graciosamente."""

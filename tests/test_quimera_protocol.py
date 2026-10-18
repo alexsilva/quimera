@@ -375,7 +375,6 @@ def build_task_services(app):
         get_task_executors=lambda: list(app.task_executors),
         set_task_executors=lambda executors: setattr(app, "task_executors", list(executors)),
         get_renderer=lambda: app.renderer,
-        get_input_services=lambda: app.input_services,
         get_input_gate=lambda: app.input_gate,
         get_event_sink=lambda: app.event_sink,
         get_agent_client=lambda: app.agent_client,
@@ -561,7 +560,6 @@ def _materialize_chat_lifecycle(app):
 
 def materialize_internal_services(app):
     import threading
-    from contextlib import nullcontext
     from unittest.mock import Mock
     if getattr(app, "_output_lock", None) is None:
         app._output_lock = threading.Lock()
@@ -591,11 +589,6 @@ def materialize_internal_services(app):
         app.input_services = AppInputServices(
             app.renderer,
             input_resolver=lambda: input,
-            get_input_status=lambda: getattr(app.runtime_state, "nonblocking_input_status", "idle"),
-            set_input_status=lambda v: setattr(app.runtime_state, "nonblocking_input_status", v),
-            set_prompt_text=lambda v: setattr(app.runtime_state, "nonblocking_prompt_text", v),
-            set_prompt_owner=lambda v: setattr(app.runtime_state, "prompt_owning_thread_id", v),
-            set_prompt_visible=lambda v: setattr(app.runtime_state, "nonblocking_prompt_visible", v),
             flush_deferred_messages=lambda: app.system_layer.flush_deferred_messages(),
             output_lock=getattr(app, "_output_lock", None),
         )
@@ -649,7 +642,6 @@ def materialize_internal_services(app):
         app._ui_event_handler = UiEventHandler(
             renderer=getattr(app, "renderer", None),
             input_gate=getattr(app, "input_gate", None),
-            runtime_state=getattr(app, "runtime_state", None),
             system_layer=getattr(app, "system_layer", None),
             event_sink=getattr(app, "event_sink", None),
             show_muted_message=(
@@ -669,7 +661,6 @@ def materialize_internal_services(app):
                 or getattr(getattr(app, "system_layer", None), "show_error_message", lambda msg: None)
             ),
             redisplay_user_prompt=getattr(app, "_redisplay_user_prompt_if_needed", lambda: None),
-            output_lock=getattr(app, "_output_lock", nullcontext()),
         )
     if getattr(app, "chat_lifecycle", None) is None:
         _materialize_chat_lifecycle(app)
@@ -919,7 +910,6 @@ class ProtocolTests(unittest.TestCase):
         app._redisplay_user_prompt_if_needed = Mock()
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_input_status = "idle"
         app._deferred_system_messages = []
         from quimera.app.agent_pool import AgentPool
         app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
@@ -974,7 +964,6 @@ class ProtocolTests(unittest.TestCase):
         app._redisplay_user_prompt_if_needed = Mock()
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_input_status = "idle"
         app._deferred_system_messages = []
         from quimera.app.agent_pool import AgentPool
         app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
@@ -1235,7 +1224,6 @@ class ProtocolTests(unittest.TestCase):
         app._redisplay_user_prompt_if_needed = Mock()
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_input_status = "idle"
         app._deferred_system_messages = []
         from quimera.app.agent_pool import AgentPool
         app.agent_pool = AgentPool([])
@@ -3371,11 +3359,6 @@ class ProfileTests(unittest.TestCase):
         app._deferred_system_messages = []
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_prompt_visible = False
-        app.runtime_state.nonblocking_input_queue = None
-        app.runtime_state.nonblocking_input_thread = None
-        app.runtime_state.nonblocking_input_status = "idle"
-        app.runtime_state.nonblocking_prompt_text = ""
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -3384,36 +3367,6 @@ class ProfileTests(unittest.TestCase):
 
         self.assertEqual(result, "mensagem")
         mock_input.assert_called_once_with("Você: ")
-
-    def test_read_user_input_zero_timeout_tty_marks_prompt_as_reading_during_blocking_input(self):
-        """Verifica que read user input zero timeout tty marks prompt as reading during blocking input."""
-        app = QuimeraApp.__new__(QuimeraApp)
-        materialize_internal_services(app)
-        app.renderer = DummyRenderer()
-        app._deferred_system_messages = []
-        from quimera.app.runtime_state import AppRuntimeState
-        app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_prompt_visible = False
-        app.runtime_state.nonblocking_input_queue = None
-        app.runtime_state.nonblocking_input_thread = None
-        app.runtime_state.nonblocking_input_status = "idle"
-        app.runtime_state.nonblocking_prompt_text = ""
-
-        stdin = io.StringIO("")
-        stdin.isatty = lambda: True
-
-        def _input_with_assertions(prompt):
-            self.assertEqual(prompt, "Alex: ")
-            self.assertEqual(app.runtime_state.nonblocking_input_status, "reading")
-            self.assertEqual(app.runtime_state.nonblocking_prompt_text, "Alex: ")
-            return "mensagem"
-
-        with patch("sys.stdin", stdin), patch("builtins.input", side_effect=_input_with_assertions):
-            result = app.read_user_input("Alex: ", timeout=0)
-
-        self.assertEqual(result, "mensagem")
-        self.assertEqual(app.runtime_state.nonblocking_input_status, "idle")
-        self.assertEqual(app.runtime_state.nonblocking_prompt_text, "")
 
     def test_read_user_input_with_timeout_polls_stdin_without_spawning_thread(self):
         """Verifica que read user input with timeout polls stdin without spawning thread."""
@@ -3452,11 +3405,6 @@ class ProfileTests(unittest.TestCase):
         app._deferred_system_messages = ["[task 7] claude:\nresultado final"]
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_prompt_visible = False
-        app.runtime_state.nonblocking_input_queue = None
-        app.runtime_state.nonblocking_input_thread = None
-        app.runtime_state.nonblocking_input_status = "reading"
-        app.runtime_state.nonblocking_prompt_text = "Você: "
         app._output_lock = threading.Lock()
 
         stdin = io.StringIO("")
@@ -3466,8 +3414,6 @@ class ProfileTests(unittest.TestCase):
             value = app.read_user_input("Você: ", timeout=0)
 
         self.assertEqual(value, "oi")
-        self.assertEqual(app.runtime_state.nonblocking_input_status, "idle")
-        self.assertEqual(app.runtime_state.nonblocking_prompt_text, "")
         self.assertEqual(app._deferred_system_messages, [])
         self.assertEqual(app.renderer.system_messages, ["[task 7] claude:\nresultado final"])
 
@@ -3479,11 +3425,6 @@ class ProfileTests(unittest.TestCase):
         app._deferred_system_messages = []
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_prompt_visible = False
-        app.runtime_state.nonblocking_input_queue = None
-        app.runtime_state.nonblocking_input_thread = None
-        app.runtime_state.nonblocking_input_status = "idle"
-        app.runtime_state.nonblocking_prompt_text = ""
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -3597,10 +3538,9 @@ class ProfileTests(unittest.TestCase):
         app._deferred_system_messages = []
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_input_status = "reading"
-        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = ""
+        app.input_gate.is_active.return_value = True
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -3620,10 +3560,9 @@ class ProfileTests(unittest.TestCase):
         app._deferred_system_messages = []
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_input_status = "reading"
-        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = ""
+        app.input_gate.is_active.return_value = True
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -3639,8 +3578,6 @@ class ProfileTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_input_status = "reading"
-        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = "digitando"
         app.input_gate.is_active.return_value = True
@@ -3665,13 +3602,12 @@ class ProfileTests(unittest.TestCase):
         app._deferred_system_messages = []
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_input_status = "reading"
-        app.runtime_state.nonblocking_prompt_text = "Alex: "
 
         renderer = Mock()
         app.renderer = renderer
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = ""
+        app.input_gate.is_active.return_value = True
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -3690,10 +3626,9 @@ class ProfileTests(unittest.TestCase):
         app._deferred_system_messages = []
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_input_status = "reading"
-        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = ""
+        app.input_gate.is_active.return_value = True
         app.system_layer = Mock()
 
         stdin = io.StringIO("")
@@ -3723,10 +3658,9 @@ class ProfileTests(unittest.TestCase):
         app._deferred_system_messages = []
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_input_status = "reading"
-        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = ""
+        app.input_gate.is_active.return_value = True
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -3746,8 +3680,8 @@ class ProfileTests(unittest.TestCase):
         finally:
             prompt_handler._ui_active = previous_state
 
-    def test_show_system_message_uses_prompt_toolkit_redisplay_without_manual_clear(self):
-        """Verifica que show system message uses prompt toolkit redisplay without manual clear."""
+    def test_show_system_message_uses_input_gate_redisplay_without_manual_clear(self):
+        """System message com o gate ativo pede redisplay ao gate, sem limpar a linha à mão."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
@@ -3755,8 +3689,6 @@ class ProfileTests(unittest.TestCase):
         app._deferred_system_messages = []
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_input_status = "reading"
-        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = "oi"
         app.input_gate.is_active.return_value = True
@@ -3771,16 +3703,14 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(len(clear_calls), 0)
         app.input_gate.redisplay.assert_called_once_with()
 
-    def test_print_response_uses_prompt_toolkit_redisplay_without_manual_prompt_rewrite(self):
-        """Verifica que print response uses prompt toolkit redisplay without manual prompt rewrite."""
+    def test_print_response_uses_input_gate_redisplay_without_manual_prompt_rewrite(self):
+        """print_response com o gate ativo pede redisplay ao gate, sem reescrever o prompt à mão."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_input_status = "reading"
-        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.renderer = Mock()
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = "oi"
@@ -3807,7 +3737,8 @@ class ProfileTests(unittest.TestCase):
         app._deferred_system_messages = []
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
-        app.runtime_state.nonblocking_input_status = "reading"
+        app.input_gate = Mock()
+        app.input_gate.is_active.return_value = True
 
         app.system_layer.show_system_message("[task 7] claude:\nresultado final")
 
@@ -4538,7 +4469,6 @@ class ProfileTests(unittest.TestCase):
         app._ui_event_handler = UiEventHandler(
             renderer=app.renderer,
             input_gate=getattr(app, "input_gate", None),
-            runtime_state=getattr(app, "runtime_state", None),
             system_layer=app.system_layer,
             event_sink=app.event_sink,
             show_muted_message=app.show_muted_message,
@@ -4546,7 +4476,6 @@ class ProfileTests(unittest.TestCase):
             show_warning_message=app.system_layer.show_warning_message,
             show_error_message=app.system_layer.show_error_message,
             redisplay_user_prompt=getattr(app, "_redisplay_user_prompt_if_needed", lambda: None),
-            output_lock=app._output_lock,
         )
 
         app._wire_event_ui()
