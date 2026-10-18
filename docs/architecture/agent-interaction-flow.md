@@ -4,16 +4,16 @@
 
 ```
 Textual Input.Submitted
-  -> TextualUiBridge.submit_input           # quimera/app/textual_ui.py:507
+  -> TextualUiBridge.submit_input           # quimera/ui/textual/bridge.py
      -> input_queue.put(value)              # rota normal de chat
-  -> TextualInputGate.__call__              # quimera/app/textual_ui.py:874
+  -> TextualInputGate.__call__              # quimera/ui/textual/input_gate.py
      -> bloqueia em input_queue.get()
-  -> app.read_user_input                    # quimera/app/core.py:1141
+  -> app.read_user_input                    # quimera/app/core_facade.py → AppInputServices (quimera/app/inputs.py)
   -> chat_processor                         # loop principal do app
-  -> ChatLifecycle.process_message          # quimera/app/chat_lifecycle.py:48
-  -> ChatRoundOrchestrator.process          # quimera/app/chat_round.py:250
-  -> DispatchServices.delegate              # roteia para o agente alvo
-  -> AgentGateway.call                      # quimera/app/agent_gateway.py:92
+  -> ChatLifecycle.process_message          # quimera/app/chat_lifecycle.py
+  -> ChatRoundOrchestrator.process          # quimera/app/chat_round.py
+  -> AppDispatchServices.delegate           # quimera/app/dispatch.py — roteia para o agente alvo
+  -> AgentGateway.call                      # quimera/app/agent_gateway.py
   -> AgentClient.call                       # quimera/agents/client.py
   -> renderer/feed                          # saída streamada para a UI
 ```
@@ -24,7 +24,7 @@ Textual Input.Submitted
 
 ```
 Modal ativo (approval/question/selection)
-  -> TextualInputGate._read_with_textual_prompt   # textual_ui.py:893
+  -> TextualInputGate._read_with_textual_prompt   # quimera/ui/textual/input_gate.py
      -> bridge.begin_direct_input()                # incrementa _direct_input_depth
      -> bridge.emit("question", {...})             # overlay visual
      -> bridge.direct_input_queue.get()            # bloqueia até resposta
@@ -38,13 +38,13 @@ Modal ativo (approval/question/selection)
 - `read_approval_in_terminal` → approval (y/s/a/n)
 - `read_selection_in_terminal` → seleção numerada
 - `read_input_in_terminal` → prompt livre inline
-- Eventos `"question"`, `"window_open"`, `"pending_input"` → ativam automaticamente via `_sync_direct_input_from_event`
+- Eventos `"question"`, `"window_open"`, `"pending_input"` **não** ativam direct input: são só visuais (ver seção 5, "Separação importante")
 
 ## 3. Fluxo Agent Stdin
 
 ```
 submit_input(value)
-  -> _try_inject_active_agent(text)               # textual_ui.py:567
+  -> _try_inject_active_agent(text)               # quimera/ui/textual/bridge.py
      -> quimera_app.is_agent_running?              # só quando há subprocesso ativo
      -> quimera_app.active_agent_stdin.write()     # escreve direto no stdin do agente
      -> retorna True (consome o input)
@@ -61,10 +61,10 @@ Se o input for consumido pelo agente, **não** cai em `input_queue` nem `direct_
 
 ```
 Agente chama tools/call via MCP socket
-  -> MCPServer._handle_tools_call                  # quimera/runtime/mcp/server.py:549
+  -> MCPServer._handle_tools_call                  # quimera/runtime/mcp/server.py
      -> constrói TrustedToolExecutionContext
      -> submete para thread pool:
-        ToolExecutor.execute                       # quimera/runtime/executor.py:191
+        ToolExecutor.execute                       # quimera/runtime/executor.py
           -> policy.requires_validation
           -> policy.requires_approval
           -> _tool_preview_callback(name, args, metadata)   # preview operacional SEMPRE
@@ -85,13 +85,13 @@ Agente chama tools/call via MCP socket
 
 ```
 Agente/Executor produz saída
-  -> TextualRenderer.show_message / show_feed / show_approval / show_plain
-     -> bridge.emit(TextualUiEvent(kind, payload, agent))     # textual_ui.py:583
+  -> TextualRenderer.show_message / show_feed / show_approval / show_plain   # quimera/ui/textual/renderer.py
+     -> bridge.emit(TextualUiEvent(kind, payload, agent))     # quimera/ui/textual/bridge.py
         -> call_from_thread(textual_app.handle_bridge_event)  # enfileira no event loop do Textual
         -> se app não attached: fallback para ui_queue interna
   -> QuimeraTextualApp.handle_bridge_event                    # ui/textual/app.py
      -> eventos especiais:
-        "clear"       -> feed_model.clear()
+        "clear"       -> feed_model.clear_chat()   # mantém o cabeçalho de boot
         "question"    -> _set_question_overlay()
         "question_clear" -> overlay hidden
         "window_open" -> _set_question_overlay(_build_window_overlay_payload(...))
@@ -99,12 +99,12 @@ Agente/Executor produz saída
         "prompt_clear" -> reset estado active do gate
         "summarizing" -> card de sumarização
      -> outros eventos passam por:
-        TextualFeedModel.apply(event)                          # textual_ui.py:324
+        TextualFeedModel.apply(event)                          # quimera/ui/textual/feed_model.py
            -> se transient kind: upsert/substitui item
            -> se final: remove transiente correspondente
            -> se permanente: append
-        -> _render_event(kind, payload)                        # textual_ui.py:1401
-           -> Rich renderable convertido para exibição no RichLog
+        -> _render_event(event)                                # quimera/ui/textual/renderables.py
+           -> Rich renderable (cacheado por evento) montado nos slots do feed
 ```
 
 **Regras do feed model:**
@@ -129,4 +129,4 @@ Agente/Executor produz saída
 | Approval consome y/s/a/n | `read_approval_in_terminal` → `_read_with_textual_prompt` → `direct_input_queue` (fora do chat) |
 | Preview de tool MCP socket aparece com ou sem approval | `execute()` emite preview antes de qualquer decisão de approval |
 | Approval visual (card laranja) aparece apenas quando há pedido humano real | `ApprovalBroker.approve` só chama `approval_handler.approve` quando `_can_auto_approve` retorna `False` |
-| `direct_input`/`modal state` não é proxy genérico para "input não-chat" | `is_direct_input_active()` reflete exclusivamente `_direct_input_depth > 0`, controlado por `begin_direct_input`/`end_direct_input` |
+| `direct_input`/`modal state` não é proxy genérico para "input não-chat" | `is_direct_input_active()` reflete exclusivamente `_direct_input_depth > 0`, controlado por `begin_direct_input`/`end_direct_input` (contagem por thread dona; threads mortas são descartadas) |

@@ -1,9 +1,7 @@
 """Canonical session-scoped mutable state — domain owns the state.
 
 This module is the single source of truth for ``SessionRuntimeState`` and
-its collaborators.  The ``app`` layer re-exports these names via thin shims
-so that existing ``from quimera.app.state.session_state import …`` statements
-keep working during the transition.
+its collaborators.
 """
 from __future__ import annotations
 

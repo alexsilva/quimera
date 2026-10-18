@@ -1,7 +1,8 @@
-"""Fachada compatível de `QuimeraApp`.
+"""Mixin com a superfície pública de `QuimeraApp`.
 
-Os métodos aqui preservam a API legada enquanto `core.py` permanece como
-construtor fino. A implementação foi movida mecanicamente na Fase 5.
+`core.py` só compõe a instância (via `AppAssembler`); os acessores, os
+comandos, os helpers de toolbar/execução usados pelo wiring e o ciclo de vida
+(`run`/`close`) de `QuimeraApp` ficam aqui.
 """
 
 import logging

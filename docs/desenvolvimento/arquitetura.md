@@ -41,8 +41,8 @@ Workspace
 - `command_router.py`: prefixos de agente e modos;
 - `chat_processor.py`: loop de leitura e tratamento de interrupções;
 - `chat_round.py`: execução de uma rodada de agente(s);
-- `dispatch.py` e `tool_loop.py`: ciclo de tool calls e respostas;
-- `task.py`: adaptador entre `/task`, repositório, roteador e executores.
+- `dispatch.py`: despacho da chamada ao agente e tratamento da resposta (o ciclo de tool calls dos drivers HTTP fica em `runtime/drivers/`: `ToolCallingDriver` em `openai_compat.py` e `CloudDriver` em `cloud.py`);
+- `tasks/services.py` (fora de `app/`): `AppTaskServices`, adaptador entre `/task`, repositório, roteador e executores.
 
 ## Profiles
 

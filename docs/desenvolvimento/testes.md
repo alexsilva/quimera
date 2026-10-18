@@ -87,7 +87,7 @@ A primeira execução do mypy leva cerca de dois minutos neste host; com o cache
 ```bash
 rg "CMD_" quimera
 rg "class ExecutionProfile" quimera/profiles/base.py
-rg "def score_profile_for_task" quimera/runtime/task_planning.py
+rg "def score_profile_for_task" quimera/tasks/planning.py
 python - <<'PY'
 from quimera.runtime.drivers.tool_schemas import resolve_tool_schemas
 print([s['function']['name'] for s in resolve_tool_schemas()])

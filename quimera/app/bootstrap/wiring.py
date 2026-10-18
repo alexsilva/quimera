@@ -42,7 +42,7 @@ from ..session import AppSessionServices, compute_history_hard_limit, trim_histo
 from ..session_metrics import SessionMetricsService
 from ..session_state import SessionStateManager
 from ..staging import merge_staging_to_workspace
-from ..state.session_state import SessionRuntimeState
+from ...domain.session_state import SessionRuntimeState
 from ..system_layer import AppSystemLayer, SystemLayerDependencies
 from ..toolbar import ToolbarManager
 from ..toolbar_coordinator import ToolbarCoordinator

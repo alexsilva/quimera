@@ -16,8 +16,8 @@ O Quimera coordena agentes (CLI e OpenAI-compatible), mantém estado compartilha
 - `quimera/app/`: loop interativo, protocolo de respostas/estado, comandos slash e orquestração de rodada.
 - `quimera/runtime/`: drivers, modelos `ToolCall`/`ToolResult`, registry, políticas e execução segura de ferramentas.
 - `quimera/runtime/mcp/server.py`: servidor MCP (Model Context Protocol) — expõe tools do runtime via JSON-RPC 2.0 sobre stdio/socket Unix.
-- `quimera/runtime/task_planning.py`: classificação de task e scoring de roteamento.
-- `quimera/runtime/tasks.py`: persistência de jobs/tasks em SQLite.
+- `quimera/tasks/planning.py` e `quimera/tasks/router.py`: classificação de task, scoring e roteamento (`TaskRouter`, `effective_score`).
+- `quimera/tasks/repository.py` e `quimera/tasks/api.py`: persistência de jobs/tasks em SQLite.
 - `quimera/runtime/tools/delegate.py`: `tasks_delegate` — delegação entre agentes via MCP (cross-MCP).
 - `quimera/profiles/`: catálogo de agentes e metadados de capacidade. Cada profile injeta configuração MCP no formato nativo do agente.
 - `quimera/ui/`: renderização terminal (temas, densidade, stream e resumo).
