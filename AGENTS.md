@@ -80,3 +80,8 @@ Isso garante que:
 ## Teste Interativo Local
 
 Para testes interativos locais, consulte a seção "Testes Interativos Locais" no README.md.
+
+## Regra de Commit
+
+- `scripts/check.sh` (Ruff + mypy) precisa passar antes de qualquer commit; o hook `scripts/git-hooks/pre-commit` o executa (instalação por clone: `pip install -e '.[dev]'` e `git config core.hooksPath scripts/git-hooks`). O hook verifica o índice, não a árvore: alteração não staged não mascara erro. Nunca commitar com `--no-verify`.
+- A baseline de dívida do mypy em `pyproject.toml` (`[[tool.mypy.overrides]]`) só encolhe: módulo corrigido sai da lista; módulo novo nunca entra.

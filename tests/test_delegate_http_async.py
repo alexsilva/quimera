@@ -444,7 +444,6 @@ class TestNonSSEPath:
     def test_non_sse_background_thread_exception_nao_propaga(self, delegation_tools, tmp_path):
         """Exceção no complete_task (pós-agente) não quebra o retorno inicial."""
         import time
-        db_path = delegation_tools.workspace.tasks_db
         dispatch = MagicMock(return_value="ok")
         delegation_tools.set_delegate_fn(dispatch)
         call = _make_call(metadata={

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Hook de pre-commit do Quimera: Ruff + mypy bloqueantes (scripts/check.sh).
+# Instalação (uma vez por clone): git config core.hooksPath scripts/git-hooks
+#
+# O que vai no commit é o índice, não a árvore de trabalho. O hook exporta o
+# índice inteiro (git checkout-index, que respeita o GIT_INDEX_FILE temporário
+# de um `git commit <path>` parcial) para um diretório estável dentro de .git
+# e roda a verificação lá, sempre. Assim nem uma correção não staged nem um
+# arquivo não rastreado (inclusive um ruff.toml ou mypy.ini solto na árvore,
+# que relaxaria as regras) mascaram um erro que seria commitado.
+set -u
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+gitdir=$(git rev-parse --absolute-git-dir) || exit 1
+export_dir="$gitdir/quimera-index-check"
+
+rm -rf "$export_dir" && mkdir -p "$export_dir" || exit 1
+git checkout-index --all --force --prefix="$export_dir/" || exit 1
+echo "pre-commit: verificando o índice (exportado em $export_dir)"
+QUIMERA_CHECK_TOOLS_DIR="$root/.venv/bin" \
+MYPY_CACHE_DIR="$gitdir/quimera-index-check-cache" \
+    bash "$export_dir/scripts/check.sh"

@@ -58,7 +58,6 @@ class TestAppHistory(unittest.TestCase):
         captured = {}
         input_gate_factory = self._make_input_gate_factory(captured)
 
-        tmp_root = Path("/tmp/quimera_test_workspace_tmp")
         mock_ws_instance = MagicMock()
         mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
         mock_ws_instance.cwd_hash = "test-workspace"
@@ -108,7 +107,6 @@ class TestAppHistory(unittest.TestCase):
         gate_mock.read_input.return_value = "test input"
         gate_mock.return_value = "test input"
 
-        tmp_root = Path("/tmp/quimera_test_workspace_tmp")
         mock_ws_instance = MagicMock()
         mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
         mock_ws_instance.cwd_hash = "test-workspace"

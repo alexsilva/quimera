@@ -325,6 +325,14 @@ Por workspace (hash do `cwd`):
 
 ## Testes
 
+Gates bloqueantes (Ruff + mypy), executados pelo hook de pre-commit:
+
+```bash
+pip install -e '.[dev]'
+git config core.hooksPath scripts/git-hooks   # uma vez por clone
+scripts/check.sh                              # ou --lint / --types
+```
+
 Execução rápida (núcleo):
 
 ```bash

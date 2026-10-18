@@ -20,7 +20,7 @@ package_parent = Path(__file__).resolve().parents[4]
 if str(package_parent) not in sys.path:
     sys.path.insert(0, str(package_parent))
 
-from quimera.runtime.tools.browser.service import BrowserService, _SocketConnection
+from quimera.runtime.tools.browser.service import BrowserService, _SocketConnection  # noqa: E402 - sys.path acima é deliberado
 
 
 def main() -> int:

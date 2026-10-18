@@ -26,3 +26,5 @@ build/
 .tinyide
 analisis/
 .quimera/
+.mypy_cache/
+.ruff_cache/

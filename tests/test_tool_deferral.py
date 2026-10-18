@@ -6,8 +6,6 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.drivers.openai_compat import ToolCallingDriver
 from quimera.runtime.drivers.tool_schemas import TOOL_SCHEMAS

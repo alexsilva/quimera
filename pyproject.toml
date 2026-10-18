@@ -14,6 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dev = ["ruff>=0.15,<0.16", "mypy>=2.4,<2.5"]
 docs = ["mkdocs>=1.6"]
 browser = ["playwright>=1.50"]
 oauth-store = ["cryptography>=42"]
@@ -35,3 +36,111 @@ filterwarnings = [
     "ignore::UserWarning:rich",
 ]
 norecursedirs = ["tmp", ".claude"]
+
+# ---------------------------------------------------------------------------
+# Gates de qualidade (scripts/check.sh; hook em scripts/git-hooks/pre-commit)
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py310"
+extend-exclude = ["tmp", ".claude"]
+
+[tool.ruff.lint]
+# Conjunto bloqueante: erros de sintaxe/semântica e pyflakes. Regras novas
+# entram aqui só com a base limpa, para o gate continuar sendo zero erro.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["quimera"]
+show_error_codes = true
+warn_unused_configs = true
+# `annotation-unchecked` é só uma nota sobre funções sem anotação; o gate
+# cobre as anotadas (74% do código) e tudo que for anotado daqui em diante.
+disable_error_code = ["annotation-unchecked"]
+
+# Único import de terceiros sem stubs: extra opcional `oauth-store`. Não usar
+# `ignore_missing_imports` global, que também silenciaria um módulo quimera.*
+# apagado enquanto ainda importado.
+[[tool.mypy.overrides]]
+module = ["cryptography.*"]
+ignore_missing_imports = true
+
+# Baseline de dívida: módulos que já tinham erros quando o gate nasceu
+# (281 erros em 70 módulos, 2026-10-18). O gate protege os demais módulos
+# e todo módulo novo. Ao corrigir um módulo, remova-o desta lista: ele passa a
+# ser protegido. Não adicione módulos aqui.
+[[tool.mypy.overrides]]
+module = [
+    "quimera.agents.client",
+    "quimera.agents.signal_guard",
+    "quimera.app.agent_gateway",
+    "quimera.app.bootstrap.wiring",
+    "quimera.app.bug_services",
+    "quimera.app.chat_lifecycle",
+    "quimera.app.chat_processor",
+    "quimera.app.chat_round",
+    "quimera.app.command_router",
+    "quimera.app.completion_dropdown",
+    "quimera.app.core_facade",
+    "quimera.app.dispatch",
+    "quimera.app.inputs",
+    "quimera.app.lifecycle",
+    "quimera.app.submission_tracker",
+    "quimera.app.system_layer",
+    "quimera.app.toolbar",
+    "quimera.app.toolbar_coordinator",
+    "quimera.app.worker",
+    "quimera.cli",
+    "quimera.debate.commands",
+    "quimera.devtools.fake_agents",
+    "quimera.env_config",
+    "quimera.metrics_report",
+    "quimera.profiles.claudecloud",
+    "quimera.profiles.codexcloud",
+    "quimera.profiles.opencode",
+    "quimera.prompt_templates",
+    "quimera.runtime.approval",
+    "quimera.runtime.claude_auth",
+    "quimera.runtime.drivers.claudecloud",
+    "quimera.runtime.drivers.cloud",
+    "quimera.runtime.drivers.codexcloud",
+    "quimera.runtime.drivers.openai_compat",
+    "quimera.runtime.drivers.repl",
+    "quimera.runtime.executor",
+    "quimera.runtime.input_broker",
+    "quimera.runtime.mcp.client",
+    "quimera.runtime.mcp.http_server",
+    "quimera.runtime.mcp.server",
+    "quimera.runtime.mcp.session",
+    "quimera.runtime.mcp.settings",
+    "quimera.runtime.policy",
+    "quimera.runtime.tools.browser.service",
+    "quimera.runtime.tools.delegate",
+    "quimera.runtime.tools.shell",
+    "quimera.runtime.tools.web",
+    "quimera.spy_output_presenter",
+    "quimera.tasks.executor_pool",
+    "quimera.tasks.failover",
+    "quimera.tasks.planning",
+    "quimera.tasks.protocol",
+    "quimera.tasks.repository",
+    "quimera.tasks.reviewer",
+    "quimera.tasks.router",
+    "quimera.tasks.runner",
+    "quimera.tasks.services",
+    "quimera.ui.boot_status",
+    "quimera.ui.browser",
+    "quimera.ui.textual.app",
+    "quimera.ui.textual.config_screen",
+    "quimera.ui.textual.connection_screen",
+    "quimera.ui.textual.feed_model",
+    "quimera.ui.textual.input_gate",
+    "quimera.ui.textual.prompt_preview_screen",
+    "quimera.ui.textual.renderables",
+    "quimera.ui.textual.renderer",
+    "quimera.ui.textual.widgets",
+    "quimera.workflows.execution",
+    "quimera.workflows.repository",
+]
+ignore_errors = true

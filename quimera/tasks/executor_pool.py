@@ -13,6 +13,7 @@ import re
 import threading
 import weakref
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any, Callable
 
 from ..agents import AgentClient
