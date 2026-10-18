@@ -1,6 +1,7 @@
 """Hub visual para inspecionar e gerenciar conexões MCP da sessão."""
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass, replace
 
@@ -26,6 +27,8 @@ from quimera.runtime.mcp.settings import (
     MCPHttpSettingsStore,
 )
 from quimera.ui.browser import open_in_browser
+
+_logger = logging.getLogger(__name__)
 
 SCOPE_OPTIONS = [
     ("Global · todos os workspaces", SCOPE_GLOBAL),
@@ -873,7 +876,8 @@ class MCPConnectionsScreen(ModalScreen[None]):
             return
         try:
             self._refresh_connections()
-        except Exception:
+        except Exception as exc:
+            _logger.warning("MCP Hub: atualizar a lista de conexões falhou: %s", exc, exc_info=True)
             return
 
     def _refresh_view(self) -> None:
@@ -1500,8 +1504,8 @@ class MCPConnectionsScreen(ModalScreen[None]):
         name, url = pending
         try:
             self.app.copy_to_clipboard(url)
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug("MCP Hub: copiar o link para a área de transferência falhou: %s", exc)
         message = (
             f"{prefix}link de autorização de '{name}' copiado para a área de "
             "transferência (se o terminal suportar OSC 52)."

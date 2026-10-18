@@ -1,6 +1,7 @@
 """Playwright-backed browser worker used by the browser tool family."""
 from __future__ import annotations
 
+import logging
 import json
 import os
 import select
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from quimera.environment import RuntimeSecrets, build_env_vars
+
+_logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from quimera.workspace import Workspace
@@ -272,8 +275,8 @@ class BrowserService:
             if playwright is not None:
                 try:
                     playwright.stop()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    _logger.debug("browser: parar o Playwright falhou: %s", exc)
             try:
                 connection.close()
             except OSError:
@@ -729,8 +732,8 @@ class BrowserService:
         for resource in (session.context, session.browser):
             try:
                 resource.close()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                _logger.debug("browser: fechar %s falhou: %s", type(resource).__name__, exc)
 
     @staticmethod
     def _json_safe(value: Any) -> Any:

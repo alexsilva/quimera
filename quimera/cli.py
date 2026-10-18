@@ -260,8 +260,8 @@ def _build_connection_from_args(profile, args):
     return _configure_connection_interactively(profile, driver_hint="openai")
 
 
-def main():
-    """Executa main."""
+def _reconfigure_stdin_encoding() -> None:
+    """Alinha a codificação do stdin ao dispositivo, substituindo bytes inválidos."""
     if hasattr(sys.stdin, "reconfigure"):
         try:
             stdin_encoding = None
@@ -272,6 +272,9 @@ def main():
         except (AttributeError, OSError, ValueError):
             pass
 
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Monta o parser de argumentos do comando ``quimera``."""
     parser = argparse.ArgumentParser(prog="quimera", allow_abbrev=False)
     parser.add_argument(
         "--version",
@@ -507,7 +510,11 @@ def main():
             "JIRA_API_TOKEN=abc123. Pode ser repetido por conexão."
         ),
     )
+    return parser
 
+
+def _parse_args(parser: argparse.ArgumentParser) -> argparse.Namespace:
+    """Faz o parse dos argumentos e as validações que dependem de mais de um deles."""
     args, unknown = parser.parse_known_args()
 
     if "--spy" in unknown:
@@ -519,89 +526,95 @@ def main():
 
     if args.history_window is not None and args.history_window <= 0:
         parser.error("--history-window deve ser maior que zero")
+    return args
 
-    agents_available = _available_agent_names(test_mode=args.test)
 
-    if args.list_connections:
-        conns = load_connections()
-        if not conns:
-            print("Nenhuma conexão persistida.")
-        else:
-            for name, data in conns.items():
-                print(f"{name}: {format_connection_label(_connection_from_dict(data))}")
-        return
+def _list_connections() -> None:
+    """Imprime as conexões persistidas (``--list-connections``)."""
+    conns = load_connections()
+    if not conns:
+        print("Nenhuma conexão persistida.")
+    else:
+        for name, data in conns.items():
+            print(f"{name}: {format_connection_label(_connection_from_dict(data))}")
 
-    if args.connect:
-        agent_name = args.connect.strip().lower()
-        if agent_name in _test_profile_names():
-            parser.error(f"Profile de teste '{agent_name}' não aceita --connect persistente; use --test com configuração local do processo")
-        profile = _profiles.get(agent_name)
-        if profile is not None and not getattr(profile, "dynamic", False):
-            parser.error(
-                f"'{agent_name}' é um perfil de execução; escolha um nome de conexão e use --profile {agent_name}."
-            )
-        if profile is None:
-            if not is_valid_agent_name(agent_name):
-                parser.error(f"Nome de agente inválido em --connect: {agent_name}")
-            profile_name = getattr(args, "profile", None)
-            profile_metadata = None
-            if profile_name:
-                profile = _profiles.get(profile_name.strip().lower())
-                if profile is None:
-                    parser.error(f"Perfil de execução '{profile_name}' não encontrado em --profile.")
-                profile_metadata = {"profile": profile.name}
-            profile = register_connection_profile(agent_name, metadata=profile_metadata)
-            print(f"Conexão registrada: {agent_name}")
-        else:
-            # Profile já existe — atualiza referência de base se --profile foi fornecido
-            profile_name = getattr(args, "profile", None)
-            if profile_name:
-                execution_profile = _profiles.get(profile_name.strip().lower())
-                if execution_profile is None:
-                    parser.error(f"Perfil de execução '{profile_name}' não encontrado em --profile.")
-                profile = register_connection_profile(agent_name, metadata={"profile": execution_profile.name})
 
-        print(f"Configurando conexão para {agent_name}")
-        print(f"Built-in atual: {format_connection_label(profile.effective_connection())}")
-        connection = _build_connection_from_args(profile, args)
-        set_connection(agent_name, connection, persist=True)
-        print(f"Conexão salva em base_dir para {agent_name}: {format_connection_label(connection)}")
-        return
+def _connect_agent(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Registra e configura a conexão de um agente (``--connect``)."""
+    agent_name = args.connect.strip().lower()
+    if agent_name in _test_profile_names():
+        parser.error(f"Profile de teste '{agent_name}' não aceita --connect persistente; use --test com configuração local do processo")
+    profile = _profiles.get(agent_name)
+    if profile is not None and not getattr(profile, "dynamic", False):
+        parser.error(
+            f"'{agent_name}' é um perfil de execução; escolha um nome de conexão e use --profile {agent_name}."
+        )
+    if profile is None:
+        if not is_valid_agent_name(agent_name):
+            parser.error(f"Nome de agente inválido em --connect: {agent_name}")
+        profile_name = getattr(args, "profile", None)
+        profile_metadata = None
+        if profile_name:
+            profile = _profiles.get(profile_name.strip().lower())
+            if profile is None:
+                parser.error(f"Perfil de execução '{profile_name}' não encontrado em --profile.")
+            profile_metadata = {"profile": profile.name}
+        profile = register_connection_profile(agent_name, metadata=profile_metadata)
+        print(f"Conexão registrada: {agent_name}")
+    else:
+        # Profile já existe — atualiza referência de base se --profile foi fornecido
+        profile_name = getattr(args, "profile", None)
+        if profile_name:
+            execution_profile = _profiles.get(profile_name.strip().lower())
+            if execution_profile is None:
+                parser.error(f"Perfil de execução '{profile_name}' não encontrado em --profile.")
+            profile = register_connection_profile(agent_name, metadata={"profile": execution_profile.name})
 
-    if args.driver_repl:
-        _ensure_required_runtime_dependencies()
-        global DriverRepl
-        if DriverRepl is None:
-            from .runtime.drivers.repl import DriverRepl as _DriverRepl
+    print(f"Configurando conexão para {agent_name}")
+    print(f"Built-in atual: {format_connection_label(profile.effective_connection())}")
+    connection = _build_connection_from_args(profile, args)
+    set_connection(agent_name, connection, persist=True)
+    print(f"Conexão salva em base_dir para {agent_name}: {format_connection_label(connection)}")
 
-            DriverRepl = _DriverRepl
 
-        if args.driver_repl in _test_profile_names() and not args.test:
-            parser.error(f"Profile de teste '{args.driver_repl}' exige --test")
-        fake_openai_backend = None
-        if args.test and args.driver_repl == "fake-openai":
-            fake_openai_backend = _start_test_fake_openai_backend()
-        working_dir = Path(args.working_dir).resolve() if args.working_dir else None
-        try:
-            repl = DriverRepl(
-                args.driver_repl,
-                working_dir=working_dir,
-                get_profile=_profiles.get,
-                all_profiles=_profiles.all_profiles,
-                input_gate=SimpleInputGate(),
-            )
-            repl.run(one_shot_prompt=args.repl_prompt)
-        except (RuntimeError, ValueError) as exc:
-            print(str(exc), file=sys.stderr)
-            raise SystemExit(2)
-        finally:
-            _stop_test_fake_openai_backend(fake_openai_backend)
-        return
+def _run_driver_repl(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Sobe o REPL de um profile openai_compat (``--driver-repl``)."""
+    _ensure_required_runtime_dependencies()
+    global DriverRepl
+    if DriverRepl is None:
+        from .runtime.drivers.repl import DriverRepl as _DriverRepl
 
-    cwd = Path.cwd()
-    workspace = Workspace(cwd)
-    config = ConfigManager(workspace.config_file)
+        DriverRepl = _DriverRepl
 
+    if args.driver_repl in _test_profile_names() and not args.test:
+        parser.error(f"Profile de teste '{args.driver_repl}' exige --test")
+    fake_openai_backend = None
+    if args.test and args.driver_repl == "fake-openai":
+        fake_openai_backend = _start_test_fake_openai_backend()
+    working_dir = Path(args.working_dir).resolve() if args.working_dir else None
+    try:
+        repl = DriverRepl(
+            args.driver_repl,
+            working_dir=working_dir,
+            get_profile=_profiles.get,
+            all_profiles=_profiles.all_profiles,
+            input_gate=SimpleInputGate(),
+        )
+        repl.run(one_shot_prompt=args.repl_prompt)
+    except (RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2)
+    finally:
+        _stop_test_fake_openai_backend(fake_openai_backend)
+
+
+def _select_agents(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    config: ConfigManager,
+    agents_available: list[str],
+) -> list[str]:
+    """Resolve a lista de agentes da sessão: ``--agents`` ou a seleção persistida."""
     if args.agents is not None:
         agents = _expand_patterns(args.agents, agents_available)
         agents_unknown = [a for a in agents if a not in agents_available]
@@ -615,36 +628,82 @@ def main():
         agents = [a for a in (saved_agents or []) if a in agents_available]
         if not agents:
             agents = _expand_patterns(["*"], agents_available)
+    return agents
 
+
+def _apply_setting_command(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: ConfigManager
+) -> bool:
+    """Executa ``--name``, ``--whoami`` e os ``--set-*`` persistentes.
+
+    Retorna True quando um deles foi executado (a sessão não sobe).
+    """
     if args.name is not None:
         config.set_user_name(" ".join(args.name).strip())
         print(f"Nome configurado: {config.user_name}")
-        return
+        return True
 
     if args.whoami:
         print(config.user_name)
-        return
+        return True
 
     if args.set_theme is not None:
         config.set_theme(args.set_theme)
         t = _themes.get(args.set_theme)
         print(f"Tema padrão definido: {t.name} — {t.description}")
-        return
+        return True
 
     if args.set_history_window is not None:
         if args.set_history_window <= 0:
             parser.error("--set-history-window deve ser maior que zero")
         config.set_history_window(args.set_history_window)
         print(f"History window definida: {args.set_history_window}")
-        return
+        return True
 
     if args.set_idle_timeout is not None:
         if args.set_idle_timeout <= 0:
             parser.error("--set-idle-timeout deve ser maior que zero")
         config.set_idle_timeout_seconds(args.set_idle_timeout)
         print(f"Idle timeout padrão definido: {args.set_idle_timeout}s")
-        return
+        return True
+    return False
 
+
+def _run_interactive_test(renderer, workspace: Workspace, args: argparse.Namespace, agents: list[str]) -> None:
+    """Executa uma chamada única ao agente e imprime o resultado (``--interactive-test``)."""
+    default_agent = agents[0] if args.agents is not None and agents else "claude"
+    default_prompt = "Use uma ferramenta de shell para executar o comando `pwd` e me diga o diretório atual. Se a ferramenta pedir aprovação, mostre o prompt normalmente."
+
+    if args.test_agent:
+        agent_name = args.test_agent
+    else:
+        agent_name = default_agent
+
+    if args.test_prompt:
+        prompt = PromptText(" ".join(args.test_prompt), strict=False)
+    else:
+        prompt = PromptText(default_prompt, strict=False)
+
+    client = AgentClient(renderer, workspace=workspace)
+    try:
+        result = client.call(agent_name, prompt)
+    finally:
+        client.close()
+
+    renderer.show_system(prompt)
+    renderer.show_plain("\n--- RESULTADO LIMPO ---\n")
+    renderer.show_plain(result)
+
+
+def _run_session(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    cwd: Path,
+    workspace: Workspace,
+    config: ConfigManager,
+    agents: list[str],
+) -> None:
+    """Sobe a sessão: MCP clients, app, servidor MCP embutido e a interface."""
     _ensure_required_runtime_dependencies()
 
     visibility = Visibility(args.visibility) if args.visibility else Visibility(config.visibility)
@@ -708,28 +767,7 @@ def main():
             workspace=workspace,
         )
         if args.interactive_test:
-            default_agent = agents[0] if args.agents is not None and agents else "claude"
-            default_prompt = "Use uma ferramenta de shell para executar o comando `pwd` e me diga o diretório atual. Se a ferramenta pedir aprovação, mostre o prompt normalmente."
-
-            if args.test_agent:
-                agent_name = args.test_agent
-            else:
-                agent_name = default_agent
-
-            if args.test_prompt:
-                prompt = PromptText(" ".join(args.test_prompt), strict=False)
-            else:
-                prompt = PromptText(default_prompt, strict=False)
-
-            client = AgentClient(renderer, workspace=workspace)
-            try:
-                result = client.call(agent_name, prompt)
-            finally:
-                client.close()
-
-            renderer.show_system(prompt)
-            renderer.show_plain("\n--- RESULTADO LIMPO ---\n")
-            renderer.show_plain(result)
+            _run_interactive_test(renderer, workspace, args, agents)
             return
 
         start_embedded_mcp(
@@ -757,6 +795,37 @@ def main():
         _run_app_ui(app, textual_bridge)
     finally:
         _stop_test_fake_openai_backend(fake_openai_backend)
+
+
+def main():
+    """Executa main."""
+    _reconfigure_stdin_encoding()
+    parser = _build_parser()
+    args = _parse_args(parser)
+
+    agents_available = _available_agent_names(test_mode=args.test)
+
+    if args.list_connections:
+        _list_connections()
+        return
+
+    if args.connect:
+        _connect_agent(parser, args)
+        return
+
+    if args.driver_repl:
+        _run_driver_repl(parser, args)
+        return
+
+    cwd = Path.cwd()
+    workspace = Workspace(cwd)
+    config = ConfigManager(workspace.config_file)
+    agents = _select_agents(parser, args, config, agents_available)
+
+    if _apply_setting_command(parser, args, config):
+        return
+
+    _run_session(parser, args, cwd, workspace, config, agents)
 
 
 if __name__ == "__main__":

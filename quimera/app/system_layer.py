@@ -1,6 +1,7 @@
 """Componentes de `quimera.app.system_layer`."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -45,6 +46,8 @@ from ..profiles.base import (
     reload_profiles,
     set_connection,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,7 +230,8 @@ class AppSystemLayer:
         if callable(self.workspace_policy_getter):
             try:
                 name = str(self.workspace_policy_getter() or "").strip().lower()
-            except Exception:
+            except Exception as exc:
+                _logger.debug("workspace_policy_getter falhou: %s", exc)
                 name = ""
             if name in {"strict", "developer", "autonomous"}:
                 return name
@@ -238,8 +242,8 @@ class AppSystemLayer:
         if callable(self.sandbox_enabled_getter):
             try:
                 return bool(self.sandbox_enabled_getter())
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("sandbox_enabled_getter falhou: %s", exc)
         return False
 
     def _sandbox_available(self) -> bool:
@@ -247,8 +251,8 @@ class AppSystemLayer:
         if callable(self.sandbox_available_checker):
             try:
                 return bool(self.sandbox_available_checker())
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("sandbox_available_checker falhou: %s", exc)
         return False
 
     def _read_command_input(self, prompt: str) -> str | None:

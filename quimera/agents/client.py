@@ -10,9 +10,11 @@ import threading
 import time
 import uuid
 from collections import deque
+from dataclasses import dataclass, field
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import quimera.profiles as profiles
 from quimera.constants import MAX_STDERR_LINES, Visibility
@@ -140,6 +142,49 @@ def _extract_cli_text_chunks(line: str, output_format: str | None) -> list[str]:
     elif part_type == "text" or event_type == "text":
         _append(part.get("text") or event.get("text"))
     return chunks
+
+
+@dataclass
+class _ApiRun:
+    """Estado de uma execução via driver de API, compartilhado com a thread do driver.
+
+    O contador de tools em curso decide se um run cancelado pode ser
+    abandonado em background (nenhuma tool cruzou a fronteira de execução).
+    """
+
+    agent: Any
+    prompt: PromptText
+    driver: Any
+    tool_executor: Any
+    approval_scope: Any
+    quiet: bool
+    silent: bool
+    from_agent: Any
+    run_id: str | None
+    on_text_chunk: Any
+    progress_callback: Any
+    run_activity_callback: Any
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    token: object = field(default_factory=object)
+    result: Any = None
+    error: BaseException | None = None
+    _tool_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _active_tools: int = 0
+
+    def begin_tool_execution(self) -> bool:
+        with self._tool_lock:
+            if self.cancel_event.is_set():
+                return False
+            self._active_tools += 1
+            return True
+
+    def end_tool_execution(self) -> None:
+        with self._tool_lock:
+            self._active_tools = max(0, self._active_tools - 1)
+
+    def has_active_tool_execution(self) -> bool:
+        with self._tool_lock:
+            return self._active_tools > 0
 
 
 class AgentClient:
@@ -944,6 +989,103 @@ class AgentClient:
         self._agent_running = True
         self._running_agent = agent or (cmd[0] if cmd else None)
         self._start_esc_monitor()
+        proc = self._spawn_cli_process(
+            cmd, agent=agent, cwd=cwd, extra_env=extra_env,
+            primed_proc=_primed_proc, run_started=run_started,
+        )
+        if proc is None:
+            return None
+
+        result_holder = {
+            "stdout_chunks": deque(),
+            "stdout_total": 0,
+            "stdout_truncated": False,
+            "stderr": deque(maxlen=MAX_STDERR_LINES * 2),
+            "error": None,
+        }
+        log_queue = queue.Queue(maxsize=self._MAX_LOG_QUEUE_ITEMS) if not silent else None
+        self._spy_output_presenter.reset()
+        stdout_thread, stderr_thread = self._start_cli_readers(
+            proc, result_holder, log_queue, on_text_chunk
+        )
+        if not self._send_cli_input(proc, input_text, cmd=cmd, agent=agent, run_started=run_started):
+            return None
+
+        runner = ProcessRunner(
+            proc, stdout_thread, stderr_thread, result_holder,
+            self._cancel_event, self.idle_timeout,
+            max_wall_clock=self._effective_max_execution_seconds(),
+            pause_idle_if=self._pause_idle_if,
+        )
+
+        try:
+            if silent:
+                termination = self._watch_cli_silent(
+                    runner, cmd=cmd, agent=agent, progress_callback=progress_callback
+                )
+            else:
+                assert log_queue is not None
+                termination = self._watch_cli_verbose(
+                    runner, log_queue, cmd=cmd, agent=agent,
+                    show_status=show_status, progress_callback=progress_callback,
+                )
+            self.rate_limit_detected = runner.rate_limit_detected
+            self.rate_limit_detected_at = runner.rate_limit_detected_at
+            self._record_watch_termination(
+                termination, agent=agent, command=cmd[0] if cmd else None,
+                started_at=run_started, result_holder=result_holder,
+            )
+            if self._abort_cli_run_on_termination(
+                termination, cmd=cmd, agent=agent, runner=runner, silent=silent
+            ):
+                return None
+            if silent:
+                self._log_silent_cli_output(agent, result_holder)
+            collected = self._collect_cli_output(
+                proc, cmd=cmd, agent=agent, silent=silent,
+                result_holder=result_holder, run_started=run_started,
+            )
+            if collected is None:
+                return None
+            output, error = collected
+        finally:
+            # Se estamos desenrolando por exceção (ex.: callback de progresso
+            # falhou), o subprocesso não pode ficar órfão nem o transient
+            # "processando" preso na tela.
+            if sys.exc_info()[0] is not None:
+                if proc.poll() is None:
+                    try:
+                        terminate_process_group(proc)
+                    except Exception as term_exc:
+                        _logger.warning("falha ao encerrar o grupo de processos de %s: %s", cmd[0], term_exc)
+                try:
+                    self.renderer.clear_agent_transient(agent or cmd[0])
+                except Exception as render_exc:
+                    _logger.warning("falha ao limpar o transient de %s: %s", agent or cmd[0], render_exc)
+            if self.process_supervisor is not None:
+                self.process_supervisor.unregister(proc)
+            should_render_turn_summary = not silent and self.visibility in {Visibility.SUMMARY, Visibility.FULL}
+            self.last_spy_turn_detail = self._spy_output_presenter.finalize_turn(
+                agent,
+                render_summary=False,
+            )
+            self._pending_summary_render = (agent, self.last_spy_turn_detail, should_render_turn_summary)
+            self._agent_running = False
+            self._running_agent = None
+            self._stop_esc_monitor()
+            self._spy_output_presenter.reset()
+
+        return self._report_cli_exit(
+            proc, cmd=cmd, agent=agent, silent=silent,
+            output=output, error=error, run_started=run_started,
+        )
+
+    def _spawn_cli_process(self, cmd, *, agent, cwd, extra_env, primed_proc, run_started):
+        """Sobe o subprocesso do agente (ou reaproveita o pré-aquecido).
+
+        Em falha de sandbox ou de spawn o erro já foi mostrado e registrado;
+        devolve None e deixa o client liberado.
+        """
         env = self._build_run_env(extra_env)
         try:
             effective_cmd, effective_cwd = self._build_effective_cmd(cmd, agent, cwd)
@@ -957,11 +1099,11 @@ class AgentClient:
                 agent=agent, command=cmd[0] if cmd else None, started_at=run_started,
             )
             return None
-        if _primed_proc is not None and _primed_proc.poll() is None:
-            proc = _primed_proc
+        if primed_proc is not None and primed_proc.poll() is None:
+            proc = primed_proc
             _logger.debug("[warm-pool] reutilizando processo pré-aquecido: %s", cmd[0])
         else:
-            if _primed_proc is not None:
+            if primed_proc is not None:
                 _logger.debug("[warm-pool] processo pré-aquecido expirou: %s", cmd[0])
             try:
                 proc = subprocess.popen_text(
@@ -988,17 +1130,14 @@ class AgentClient:
                 label=cmd[0] if cmd else None,
                 scope_id=self._process_scope_id,
             )
+        return proc
 
-        result_holder = {
-            "stdout_chunks": deque(),
-            "stdout_total": 0,
-            "stdout_truncated": False,
-            "stderr": deque(maxlen=MAX_STDERR_LINES * 2),
-            "error": None,
-        }
-        log_queue = queue.Queue(maxsize=self._MAX_LOG_QUEUE_ITEMS) if not silent else None
-        stderr_lines_shown = 0
-        self._spy_output_presenter.reset()
+    def _start_cli_readers(self, proc, result_holder, log_queue, on_text_chunk):
+        """Inicia as threads que drenam stdout e stderr do agente.
+
+        stdout vai ao holder (com teto), ao callback de streaming e, fora do
+        modo silencioso, à fila de log que o watchdog consome.
+        """
         text_chunk_callback_failed = False
 
         def _relay_text_chunks(line: str) -> None:
@@ -1043,7 +1182,10 @@ class AgentClient:
         stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
         stdout_thread.start()
         stderr_thread.start()
+        return stdout_thread, stderr_thread
 
+    def _send_cli_input(self, proc, input_text, *, cmd, agent, run_started) -> bool:
+        """Escreve o prompt no stdin do agente e o fecha; False se a escrita falhou."""
         try:
             if input_text and proc.stdin:
                 proc.stdin.write(input_text)
@@ -1071,220 +1213,170 @@ class AgentClient:
                     proc.kill()
                 except OSError:
                     pass
-            except Exception:
-                pass
+            except OSError as wait_exc:
+                _logger.debug("falha ao aguardar %s após erro de input: %s", cmd[0], wait_exc)
+            return False
+        return True
+
+    def _pump_tool_input_once(self) -> bool:
+        """Processa aprovação/ask_user pendente enquanto aguardamos CLI.
+
+        Agentes CLI com MCP podem bloquear esperando a resposta de uma
+        tool. Se essa tool pede aprovação humana, o pedido fica na fila do
+        InputBroker e precisa ser processado pela thread principal que está
+        justamente dentro deste watchdog.
+        """
+        executor = self.tool_executor
+        process_input = getattr(executor, "process_pending_input_once", None)
+        if not callable(process_input):
+            return False
+        try:
+            return bool(process_input())
+        except Exception:
+            _logger.debug("CLI input pump failed", exc_info=True)
+            return False
+
+    def _watch_cli_silent(self, runner, *, cmd, agent, progress_callback):
+        """Acompanha o agente sem renderizar saída; só bombeia input de tools e progresso."""
+        def _on_tick_silent(elapsed):
+            self._pump_tool_input_once()
+            if progress_callback:
+                progress_callback(f"aguardando resposta de {agent or cmd[0]}... {elapsed}s")
+
+        return runner.watch(on_tick=_on_tick_silent)
+
+    def _log_silent_cli_output(self, agent, result_holder) -> None:
+        """No modo silencioso, stdout vai ao log em debug e stderr filtrado em warning."""
+        debug_output = self._get_capped_stdout(result_holder)
+        if debug_output:
+            _logger.debug(debug_output)
+        filtered_stderr = _filter_stderr_lines(agent, list(result_holder["stderr"]))
+        if filtered_stderr:
+            _logger.warning("".join(filtered_stderr))
+
+    def _watch_cli_verbose(self, runner, log_queue, *, cmd, agent, show_status, progress_callback):
+        """Acompanha o agente renderizando stdout pelo presenter e stderr como transient."""
+        stderr_lines_shown = 0
+        _first_stdout_seen = [False]
+
+        def _on_item(stream_type, line):
+            nonlocal stderr_lines_shown
+            if stream_type == "stderr" and _is_rate_limit_signal(line):
+                runner.notify_rate_limit()
+            cleaned = _strip_spinner(line.rstrip("\n"))
+            if not cleaned.strip():
+                if show_status:
+                    _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
+                    self.renderer.update_agent_transient(agent or cmd[0], _lbl)
+                return
+            if stream_type == "stdout":
+                _first_stdout_seen[0] = True
+                self._show_formatted_stdout(agent, cleaned)
+                return
+            if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
+                return
+            self._spy_output_presenter.flush(agent)
+            if show_status:
+                _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
+                self.renderer.update_agent_transient(agent or cmd[0], _lbl)
+            _stderr_limit = MAX_STDERR_LINES * 5
+            if stderr_lines_shown < _stderr_limit:
+                if self._is_tool_call_text(cleaned):
+                    self._render_agent_transient(cleaned, agent=agent, muted=True)
+                else:
+                    self._render_agent_transient(cleaned, agent=agent)
+            elif stderr_lines_shown == _stderr_limit:
+                self._render_agent_transient(
+                    f"... (stderr truncado, máximo {_stderr_limit} linhas)", agent=agent)
+            stderr_lines_shown += 1
+
+        def _on_tick(elapsed):
+            self._pump_tool_input_once()
+            if progress_callback:
+                progress_callback(f"aguardando resposta de {agent or cmd[0]}...")
+
+        self._spy_output_presenter.notify_agent_started(agent)
+        termination = runner.watch(log_queue=log_queue, on_item=_on_item, on_tick=_on_tick)
+        self.renderer.clear_agent_transient(agent or cmd[0])
+        return termination
+
+    def _abort_cli_run_on_termination(self, termination, *, cmd, agent, runner, silent) -> bool:
+        """Encerra o run quando o watchdog parou por cancelamento, rate limit ou timeout.
+
+        Devolve True quando o run deve terminar sem resultado. Em modo
+        silencioso o motivo vai só ao log; com renderer, à tela.
+        """
+        if termination == ProcessRunner.CANCELLED:
+            self.cancel_active_work()
+            self._agent_running = False
+            self._current_proc = None
+            self._stop_esc_monitor()
+            self._show_cancelled_once()
+            return True
+        if termination not in (ProcessRunner.RATE_LIMIT, ProcessRunner.TIMEOUT, ProcessRunner.WALL_TIMEOUT):
+            return False
+        self._agent_running = False
+        self._current_proc = None
+        self._stop_esc_monitor()
+        if termination == ProcessRunner.RATE_LIMIT:
+            if silent:
+                _logger.warning("[rate limit] %s em espera; cedendo para outros agentes", cmd[0])
+            else:
+                self._show_error(
+                    f"[rate limit] {cmd[0]} em espera; cedendo para outros agentes")
+        elif termination == ProcessRunner.TIMEOUT:
+            if silent:
+                _logger.warning(
+                    "[erro] idle timeout after %ds without stdout for %s",
+                    self.idle_timeout,
+                    cmd[0],
+                )
+            else:
+                self._show_error(
+                    f"[erro] idle timeout after {self.idle_timeout}s without stdout for {cmd[0]}")
+        else:
+            if silent:
+                _logger.warning(
+                    "[erro] wall-clock timeout for %s (limit %ds)",
+                    cmd[0], runner._max_wall_clock,
+                )
+            else:
+                self._show_error(
+                    f"[erro] wall-clock timeout for {cmd[0]} (limit {runner._max_wall_clock}s)")
+        return True
+
+    def _collect_cli_output(self, proc, *, cmd, agent, silent, result_holder, run_started):
+        """Aguarda o processo e devolve ``(stdout, stderr filtrado)``.
+
+        None quando uma thread leitora falhou: o erro já foi mostrado e registrado.
+        """
+        self._spy_output_presenter.flush(agent)
+        proc.wait()
+        if not silent and self.visibility == Visibility.SUMMARY and proc.returncode == 0 and not self._cancel_event.is_set():
+            if agent:
+                self.renderer.show_plain("execução concluída", agent=agent, muted=True)
+            else:
+                self._show_muted(f"← {cmd[0]} concluído")
+        if result_holder["error"]:
+            self._show_error(
+                str(result_holder["error"]),
+                agent=agent,
+                command_name=cmd[0],
+                error_kind="agent_comm",
+            )
+            self._record_run_failure(
+                "agent_comm", str(result_holder["error"]),
+                agent=agent, command=cmd[0] if cmd else None,
+                started_at=run_started,
+            )
             return None
 
-        runner = ProcessRunner(
-            proc, stdout_thread, stderr_thread, result_holder,
-            self._cancel_event, self.idle_timeout,
-            max_wall_clock=self._effective_max_execution_seconds(),
-            pause_idle_if=self._pause_idle_if,
-        )
+        output = self._get_capped_stdout(result_holder).strip()
+        error = "".join(_filter_stderr_lines(agent, list(result_holder["stderr"]))).strip()
+        return output, error
 
-        def _pump_tool_input_once() -> bool:
-            """Processa aprovação/ask_user pendente enquanto aguardamos CLI.
-
-            Agentes CLI com MCP podem bloquear esperando a resposta de uma
-            tool. Se essa tool pede aprovação humana, o pedido fica na fila do
-            InputBroker e precisa ser processado pela thread principal que está
-            justamente dentro deste watchdog.
-            """
-            executor = self.tool_executor
-            process_input = getattr(executor, "process_pending_input_once", None)
-            if not callable(process_input):
-                return False
-            try:
-                return bool(process_input())
-            except Exception:
-                _logger.debug("CLI input pump failed", exc_info=True)
-                return False
-
-        try:
-            if silent:
-                def _on_tick_silent(elapsed):
-                    _pump_tool_input_once()
-                    if progress_callback:
-                        progress_callback(f"aguardando resposta de {agent or cmd[0]}... {elapsed}s")
-
-                termination = runner.watch(on_tick=_on_tick_silent)
-                self.rate_limit_detected = runner.rate_limit_detected
-                self.rate_limit_detected_at = runner.rate_limit_detected_at
-                self._record_watch_termination(
-                    termination, agent=agent, command=cmd[0] if cmd else None,
-                    started_at=run_started, result_holder=result_holder,
-                )
-
-                if termination == ProcessRunner.CANCELLED:
-                    self.cancel_active_work()
-                    self._agent_running = False
-                    self._current_proc = None
-                    self._stop_esc_monitor()
-                    self._show_cancelled_once()
-                    return None
-                if termination == ProcessRunner.RATE_LIMIT:
-                    self._agent_running = False
-                    self._current_proc = None
-                    self._stop_esc_monitor()
-                    _logger.warning("[rate limit] %s em espera; cedendo para outros agentes", cmd[0])
-                    return None
-                if termination == ProcessRunner.TIMEOUT:
-                    self._agent_running = False
-                    self._current_proc = None
-                    self._stop_esc_monitor()
-                    _logger.warning(
-                        "[erro] idle timeout after %ds without stdout for %s",
-                        self.idle_timeout,
-                        cmd[0],
-                    )
-                    return None
-                if termination == ProcessRunner.WALL_TIMEOUT:
-                    self._agent_running = False
-                    self._current_proc = None
-                    self._stop_esc_monitor()
-                    _logger.warning(
-                        "[erro] wall-clock timeout for %s (limit %ds)",
-                        cmd[0], runner._max_wall_clock,
-                    )
-                    return None
-
-                debug_output = self._get_capped_stdout(result_holder)
-                if debug_output:
-                    _logger.debug(debug_output)
-                filtered_stderr = _filter_stderr_lines(agent, list(result_holder["stderr"]))
-                if filtered_stderr:
-                    _logger.warning("".join(filtered_stderr))
-
-            else:
-                assert log_queue is not None
-                with nullcontext(None):
-                    _first_stdout_seen = [False]
-
-                    def _on_item(stream_type, line):
-                        nonlocal stderr_lines_shown
-                        if stream_type == "stderr" and _is_rate_limit_signal(line):
-                            runner.notify_rate_limit()
-                        cleaned = _strip_spinner(line.rstrip("\n"))
-                        if not cleaned.strip():
-                            if show_status:
-                                _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
-                                self.renderer.update_agent_transient(agent or cmd[0], _lbl)
-                            return
-                        if stream_type == "stdout":
-                            _first_stdout_seen[0] = True
-                            self._show_formatted_stdout(agent, cleaned)
-                            return
-                        if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
-                            return
-                        self._spy_output_presenter.flush(agent)
-                        if show_status:
-                            _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
-                            self.renderer.update_agent_transient(agent or cmd[0], _lbl)
-                        _stderr_limit = MAX_STDERR_LINES * 5
-                        if stderr_lines_shown < _stderr_limit:
-                            if self._is_tool_call_text(cleaned):
-                                self._render_agent_transient(cleaned, agent=agent, muted=True)
-                            else:
-                                self._render_agent_transient(cleaned, agent=agent)
-                        elif stderr_lines_shown == _stderr_limit:
-                            self._render_agent_transient(
-                                f"... (stderr truncado, máximo {_stderr_limit} linhas)", agent=agent)
-                        stderr_lines_shown += 1
-
-                    def _on_tick(elapsed):
-                        _pump_tool_input_once()
-                        if progress_callback:
-                            progress_callback(f"aguardando resposta de {agent or cmd[0]}...")
-
-                    self._spy_output_presenter.notify_agent_started(agent)
-                    termination = runner.watch(log_queue=log_queue, on_item=_on_item, on_tick=_on_tick)
-                    self.renderer.clear_agent_transient(agent or cmd[0])
-                    self.rate_limit_detected = runner.rate_limit_detected
-                    self.rate_limit_detected_at = runner.rate_limit_detected_at
-                    self._record_watch_termination(
-                        termination, agent=agent, command=cmd[0] if cmd else None,
-                        started_at=run_started, result_holder=result_holder,
-                    )
-
-                    if termination == ProcessRunner.CANCELLED:
-                        self.cancel_active_work()
-                        self._agent_running = False
-                        self._current_proc = None
-                        self._stop_esc_monitor()
-                        self._show_cancelled_once()
-                        return None
-                    if termination == ProcessRunner.RATE_LIMIT:
-                        self._agent_running = False
-                        self._current_proc = None
-                        self._stop_esc_monitor()
-                        self._show_error(
-                            f"[rate limit] {cmd[0]} em espera; cedendo para outros agentes")
-                        return None
-                    if termination == ProcessRunner.TIMEOUT:
-                        self._agent_running = False
-                        self._current_proc = None
-                        self._stop_esc_monitor()
-                        self._show_error(
-                            f"[erro] idle timeout after {self.idle_timeout}s without stdout for {cmd[0]}")
-                        return None
-                    if termination == ProcessRunner.WALL_TIMEOUT:
-                        self._agent_running = False
-                        self._current_proc = None
-                        self._stop_esc_monitor()
-                        self._show_error(
-                            f"[erro] wall-clock timeout for {cmd[0]} (limit {runner._max_wall_clock}s)")
-                        return None
-
-            self._spy_output_presenter.flush(agent)
-            proc.wait()
-            if not silent and self.visibility == Visibility.SUMMARY and proc.returncode == 0 and not self._cancel_event.is_set():
-                if agent:
-                    self.renderer.show_plain("execução concluída", agent=agent, muted=True)
-                else:
-                    self._show_muted(f"← {cmd[0]} concluído")
-            if result_holder["error"]:
-                self._show_error(
-                    str(result_holder["error"]),
-                    agent=agent,
-                    command_name=cmd[0],
-                    error_kind="agent_comm",
-                )
-                self._record_run_failure(
-                    "agent_comm", str(result_holder["error"]),
-                    agent=agent, command=cmd[0] if cmd else None,
-                    started_at=run_started,
-                )
-                return None
-
-            output = self._get_capped_stdout(result_holder).strip()
-            error = "".join(_filter_stderr_lines(agent, list(result_holder["stderr"]))).strip()
-        finally:
-            # Se estamos desenrolando por exceção (ex.: callback de progresso
-            # falhou), o subprocesso não pode ficar órfão nem o transient
-            # "processando" preso na tela.
-            if sys.exc_info()[0] is not None:
-                if proc.poll() is None:
-                    try:
-                        terminate_process_group(proc)
-                    except Exception:
-                        pass
-                try:
-                    self.renderer.clear_agent_transient(agent or cmd[0])
-                except Exception:
-                    pass
-            if self.process_supervisor is not None:
-                self.process_supervisor.unregister(proc)
-            should_render_turn_summary = not silent and self.visibility in {Visibility.SUMMARY, Visibility.FULL}
-            self.last_spy_turn_detail = self._spy_output_presenter.finalize_turn(
-                agent,
-                render_summary=False,
-            )
-            self._pending_summary_render = (agent, self.last_spy_turn_detail, should_render_turn_summary)
-            self._agent_running = False
-            self._running_agent = None
-            self._stop_esc_monitor()
-            self._spy_output_presenter.reset()
-
+    def _report_cli_exit(self, proc, *, cmd, agent, silent, output, error, run_started):
+        """Traduz código de saída e stdout vazio em erro e recibo; devolve o stdout útil."""
         if proc.returncode != 0:
             if self._is_expected_termination_return_code(proc.returncode):
                 self._record_run_failure(
@@ -1733,6 +1825,100 @@ class AgentClient:
                 "spawn_failed", "conexão inválida para driver de API", agent=agent,
             )
             return None
+        resolved = self._ensure_api_driver(agent, profile, connection)
+        if resolved is None:
+            return None
+        driver_instance, is_first_call = resolved
+        if self._cancel_event.is_set():
+            self._user_cancelled = True
+            self._show_cancelled_once()
+            self._record_run_failure(
+                "cancelled", "cancelado antes de iniciar", agent=agent,
+            )
+            return None
+        self.rate_limit_detected = False
+        self.rate_limit_detected_at = None
+        self.rate_limit_retry_after = None
+        self._agent_running = True
+        self._running_agent = agent
+        self._start_esc_monitor()
+        status_cm = self.renderer.running_status("", agent=agent) if (
+                show_status and not silent and not quiet) else nullcontext(None)
+        status_label = f"[dim]{'conectando' if is_first_call else 'aguardando'} {connection.model}...[/dim]"
+        effective_tool_executor = None
+        should_render_turn_summary = (
+            not silent and self.visibility in {Visibility.SUMMARY, Visibility.FULL}
+        )
+
+        try:
+            with status_cm as status:
+                if status is not None:
+                    status.update(status_label)
+                effective_tool_executor = self._select_api_tool_executor(
+                    profile, connection, allow_tools=allow_tools
+                )
+                approval_scope = self._attach_api_tool_executor(
+                    effective_tool_executor, agent=agent, status=status
+                )
+                run = _ApiRun(
+                    agent=agent,
+                    prompt=prompt,
+                    driver=driver_instance,
+                    tool_executor=effective_tool_executor,
+                    approval_scope=approval_scope,
+                    quiet=quiet,
+                    silent=silent,
+                    from_agent=from_agent,
+                    run_id=run_id,
+                    on_text_chunk=on_text_chunk,
+                    progress_callback=progress_callback,
+                    run_activity_callback=run_activity_callback,
+                )
+                if self._cancel_event.is_set():
+                    run.cancel_event.set()
+
+                t = threading.Thread(target=self._run_api_driver, args=(run,), daemon=True)
+                self._register_api_run(run.token, run.cancel_event)
+                t.start()
+
+                if not self._wait_for_api_driver(t, run, connection=connection, api_started=api_started):
+                    return None
+
+                if run.cancel_event.is_set():
+                    # O próprio driver pode concluir imediatamente após
+                    # sinalizar o evento, sem permanecer vivo tempo suficiente
+                    # para o loop acima observar o cancelamento. Normalize o
+                    # estado público do client também nesse caminho rápido.
+                    self._user_cancelled = True
+                    self._show_cancelled_once()
+                    self.invalidate_api_driver(agent)
+                    self._record_run_failure(
+                        "cancelled", "execução cancelada",
+                        agent=agent, started_at=api_started,
+                    )
+                    return None
+
+                if run.error is not None:
+                    return self._handle_api_driver_error(
+                        run.error, agent=agent, profile=profile,
+                        connection=connection, api_started=api_started,
+                    )
+
+                if run.result is None:
+                    self._record_run_failure(
+                        "empty_response", "driver de API não retornou resposta",
+                        agent=agent, started_at=api_started,
+                    )
+                return run.result
+        finally:
+            self._finalize_api_run(effective_tool_executor, agent, should_render_turn_summary)
+
+    def _ensure_api_driver(self, agent, profile, connection):
+        """Cria (ou reaproveita) o driver de API do agente.
+
+        Devolve ``(driver, is_first_call)``; None quando a API key configurada
+        não está no ambiente (erro já mostrado e registrado).
+        """
         signature = self._api_connection_signature(connection)
         cached_signature = self._api_driver_signatures.get(agent)
         if cached_signature is not None and cached_signature != signature:
@@ -1785,360 +1971,307 @@ class AgentClient:
                 runtime_secrets=self.runtime_secrets,
             )
             self._api_driver_signatures[agent] = signature
+        return self._api_drivers[agent], is_first_call
 
-        driver_instance = self._api_drivers[agent]
-        if self._cancel_event.is_set():
-            self._user_cancelled = True
-            self._show_cancelled_once()
+    def _select_api_tool_executor(self, profile, connection, *, allow_tools):
+        """Executor de tools do turno, ou None quando perfil/conexão não usam tools."""
+        if (
+            allow_tools
+            and getattr(profile, "supports_tools", True)
+            and getattr(connection, "supports_native_tools", True)
+        ):
+            return self.tool_executor
+        return None
+
+    def _attach_api_tool_executor(self, effective_tool_executor, *, agent, status):
+        """Liga preview e spinner ao executor; devolve o escopo de aprovação da thread atual."""
+        approval_scope = None
+        if effective_tool_executor is not None:
+            get_approval_scope = getattr(effective_tool_executor, "get_thread_approval_scope", None)
+            if callable(get_approval_scope):
+                approval_scope = get_approval_scope()
+        if effective_tool_executor is not None:
+            # O driver sempre inclui o agente em trusted_context. Manter
+            # o callback baseado em metadata evita fixar o executor no
+            # último agente OpenAI e contaminar chamadas MCP posteriores.
+            self.bind_tool_preview_callback(effective_tool_executor, agent=agent)
+        # Injeta callbacks de spinner no executor para que o approval handler
+        # possa pausar o Live do Rich antes de input() bloqueante, evitando
+        # race condition entre o refresh do spinner e a leitura do stdin.
+        if effective_tool_executor is not None and status is not None:
+            _live = getattr(status, '_live', None)
+            if _live is not None:
+                effective_tool_executor.set_spinner_callbacks(
+                    suspend_spinner_fn=lambda: _live.stop(),
+                    resume_spinner_fn=lambda: _live.start(),
+                )
+        return approval_scope
+
+    def _record_api_tool_call(self, run, name, arguments, tool_call_id=None) -> None:
+        """Registra (ou emite, em quiet) uma chamada de tool feita pelo driver."""
+        activity = self._spy_output_presenter.tool_call_activity(
+            name,
+            arguments,
+            tool_call_id=tool_call_id,
+        )
+        self._notify_run_activity(run.run_activity_callback, activity)
+        if not run.silent and self.visibility == Visibility.QUIET:
+            self._spy_output_presenter.emit_tool_call(
+                run.agent,
+                name,
+                arguments,
+                tool_call_id=tool_call_id,
+            )
+        else:
+            self._spy_output_presenter.record_tool_call(
+                name,
+                arguments,
+                tool_call_id=tool_call_id,
+            )
+
+    def _record_api_tool_result(self, run, tool_result) -> None:
+        """Registra (ou emite, em quiet) o resultado de uma tool executada pelo driver."""
+        activity = self._spy_output_presenter.tool_result_activity(tool_result)
+        self._notify_run_activity(run.run_activity_callback, activity)
+        if not run.silent and self.visibility == Visibility.QUIET:
+            self._spy_output_presenter.emit_tool_result(run.agent, tool_result)
+        else:
+            self._spy_output_presenter.record_tool_result(tool_result)
+        if self.tool_event_callback is not None:
+            self.tool_event_callback(run.agent, result=tool_result)
+
+    def _run_api_driver(self, run) -> None:
+        """Corpo da thread do driver: vincula escopo e cancelamento, executa e guarda o desfecho."""
+        previous_scope = None
+        previous_cancel_event = None
+        executor = run.tool_executor
+        try:
+            if executor is not None:
+                bind_approval_scope = getattr(
+                    executor,
+                    "bind_thread_approval_scope",
+                    None,
+                )
+                if callable(bind_approval_scope):
+                    previous_scope = bind_approval_scope(run.approval_scope)
+                # Vincula o cancel_event à thread do driver com
+                # restauração segura, em vez de gravar num slot global
+                # do handler compartilhado (evita corrida entre
+                # clients concorrentes usando o mesmo executor).
+                bind_cancel_event = getattr(
+                    executor,
+                    "bind_approval_cancel_event",
+                    None,
+                )
+                if callable(bind_cancel_event):
+                    previous_cancel_event = bind_cancel_event(run.cancel_event)
+
+            guarded_on_text_chunk = None
+            if run.on_text_chunk is not None:
+                def guarded_on_text_chunk(chunk):
+                    if not run.cancel_event.is_set():
+                        run.on_text_chunk(chunk)
+
+            run.result = run.driver.run(
+                prompt=run.prompt,
+                tool_executor=executor,
+                agent_name=run.agent,
+                parent_agent=run.from_agent,
+                run_id=run.run_id,
+                session_id=self.session_id,
+                base_dir=self.evidence_base_dir,
+                quiet=run.quiet,
+                cancel_event=run.cancel_event,
+                on_tool_call=lambda name, arguments, tool_call_id=None: self._record_api_tool_call(
+                    run, name, arguments, tool_call_id=tool_call_id
+                ),
+                on_tool_result=lambda tool_result: self._record_api_tool_result(run, tool_result),
+                on_tool_abort=(
+                    lambda reason: self.tool_event_callback(run.agent, loop_abort=True, reason=reason))
+                if self.tool_event_callback else None,
+                on_text_chunk=guarded_on_text_chunk,
+                progress_callback=run.progress_callback,
+                begin_tool_execution=run.begin_tool_execution,
+                end_tool_execution=run.end_tool_execution,
+            )
+        except Exception as exc:
+            run.error = exc
+        finally:
+            if executor is not None:
+                bind_approval_scope = getattr(
+                    executor,
+                    "bind_thread_approval_scope",
+                    None,
+                )
+                if callable(bind_approval_scope):
+                    bind_approval_scope(previous_scope)
+                bind_cancel_event = getattr(
+                    executor,
+                    "bind_approval_cancel_event",
+                    None,
+                )
+                if callable(bind_cancel_event):
+                    bind_cancel_event(previous_cancel_event)
+            self._unregister_api_run(run.token)
+
+    def _wait_for_api_driver(self, thread, run, *, connection, api_started) -> bool:
+        """Acompanha a thread do driver bombeando input de tools, cancelamento e wall-clock.
+
+        Devolve False quando a execução foi abandonada (cancelada sem tool em
+        curso) ou expirou; nesses casos a falha já foi registrada.
+        """
+        executor = run.tool_executor
+        max_execution_seconds = self._effective_max_execution_seconds()
+        _api_start = time.time()
+        cancellation_announced = False
+        timed_out = False
+        while thread.is_alive():
+            if executor is not None:
+                process_input = getattr(
+                    executor,
+                    "process_pending_input_once",
+                    None,
+                )
+                if callable(process_input) and process_input():
+                    continue
+            if self._cancel_event.is_set() and not run.cancel_event.is_set():
+                run.cancel_event.set()
+            if run.cancel_event.is_set():
+                if not timed_out:
+                    self._user_cancelled = True
+                    if not cancellation_announced:
+                        self._show_cancelled_once()
+                        cancellation_announced = True
+                    if (
+                        self._can_abandon_cancelled_api_run
+                        and not run.has_active_tool_execution()
+                    ):
+                        # Forks de chat têm ToolExecutor próprio. Enquanto
+                        # nenhuma tool cruzou a fronteira de execução, a
+                        # thread pode drenar o transporte em background sem
+                        # afetar o próximo turno.
+                        self.invalidate_api_driver(run.agent)
+                        self._record_run_failure(
+                            "cancelled", "execução cancelada",
+                            agent=run.agent, started_at=api_started,
+                        )
+                        return False
+                # Wall-clock timeout mantém o contrato conservador: nesse
+                # caso, no client primário ou com tool já iniciada, aguardamos
+                # a thread realmente encerrar antes de liberar a rodada.
+                thread.join(timeout=0.1)
+                continue
+            time.sleep(0.25)
+            _api_elapsed = time.time() - _api_start
+            if run.progress_callback:
+                run.progress_callback(
+                    f"aguardando resposta da API ({connection.model})... {int(_api_elapsed)}s"
+                )
+
+            if _api_elapsed > max_execution_seconds and not timed_out:
+                timed_out = True
+                run.cancel_event.set()
+                self._show_error(
+                    "[erro] wall-clock timeout after "
+                    f"{max_execution_seconds:g}s em driver API"
+                )
+                # Não libere o client enquanto o driver ainda usa executor,
+                # approval callbacks e semáforo do backend. O timeout do
+                # transporte limita a espera pelo encerramento cooperativo.
+                continue
+
+        if timed_out:
             self._record_run_failure(
-                "cancelled", "cancelado antes de iniciar", agent=agent,
+                "wall_timeout",
+                f"wall-clock timeout após {max_execution_seconds:g}s em driver API",
+                agent=run.agent, started_at=api_started,
+            )
+            return False
+        return True
+
+    def _handle_api_driver_error(self, error, *, agent, profile, connection, api_started):
+        """Traduz a exceção do driver em erro visível e recibo; erro fatal propaga."""
+        if isinstance(error, _TransientAPIError):
+            if error.rate_limited:
+                self.rate_limit_detected = True
+                self.rate_limit_retry_after = error.retry_after
+                if self.rate_limit_detected_at is None:
+                    self.rate_limit_detected_at = time.time()
+            _cmd = getattr(profile, "cmd", None)
+            _name = (
+                (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None)
+                or connection.model or "driver"
+            )
+            user_message = getattr(error, "user_message", None) or (
+                "Falha temporária ao comunicar com o provedor."
+            )
+            self._show_error(f"[erro] {_name}: {user_message}")
+            self._record_run_failure(
+                "rate_limited" if error.rate_limited else "api_error",
+                user_message,
+                agent=agent, command=_name, started_at=api_started,
+                retry_after=error.retry_after if error.rate_limited else None,
             )
             return None
-        self.rate_limit_detected = False
-        self.rate_limit_detected_at = None
-        self.rate_limit_retry_after = None
-        self._agent_running = True
-        self._running_agent = agent
-        self._start_esc_monitor()
-        status_cm = self.renderer.running_status("", agent=agent) if (
-                show_status and not silent and not quiet) else nullcontext(None)
-        status_label = f"[dim]{'conectando' if is_first_call else 'aguardando'} {connection.model}...[/dim]"
-        effective_tool_executor = None
-        should_render_turn_summary = (
-            not silent and self.visibility in {Visibility.SUMMARY, Visibility.FULL}
+        if isinstance(error, (_FatalAPIError, _APIExecutionError)):
+            # A camada de dispatch é a única responsável por exibir
+            # erros não-retryable, evitando mensagens duplicadas.
+            # O recibo fica registrado aqui porque o dispatch
+            # converte o fatal em None após desistir dos retries.
+            self._record_run_failure(
+                "api_fatal",
+                getattr(error, "user_message", None) or str(error),
+                agent=agent, started_at=api_started,
+            )
+            raise error
+        if _is_rate_limit_signal(str(error)):
+            self.rate_limit_detected = True
+            if self.rate_limit_detected_at is None:
+                self.rate_limit_detected_at = time.time()
+        _cmd = getattr(profile, "cmd", None)
+        _name = (
+            (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None)
+            or connection.model or "driver"
         )
+        _logger.exception(
+            "driver API falhou agent=%s model=%s",
+            agent,
+            connection.model,
+            exc_info=error,
+        )
+        self._show_error(
+            f"[erro] {_name}: falha inesperada na comunicação com o provedor."
+        )
+        self._record_run_failure(
+            "api_error", str(error),
+            agent=agent, command=_name, started_at=api_started,
+        )
+        return None
 
-        try:
-            with status_cm as status:
-                if status is not None:
-                    status.update(status_label)
-                if (
-                    allow_tools
-                    and getattr(profile, "supports_tools", True)
-                    and getattr(connection, "supports_native_tools", True)
-                ):
-                    effective_tool_executor = self.tool_executor
-                approval_scope = None
-                if effective_tool_executor is not None:
-                    get_approval_scope = getattr(effective_tool_executor, "get_thread_approval_scope", None)
-                    if callable(get_approval_scope):
-                        approval_scope = get_approval_scope()
-                if effective_tool_executor is not None:
-                    # O driver sempre inclui o agente em trusted_context. Manter
-                    # o callback baseado em metadata evita fixar o executor no
-                    # último agente OpenAI e contaminar chamadas MCP posteriores.
-                    self.bind_tool_preview_callback(effective_tool_executor, agent=agent)
-                # Injeta callbacks de spinner no executor para que o approval handler
-                # possa pausar o Live do Rich antes de input() bloqueante, evitando
-                # race condition entre o refresh do spinner e a leitura do stdin.
-                if effective_tool_executor is not None and status is not None:
-                    _live = getattr(status, '_live', None)
-                    if _live is not None:
-                        effective_tool_executor.set_spinner_callbacks(
-                            suspend_spinner_fn=lambda: _live.stop(),
-                            resume_spinner_fn=lambda: _live.start(),
-                        )
-                result_holder = {"result": None, "error": None}
-                api_run_token = object()
-                api_cancel_event = threading.Event()
-                tool_execution_lock = threading.Lock()
-                active_tool_executions = 0
-                if self._cancel_event.is_set():
-                    api_cancel_event.set()
-
-                def _begin_tool_execution() -> bool:
-                    nonlocal active_tool_executions
-                    with tool_execution_lock:
-                        if api_cancel_event.is_set():
-                            return False
-                        active_tool_executions += 1
-                        return True
-
-                def _end_tool_execution() -> None:
-                    nonlocal active_tool_executions
-                    with tool_execution_lock:
-                        active_tool_executions = max(0, active_tool_executions - 1)
-
-                def _has_active_tool_execution() -> bool:
-                    with tool_execution_lock:
-                        return active_tool_executions > 0
-
-                def _record_api_tool_call(
-                    name,
-                    arguments,
-                    tool_call_id=None,
-                ) -> None:
-                    activity = self._spy_output_presenter.tool_call_activity(
-                        name,
-                        arguments,
-                        tool_call_id=tool_call_id,
-                    )
-                    self._notify_run_activity(run_activity_callback, activity)
-                    if not silent and self.visibility == Visibility.QUIET:
-                        self._spy_output_presenter.emit_tool_call(
-                            agent,
-                            name,
-                            arguments,
-                            tool_call_id=tool_call_id,
-                        )
-                    else:
-                        self._spy_output_presenter.record_tool_call(
-                            name,
-                            arguments,
-                            tool_call_id=tool_call_id,
-                        )
-
-                def _record_api_tool_result(tool_result) -> None:
-                    activity = self._spy_output_presenter.tool_result_activity(tool_result)
-                    self._notify_run_activity(run_activity_callback, activity)
-                    if not silent and self.visibility == Visibility.QUIET:
-                        self._spy_output_presenter.emit_tool_result(agent, tool_result)
-                    else:
-                        self._spy_output_presenter.record_tool_result(tool_result)
-                    if self.tool_event_callback is not None:
-                        self.tool_event_callback(agent, result=tool_result)
-
-                def _run_driver():
-                    previous_scope = None
-                    previous_cancel_event = None
-                    try:
-                        if effective_tool_executor is not None:
-                            bind_approval_scope = getattr(
-                                effective_tool_executor,
-                                "bind_thread_approval_scope",
-                                None,
-                            )
-                            if callable(bind_approval_scope):
-                                previous_scope = bind_approval_scope(approval_scope)
-                            # Vincula o cancel_event à thread do driver com
-                            # restauração segura, em vez de gravar num slot global
-                            # do handler compartilhado (evita corrida entre
-                            # clients concorrentes usando o mesmo executor).
-                            bind_cancel_event = getattr(
-                                effective_tool_executor,
-                                "bind_approval_cancel_event",
-                                None,
-                            )
-                            if callable(bind_cancel_event):
-                                previous_cancel_event = bind_cancel_event(api_cancel_event)
-
-                        guarded_on_text_chunk = None
-                        if on_text_chunk is not None:
-                            def guarded_on_text_chunk(chunk):
-                                if not api_cancel_event.is_set():
-                                    on_text_chunk(chunk)
-
-                        result_holder["result"] = driver_instance.run(
-                            prompt=prompt,
-                            tool_executor=effective_tool_executor,
-                            agent_name=agent,
-                            parent_agent=from_agent,
-                            run_id=run_id,
-                            session_id=self.session_id,
-                            base_dir=self.evidence_base_dir,
-                            quiet=quiet,
-                            cancel_event=api_cancel_event,
-                            on_tool_call=_record_api_tool_call,
-                            on_tool_result=_record_api_tool_result,
-                            on_tool_abort=(
-                                lambda reason: self.tool_event_callback(agent, loop_abort=True, reason=reason))
-                            if self.tool_event_callback else None,
-                            on_text_chunk=guarded_on_text_chunk,
-                            progress_callback=progress_callback,
-                            begin_tool_execution=_begin_tool_execution,
-                            end_tool_execution=_end_tool_execution,
-                        )
-                    except Exception as exc:
-                        result_holder["error"] = exc
-                    finally:
-                        if effective_tool_executor is not None:
-                            bind_approval_scope = getattr(
-                                effective_tool_executor,
-                                "bind_thread_approval_scope",
-                                None,
-                            )
-                            if callable(bind_approval_scope):
-                                bind_approval_scope(previous_scope)
-                            bind_cancel_event = getattr(
-                                effective_tool_executor,
-                                "bind_approval_cancel_event",
-                                None,
-                            )
-                            if callable(bind_cancel_event):
-                                bind_cancel_event(previous_cancel_event)
-                        self._unregister_api_run(api_run_token)
-
-                t = threading.Thread(target=_run_driver, daemon=True)
-                self._register_api_run(api_run_token, api_cancel_event)
-                t.start()
-
-                max_execution_seconds = self._effective_max_execution_seconds()
-                _api_start = time.time()
-                cancellation_announced = False
-                timed_out = False
-                while t.is_alive():
-                    if effective_tool_executor is not None:
-                        process_input = getattr(
-                            effective_tool_executor,
-                            "process_pending_input_once",
-                            None,
-                        )
-                        if callable(process_input) and process_input():
-                            continue
-                    if self._cancel_event.is_set() and not api_cancel_event.is_set():
-                        api_cancel_event.set()
-                    if api_cancel_event.is_set():
-                        if not timed_out:
-                            self._user_cancelled = True
-                            if not cancellation_announced:
-                                self._show_cancelled_once()
-                                cancellation_announced = True
-                            if (
-                                self._can_abandon_cancelled_api_run
-                                and not _has_active_tool_execution()
-                            ):
-                                # Forks de chat têm ToolExecutor próprio. Enquanto
-                                # nenhuma tool cruzou a fronteira de execução, a
-                                # thread pode drenar o transporte em background sem
-                                # afetar o próximo turno.
-                                self.invalidate_api_driver(agent)
-                                self._record_run_failure(
-                                    "cancelled", "execução cancelada",
-                                    agent=agent, started_at=api_started,
-                                )
-                                return None
-                        # Wall-clock timeout mantém o contrato conservador: nesse
-                        # caso, no client primário ou com tool já iniciada, aguardamos
-                        # a thread realmente encerrar antes de liberar a rodada.
-                        t.join(timeout=0.1)
-                        continue
-                    time.sleep(0.25)
-                    _api_elapsed = time.time() - _api_start
-                    if progress_callback:
-                        progress_callback(f"aguardando resposta da API ({connection.model})... {int(_api_elapsed)}s")
-
-                    if _api_elapsed > max_execution_seconds and not timed_out:
-                        timed_out = True
-                        api_cancel_event.set()
-                        self._show_error(
-                            "[erro] wall-clock timeout after "
-                            f"{max_execution_seconds:g}s em driver API"
-                        )
-                        # Não libere o client enquanto o driver ainda usa executor,
-                        # approval callbacks e semáforo do backend. O timeout do
-                        # transporte limita a espera pelo encerramento cooperativo.
-                        continue
-
-                if timed_out:
-                    self._record_run_failure(
-                        "wall_timeout",
-                        f"wall-clock timeout após {max_execution_seconds:g}s em driver API",
-                        agent=agent, started_at=api_started,
-                    )
-                    return None
-
-                if api_cancel_event.is_set():
-                    # O próprio driver pode concluir imediatamente após
-                    # sinalizar o evento, sem permanecer vivo tempo suficiente
-                    # para o loop acima observar o cancelamento. Normalize o
-                    # estado público do client também nesse caminho rápido.
-                    self._user_cancelled = True
-                    self._show_cancelled_once()
-                    self.invalidate_api_driver(agent)
-                    self._record_run_failure(
-                        "cancelled", "execução cancelada",
-                        agent=agent, started_at=api_started,
-                    )
-                    return None
-
-                if result_holder["error"]:
-                    error = result_holder["error"]
-                    if isinstance(error, _TransientAPIError):
-                        if error.rate_limited:
-                            self.rate_limit_detected = True
-                            self.rate_limit_retry_after = error.retry_after
-                            if self.rate_limit_detected_at is None:
-                                self.rate_limit_detected_at = time.time()
-                        _cmd = getattr(profile, "cmd", None)
-                        _name = (
-                            (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None)
-                            or connection.model or "driver"
-                        )
-                        user_message = getattr(error, "user_message", None) or (
-                            "Falha temporária ao comunicar com o provedor."
-                        )
-                        self._show_error(f"[erro] {_name}: {user_message}")
-                        self._record_run_failure(
-                            "rate_limited" if error.rate_limited else "api_error",
-                            user_message,
-                            agent=agent, command=_name, started_at=api_started,
-                            retry_after=error.retry_after if error.rate_limited else None,
-                        )
-                        return None
-                    if isinstance(error, (_FatalAPIError, _APIExecutionError)):
-                        # A camada de dispatch é a única responsável por exibir
-                        # erros não-retryable, evitando mensagens duplicadas.
-                        # O recibo fica registrado aqui porque o dispatch
-                        # converte o fatal em None após desistir dos retries.
-                        self._record_run_failure(
-                            "api_fatal",
-                            getattr(error, "user_message", None) or str(error),
-                            agent=agent, started_at=api_started,
-                        )
-                        raise error
-                    if _is_rate_limit_signal(str(error)):
-                        self.rate_limit_detected = True
-                        if self.rate_limit_detected_at is None:
-                            self.rate_limit_detected_at = time.time()
-                    _cmd = getattr(profile, "cmd", None)
-                    _name = (
-                        (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None)
-                        or connection.model or "driver"
-                    )
-                    _logger.exception(
-                        "driver API falhou agent=%s model=%s",
-                        agent,
-                        connection.model,
-                        exc_info=error,
-                    )
-                    self._show_error(
-                        f"[erro] {_name}: falha inesperada na comunicação com o provedor."
-                    )
-                    self._record_run_failure(
-                        "api_error", str(error),
-                        agent=agent, command=_name, started_at=api_started,
-                    )
-                    return None
-
-                if result_holder["result"] is None:
-                    self._record_run_failure(
-                        "empty_response", "driver de API não retornou resposta",
-                        agent=agent, started_at=api_started,
-                    )
-                return result_holder["result"]
-        finally:
-            if effective_tool_executor is not None:
-                # Limpa callbacks de spinner para não manter referência a Live encerrado
-                clear_spinner = getattr(effective_tool_executor, "set_spinner_callbacks", None)
-                if callable(clear_spinner):
-                    clear_spinner(None, None)
-            detail = self._spy_output_presenter.build_turn_detail()
-            if detail.get("tools"):
-                self.last_spy_turn_detail = self._spy_output_presenter.finalize_turn(
-                    agent,
-                    render_summary=False,
-                )
-                self._pending_summary_render = (
-                    agent,
-                    self.last_spy_turn_detail,
-                    should_render_turn_summary,
-                )
-            else:
-                self.last_spy_turn_detail = detail
-            self._spy_output_presenter.reset()
-            self._agent_running = False
-            self._running_agent = None
-            self._stop_esc_monitor()
+    def _finalize_api_run(self, effective_tool_executor, agent, should_render_turn_summary) -> None:
+        """Solta o spinner do executor, fecha o turno do presenter e libera o client."""
+        if effective_tool_executor is not None:
+            # Limpa callbacks de spinner para não manter referência a Live encerrado
+            clear_spinner = getattr(effective_tool_executor, "set_spinner_callbacks", None)
+            if callable(clear_spinner):
+                clear_spinner(None, None)
+        detail = self._spy_output_presenter.build_turn_detail()
+        if detail.get("tools"):
+            self.last_spy_turn_detail = self._spy_output_presenter.finalize_turn(
+                agent,
+                render_summary=False,
+            )
+            self._pending_summary_render = (
+                agent,
+                self.last_spy_turn_detail,
+                should_render_turn_summary,
+            )
+        else:
+            self.last_spy_turn_detail = detail
+        self._spy_output_presenter.reset()
+        self._agent_running = False
+        self._running_agent = None
+        self._stop_esc_monitor()
 
     def flush_pending_summary(self) -> None:
         """Renderiza o resumo de turno pendente; deve ser chamado após fechar o stream."""

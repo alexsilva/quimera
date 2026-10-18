@@ -1,5 +1,5 @@
 from quimera.app.agent_gateway import AgentGateway
-from quimera.app.agent_run_events import (
+from quimera.domain.agent_run_events import (
     AgentRunController,
     AgentRunEvent,
     AgentRunRegistry,

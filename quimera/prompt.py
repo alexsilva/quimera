@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from . import profiles
@@ -11,6 +12,8 @@ from .prompt_kinds import PromptKind, coerce_prompt_kind
 from .prompt_templates import PromptText, get_prompt_template
 from .shared_state_presenter import SharedStatePresenter
 from .bugs import BugStore, format_bug_context
+
+_logger = logging.getLogger(__name__)
 
 
 class PromptBuilder:
@@ -45,7 +48,8 @@ class PromptBuilder:
         if callable(provider):
             try:
                 provided = provider()
-            except Exception:
+            except Exception as exc:
+                _logger.warning("active_agents_provider falhou: %s", exc)
                 provided = None
             if provided is not None:
                 return list(provided)
@@ -57,7 +61,8 @@ class PromptBuilder:
         if callable(provider):
             try:
                 return provider()
-            except Exception:
+            except Exception as exc:
+                _logger.warning("orchestrator_provider falhou: %s", exc)
                 return None
         return None
 
@@ -310,7 +315,8 @@ class PromptBuilder:
             return ""
         try:
             store = EvidenceStore(Path(base_dir), evidence_session_id)
-        except Exception:
+        except Exception as exc:
+            _logger.warning("contexto de evidências indisponível: %s", exc)
             return ""
         try:
             evidences = store.query(evidence_session_id)
@@ -331,15 +337,17 @@ class PromptBuilder:
             return ""
         try:
             store = BugStore(Path(bug_logs_dir))
-        except Exception:
+        except Exception as exc:
+            _logger.warning("contexto de bugs indisponível: %s", exc)
             return ""
         try:
             reports = store.query(session_id=bug_session_id, status="open", limit=3)
-        except Exception:
+        except Exception as exc:
+            _logger.warning("consulta de bugs abertos falhou: %s", exc)
             return ""
         finally:
             try:
                 store.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("fechar o BugStore falhou: %s", exc)
         return format_bug_context(reports)

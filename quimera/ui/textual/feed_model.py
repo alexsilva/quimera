@@ -6,6 +6,7 @@ substituir estados transitórios, acumular stream e limpar previews.
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -21,6 +22,8 @@ from quimera.ui.text import (
     strip_ansi,
 )
 from quimera.ui.textual.events import TextualUiEvent
+
+_logger = logging.getLogger(__name__)
 
 
 class AgentLifecycleStatus(str, Enum):
@@ -259,7 +262,8 @@ class TextualFeedModel:
             if callable(agent_resolver):
                 try:
                     resolved = agent_resolver(role)
-                except Exception:
+                except Exception as exc:
+                    _logger.debug("hydrate_from_history: resolver do agente %s falhou: %s", role, exc)
                     resolved = None
                 if resolved:
                     style, label = str(resolved[0] or "cyan"), str(resolved[1] or role)

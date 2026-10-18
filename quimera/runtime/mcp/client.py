@@ -219,8 +219,9 @@ def _sandbox_enabled(workspace) -> bool:
         return False
     try:
         return bool(is_sandbox_enabled(workspace))
-    except Exception:
+    except Exception as exc:
         # Config inválida: wrap_subprocess_cmd falha fechado logo em seguida.
+        _logger.debug("sandbox: configuração ilegível: %s", exc)
         return False
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -777,8 +778,8 @@ class HttpMCPTransport(MCPTransport):
         if sid:
             try:
                 self._http_request("DELETE", headers={"MCP-Session-Id": sid})
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("MCP: encerrar a sessão HTTP %s falhou: %s", sid, exc)
 
     @property
     def transport_type(self) -> str:

@@ -9,6 +9,7 @@ salva) fica no diretório de screenshots da sessão para o humano abrir.
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
 from ..policy import ToolPolicyError
 from .base import ToolBase, ValidatableTool
+
+_logger = logging.getLogger(__name__)
 
 _TUI_TOOL_NAMES = ["tui_screenshot"]
 _FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$")
@@ -130,8 +133,8 @@ class TuiTools(
                     height=shot.height,
                     **{f"feed_{key}": value for key, value in feed.items()},
                 )
-            except Exception:  # noqa: BLE001 - audit nunca derruba a tool
-                pass
+            except Exception as exc:  # noqa: BLE001 - audit nunca derruba a tool
+                _logger.debug("tui_screenshot: registrar o evento de audit falhou: %s", exc)
         return ToolResult(
             ok=True,
             tool_name=call.name,

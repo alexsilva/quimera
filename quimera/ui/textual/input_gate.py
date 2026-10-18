@@ -1,6 +1,7 @@
 """Input gate da interface Textual."""
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 
@@ -13,6 +14,8 @@ from quimera.ui.textual.constants import (
     APPROVAL_TITLE as _APPROVAL_TITLE,
 )
 from quimera.ui.textual.events import TextualUiEvent
+
+_logger = logging.getLogger(__name__)
 
 
 def _approval_options() -> list[str]:
@@ -116,7 +119,8 @@ class TextualInputGate:
         if callable(resolver):
             try:
                 context = dict(resolver() or {})
-            except Exception:
+            except Exception as exc:
+                _logger.debug("toolbar_context_resolver falhou: %s", exc)
                 context = {}
         else:
             context = {}
@@ -263,7 +267,8 @@ class TextualInputGate:
             return []
         try:
             return sorted(set(str(item) for item in (resolver() or [])))
-        except Exception:
+        except Exception as exc:
+            _logger.debug("command_resolver falhou: %s", exc)
             return []
 
     def completions_for(self, value: str, cursor_position: int | None = None) -> list[str]:
@@ -292,7 +297,8 @@ class TextualInputGate:
             return []
         try:
             suggestions = resolver(command, partial) or []
-        except Exception:
+        except Exception as exc:
+            _logger.debug("argument_resolver falhou para %s: %s", command, exc)
             return []
         return [str(item) for item in suggestions if str(item).startswith(partial)]
 

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quimera.app.agent_run_events import (
+from quimera.domain.agent_run_events import (
     AgentRunController,
     AgentRunEvent,
     AgentRunRegistry,
@@ -540,7 +540,7 @@ def test_gateway_failed_delegate_clears_partial_thinking():
 def test_concurrent_delegate_runs_are_scoped_in_textual_renderer():
     """Dois gateways reais não atribuem update/cleanup ao run concorrente."""
     from quimera.app.agent_gateway import cleanup_agent_transient_if_unowned
-    from quimera.app.agent_run_events import AgentRunController
+    from quimera.domain.agent_run_events import AgentRunController
     from quimera.ui.textual.bridge import TextualUiBridge
     from quimera.ui.textual.renderer import TextualRenderer
     from tests.test_agent_run_events import FakeAgentClient, make_gateway

@@ -4,6 +4,7 @@ Os métodos aqui preservam a API legada enquanto `core.py` permanece como
 construtor fino. A implementação foi movida mecanicamente na Fase 5.
 """
 
+import logging
 import os
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from .agent_pool import AgentPoolView
 from .chat_processor import run_chat_loop
 from .inputs import AskUserPrompter
 from .lifecycle import AppLifecycle
-from .prompt_formatter import PromptFormatter
+from ..domain.prompt_formatter import PromptFormatter
 from .state import ExecutionModeState
 from .stats_services import StatsServices
 from .turn import TurnManager
@@ -35,6 +36,8 @@ from ..runtime.workspace_policy import WorkspacePolicy
 from ..sandbox.bwrap import SandboxUnavailableError, bwrap_self_test
 from ..sandbox.state import is_sandbox_enabled
 from ..tasks.classifiers import classify_task_execution_result, parse_task_command
+
+_logger = logging.getLogger(__name__)
 
 
 def _core_sys():
@@ -475,14 +478,15 @@ class CoreFacadeMixin:
         try:
             if not bool(input_gate.is_active()):
                 return
-        except Exception:
+        except Exception as exc:
+            _logger.debug("redisplay: is_active do input gate falhou: %s", exc)
             return
         redisplay = getattr(input_gate, "redisplay", None)
         if callable(redisplay):
             try:
                 redisplay()
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("redisplay do input gate falhou: %s", exc)
 
     def clear_terminal_screen(self) -> None:
         """Limpa o chat.

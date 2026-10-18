@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Protocol
 
@@ -9,6 +10,8 @@ from ..prompt_kinds import PromptKind
 from ..constants import TaskStatus
 from ..runtime.models import TaskRecord
 from .events import TaskReviewReassigned
+
+_logger = logging.getLogger(__name__)
 
 
 class _DispatchServicesProto(Protocol):
@@ -150,8 +153,8 @@ class TaskReviewer:
                                 reason="self-review rejected",
                                 previous_reviewer=agent_name,
                             ))
-                        except Exception:
-                            pass
+                        except Exception as publish_exc:
+                            _logger.warning("publicar TaskReviewReassigned falhou: %s", publish_exc)
                 else:
                     self.system_layer.show_muted_message(
                         f"[task {task_id}] {agent_name}: erro ao rejeitar review \u2014 transi\u00e7\u00e3o inv\u00e1lida"
@@ -268,8 +271,8 @@ class TaskReviewer:
                                 reason=f"review exception with fallback: {exc}",
                                 previous_reviewer=agent_name,
                             ))
-                        except Exception:
-                            pass
+                        except Exception as publish_exc:
+                            _logger.warning("publicar TaskReviewReassigned falhou: %s", publish_exc)
             else:
                 self.repository.fail_task(
                     task_id,

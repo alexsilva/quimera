@@ -12,6 +12,7 @@ mesmo conteúdo estruturado que a TUI grava.
 """
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 from typing import Any, Callable, TextIO
@@ -25,6 +26,8 @@ from quimera.ui.text import (
     _preview_text,
     strip_ansi,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 class PlainTextRenderer(RendererBase):
@@ -150,7 +153,8 @@ class PlainTextRenderer(RendererBase):
             return None
         try:
             audit_logger.log_event(event, **payload)
-        except Exception:
+        except Exception as exc:
+            _logger.debug("audit de render: registrar %s falhou: %s", event, exc)
             return None
         return None
 
@@ -169,7 +173,8 @@ class PlainTextRenderer(RendererBase):
         if audit_logger is not None:
             try:
                 audit_logger.close()
-            except Exception:
+            except Exception as exc:
+                _logger.debug("audit de render: fechar falhou: %s", exc)
                 return None
         return None
 

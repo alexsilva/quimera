@@ -6,6 +6,7 @@ environment ou acesso irrestrito ao filesystem do host.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shlex
@@ -25,6 +26,8 @@ from .host_sampling import (
     growth_signals,
     summarize_samples,
 )
+
+_logger = logging.getLogger(__name__)
 
 _HOST_TOOL_NAMES = [
     "host_processes",
@@ -541,12 +544,14 @@ class HostTools(ToolBase, tool_prefix="host"):
             try:
                 if bool(is_set()):
                     return True
-            except Exception:  # noqa: BLE001 - cancel source is external plumbing
+            except Exception as exc:  # noqa: BLE001 - cancel source is external plumbing
+                _logger.debug("host: is_set do cancel event falhou: %s", exc)
                 is_set = None
         if self._cancel_checker is not None:
             try:
                 return bool(self._cancel_checker())
-            except Exception:  # noqa: BLE001 - cancellation must not break diagnostics
+            except Exception as exc:  # noqa: BLE001 - cancellation must not break diagnostics
+                _logger.debug("host: cancel_checker falhou: %s", exc)
                 return False
         return False
 
@@ -583,7 +588,8 @@ class HostTools(ToolBase, tool_prefix="host"):
                 f"host sample pid={pid} {current}/{total} "
                 f"rss={sample['rss_kb']}kB threads={sample['threads']}{suffix}"
             )
-        except Exception:  # noqa: BLE001 - progress is best-effort
+        except Exception as exc:  # noqa: BLE001 - progress is best-effort
+            _logger.debug("host sample: callback de progresso falhou: %s", exc)
             return
 
     def _read_process(self, process_root: Path) -> dict[str, Any] | None:

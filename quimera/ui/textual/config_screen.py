@@ -6,7 +6,7 @@ from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select
-from quimera.app.prompt_formatter import PromptFormatter
+from quimera.domain.prompt_formatter import PromptFormatter
 from quimera.config import ConfigManager
 from quimera.themes import DENSITY_OPTIONS, names as theme_names
 

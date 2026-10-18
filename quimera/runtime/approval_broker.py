@@ -1,6 +1,7 @@
 """Approval Broker central para governar ferramentas MCP e chamadas paralelas."""
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import uuid
@@ -13,6 +14,8 @@ from .models import ToolCall
 from .policy import PathPermissionError, is_path_inside
 from .tool_metadata import TOOL_METADATA, ToolRisk, get_tool_metadata
 from .tool_preview import ToolPreview
+
+_logger = logging.getLogger(__name__)
 
 
 RiskLevel = ToolRisk
@@ -634,7 +637,7 @@ class ApprovalBroker:
                 raw = raw[2:]
             try:
                 path = (workspace_root / raw.lstrip("/")).resolve()
-            except Exception:
+            except (OSError, RuntimeError, ValueError):
                 return
             if is_path_inside(path, workspace_root):
                 text = str(path)
@@ -793,6 +796,7 @@ def _static_callable_attr(obj: Any, name: str):
         return None
     try:
         value = getattr(obj, name)
-    except Exception:
+    except Exception as exc:
+        _logger.debug("_static_callable_attr: acesso a %s falhou: %s", name, exc)
         return None
     return value if callable(value) else None

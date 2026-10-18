@@ -8,11 +8,14 @@ atual uma única vez e devolve as três coisas juntas.
 """
 from __future__ import annotations
 
+import logging
 import io
 from dataclasses import dataclass, field
 from typing import Any
 
 from rich.console import Console
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -35,7 +38,8 @@ def feed_geometry(app) -> dict[str, Any]:
     """Geometria do feed unificado (``#feed``), ou ``{}`` sem feed montado."""
     try:
         feed = app.query_one("#feed")
-    except Exception:
+    except Exception as exc:
+        _logger.debug("feed_geometry: feed não montado: %s", exc)
         return {}
     return feed_widget_geometry(feed)
 
@@ -60,7 +64,8 @@ def feed_widget_geometry(feed) -> dict[str, Any]:
         if children:
             geometry["first_slot_y"] = int(children[0].region.y)
             geometry["last_slot_bottom"] = int(children[-1].region.bottom)
-    except Exception:
+    except Exception as exc:
+        _logger.debug("feed_widget_geometry: geometria indisponível: %s", exc)
         return {}
     return geometry
 

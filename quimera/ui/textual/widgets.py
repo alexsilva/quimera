@@ -69,7 +69,8 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
             app = self.app
             audit_event = getattr(app, "audit_event", None)
             terminal = app.size
-        except Exception:
+        except Exception as exc:
+            logger.debug("on_resize: app ou geometria indisponível: %s", exc)
             return
         if not callable(audit_event):
             return
@@ -123,14 +124,16 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
                 int(self.virtual_size.height),
                 len(self.children),
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug("_audit_scroll_clamp: geometria indisponível: %s", exc)
             return
         if self._last_clamp_by_reactive.get(name) == signature:
             return
         self._last_clamp_by_reactive[name] = signature
         try:
             audit_event = getattr(self.app, "audit_event", None)
-        except Exception:
+        except Exception as exc:
+            logger.debug("_audit_scroll_clamp: app indisponível: %s", exc)
             return
         if not callable(audit_event):
             return

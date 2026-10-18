@@ -8,7 +8,7 @@ from contextlib import nullcontext
 
 from ..agents.capabilities import get_cancel_event, is_user_cancelled
 from ..prompt_kinds import PromptKind
-from .agent_run_events import AgentRunEvent, ThinkingStreamParser, coerce_agent_run_sink
+from ..domain.agent_run_events import AgentRunEvent, ThinkingStreamParser, coerce_agent_run_sink
 from .config import logger
 from .render_event import RenderEvent
 
@@ -112,7 +112,8 @@ def _is_user_cancelled(agent_client) -> bool:
     if callable(is_set):
         try:
             return is_set() is True
-        except Exception:
+        except Exception as exc:
+            logger.debug("_is_user_cancelled: is_set falhou: %s", exc)
             return False
     return False
 

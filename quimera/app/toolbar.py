@@ -1,11 +1,14 @@
 """Toolbar management for QuimeraApp."""
 
+import logging
 import time
 import threading
 from dataclasses import dataclass
 from typing import Callable
 
 from ..profiles.base import extract_model_from_cli_cmd
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -60,7 +63,8 @@ class ActiveModelResolver:
         if not cmd and hasattr(profile, "effective_cmd"):
             try:
                 cmd = profile.effective_cmd()
-            except Exception:
+            except Exception as exc:
+                _logger.debug("toolbar: effective_cmd do perfil falhou: %s", exc)
                 cmd = None
         if not cmd:
             cmd = getattr(profile, "cmd", None)
@@ -199,7 +203,7 @@ class ToolbarManager:
                 cached_count = cache.get("count", 0)
                 try:
                     open_bug_count = int(cached_count)
-                except Exception:
+                except (TypeError, ValueError):
                     open_bug_count = 0
         if open_bug_count is None:
             try:
@@ -209,7 +213,8 @@ class ToolbarManager:
                     "count": open_bug_count,
                     "ts": now_monotonic,
                 }
-            except Exception:
+            except Exception as exc:
+                _logger.debug("toolbar: contagem de bugs abertos falhou: %s", exc)
                 open_bug_count = 0
         return open_bug_count
 

@@ -5,6 +5,7 @@ only transform strings and renderables. Safe to import from anywhere.
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -12,6 +13,8 @@ if TYPE_CHECKING:
     from rich.text import Text
 
 from quimera.runtime.streaming import apply_stream_diff, normalize_stream_diff
+
+_logger = logging.getLogger(__name__)
 
 _UNICODE_CONTROL_RE = re.compile(
     r"[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]"
@@ -116,7 +119,8 @@ def _preview_chunk(chunk: Any) -> str:
         if diff:
             try:
                 normalized = _normalize_stream_diff(diff)
-            except Exception:
+            except Exception as exc:
+                _logger.debug("_preview_chunk: diff de stream inválido: %s", exc)
                 normalized = []
             parts = []
             for item in normalized:

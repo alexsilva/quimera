@@ -7,6 +7,7 @@ ao encerramento do app.
 
 from __future__ import annotations
 
+import subprocess
 import logging
 import os
 import signal
@@ -204,8 +205,10 @@ class ProcessSupervisor:
                 break
             try:
                 mp.proc.wait(timeout=remaining)
-            except Exception:
+            except subprocess.TimeoutExpired:
                 pass
+            except OSError as exc:
+                _logger.debug("process_supervisor: wait após SIGTERM falhou para pid=%d: %s", mp.pid, exc)
 
         for mp in snapshot:
             if not self._is_process_alive(mp.pid):
@@ -219,8 +222,10 @@ class ProcessSupervisor:
         for mp in snapshot:
             try:
                 mp.proc.wait(timeout=_SIGKILL_WAIT_SECONDS)
-            except Exception:
+            except subprocess.TimeoutExpired:
                 pass
+            except OSError as exc:
+                _logger.debug("process_supervisor: wait após SIGKILL falhou para pid=%d: %s", mp.pid, exc)
 
         if clear_registry:
             with self._lock:

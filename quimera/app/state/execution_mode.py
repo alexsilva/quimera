@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Callable
+
+_logger = logging.getLogger(__name__)
 
 
 _Listener = Callable[[object | None, object | None], None]
@@ -52,5 +55,5 @@ class ExecutionModeState:
         for listener in list(self._listeners):
             try:
                 listener(old, new)
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning("listener de modo de execução falhou: %s", exc, exc_info=True)

@@ -35,5 +35,5 @@ class PromptAwareStderrHandler(logging.StreamHandler):
         for record in buffered:
             try:
                 super().emit(record)
-            except Exception:
-                pass
+            except (OSError, ValueError):
+                pass  # stderr fechado ou inválido: o registro já foi perdido

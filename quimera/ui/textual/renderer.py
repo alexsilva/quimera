@@ -1,6 +1,7 @@
 """Renderer compatível com o contrato legado sobre eventos Textual."""
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -30,6 +31,8 @@ from quimera.ui.textual.feed_model import (
 from quimera.ui.textual.terminal_modes import _external_textual_window
 from quimera.domain.execution import ExecutionControlEvent
 from quimera.domain.tool_activity import count_tool_activities
+
+_logger = logging.getLogger(__name__)
 
 
 class _TextualStatus:
@@ -150,8 +153,8 @@ class TextualRenderer(RendererBase):
                 if result:
                     style, label = result
                     return str(style or "cyan"), str(label)
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("resolver de estilo do agente %s falhou: %s", agent, exc)
         agent_name = str(agent).capitalize() if agent else "Agente"
         return "cyan", f"🤖  {agent_name}"
 
@@ -314,7 +317,8 @@ class TextualRenderer(RendererBase):
             return None
         try:
             audit_logger.close()
-        except Exception:
+        except Exception as exc:
+            _logger.debug("audit de render: fechar falhou: %s", exc)
             return None
         return None
 
@@ -324,7 +328,8 @@ class TextualRenderer(RendererBase):
             return
         try:
             self._audit_logger.log_event(event, **payload)
-        except Exception:
+        except Exception as exc:
+            _logger.debug("audit de render: registrar %s falhou: %s", event, exc)
             return
 
     def capture_screenshot(self, *, title: str | None = None, timeout: float = 10.0):

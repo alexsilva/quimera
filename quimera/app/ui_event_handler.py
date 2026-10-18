@@ -157,7 +157,8 @@ class UiEventHandler:
                     if not isinstance(active_state, bool) or not active_state:
                         return False
                     owner_thread_id = get_owner_thread_id()
-                except Exception:
+                except Exception as exc:
+                    logger.debug("input gate: owner_thread_id indisponível: %s", exc)
                     owner_thread_id = None
                 if not isinstance(owner_thread_id, int):
                     return False
@@ -187,7 +188,8 @@ class UiEventHandler:
 
         try:
             return bool(run_in_terminal_message(_render_callback))
-        except Exception:
+        except Exception as exc:
+            logger.debug("render acima do prompt falhou: %s", exc)
             return False
 
     # ------------------------------------------------------------------
@@ -199,7 +201,7 @@ class UiEventHandler:
         while True:
             try:
                 event: RenderEvent = ui_queue.get_nowait()
-            except Exception:
+            except queue.Empty:
                 break
             try:
                 event_type = event.type
@@ -313,5 +315,5 @@ class UiEventHandler:
             finally:
                 try:
                     ui_queue.task_done()
-                except Exception:
-                    pass
+                except ValueError:
+                    pass  # fila não contabiliza itens (task_done além do consumido)

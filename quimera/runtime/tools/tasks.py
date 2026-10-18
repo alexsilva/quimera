@@ -279,8 +279,8 @@ class TaskTools(
                 rows = _list_tasks({"id": task_id}, db_path=self.workspace.tasks_db)
                 if rows:
                     status_hint = f" (status atual: {rows[0].get('status')})"
-            except Exception:  # noqa: BLE001 - hint é best-effort
-                pass
+            except Exception as exc:  # noqa: BLE001 - hint é best-effort
+                logger.debug("tasks_cancel: consulta do status da task %s falhou: %s", task_id, exc)
             return ToolResult(
                 ok=False,
                 tool_name=call.name,
@@ -459,7 +459,8 @@ class JobTools(ToolBase, tool_prefix="jobs"):
                     recent_jobs = _list_jobs({"status": "active"}, db_path=self.workspace.tasks_db)
                 if recent_jobs:
                     job_id = recent_jobs[-1]["id"]
-            except Exception:
+            except Exception as exc:
+                logger.warning("_resolve_job_id: consulta de jobs falhou: %s", exc)
                 return None
         return job_id
 

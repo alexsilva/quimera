@@ -148,7 +148,8 @@ class ToolbarCoordinator:
         if chat_queue is not None:
             try:
                 queued_from_queue = max(0, int(chat_queue.qsize()))
-            except Exception:
+            except Exception as exc:
+                logger.debug("toolbar: qsize da fila de chat falhou: %s", exc)
                 queued_from_queue = None
         pending_count = self._runtime_state.get_chat_pending_count()
         if queued_from_queue is None:

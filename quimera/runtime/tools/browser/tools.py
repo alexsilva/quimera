@@ -1,6 +1,7 @@
 """Tool wrappers and policy validation for browser automation."""
 from __future__ import annotations
 
+import logging
 import base64
 import json
 import time
@@ -13,6 +14,8 @@ from ...models import ToolCall, ToolResult
 from ...policy import ToolPolicyError, is_path_inside
 from ..base import ToolBase, ValidatableTool
 from .service import BrowserService
+
+_logger = logging.getLogger(__name__)
 
 
 _BROWSER_TOOL_NAMES = (
@@ -67,8 +70,8 @@ class BrowserTool(
     def __del__(self) -> None:
         try:
             self.shutdown()
-        except Exception:  # noqa: BLE001 - best-effort interpreter cleanup
-            pass
+        except Exception as exc:  # noqa: BLE001 - best-effort interpreter cleanup
+            _logger.debug("BrowserTools.__del__: shutdown falhou: %s", exc)
 
     def shutdown(self) -> None:
         """Encerra todas as sessões e finaliza o worker Playwright."""

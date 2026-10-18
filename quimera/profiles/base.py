@@ -94,7 +94,8 @@ def extract_model_from_cli_cmd(cmd) -> Optional[str]:
         return None
     try:
         args = [str(part).strip() for part in cmd if str(part).strip()]
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - cmd não iterável ou parte sem str()
+        logging.getLogger(__name__).debug("extract_model_from_cli_cmd: cmd inválido: %s", exc)
         return None
 
     for idx, arg in enumerate(args):

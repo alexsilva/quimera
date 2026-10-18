@@ -70,8 +70,8 @@ class AgentFailureTracker:
                 logger.warning("agent %s removed from pool after %d failures", name, failures)
                 try:
                     self._release_agent_tasks(name)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("falha ao liberar as tasks do agente %s: %s", name, exc)
         if self._record_metric is not None:
             self._record_metric(name)
         if failures == self.FAILURE_THRESHOLD and self._file_bug is not None:

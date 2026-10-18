@@ -492,7 +492,8 @@ class FileTools(ToolBase):
 
                 try:
                     text = file_path.read_text(encoding="utf-8")
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001 - arquivo ilegível fica fora da busca
+                    _logger.debug("grep_search: leitura de %s falhou: %s", display_path, exc)
                     continue
 
                 lines = text.splitlines()

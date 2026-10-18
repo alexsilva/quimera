@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -26,6 +27,8 @@ from .events import (
     TaskFailed,
     TaskRequeued,
 )
+
+_logger = logging.getLogger(__name__)
 
 _UNSET = object()
 
@@ -52,8 +55,8 @@ class TaskRepository:
         if self.event_sink is not None:
             try:
                 self.event_sink.publish(event)
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning("publicar %s falhou: %s", type(event).__name__, exc, exc_info=True)
 
     @staticmethod
     def _now() -> str:

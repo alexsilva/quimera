@@ -73,8 +73,8 @@ _env_limit = os.getenv("QUIMERA_MAX_STDERR_LINES")
 if _env_limit is not None:
     try:
         MAX_STDERR_LINES = int(_env_limit)
-    except Exception:
-        pass
+    except ValueError:
+        pass  # valor não numérico na variável de ambiente: mantém o padrão
 
 # Shared state keys that should be trimmed when building prompts
 _SHARED_STATE_TRIM_KEYS = [

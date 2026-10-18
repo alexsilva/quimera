@@ -41,12 +41,12 @@ class AppLifecycle:
             debate_service = getattr(app, "debate_service", None)
             if debate_service is not None:
                 debate_service.shutdown()
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.warning("encerramento do serviço de debate falhou: %s", exc, exc_info=True)
         try:
             app._stop_task_executors()
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.warning("parar os executores de tasks falhou: %s", exc, exc_info=True)
         process_supervisor = getattr(app, "process_supervisor", None)
         if process_supervisor is not None:
             # terminate_all() (e não shutdown()) para não bloquear novos
@@ -97,8 +97,8 @@ class AppLifecycle:
             if bug_store is not None and hasattr(bug_store, "close"):
                 try:
                     bug_store.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.warning("fechar o bug_store falhou: %s", exc, exc_info=True)
 
     def restore_current_job_env(self) -> None:
         """Restaura QUIMERA_CURRENT_JOB_ID ao valor anterior ao app."""

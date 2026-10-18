@@ -89,7 +89,7 @@ Agente/Executor produz saída
      -> bridge.emit(TextualUiEvent(kind, payload, agent))     # textual_ui.py:583
         -> call_from_thread(textual_app.handle_bridge_event)  # enfileira no event loop do Textual
         -> se app não attached: fallback para ui_queue interna
-  -> QuimeraTextualApp.handle_bridge_event                    # textual_ui.py:2094
+  -> QuimeraTextualApp.handle_bridge_event                    # ui/textual/app.py
      -> eventos especiais:
         "clear"       -> feed_model.clear()
         "question"    -> _set_question_overlay()

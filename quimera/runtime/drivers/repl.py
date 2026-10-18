@@ -25,7 +25,7 @@ from ...paths import CANDIDATE_DIRS, find_base_writable
 from ...profiles.base import OpenAIConnection
 from ...session_paths import SessionPaths
 from ...workspace import Workspace
-from ...app.prompt_formatter import PromptFormatter
+from ...domain.prompt_formatter import PromptFormatter
 from .openai_compat import OpenAICompatDriver
 from ..approval import ApprovalManager
 from ..config import ToolRuntimeConfig
@@ -150,7 +150,8 @@ class DriverRepl:
         try:
             base_dir = find_base_writable(CANDIDATE_DIRS)
             return GlobalConfigManager(base_dir / "config.json").user_name
-        except Exception:
+        except Exception as exc:
+            _logger.warning("config global ilegível; usando o nome de usuário padrão: %s", exc)
             return DEFAULT_USER_NAME
 
     def _resolve_input_prompt(self) -> str:

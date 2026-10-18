@@ -1,5 +1,6 @@
 """Apresentação do stdout de agentes como eventos de spy."""
 
+import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,8 @@ from quimera.evidence import Evidence, EvidenceStore, PatternRegistry
 from quimera.domain.tool_activity import classify_tool_activity
 from quimera.runtime.tool_preview import ToolPreview
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
+
+_logger = logging.getLogger(__name__)
 
 
 class SpyOutputPresenter:
@@ -478,7 +481,8 @@ class SpyOutputPresenter:
         if callable(effective_driver):
             try:
                 return str(effective_driver()).strip().lower() == "cli"
-            except Exception:
+            except Exception as exc:
+                _logger.debug("_is_cli_agent: effective_driver falhou: %s", exc)
                 return False
         return False
 

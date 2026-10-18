@@ -1,7 +1,10 @@
 """Gerenciamento de sinal SIGINT e término de grupo de processos."""
+import logging
 import os
 import signal
 import threading
+
+_logger = logging.getLogger(__name__)
 
 
 def terminate_process_group(proc) -> None:
@@ -44,6 +47,6 @@ class EscMonitor:
         if self._old_handler is not None:
             try:
                 signal.signal(signal.SIGINT, self._old_handler)
-            except Exception:
-                pass
+            except (ValueError, OSError, TypeError) as exc:
+                _logger.warning("SignalGuard: falha ao restaurar o handler de SIGINT: %s", exc)
             self._old_handler = None

@@ -1012,7 +1012,8 @@ class ToolCallingDriver:
                 call_id=tc.get("id"),
             )
             decision = checker(call)
-        except Exception:
+        except Exception as exc:
+            _logger.debug("_tool_call_is_parallel_safe: checker falhou para %s: %s", tc.get("name"), exc)
             return False
         # Contrato booleano e fail-closed: só ``True`` habilita concorrência.
         if decision is not True:
@@ -1025,7 +1026,8 @@ class ToolCallingDriver:
             try:
                 if approval_checker(call) is True:
                     return False
-            except Exception:
+            except Exception as exc:
+                _logger.debug("would_require_approval falhou para %s: %s", call.name, exc)
                 return False
         return True
 

@@ -30,7 +30,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import IO, Any
 
-from quimera.app.agent_run_events import AgentRunEvent, coerce_agent_run_sink
+from quimera.domain.agent_run_events import AgentRunEvent, coerce_agent_run_sink
 from quimera.runtime.approval import ApprovalManager, TrustedToolExecutionContext
 from quimera.runtime.config import (
     DEFAULT_DELEGATE_TIMEOUT_SECONDS,
@@ -555,7 +555,7 @@ class MCPServer:
             try:
                 decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
                 page = int(decoded.split(":", 1)[1])
-            except Exception:
+            except (ValueError, IndexError, TypeError):
                 return {"__error__": "Invalid cursor"}
         start = page * page_size
         end = start + page_size
@@ -1382,12 +1382,12 @@ class MCPServer:
         if underlying is not None:
             try:
                 previous_timeout = underlying.gettimeout()
-            except Exception:
+            except (OSError, AttributeError, ValueError):
                 previous_timeout = None
             try:
                 underlying.settimeout(self._AUTH_READLINE_TIMEOUT)
-            except Exception:
-                pass
+            except (OSError, AttributeError, ValueError) as exc:
+                _logger.debug("MCP auth: settimeout falhou: %s", exc)
         try:
             first_line = inp.readline()
             if not first_line:
@@ -1405,8 +1405,8 @@ class MCPServer:
             if underlying is not None:
                 try:
                     underlying.settimeout(previous_timeout)
-                except Exception:
-                    pass
+                except (OSError, AttributeError, ValueError) as exc:
+                    _logger.debug("MCP auth: restaurar o timeout falhou: %s", exc)
 
     # ------------------------------------------------------------------
     # Socket Unix
@@ -1536,8 +1536,8 @@ class MCPServer:
             state = {"initialize_seen": False, "initialized": False, "strict_lifecycle": False}
             try:
                 setattr(out, "_mcp_state", state)
-            except Exception:
-                pass
+            except (AttributeError, TypeError):
+                pass  # stream sem __dict__: o estado vale só nesta chamada
         if transport:
             state["transport"] = transport
         else:

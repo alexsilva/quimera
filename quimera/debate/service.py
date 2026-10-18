@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 import math
 import sqlite3
@@ -41,6 +42,8 @@ from .prompts import (
     build_synthesis_prompt,
 )
 from .repository import DebateRepository
+
+_logger = logging.getLogger(__name__)
 
 
 class DebateCancelled(RuntimeError):
@@ -93,8 +96,8 @@ class _CallHandle:
         if callable(cancel_fn):
             try:
                 cancel_fn()
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning("debate: cancel_fn falhou: %s", exc, exc_info=True)
 
 
 class DebateService:

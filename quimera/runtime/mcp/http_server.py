@@ -147,8 +147,8 @@ def _set_mcp_state(out: Any, state: dict) -> None:
     """Anexa o estado de sessão MCP ao stream de saída quando suportado."""
     try:
         setattr(out, "_mcp_state", state)
-    except Exception:
-        pass
+    except (AttributeError, TypeError):
+        pass  # stream sem __dict__: o estado vale só nesta chamada
 
 
 class _JSONBodyOutput(StringIO):

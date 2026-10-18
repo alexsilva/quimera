@@ -23,7 +23,7 @@ from .bundles import (
 )
 from .context import AppOptions
 from ..agent_pool import AgentPool
-from ..agent_run_events import AgentRunController
+from ...domain.agent_run_events import AgentRunController
 from ..agent_failure_tracker import AgentFailureTracker
 from ..bug_services import BugServices
 from ..chat_lifecycle import ChatLifecycle

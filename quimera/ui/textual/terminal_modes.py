@@ -1,10 +1,13 @@
 """Controle de modos de terminal para a UI Textual."""
 from __future__ import annotations
 
+import logging
 import sys
 from contextlib import contextmanager
 
 from quimera.ui.textual.constants import TERMINAL_MODE_RESET as _TERMINAL_MODE_RESET
+
+_logger = logging.getLogger(__name__)
 
 
 class _DiscardWriter:
@@ -32,7 +35,8 @@ def _install_discard_writer(driver) -> None:
         return
     try:
         driver._writer_thread = _DiscardWriter()
-    except Exception:
+    except (AttributeError, TypeError) as exc:
+        _logger.debug("terminal_modes: trocar o writer do driver falhou: %s", exc)
         return
 
 
@@ -44,7 +48,8 @@ def _restore_terminal_modes() -> None:
     try:
         stdout.write(_TERMINAL_MODE_RESET)
         stdout.flush()
-    except Exception:
+    except (OSError, ValueError) as exc:
+        _logger.debug("terminal_modes: reset do terminal falhou: %s", exc)
         return
 
 
@@ -54,16 +59,17 @@ def _restore_textual_input_focus(textual_app) -> None:
         return
     try:
         input_widget = textual_app.query_one("#input")
-    except Exception:
+    except Exception as exc:
+        _logger.debug("terminal_modes: input fixo indisponível: %s", exc)
         return
     try:
         input_widget.focus()
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.debug("terminal_modes: focar o input falhou: %s", exc)
     try:
         input_widget.cursor_position = len(str(getattr(input_widget, "value", "") or ""))
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.debug("terminal_modes: posicionar o cursor falhou: %s", exc)
 
 
 @contextmanager
@@ -105,8 +111,8 @@ def _external_textual_window(textual_app):
             return
         try:
             textual_app._suspend_signal()
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug("terminal_modes: suspender o driver falhou: %s", exc)
         driver.suspend_application_mode()
         # O writer real foi parado; troca por um sink não-bloqueante para que
         # repaints do loop durante o processo externo não travem o event loop.
@@ -118,12 +124,12 @@ def _external_textual_window(textual_app):
         driver.resume_application_mode()
         try:
             textual_app._resume_signal()
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug("terminal_modes: retomar o driver falhou: %s", exc)
         try:
             textual_app.refresh(layout=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug("terminal_modes: refresh após retomar falhou: %s", exc)
         _restore_textual_input_focus(textual_app)
 
     try:

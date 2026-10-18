@@ -1,6 +1,7 @@
 """Componentes de `quimera.runtime.approval`."""
 from __future__ import annotations
 
+import logging
 import inspect
 import select
 import threading
@@ -10,6 +11,8 @@ from contextlib import nullcontext
 
 from .approval_broker import ApprovalBroker, TrustedToolExecutionContext  # noqa: F401
 
+_logger = logging.getLogger(__name__)
+
 
 def _emit_approval_message(renderer, message: str) -> None:
     """Emite mensagem de approval e força flush quando houver renderer."""
@@ -17,8 +20,8 @@ def _emit_approval_message(renderer, message: str) -> None:
         renderer.show_approval(message)
         try:
             renderer.flush()
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug("flush do renderer após mensagem de aprovação falhou: %s", exc)
         return
     print(message)
 
@@ -31,7 +34,8 @@ def _extract_renderer(base_handler) -> object | None:
         return None
     try:
         return getattr(base_handler, "_renderer", None)
-    except Exception:
+    except Exception as exc:
+        _logger.debug("_extract_renderer: acesso a _renderer falhou: %s", exc)
         return None
 
 
@@ -55,7 +59,8 @@ def _static_callable_attr(obj, name: str):
             return None
     try:
         value = getattr(obj, name)
-    except Exception:
+    except Exception as exc:
+        _logger.debug("_static_callable_attr: acesso a %s falhou: %s", name, exc)
         return None
     return value if callable(value) else None
 
@@ -289,7 +294,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
         """Verifica se stdin é um terminal interativo no contexto atual."""
         try:
             return sys.stdin is not None and sys.stdin.isatty()
-        except Exception:
+        except (AttributeError, ValueError, OSError):
             return False
 
     def _approve_interactive(self, tool_name: str, summary: str) -> bool:
@@ -454,7 +459,8 @@ class ConsoleApprovalHandler(ApprovalHandler):
         if callable(is_set):
             try:
                 return bool(is_set())
-            except Exception:
+            except Exception as exc:
+                _logger.debug("_is_cancelled: is_set falhou: %s", exc)
                 return False
         return False
 
@@ -567,7 +573,8 @@ class NonBlockingConsoleApprovalHandler(ApprovalHandler):
             if not ready:
                 return None
             return stdin.readline()
-        except Exception:
+        except (OSError, ValueError, TypeError) as exc:
+            _logger.debug("leitura de aprovação em stdin falhou: %s", exc)
             return None
 
     @staticmethod
@@ -590,7 +597,7 @@ class NonBlockingConsoleApprovalHandler(ApprovalHandler):
                     break
                 if sys.stdin.readline() == "":
                     break
-        except Exception:
+        except (OSError, ValueError, TypeError):
             return
 
 

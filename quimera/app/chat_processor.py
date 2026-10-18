@@ -205,8 +205,8 @@ def run_chat_loop(
                     _ai_turn_input = None
                     try:
                         _ai_turn_input = app.read_user_input("", timeout=0)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("turno de IA: leitura não bloqueante do input falhou: %s", exc)
                     if _ai_turn_input is not None:
                         _stripped_ai_turn_input = _ai_turn_input.strip()
                         _resolved_cmd = CMD_ALIASES.get(_stripped_ai_turn_input, _stripped_ai_turn_input)
@@ -500,5 +500,6 @@ def _join_executor_threads(executor, timeout=2.0) -> bool:
                 break
             thread.join(timeout=remaining)
         return not any(thread.is_alive() for thread in threads)
-    except Exception:
+    except Exception as exc:
+        logger.warning("_join_executor_threads: falha ao aguardar threads do executor: %s", exc)
         return False

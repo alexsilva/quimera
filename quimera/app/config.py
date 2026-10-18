@@ -52,8 +52,8 @@ def set_app_log_file(path: "Path | str") -> None:
             lg.removeHandler(_file_handler)
     try:
         _file_handler.close()
-    except Exception:
-        pass
+    except (OSError, ValueError):
+        pass  # handler já fechado ou stream inválido; o novo handler o substitui
     _file_handler = logging.FileHandler(str(path), mode="a", encoding="utf-8")
     _file_handler.setFormatter(logging.Formatter(
         "%(asctime)s %(levelname)s [%(name)s] %(module)s: %(message)s"

@@ -109,7 +109,8 @@ def _app_log_path(app) -> str:
         return ""
     try:
         return str(resolver(session_id))
-    except Exception:
+    except Exception as exc:
+        logger.debug("_app_log_path: resolver falhou: %s", exc)
         return ""
 
 

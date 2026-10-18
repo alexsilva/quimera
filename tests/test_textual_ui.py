@@ -12,7 +12,7 @@ from rich.console import Console, Group
 from rich.padding import Padding
 
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
-from quimera.ui.textual.app import run_textual_quimera_app
+from quimera.ui.textual.app import QuimeraTextualApp, run_textual_quimera_app
 from quimera.ui.textual.bridge import TextualUiBridge
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.feed_model import (
@@ -4567,7 +4567,7 @@ def test_textual_theme_cycle_bindings_include_main_tui_fallbacks():
     import inspect
 
     
-    source = inspect.getsource(run_textual_quimera_app)
+    source = inspect.getsource(QuimeraTextualApp)
 
     assert '"ctrl+t", "cycle_theme"' in source
     assert '"alt+t", "cycle_theme"' in source
@@ -4938,7 +4938,7 @@ def test_textual_bridge_handler_refreshes_after_visual_event_updates():
     import inspect
 
     
-    source = inspect.getsource(run_textual_quimera_app)
+    source = inspect.getsource(QuimeraTextualApp)
 
     assert "def _refresh_now" in source
     assert "self._refresh_now(layout=True)" in source
@@ -4949,7 +4949,7 @@ def test_textual_bridge_handler_refreshes_after_visual_event_updates():
 def test_textual_app_syncs_last_expired_tool_before_early_return():
     import inspect
 
-    source = inspect.getsource(run_textual_quimera_app)
+    source = inspect.getsource(QuimeraTextualApp)
     pulse_start = source.index("def _pulse_thinking_marker")
     pulse_end = source.index("def _run_quimera_app", pulse_start)
     pulse_source = source[pulse_start:pulse_end]
@@ -4966,7 +4966,7 @@ def test_textual_app_syncs_last_expired_tool_before_early_return():
 def test_textual_unified_feed_follows_bottom_via_native_anchor():
     import inspect
 
-    source = inspect.getsource(run_textual_quimera_app)
+    source = inspect.getsource(QuimeraTextualApp)
     sync_start = source.index("def _sync_feed")
     sync_end = source.index("def _redraw_feed", sync_start)
     sync_source = source[sync_start:sync_end]
@@ -4985,7 +4985,7 @@ def test_textual_unified_feed_follows_bottom_via_native_anchor():
 def test_textual_prompt_submission_scrolls_feed_to_end_once():
     import inspect
 
-    source = inspect.getsource(run_textual_quimera_app)
+    source = inspect.getsource(QuimeraTextualApp)
 
     submit_start = source.index("def on_input_submitted")
     submit_end = source.index("def _set_question_overlay", submit_start)
@@ -5009,7 +5009,7 @@ def test_textual_prompt_submission_scrolls_feed_to_end_once():
 def test_textual_app_pulse_updates_only_transient_slots():
     import inspect
 
-    source = inspect.getsource(run_textual_quimera_app)
+    source = inspect.getsource(QuimeraTextualApp)
     transient_start = source.index("def _sync_transient_feed_slots")
     transient_end = source.index("def _redraw_feed", transient_start)
     transient_source = source[transient_start:transient_end]
@@ -5024,7 +5024,7 @@ def test_textual_app_periodically_drains_bridge_event_queue():
     import inspect
 
     
-    source = inspect.getsource(run_textual_quimera_app)
+    source = inspect.getsource(QuimeraTextualApp)
 
     assert "self.set_interval(0.05, self._drain_bridge_events)" in source
     assert "def _drain_bridge_events" in source
@@ -5062,7 +5062,7 @@ def test_textual_app_exposes_flush_bridge_events_for_immediate_tool_preview_rend
     import inspect
 
     
-    source = inspect.getsource(run_textual_quimera_app)
+    source = inspect.getsource(QuimeraTextualApp)
 
     assert "def flush_bridge_events" in source
     assert "bridge.pending_event_count()" in source
@@ -5072,7 +5072,7 @@ def test_textual_app_exposes_flush_bridge_events_for_immediate_tool_preview_rend
 def test_textual_app_status_bar_tracks_tool_preview_events():
     import inspect
 
-    source = inspect.getsource(run_textual_quimera_app)
+    source = inspect.getsource(QuimeraTextualApp)
 
     assert "_active_tool_previews" in source
     assert 'event.kind == "tool_preview"' in source
@@ -5090,7 +5090,7 @@ def test_textual_app_uses_question_overlay_for_prompt_routing():
     import inspect
 
     
-    source = inspect.getsource(run_textual_quimera_app)
+    source = inspect.getsource(QuimeraTextualApp)
 
     assert "def _set_question_overlay" in source
     assert "def _clear_question_overlay" in source
@@ -5191,20 +5191,20 @@ def test_textual_chat_prompt_active_does_not_steal_normal_input():
 def test_textual_app_imports_summary_spinner_used_by_spinner_update():
     import inspect
 
-    from quimera.ui.textual.app import run_textual_quimera_app
+    import quimera.ui.textual.app as textual_app_module
 
-    source = inspect.getsource(run_textual_quimera_app)
+    source = inspect.getsource(textual_app_module.QuimeraTextualApp)
 
     assert "_SummarySpinner" in source
-    assert "from quimera.ui.textual.widgets import" in source
+    assert "from quimera.ui.textual.widgets import" in inspect.getsource(textual_app_module)
 
 
 def test_textual_app_routes_notification_events_to_notify():
     import inspect
 
-    from quimera.ui.textual.app import run_textual_quimera_app
+    from quimera.ui.textual.app import QuimeraTextualApp
 
-    source = inspect.getsource(run_textual_quimera_app)
+    source = inspect.getsource(QuimeraTextualApp)
 
     assert 'event.kind == "notification"' in source
     assert "self.notify(" in source

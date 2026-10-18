@@ -40,7 +40,8 @@ def build_chain_summarizer(agent_client, agents_or_fn):
                 return None
             try:
                 result = agent_client.call(agent, prompt, silent=True, allow_tools=False)
-            except Exception:
+            except Exception as exc:
+                logger.warning("resumo: agente %s falhou: %s", agent, exc)
                 result = None
             if result:
                 _call.last_outcome = "success"
@@ -88,7 +89,8 @@ class SessionSummarizer:
             if accepts_fallback:
                 kwargs["fallback"] = fallback
             summary = self.summarizer_call(prompt, **kwargs)
-        except Exception:
+        except Exception as exc:
+            logger.warning("summarizer falhou: %s", exc, exc_info=True)
             summary = None
         if not summary:
             outcome = getattr(self.summarizer_call, "last_outcome", None)

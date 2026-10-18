@@ -1,6 +1,7 @@
 """Serviços e utilitários de entrada do aplicativo."""
 from __future__ import annotations
 
+import logging
 import queue
 import select
 import sys
@@ -12,6 +13,8 @@ from types import SimpleNamespace
 
 from ..editor import Editor
 from .interfaces import IRenderer
+
+_logger = logging.getLogger(__name__)
 
 
 def _stdin():
@@ -69,7 +72,8 @@ def read_user_input(
                 return line.rstrip("\r\n")
             time.sleep(0.01)
             return None
-        except Exception:
+        except Exception as exc:
+            _logger.debug("read_user_input: leitura não bloqueante falhou: %s", exc)
             return None
 
     try:
@@ -107,7 +111,8 @@ def read_user_input_with_timeout(prompt: str, timeout: int, input_fn=input):
     if stdin is not None and not stdin.isatty():
         try:
             ready, _, _ = _tty.select.select([stdin], [], [], timeout)
-        except Exception:
+        except Exception as exc:
+            _logger.debug("read_user_input_with_timeout: select falhou: %s", exc)
             return None
         if not ready:
             return None
@@ -203,7 +208,8 @@ class AppInputServices:
         """True quando o gate consome stdin em ordem (pipe, sem TUI)."""
         try:
             gate = self.input_resolver()
-        except Exception:
+        except Exception as exc:
+            _logger.debug("sequential_input: input_resolver falhou: %s", exc)
             return False
         return bool(getattr(gate, "sequential", False))
 

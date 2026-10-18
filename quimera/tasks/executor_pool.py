@@ -346,14 +346,14 @@ class TaskExecutorPool:
                 executor.stop()
             except KeyboardInterrupt:
                 pass
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning("parar o executor de tasks falhou: %s", exc, exc_info=True)
         background_dispatch = self._background_dispatch_services
         if background_dispatch is not None:
             try:
                 background_dispatch.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning("fechar o dispatch em background falhou: %s", exc, exc_info=True)
         job_id = self._current_job_id()
         if job_id is not None:
             TodoRegistry.cleanup(job_id)

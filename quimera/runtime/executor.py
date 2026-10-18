@@ -1,6 +1,7 @@
 """Componentes de `quimera.runtime.executor`."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Callable, ClassVar
 
@@ -27,6 +28,8 @@ from .tools import todo as todo_tools
 from .tools import tui as tui_tools
 from .tools import web as web_tools
 from .tools import workflows as workflows_tools
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -300,9 +303,12 @@ class ToolExecutor:
                 needs_policy_approval=bool(needs_approval),
                 permission_error=permission_error,
             )
-        except Exception:
+        except Exception as exc:
             # Se validation falha, consideramos que precisa de aprovação
             # (seguro: mostra approval mesmo que não precise, nunca o contrário)
+            _logger.warning(
+                "would_require_approval: validação de %s falhou, assumindo aprovação: %s", call.name, exc
+            )
             return True
 
     def is_parallel_safe(self, call: ToolCall) -> bool:

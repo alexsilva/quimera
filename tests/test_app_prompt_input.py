@@ -189,10 +189,10 @@ def test_textual_summary_spinner_uses_circular_frames():
 def test_textual_summary_start_uses_loading_notification():
     import inspect
 
-    from quimera.ui.textual.app import run_textual_quimera_app
+    from quimera.ui.textual.app import QuimeraTextualApp
     from quimera.ui.textual.constants import SUMMARY_NOTIFICATION_MESSAGE
 
-    source = inspect.getsource(run_textual_quimera_app)
+    source = inspect.getsource(QuimeraTextualApp)
 
     assert SUMMARY_NOTIFICATION_MESSAGE == "Gerando resumo"
     assert "self.notify(" in source
@@ -563,7 +563,7 @@ def test_simple_input_gate_redisplay_does_nothing():
 
 
 def test_prompt_formatter():
-    from quimera.app.prompt_formatter import PromptFormatter
+    from quimera.domain.prompt_formatter import PromptFormatter
 
     assert PromptFormatter.format_user_prompt("Alex", None) == "Alex: "
     assert PromptFormatter.format_user_prompt("Alex", "code") == "Alex [code]: "

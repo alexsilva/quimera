@@ -1,6 +1,7 @@
 """Bridge thread-safe entre a aplicação e a UI Textual."""
 from __future__ import annotations
 
+import logging
 import asyncio
 import queue
 import threading
@@ -11,6 +12,8 @@ from quimera.agents.capabilities import is_agent_running
 import quimera.themes as themes
 from quimera.constants import CMD_EXIT
 from quimera.ui.textual.events import TextualUiEvent
+
+_logger = logging.getLogger(__name__)
 
 
 class _TextualConsoleShim:
@@ -209,7 +212,8 @@ class TextualUiBridge:
                 from quimera.debate.commands import parse_debate_command
 
                 parsed = parse_debate_command(clean)
-            except Exception:
+            except Exception as exc:
+                _logger.debug("_visible_user_message: /debate não interpretado: %s", exc)
                 return ""
             return parsed.topic if parsed.action == "start" else ""
         with self._lock:
@@ -219,7 +223,8 @@ class TextualUiBridge:
             return ""
         try:
             active_profiles = list(get_profiles() or ())
-        except Exception:
+        except Exception as exc:
+            _logger.debug("_visible_user_message: perfis ativos indisponíveis: %s", exc)
             return ""
         for profile in active_profiles:
             prefixes = (
@@ -446,8 +451,8 @@ class TextualUiBridge:
             try:
                 if bool(has_active_work()):
                     return True
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("_has_active_chat_work: has_active_work falhou: %s", exc)
         return bool(getattr(quimera_app, "is_agent_running", False))
 
     def cancel_or_exit(self) -> None:

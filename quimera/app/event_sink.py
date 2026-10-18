@@ -1,11 +1,14 @@
 """Barramento de eventos de domínio com suporte a subscribe/unsubscribe."""
 from __future__ import annotations
 
+import logging
 import queue as _queue_module
 import threading
 from collections.abc import Callable
 
 from ..tasks.events import TaskEvent
+
+_logger = logging.getLogger(__name__)
 
 
 Handler = Callable[[TaskEvent], None]
@@ -23,6 +26,7 @@ class EventSink:
     def __init__(self, ui_queue: "_queue_module.Queue | None" = None) -> None:
         self._lock = threading.Lock()
         self._handlers: dict[type[TaskEvent], list[Handler]] = {}
+        self._failed_handlers: set[int] = set()
         self._ui_queue = ui_queue
         self._pending_events: "_queue_module.Queue[TaskEvent]" = _queue_module.Queue()
 
@@ -67,8 +71,16 @@ class EventSink:
         for h in matched:
             try:
                 h(event)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Traceback só na primeira falha de cada handler: um listener
+                # quebrado dispara a cada evento e inflaria o log.
+                first_failure = id(h) not in self._failed_handlers
+                self._failed_handlers.add(id(h))
+                _logger.log(
+                    logging.WARNING if first_failure else logging.DEBUG,
+                    "EventSink: handler %r falhou para %s: %s",
+                    h, type(event).__name__, exc, exc_info=first_failure,
+                )
 
     def clear(self) -> None:
         """Remove todos os handlers."""

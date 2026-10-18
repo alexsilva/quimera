@@ -143,7 +143,8 @@ class AppSessionServices:
             return None
         try:
             value = getter()
-        except Exception:
+        except Exception as exc:
+            logger.debug("_resumer_override: getter falhou: %s", exc)
             return None
         return value if isinstance(value, str) and value else None
 
@@ -219,7 +220,8 @@ class AppSessionServices:
                     self._pending_summary_completion = (
                         "Resumo automático falhou; histórico mantido."
                     )
-            except Exception:
+            except Exception as exc:
+                logger.warning("resumo automático falhou: %s", exc, exc_info=True)
                 self._pending_summary_completion = (
                     "Resumo automático falhou; histórico mantido."
                 )
@@ -289,8 +291,8 @@ class AppSessionServices:
                     # comportamento de tentativa única no shutdown.
                     fallback=bool(override),
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("resumo de sessão no encerramento falhou: %s", exc, exc_info=True)
 
         worker = threading.Thread(target=_run_summary, daemon=True)
         worker.start()

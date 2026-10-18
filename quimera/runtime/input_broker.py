@@ -14,6 +14,7 @@ Cenários tratados:
 """
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import time
@@ -22,8 +23,10 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from ..app.agent_run_events import AgentRunEvent, coerce_agent_run_sink
+from ..domain.agent_run_events import AgentRunEvent, coerce_agent_run_sink
 from .approval import format_approval_question
+
+_logger = logging.getLogger(__name__)
 
 _UNSET = object()
 
@@ -74,7 +77,8 @@ class _InputRequest:
         self.reservation = None
         try:
             reservation.release()
-        except Exception:
+        except Exception as exc:
+            _logger.warning("liberar a reserva de stdin falhou: %s", exc)
             return
 
     def try_expire(self) -> bool:
@@ -91,7 +95,8 @@ class _InputRequest:
         if callable(wake):
             try:
                 wake()
-            except Exception:
+            except Exception as exc:
+                _logger.warning("acordar a leitura direta após expiração falhou: %s", exc)
                 return True
         return True
 
@@ -117,7 +122,8 @@ class _InputRequest:
             return False
         try:
             return bool(is_set())
-        except Exception:
+        except Exception as exc:
+            _logger.debug("is_cancelled: is_set falhou: %s", exc)
             return False
 
     def wait(self) -> Any:
@@ -187,8 +193,8 @@ class InputBroker:
         if renderer is not None:
             try:
                 return renderer.agent_window_controller(agent), renderer
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("agent_window_controller indisponível no renderer: %s", exc)
         return None, renderer
 
     # ------------------------------------------------------------------
@@ -429,8 +435,8 @@ class InputBroker:
                         if req.on_approve_all is not None:
                             try:
                                 req.on_approve_all()
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                _logger.warning("on_approve_all falhou: %s", exc, exc_info=True)
                         return True
                     return ans in {"y", "yes", "s", "sim"}
 
@@ -457,8 +463,8 @@ class InputBroker:
             if req.on_approve_all is not None:
                 try:
                     req.on_approve_all()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.warning("on_approve_all falhou: %s", exc, exc_info=True)
             return True
         return key in {"y", "yes", "s", "sim"}
 
@@ -655,8 +661,8 @@ class InputBroker:
         if callable(suspend_spinner):
             try:
                 suspend_spinner()
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("suspender o spinner falhou: %s", exc)
         try:
             with window_factory():
                 yield
@@ -665,8 +671,8 @@ class InputBroker:
             if callable(resume_spinner):
                 try:
                     resume_spinner()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.debug("retomar o spinner falhou: %s", exc)
 
     def _approval_terminal_window(
         self,
