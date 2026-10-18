@@ -28,7 +28,7 @@ from tests.legacy_app_adapters import (
 )
 from quimera.app.inputs import AppInputServices, read_from_editor, read_user_input_with_timeout
 from quimera.app.session import AppSessionServices
-from quimera.tasks.services import AppTaskServices, delegate_for_parallel
+from quimera.tasks.services import AppTaskServices
 from quimera.tasks.classifiers import classify_task_execution_result, classify_task_review_result
 from quimera.app.protocol import AppProtocol
 from quimera.app.session_metrics import SessionMetricsService
@@ -3236,48 +3236,6 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("agent2", app.active_agents)
         self.assertTrue(hasattr(app.task_services, "delegate_for_parallel"))
         app._stop_task_executors()
-
-    def test_parallel_threads_calls_agents_concurrently(self):
-        """Verifica que parallel threads calls agents concurrently."""
-        # Testa que o método _delegate_for_parallel retorna tupla correta
-        app = QuimeraApp.__new__(QuimeraApp)
-        materialize_internal_services(app)
-        app.threads = 2
-        from quimera.app.agent_pool import AgentPool
-        app.agent_pool = AgentPool(["agent1", "agent2"])
-        app.active_agents = ["agent1", "agent2"]
-        app.debug_prompt_metrics = False
-        app.session_call_index = 0
-        app._lock = threading.Lock()
-        app._output_lock = threading.Lock()
-        app._counter_lock = threading.Lock()
-        app.prompt_builder = Mock()
-        app.prompt_builder.build.return_value = "dummy prompt"
-        app.agent_client = Mock()
-        app.agent_client.call.return_value = "Resposta mock"
-        app.tool_executor = Mock()
-        app.history = []
-        app.shared_state = {}
-        app.renderer = Mock()
-        app.storage = Mock()
-        app.context_manager = Mock()
-        app.session_state = {"session_id": "test"}
-        app.round_index = 0
-        app.summary_agent_preference = None
-        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
-        app.task_services = Mock()
-        app.task_services.refresh_task_shared_state = Mock()
-        app._record_agent_metric = Mock()
-
-        from pathlib import Path
-        import tempfile
-        staging_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-
-        agent, response = delegate_for_parallel(
-            app, "agent1", None, "standard", staging_root, 0
-        )
-        self.assertEqual(agent, "agent1")
-        self.assertEqual(response, "Resposta mock")
 
     def test_run_thread_mode_accepts_new_human_input_while_agent_is_running(self):
         """Verifica que run thread mode accepts new human input while agent is running."""

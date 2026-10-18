@@ -1469,6 +1469,38 @@ class TestMakeBackgroundDelegateFn:
 
         background.close.assert_called_once()
 
+    def test_cancel_handle_cancela_agent_client_do_dispatch_isolado(self):
+        """O cancel_handle do step chega ao AgentClient do dispatch isolado.
+
+        Usa o helper real do TaskExecutorPool: com MagicMock no lugar dele, a
+        remoção do método passaria despercebida (o mock aceita qualquer atributo).
+        """
+        from types import SimpleNamespace
+
+        from quimera.app.bootstrap.wiring import _make_background_delegate_fn
+        from quimera.tasks.executor_pool import TaskExecutorPool
+
+        agent_client = MagicMock()
+        background = MagicMock()
+        background._get_agent_client.return_value = agent_client
+        background.delegate.return_value = "ok"
+        task_services = SimpleNamespace(
+            _create_background_dispatch_services=lambda: background,
+            _executor_pool=SimpleNamespace(
+                _register_parallel_cancel_handle=TaskExecutorPool._register_parallel_cancel_handle,
+            ),
+        )
+        registered = []
+        cancel_handle = SimpleNamespace(register=registered.append)
+
+        fn = _make_background_delegate_fn(task_services, MagicMock())
+        assert fn("codex", delegation={"task": "a"}, cancel_handle=cancel_handle) == "ok"
+
+        assert len(registered) == 1
+        registered[0]()
+        agent_client.cancel_active_work.assert_called_once()
+        assert "cancel_handle" not in background.delegate.call_args.kwargs
+
     def test_factory_nao_pode_devolver_dispatch_principal(self):
         """Se o factory devolve o dispatch principal, falha em vez de reusar o client ativo."""
         from quimera.app.bootstrap.wiring import _make_background_delegate_fn

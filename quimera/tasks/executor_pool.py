@@ -13,7 +13,6 @@ import re
 import threading
 import weakref
 from collections.abc import Iterable
-from pathlib import Path
 from typing import Any, Callable
 
 from ..agents import AgentClient
@@ -28,7 +27,6 @@ from .runner import TaskRunner
 from .failover import TaskFailoverPolicy
 from .repository import TaskRepository
 from .reviewer import TaskReviewer
-from ..runtime.tools.files import set_staging_root
 from ..runtime.tools.todo import TodoRegistry
 from ..modes import read_only_mode
 from ..workflows.execution import WorkflowTaskHooks
@@ -388,46 +386,7 @@ class TaskExecutorPool:
             approval_handler=approval_handler,
         )
 
-    # ── Parallel delegation ────────────────────────────────────────────
-
-    def delegate_for_parallel(
-        self,
-        agent,
-        delegation,
-        protocol_mode,
-        staging_root: Path,
-        index: int,
-        cancel_event: threading.Event | None = None,
-        cancel_handle=None,
-    ):
-        """Executa chamada de agente em paralelo com staging isolado por worker."""
-        background_dispatch = self._create_background_dispatch_services(
-            cancel_checker_override=(
-                (lambda: bool(cancel_event and cancel_event.is_set()))
-                if cancel_event is not None
-                else self._background_was_user_cancelled
-            ),
-            cancel_event=cancel_event,
-        )
-        if background_dispatch is None:
-            raise RuntimeError("dispatch de background indisponível para delegate paralelo")
-        self._register_parallel_cancel_handle(background_dispatch, cancel_handle)
-        delegate = background_dispatch.delegate
-        try:
-            return delegate_for_parallel_with_client(
-                delegate,
-                self._parse_response,
-                agent,
-                delegation,
-                protocol_mode,
-                staging_root,
-                index,
-                cancel_handle=cancel_handle,
-            )
-        finally:
-            close = getattr(background_dispatch, "close", None)
-            if callable(close):
-                close()
+    # ── Cancelamento de dispatch de background ─────────────────────────
 
     @staticmethod
     def _register_parallel_cancel_handle(background_dispatch, cancel_handle) -> None:
@@ -927,24 +886,3 @@ class TaskExecutorPool:
 
     def _task_approval_handlers(self, approval_handler=None) -> list[Any]:
         return self._approval_policy._resolve_handlers(approval_handler)
-
-
-def delegate_for_parallel_with_client(
-    delegate: Callable[..., Any],
-    parse_response: Callable[[Any], tuple[Any, ...]],
-    agent,
-    delegation,
-    protocol_mode,
-    staging_root: Path,
-    index: int,
-    cancel_handle=None,
-):
-    """Executa chamada paralela de agente com staging isolado por thread."""
-    del cancel_handle
-    set_staging_root(staging_root / str(index))
-    try:
-        raw = delegate(agent, delegation=delegation, primary=False, protocol_mode=protocol_mode, silent=True, show_output=False)
-        response, _, _, _ = parse_response(raw)
-        return agent, response
-    finally:
-        set_staging_root(None)

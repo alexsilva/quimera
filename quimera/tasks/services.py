@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 from ..agents.capabilities import is_user_cancelled
 from ..runtime.executor import ToolExecutor
+from ..runtime.tools.files import set_staging_root
 from .executor import create_executor
 from ..app.dispatch import AppDispatchServices
 from ..domain.session_state import SessionRuntimeState
@@ -27,7 +28,6 @@ from .classifiers import classify_task_execution_result, classify_task_review_re
 from .executor_pool import (  # noqa: F401
     TaskExecutorPool,
     _BACKGROUND_AGENT_TIMEOUT_SECONDS,
-    delegate_for_parallel_with_client,
 )
 from .protocol import TaskCreationResult, TaskProtocolService
 from .repository import TaskRepository
@@ -612,18 +612,20 @@ class AppTaskServices:
         if background_dispatch is None:
             raise RuntimeError("dispatch de background indisponível para delegate paralelo")
         self._executor_pool._register_parallel_cancel_handle(background_dispatch, cancel_handle)
-        delegate = background_dispatch.delegate
+        set_staging_root(staging_root / str(index))
         try:
-            return delegate_for_parallel_with_client(
-                delegate,
-                self._parse_response,
+            raw = background_dispatch.delegate(
                 agent,
-                delegation,
-                protocol_mode,
-                staging_root,
-                index,
+                delegation=delegation,
+                primary=False,
+                protocol_mode=protocol_mode,
+                silent=True,
+                show_output=False,
             )
+            response, _, _, _ = self._parse_response(raw)
+            return agent, response
         finally:
+            set_staging_root(None)
             close = getattr(background_dispatch, "close", None)
             if callable(close):
                 close()
@@ -808,25 +810,3 @@ class AppTaskServices:
 
     def _task_approval_handlers(self, approval_handler=None) -> list[Any]:
         return self._executor_pool._task_approval_handlers(approval_handler)
-
-
-def delegate_for_parallel(
-    app,
-    agent,
-    delegation,
-    protocol_mode,
-    staging_root: Path,
-    index: int,
-    cancel_handle=None,
-):
-    """Executa chamada paralela do agente isolando staging por thread."""
-    return delegate_for_parallel_with_client(
-        app.delegate,
-        app.parse_response,
-        agent,
-        delegation,
-        protocol_mode,
-        staging_root,
-        index,
-        cancel_handle=cancel_handle,
-    )
