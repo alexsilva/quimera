@@ -711,7 +711,7 @@ class CoreFacadeMixin:
         )
         return stats_services.handle_stats_command(command)
 
-    def handle_command(self, user_input: str) -> bool:
+    def handle_command(self, user_input: str) -> bool | str:
         """Fachada compatível para comandos slash."""
         return self.system_layer.handle_command(user_input)
 

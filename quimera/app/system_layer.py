@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 from .display_service import DisplayService
 from .interfaces import IAgentPool
@@ -106,6 +106,39 @@ class _NullProfileResolver:
 
 class AppSystemLayer:
     """Encapsula comandos de sistema e delega display para ``DisplayService``."""
+
+    # Nomes de métodos, não callbacks capturados: a resolução continua dinâmica.
+    _EXACT_COMMAND_HANDLERS: ClassVar[dict[str, str]] = {
+        CMD_HELP: "_handle_help_command",
+        CMD_AGENTS: "_handle_agents_command",
+        CMD_CLEAR: "_handle_clear_command",
+        CMD_RELOAD: "_handle_reload_command",
+        CMD_APPROVE_ALL: "_handle_approve_all_command",
+        CMD_APPROVE: "_handle_approve_command",
+    }
+    _ARGUMENT_COMMAND_HANDLERS: ClassVar[dict[str, str]] = {
+        CMD_BUGS: "_handle_bugs_command",
+        CMD_STATS: "_handle_stats_command",
+        CMD_CONNECT: "_handle_connect_command",
+        CMD_DISCONNECT: "_handle_disconnect_command",
+        CMD_PROMPT: "_handle_prompt_command",
+        CMD_DEBATE: "_handle_debate_command",
+        CMD_WORKFLOW: "_handle_workflow_command",
+        CMD_RESET: "_handle_reset_command",
+        CMD_POLICY: "_handle_policy_command",
+        CMD_SANDBOX: "_handle_sandbox_command",
+        CMD_CONTEXT_EDIT: "_handle_context_edit_command",
+        CMD_CONTEXT_BRANCH: "_handle_context_branch_command",
+        CMD_CONTEXT: "_handle_context_command",
+    }
+    # Prefixo, tamanho mínimo da entrada, método. /task aceita até /taskfoo;
+    # s/ e o/ exigem um alvo, enquanto r/ sozinho já retoma a rotação.
+    _PREFIX_COMMAND_HANDLERS: ClassVar[tuple[tuple[str, int, str], ...]] = (
+        (CMD_TASK, len(CMD_TASK), "_handle_task_command"),
+        ("s/", 3, "_handle_freeze_command"),
+        ("o/", 3, "_handle_orchestrator_command"),
+        ("r/", 2, "_handle_rotation_command"),
+    )
 
     @classmethod
     def from_dependencies(
@@ -548,8 +581,8 @@ class AppSystemLayer:
     def _enqueue_deferred_message(self, message: str, level: str = "system") -> bool:
         return self._display._enqueue_deferred_message(message, level=level)
 
-    def handle_command(self, user_input: str) -> bool:
-        """Processa command."""
+    def handle_command(self, user_input: str) -> bool | str:
+        """Despacha comandos; s/ e o/ podem devolver a mensagem após o alvo."""
         command = user_input.strip()
         command = CMD_ALIASES.get(command, command)
 
@@ -566,283 +599,296 @@ class AppSystemLayer:
         if renderer is None:
             return False
 
-        if command == CMD_HELP:
-            renderer.show_system(build_help(self._get_active_agents()))
-            return True
+        handler_name = self._EXACT_COMMAND_HANDLERS.get(command)
+        if handler_name is None:
+            # Só espaço literal separava os argumentos; split() aceitaria tabs
+            # e quebras de linha que antes não eram comandos de sistema.
+            command_name = command.partition(" ")[0]
+            handler_name = self._ARGUMENT_COMMAND_HANDLERS.get(command_name)
+        if handler_name is not None:
+            return getattr(self, handler_name)(command, renderer)
 
-        if command == CMD_AGENTS:
-            renderer.show_system(build_agents_help(self._get_active_agents()))
-            return True
-
-        if command == CMD_BUGS or command.startswith(f"{CMD_BUGS} "):
-            if callable(self.bugs_command_handler):
-                return bool(self.bugs_command_handler(command))
-            self._display.show_warning_message("Comando /bugs indisponível nesta sessão.")
-            return True
-
-        if command == CMD_STATS or command.startswith(f"{CMD_STATS} "):
-            if callable(self.stats_command_handler):
-                return bool(self.stats_command_handler(command))
-            self._display.show_warning_message("Comando /stats indisponível nesta sessão.")
-            return True
-
-        if command == CMD_CONNECT or command.startswith(f"{CMD_CONNECT} "):
-            advanced = " --advanced" in f" {command}" or " --full" in f" {command}"
-            command_for_target = command.replace(" --advanced", "").replace(" --full", "")
-            target = self._resolve_connect_target(command_for_target)
-            if target is None:
-                self._display.show_warning_message("Uso: /connect <agente> [--advanced]")
-                return True
-            profile_registry = self.profile_registry
-            profile = self.profile_resolver.get(target)
-            if profile is None:
-                profile = register_connection_profile(target, registry=profile_registry)
-                self.show_system_message(f"Conexão registrada: {target}")
-            open_connection_config = getattr(renderer, "open_connection_config", None)
-            if callable(open_connection_config) and open_connection_config(
-                target,
-                advanced=advanced,
-            ):
-                return True
-            self.show_system_message(f"Configurando conexão para {target}")
-            self.show_system_message(f"Atual: {format_connection_label(profile.effective_connection())}")
-            try:
-                connection, profile_name = self._configure_connection_interactively(profile, advanced=advanced)
-            except ValueError as exc:
-                self._display.show_warning_message(str(exc))
-                return True
-            self.apply_connection_configuration(
-                target,
-                connection,
-                profile_name=profile_name,
-            )
-            return True
-
-        if command == CMD_DISCONNECT or command.startswith(f"{CMD_DISCONNECT} "):
-            target = command[len(CMD_DISCONNECT):].strip().lower()
-            if not target:
-                self._display.show_warning_message("Uso: /disconnect <agente>")
-                return True
-            profile_registry = self.profile_registry
-            if remove_connection(target, registry=profile_registry):
-                self._display.show_system(f"Conexão removida para {target}.")
-            else:
-                self._display.show_warning_message(f"Nenhuma conexão persistida encontrada para {target}.")
-            return True
-
-        if command == CMD_CLEAR:
-            self.clear_screen()
-            return True
-
-        if command == CMD_RELOAD:
-            current_agents = list(self.agent_pool.agents)
-            current_selected_agents = list(self.get_selected_agents() or [])
-            all_names = reload_profiles(registry=self.profile_registry)
-            surviving = [a for a in current_agents if a in all_names]
-            surviving_selected = [a for a in current_selected_agents if a in surviving]
-            self.agent_pool.set(surviving)
-            self.set_selected_agents(surviving_selected)
-            self._display.show_system(f"Profiles recarregados: {len(all_names)} profile(s)")
-            return True
-
-        if command == CMD_PROMPT or command.startswith(f"{CMD_PROMPT} "):
-            raw_args = command[len(CMD_PROMPT):].strip()
-            is_follower = raw_args.endswith(" follower") or raw_args == "follower"
-            if is_follower:
-                raw_args = raw_args[: -len("follower")].rstrip()
-            lookup_cmd = f"{CMD_PROMPT} {raw_args}".rstrip() if raw_args else CMD_PROMPT
-            target = self._resolve_prompt_target(lookup_cmd)
-            if target is None:
-                self._display.show_warning_message("Uso: /prompt [agente] [follower]")
-                return True
-            preview = self._build_prompt_preview_message(target, is_first_speaker=not is_follower)
-            self._display.show_prompt_preview(target, preview)
-            return True
-
-        if command.startswith(CMD_TASK):
-            if callable(self.task_command_handler):
-                self.task_command_handler(command)
-            return True
-
-        if command == CMD_DEBATE or command.startswith(f"{CMD_DEBATE} "):
-            if callable(self.debate_command_handler):
-                self.debate_command_handler(command)
-            else:
-                self._display.show_warning_message("Comando /debate indisponivel nesta sessao.")
-            return True
-
-        if command == CMD_WORKFLOW or command.startswith(f"{CMD_WORKFLOW} "):
-            if callable(self.workflow_command_handler):
-                self.workflow_command_handler(command)
-            else:
-                self._display.show_warning_message("Comando /workflow indisponivel nesta sessao.")
-            return True
-
-        if command == CMD_RESET or command.startswith(f"{CMD_RESET} "):
-            target = command[len(CMD_RESET):].strip() or "state"
-            session_state_manager = self.session_state_manager
-            if session_state_manager is not None and hasattr(session_state_manager, "reset"):
-                msg = session_state_manager.reset(target)
-            else:
-                msg = "reset não disponível."
-            self._display.show_system(msg)
-            return True
-
-        if command == CMD_APPROVE_ALL:
-            approval_handler = self.approval_handler_getter()
-            if approval_handler is not None and hasattr(approval_handler, "set_approve_all"):
-                approval_handler.set_approve_all(True)
-                self._display.show_system("[aprovação] modo approve-all ativado — todas as ferramentas serão aprovadas automaticamente.")
-            else:
-                self._display.show_warning_message("[aprovação] mecanismo de aprovação não disponível.")
-            return True
-
-        if command == CMD_APPROVE:
-            approval_handler = self.approval_handler_getter()
-            if approval_handler is not None and hasattr(approval_handler, "pre_approve"):
-                approval_handler.pre_approve()
-                self._display.show_system("[aprovação] próxima ferramenta será pré-aprovada.")
-            else:
-                self._display.show_warning_message("[aprovação] mecanismo de aprovação não disponível.")
-            return True
-
-        if command == CMD_POLICY or command.startswith(f"{CMD_POLICY} "):
-            raw_target = command[len(CMD_POLICY):].strip().lower()
-            if raw_target in {"", "status", "show"}:
-                current = self._current_workspace_policy_name()
-                self._display.show_system(
-                    f"[policy] atual: {current}. Opções: strict, developer, autonomous."
-                )
-                return True
-            if raw_target not in {"strict", "developer", "autonomous"}:
-                self._display.show_warning_message(
-                    "Uso: /policy [status|strict|developer|autonomous]"
-                )
-                return True
-            if callable(self.workspace_policy_setter):
-                self.workspace_policy_setter(raw_target)
-                self._display.show_system(f"[policy] workspace_policy={raw_target}")
-            else:
-                self._display.show_warning_message("[policy] configuração indisponível.")
-            return True
-
-        if command == CMD_SANDBOX or command.startswith(f"{CMD_SANDBOX} "):
-            raw_target = command[len(CMD_SANDBOX):].strip().lower()
-            if raw_target in {"", "status", "show"}:
-                current = "on" if self._current_sandbox_enabled() else "off"
-                available = "disponível" if self._sandbox_available() else "indisponível"
-                self._display.show_system(
-                    f"[sandbox] atual: {current}; bubblewrap: {available}. "
-                    "Escrita permitida no workspace, /tmp e runtimes configurados dos agentes."
-                )
-                return True
-            if raw_target not in {"on", "off"}:
-                self._display.show_warning_message("Uso: /sandbox [status|on|off]")
-                return True
-            if not callable(self.sandbox_enabled_setter):
-                self._display.show_warning_message("[sandbox] configuração indisponível.")
-                return True
-            try:
-                enabled = raw_target == "on"
-                self.sandbox_enabled_setter(enabled)
-            except Exception as exc:
-                self._display.show_warning_message(
-                    f"[sandbox] não foi possível ativar: {exc}"
-                    if raw_target == "on"
-                    else f"[sandbox] não foi possível desativar: {exc}"
-                )
-                return True
-            self._display.show_system(f"[sandbox] workspace_sandbox={raw_target}")
-            return True
-
-        if command == CMD_CONTEXT_EDIT or command.startswith(f"{CMD_CONTEXT_EDIT} "):
-            if self.context_manager is not None:
-                self.context_manager.edit()
-            return True
-
-        if command == CMD_CONTEXT_BRANCH or command.startswith(f"{CMD_CONTEXT_BRANCH} "):
-            if self.context_manager is not None:
-                self.context_manager.handle_context_branch(command)
-            return True
-
-        if command == CMD_CONTEXT or command.startswith(f"{CMD_CONTEXT} "):
-            parts = command[len(CMD_CONTEXT):].strip().split()
-            sub = parts[0] if parts else None
-            if sub == "resumer":
-                self._handle_context_resumer(parts[1:])
-            elif self.context_manager is None:
-                return True
-            elif sub is None or sub == "show":
-                self.context_manager.show()
-            elif sub == "edit":
-                self.context_manager.edit()
-            elif sub == "branch":
-                self.context_manager.handle_context_branch(command)
-            else:
-                self._display.show_warning_message(
-                    "Uso: /context [show|edit|branch [nome]|resumer [<agente>|clear]]"
-                )
-            return True
-
-        if command.startswith("s/") and len(command) > 2:
-            parts = command[2:].strip().split(None, 1)
-            agent = parts[0]
-            trailing = parts[1].strip() if len(parts) > 1 else ""
-            try:
-                self.agent_pool.freeze(agent)
-            except ValueError:
-                self._display.show_warning_message(
-                    f"Agente '{agent}' não está no pool ativo."
-                )
-                return True
-            self._display.show_system(
-                f"[rotação] congelada para {agent} — "
-                "todo input não-prefixado irá para este agente."
-            )
-            if trailing:
-                return trailing
-            return True
-
-        if command.startswith("o/") and len(command) > 2:
-            parts = command[2:].strip().split(None, 1)
-            agent = parts[0]
-            trailing = parts[1].strip() if len(parts) > 1 else ""
-            others = [a for a in self.agent_pool.agents if a != agent]
-            if not others:
-                self._display.show_warning_message(
-                    f"Modo orquestrador requer pelo menos um outro agente ativo além de '{agent}'."
-                )
-                return True
-            try:
-                self.agent_pool.set_orchestrator(agent)
-            except ValueError:
-                self._display.show_warning_message(
-                    f"Agente '{agent}' não está no pool ativo."
-                )
-                return True
-            available_count = len(others)
-            available_label = (
-                "agente disponível" if available_count == 1 else "agentes disponíveis"
-            )
-            self._display.show_system(
-                f"[orquestrador] {agent} ativado — todo input passa por ele antes de delegar."
-                f" {available_count} {available_label} para delegação."
-            )
-            if trailing:
-                return trailing
-            return True
-
-        if command.startswith("r/") and len(command) >= 2:
-            was_orchestrator = getattr(self.agent_pool, "orchestrator_agent", None)
-            self.agent_pool.unfreeze()
-            if was_orchestrator:
-                self._display.show_system(
-                    f"[orquestrador] {was_orchestrator} desativado — agentes voltam a rotacionar."
-                )
-            else:
-                self._display.show_system(
-                    "[rotação] descongelada — agentes voltam a rotacionar."
-                )
-            return True
+        for prefix, min_length, prefix_handler in self._PREFIX_COMMAND_HANDLERS:
+            if len(command) >= min_length and command.startswith(prefix):
+                return getattr(self, prefix_handler)(command, renderer)
 
         return False
+
+    def _handle_help_command(self, command: str, renderer: Any) -> bool:
+        renderer.show_system(build_help(self._get_active_agents()))
+        return True
+
+    def _handle_agents_command(self, command: str, renderer: Any) -> bool:
+        renderer.show_system(build_agents_help(self._get_active_agents()))
+        return True
+
+    def _handle_bugs_command(self, command: str, renderer: Any) -> bool:
+        if callable(self.bugs_command_handler):
+            return bool(self.bugs_command_handler(command))
+        self._display.show_warning_message("Comando /bugs indisponível nesta sessão.")
+        return True
+
+    def _handle_stats_command(self, command: str, renderer: Any) -> bool:
+        if callable(self.stats_command_handler):
+            return bool(self.stats_command_handler(command))
+        self._display.show_warning_message("Comando /stats indisponível nesta sessão.")
+        return True
+
+    def _handle_connect_command(self, command: str, renderer: Any) -> bool:
+        advanced = " --advanced" in f" {command}" or " --full" in f" {command}"
+        command_for_target = command.replace(" --advanced", "").replace(" --full", "")
+        target = self._resolve_connect_target(command_for_target)
+        if target is None:
+            self._display.show_warning_message("Uso: /connect <agente> [--advanced]")
+            return True
+        profile_registry = self.profile_registry
+        profile = self.profile_resolver.get(target)
+        if profile is None:
+            profile = register_connection_profile(target, registry=profile_registry)
+            self.show_system_message(f"Conexão registrada: {target}")
+        open_connection_config = getattr(renderer, "open_connection_config", None)
+        if callable(open_connection_config) and open_connection_config(
+            target,
+            advanced=advanced,
+        ):
+            return True
+        self.show_system_message(f"Configurando conexão para {target}")
+        self.show_system_message(f"Atual: {format_connection_label(profile.effective_connection())}")
+        try:
+            connection, profile_name = self._configure_connection_interactively(profile, advanced=advanced)
+        except ValueError as exc:
+            self._display.show_warning_message(str(exc))
+            return True
+        self.apply_connection_configuration(
+            target,
+            connection,
+            profile_name=profile_name,
+        )
+        return True
+
+    def _handle_disconnect_command(self, command: str, renderer: Any) -> bool:
+        target = command[len(CMD_DISCONNECT):].strip().lower()
+        if not target:
+            self._display.show_warning_message("Uso: /disconnect <agente>")
+            return True
+        profile_registry = self.profile_registry
+        if remove_connection(target, registry=profile_registry):
+            self._display.show_system(f"Conexão removida para {target}.")
+        else:
+            self._display.show_warning_message(f"Nenhuma conexão persistida encontrada para {target}.")
+        return True
+
+    def _handle_clear_command(self, command: str, renderer: Any) -> bool:
+        self.clear_screen()
+        return True
+
+    def _handle_reload_command(self, command: str, renderer: Any) -> bool:
+        current_agents = list(self.agent_pool.agents)
+        current_selected_agents = list(self.get_selected_agents() or [])
+        all_names = reload_profiles(registry=self.profile_registry)
+        surviving = [a for a in current_agents if a in all_names]
+        surviving_selected = [a for a in current_selected_agents if a in surviving]
+        self.agent_pool.set(surviving)
+        self.set_selected_agents(surviving_selected)
+        self._display.show_system(f"Profiles recarregados: {len(all_names)} profile(s)")
+        return True
+
+    def _handle_prompt_command(self, command: str, renderer: Any) -> bool:
+        raw_args = command[len(CMD_PROMPT):].strip()
+        is_follower = raw_args.endswith(" follower") or raw_args == "follower"
+        if is_follower:
+            raw_args = raw_args[: -len("follower")].rstrip()
+        lookup_cmd = f"{CMD_PROMPT} {raw_args}".rstrip() if raw_args else CMD_PROMPT
+        target = self._resolve_prompt_target(lookup_cmd)
+        if target is None:
+            self._display.show_warning_message("Uso: /prompt [agente] [follower]")
+            return True
+        preview = self._build_prompt_preview_message(target, is_first_speaker=not is_follower)
+        self._display.show_prompt_preview(target, preview)
+        return True
+
+    def _handle_task_command(self, command: str, renderer: Any) -> bool:
+        if callable(self.task_command_handler):
+            self.task_command_handler(command)
+        return True
+
+    def _handle_debate_command(self, command: str, renderer: Any) -> bool:
+        if callable(self.debate_command_handler):
+            self.debate_command_handler(command)
+        else:
+            self._display.show_warning_message("Comando /debate indisponivel nesta sessao.")
+        return True
+
+    def _handle_workflow_command(self, command: str, renderer: Any) -> bool:
+        if callable(self.workflow_command_handler):
+            self.workflow_command_handler(command)
+        else:
+            self._display.show_warning_message("Comando /workflow indisponivel nesta sessao.")
+        return True
+
+    def _handle_reset_command(self, command: str, renderer: Any) -> bool:
+        target = command[len(CMD_RESET):].strip() or "state"
+        session_state_manager = self.session_state_manager
+        if session_state_manager is not None and hasattr(session_state_manager, "reset"):
+            msg = session_state_manager.reset(target)
+        else:
+            msg = "reset não disponível."
+        self._display.show_system(msg)
+        return True
+
+    def _handle_approve_all_command(self, command: str, renderer: Any) -> bool:
+        approval_handler = self.approval_handler_getter()
+        if approval_handler is not None and hasattr(approval_handler, "set_approve_all"):
+            approval_handler.set_approve_all(True)
+            self._display.show_system("[aprovação] modo approve-all ativado — todas as ferramentas serão aprovadas automaticamente.")
+        else:
+            self._display.show_warning_message("[aprovação] mecanismo de aprovação não disponível.")
+        return True
+
+    def _handle_approve_command(self, command: str, renderer: Any) -> bool:
+        approval_handler = self.approval_handler_getter()
+        if approval_handler is not None and hasattr(approval_handler, "pre_approve"):
+            approval_handler.pre_approve()
+            self._display.show_system("[aprovação] próxima ferramenta será pré-aprovada.")
+        else:
+            self._display.show_warning_message("[aprovação] mecanismo de aprovação não disponível.")
+        return True
+
+    def _handle_policy_command(self, command: str, renderer: Any) -> bool:
+        raw_target = command[len(CMD_POLICY):].strip().lower()
+        if raw_target in {"", "status", "show"}:
+            current = self._current_workspace_policy_name()
+            self._display.show_system(
+                f"[policy] atual: {current}. Opções: strict, developer, autonomous."
+            )
+            return True
+        if raw_target not in {"strict", "developer", "autonomous"}:
+            self._display.show_warning_message(
+                "Uso: /policy [status|strict|developer|autonomous]"
+            )
+            return True
+        if callable(self.workspace_policy_setter):
+            self.workspace_policy_setter(raw_target)
+            self._display.show_system(f"[policy] workspace_policy={raw_target}")
+        else:
+            self._display.show_warning_message("[policy] configuração indisponível.")
+        return True
+
+    def _handle_sandbox_command(self, command: str, renderer: Any) -> bool:
+        raw_target = command[len(CMD_SANDBOX):].strip().lower()
+        if raw_target in {"", "status", "show"}:
+            current = "on" if self._current_sandbox_enabled() else "off"
+            available = "disponível" if self._sandbox_available() else "indisponível"
+            self._display.show_system(
+                f"[sandbox] atual: {current}; bubblewrap: {available}. "
+                "Escrita permitida no workspace, /tmp e runtimes configurados dos agentes."
+            )
+            return True
+        if raw_target not in {"on", "off"}:
+            self._display.show_warning_message("Uso: /sandbox [status|on|off]")
+            return True
+        if not callable(self.sandbox_enabled_setter):
+            self._display.show_warning_message("[sandbox] configuração indisponível.")
+            return True
+        try:
+            enabled = raw_target == "on"
+            self.sandbox_enabled_setter(enabled)
+        except Exception as exc:
+            self._display.show_warning_message(
+                f"[sandbox] não foi possível ativar: {exc}"
+                if raw_target == "on"
+                else f"[sandbox] não foi possível desativar: {exc}"
+            )
+            return True
+        self._display.show_system(f"[sandbox] workspace_sandbox={raw_target}")
+        return True
+
+    def _handle_context_edit_command(self, command: str, renderer: Any) -> bool:
+        if self.context_manager is not None:
+            self.context_manager.edit()
+        return True
+
+    def _handle_context_branch_command(self, command: str, renderer: Any) -> bool:
+        if self.context_manager is not None:
+            self.context_manager.handle_context_branch(command)
+        return True
+
+    def _handle_context_command(self, command: str, renderer: Any) -> bool:
+        parts = command[len(CMD_CONTEXT):].strip().split()
+        sub = parts[0] if parts else None
+        if sub == "resumer":
+            self._handle_context_resumer(parts[1:])
+        elif self.context_manager is None:
+            return True
+        elif sub is None or sub == "show":
+            self.context_manager.show()
+        elif sub == "edit":
+            self.context_manager.edit()
+        elif sub == "branch":
+            self.context_manager.handle_context_branch(command)
+        else:
+            self._display.show_warning_message(
+                "Uso: /context [show|edit|branch [nome]|resumer [<agente>|clear]]"
+            )
+        return True
+
+    def _handle_freeze_command(self, command: str, renderer: Any) -> bool | str:
+        parts = command[2:].strip().split(None, 1)
+        agent = parts[0]
+        trailing = parts[1].strip() if len(parts) > 1 else ""
+        try:
+            self.agent_pool.freeze(agent)
+        except ValueError:
+            self._display.show_warning_message(
+                f"Agente '{agent}' não está no pool ativo."
+            )
+            return True
+        self._display.show_system(
+            f"[rotação] congelada para {agent} — "
+            "todo input não-prefixado irá para este agente."
+        )
+        if trailing:
+            return trailing
+        return True
+
+    def _handle_orchestrator_command(self, command: str, renderer: Any) -> bool | str:
+        parts = command[2:].strip().split(None, 1)
+        agent = parts[0]
+        trailing = parts[1].strip() if len(parts) > 1 else ""
+        others = [a for a in self.agent_pool.agents if a != agent]
+        if not others:
+            self._display.show_warning_message(
+                f"Modo orquestrador requer pelo menos um outro agente ativo além de '{agent}'."
+            )
+            return True
+        try:
+            self.agent_pool.set_orchestrator(agent)
+        except ValueError:
+            self._display.show_warning_message(
+                f"Agente '{agent}' não está no pool ativo."
+            )
+            return True
+        available_count = len(others)
+        available_label = (
+            "agente disponível" if available_count == 1 else "agentes disponíveis"
+        )
+        self._display.show_system(
+            f"[orquestrador] {agent} ativado — todo input passa por ele antes de delegar."
+            f" {available_count} {available_label} para delegação."
+        )
+        if trailing:
+            return trailing
+        return True
+
+    def _handle_rotation_command(self, command: str, renderer: Any) -> bool:
+        was_orchestrator = getattr(self.agent_pool, "orchestrator_agent", None)
+        self.agent_pool.unfreeze()
+        if was_orchestrator:
+            self._display.show_system(
+                f"[orquestrador] {was_orchestrator} desativado — agentes voltam a rotacionar."
+            )
+        else:
+            self._display.show_system(
+                "[rotação] descongelada — agentes voltam a rotacionar."
+            )
+        return True
