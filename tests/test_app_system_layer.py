@@ -8,7 +8,7 @@ from quimera.app.agent_pool import AgentPool
 from quimera.app.system_layer import AppSystemLayer
 from tests.legacy_app_adapters import system_layer_from_app
 from quimera.prompt_templates import PromptText
-from quimera.constants import (
+from quimera.ui.commands import (
     CMD_APPROVE,
     CMD_APPROVE_ALL,
     CMD_BUGS,
@@ -1720,7 +1720,7 @@ def test_set_visibility_name_persiste_e_propaga(tmp_path):
     """set_visibility_name grava na config e propaga para o agent_client."""
     from quimera.app.core import QuimeraApp
     from quimera.config import ConfigManager
-    from quimera.constants import Visibility
+    from quimera.domain.task_states import Visibility
 
     app = QuimeraApp.__new__(QuimeraApp)
     app.config = ConfigManager(tmp_path / "config.json")

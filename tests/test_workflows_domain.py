@@ -3,7 +3,7 @@ import threading
 
 import pytest
 
-from quimera.constants import TaskStatus
+from quimera.domain.task_states import TaskStatus
 from quimera.workflows.handoff import Handoff, evaluate, parse_handoff, verify_files
 from quimera.workflows.models import (
     WorkflowError,

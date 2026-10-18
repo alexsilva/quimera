@@ -7,7 +7,7 @@ from rich.table import Table
 from rich.text import Text
 
 from quimera.agent_events import SpyEvent
-from quimera.constants import Visibility
+from quimera.domain.task_states import Visibility
 from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.ui import PlainTextRenderer, RenderAuditLogger
 

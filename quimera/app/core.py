@@ -11,7 +11,7 @@ from .turn import TurnManager
 from .worker import ChatWorker
 from .chat_processor import run_chat_loop
 from .. import profiles  # noqa: F401
-from ..constants import Visibility
+from ..domain.task_states import Visibility
 from ..profiles.base import ProfileRegistry
 from ..session_paths import SessionPaths
 from ..workspace import Workspace

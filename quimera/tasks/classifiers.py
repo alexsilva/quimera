@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from typing import Tuple
 
-from ..constants import CMD_TASK
+from ..ui.commands import CMD_TASK
 from .planning import normalize_task_description
 
 

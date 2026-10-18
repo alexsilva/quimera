@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from ..constants import TaskType
+from ..domain.task_states import TaskType
 
 
 @dataclass(frozen=True, kw_only=True)

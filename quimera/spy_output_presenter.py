@@ -8,7 +8,7 @@ from typing import Any
 
 import quimera.profiles as profiles
 from quimera.agent_events import SpyEvent
-from quimera.constants import Visibility
+from quimera.domain.task_states import Visibility
 from quimera.evidence import Evidence, EvidenceStore, PatternRegistry
 from quimera.domain.tool_activity import classify_tool_activity
 from quimera.runtime.tool_preview import ToolPreview

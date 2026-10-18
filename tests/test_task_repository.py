@@ -15,7 +15,7 @@ from quimera.tasks.events import (
 )
 from quimera.tasks.repository import TaskRepository
 from quimera.tasks.executor import TaskExecutor
-from quimera.constants import TaskStatus
+from quimera.domain.task_states import TaskStatus
 from quimera.tasks import api as runtime_tasks
 from quimera.runtime.models import JobRecord, TaskRecord
 from tests.helpers import task_row

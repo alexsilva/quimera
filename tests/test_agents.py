@@ -11,16 +11,16 @@ from unittest.mock import MagicMock, patch, ANY, call
 import pytest
 
 from quimera.agent_events import SpyEvent
-from quimera.agents import (
-    AgentClient,
+from quimera.agents import AgentClient
+from quimera.agents.text_filters import (
     _filter_stderr_lines,
     _is_rate_limit_signal,
-    _strip_spinner,
     _should_ignore_stderr_line,
+    _strip_spinner,
 )
 from quimera.agents.client import _extract_cli_text_chunks
 from quimera.agents.process_runner import ProcessRunner
-from quimera.constants import Visibility
+from quimera.domain.task_states import Visibility
 from quimera.paths import TMP_BASE_DIR
 from quimera.profiles import get as get_profile
 from quimera.prompt_templates import PromptText
@@ -1844,7 +1844,7 @@ def test_agent_client_thread_exceptions(renderer):
 
 def test_synthetic_tool_result(renderer):
     """Verifica que synthetic tool result."""
-    from quimera.agents import _SyntheticToolResult
+    from quimera.agent_events import _SyntheticToolResult
     result_ok = _SyntheticToolResult(ok=True)
     assert result_ok.ok is True
     result_err = _SyntheticToolResult(ok=False, error="test error")

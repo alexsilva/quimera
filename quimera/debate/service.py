@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
-from ..constants import TaskStatus, TaskType
+from ..domain.task_states import TaskStatus, TaskType
 from ..domain.execution import ExecutionControlSource
 from ..prompt_kinds import PromptKind
 from ..runtime.tools.files import set_staging_root

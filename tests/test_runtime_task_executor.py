@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from quimera.constants import TaskStatus
+from quimera.domain.task_states import TaskStatus
 from quimera.runtime.models import TaskRecord
 from quimera.tasks.executor import TaskExecutor, create_executor
 

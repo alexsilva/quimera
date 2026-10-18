@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from quimera.app.core import QuimeraApp
-from quimera.constants import CMD_APPROVE, CMD_APPROVE_ALL
+from quimera.ui.commands import CMD_APPROVE, CMD_APPROVE_ALL
 from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.executor import ToolExecutor
 from quimera.ui.base import RendererBase

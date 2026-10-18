@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .connection_configurator import ConnectionConfigurator
-from .constants import Visibility
+from .domain.task_states import Visibility
 from . import profiles as _profiles
 from .profiles.base import (
     CliConnection,

@@ -3036,7 +3036,6 @@ def test_agent_profile_cli_defaults():
 def test_existing_profiles_still_register():
     """Verifica que os perfis embutidos continuam registrados."""
     import quimera.profiles.claude  # noqa: F401
-    import quimera.profiles.mock  # noqa: F401
     import quimera.profiles as profiles
 
     claude = profiles.get("claude")
@@ -3050,10 +3049,6 @@ def test_existing_profiles_still_register():
         "--print",
         "--input-format=stream-json",
     ]
-
-    mock = profiles.get("mock")
-    assert mock is not None
-    assert mock.driver == "cli"
 
 
 # ---------------------------------------------------------------------------

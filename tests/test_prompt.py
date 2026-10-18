@@ -4,7 +4,7 @@ import re
 import pytest
 
 from quimera.context import ContextManager
-from quimera.constants import Visibility
+from quimera.domain.task_states import Visibility
 from quimera.evidence import Evidence, EvidenceStore
 from quimera.modes import get_mode
 from quimera.profiles.codex import _format_codex_spy_event

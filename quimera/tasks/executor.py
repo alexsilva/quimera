@@ -7,7 +7,7 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable, Optional
 
-from ..constants import TaskStatus
+from ..domain.task_states import TaskStatus
 from ..runtime.models import TaskRecord
 
 _logger = logging.getLogger("quimera.task_executor")

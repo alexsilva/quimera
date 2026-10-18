@@ -9,7 +9,6 @@ import threading
 import time
 from contextlib import nullcontext
 from pathlib import Path
-from types import SimpleNamespace
 
 from ..editor import Editor
 from .interfaces import IRenderer
@@ -40,7 +39,7 @@ def read_user_input(
     if callable(read_chat_line) and getattr(input_fn, "sequential", False) is True:
         return _read_sequential_input(renderer, read_chat_line, prompt, timeout)
     if timeout and timeout > 0:
-        value = _tty.read_user_input_with_timeout(prompt, timeout, input_fn=input_fn)
+        value = read_user_input_with_timeout(prompt, timeout, input_fn=input_fn)
         if value is None:
             renderer.show_system(f"*idle* ({timeout}s sem activity)")
             return None
@@ -48,7 +47,7 @@ def read_user_input(
 
     if timeout == 0:
         try:
-            stdin = _tty._stdin()
+            stdin = _stdin()
             if stdin is None:
                 return None
             if stdin.isatty():
@@ -60,7 +59,7 @@ def read_user_input(
                     raise
                 finally:
                     flush_deferred_messages()
-            if _tty.select.select([stdin], [], [], 0)[0]:
+            if select.select([stdin], [], [], 0)[0]:
                 line = stdin.readline()
                 if line == "":
                     return None
@@ -100,10 +99,10 @@ def _read_sequential_input(renderer: IRenderer, read_chat_line, prompt, timeout)
 
 def read_user_input_with_timeout(prompt: str, timeout: int, input_fn=input):
     """Lê entrada do usuário com timeout."""
-    stdin = _tty._stdin()
+    stdin = _stdin()
     if stdin is not None and not stdin.isatty():
         try:
-            ready, _, _ = _tty.select.select([stdin], [], [], timeout)
+            ready, _, _ = select.select([stdin], [], [], timeout)
         except Exception as exc:
             _logger.debug("read_user_input_with_timeout: select falhou: %s", exc)
             return None
@@ -122,7 +121,7 @@ def read_user_input_with_timeout(prompt: str, timeout: int, input_fn=input):
         except Exception:
             result_queue.put(None)
 
-    thread = _tty.threading.Thread(target=_reader, daemon=True)
+    thread = threading.Thread(target=_reader, daemon=True)
     thread.start()
     try:
         return result_queue.get(timeout=timeout)
@@ -151,15 +150,6 @@ def _normalize_loaded_content(content: str) -> str | None:
     if not normalized.strip():
         return None
     return normalized
-
-
-# Compatibilidade para testes legados que patcham quimera.app.inputs._tty.*
-_tty = SimpleNamespace(
-    _stdin=_stdin,
-    read_user_input_with_timeout=read_user_input_with_timeout,
-    select=select,
-    threading=threading,
-)
 
 
 class AppInputServices:
@@ -200,7 +190,7 @@ class AppInputServices:
 
     def read_user_input(self, prompt, timeout: int) -> str | None:
         if timeout == 0 and self._nonblocking_tty:
-            stdin = _tty._stdin()
+            stdin = _stdin()
             if stdin is not None and stdin.isatty():
                 return self._read_nonblocking_tty(prompt)
         return read_user_input(
@@ -324,5 +314,4 @@ __all__ = [
     "read_from_file",
     "_normalize_loaded_content",
     "_stdin",
-    "_tty",
 ]

@@ -1,4 +1,4 @@
-from quimera.constants import TaskStatus
+from quimera.domain.task_states import TaskStatus
 
 from quimera.tasks.reviewer import TaskReviewer
 from quimera.runtime.models import TaskRecord

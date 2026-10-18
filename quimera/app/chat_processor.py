@@ -14,7 +14,6 @@ from .config import logger
 from .welcome_presenter import WelcomePresenter
 from .lifecycle import AppLifecycle
 from .mcp_status import install_mcp_boot_status
-from .tty_control import TtyController
 from .session_bootstrap import (
     resolve_render_debug_log_path,
     resolve_session_log_path,
@@ -22,7 +21,7 @@ from .session_bootstrap import (
 from .submission_tracker import new_submission_id, submission_id_of
 from .turn import TurnManager
 from .worker import ChatWorker, ChatWorkItem
-from ..constants import (
+from ..ui.commands import (
     CMD_ALIASES,
     CMD_EDIT,
     CMD_EXIT,
@@ -32,8 +31,6 @@ from ..constants import (
     MSG_SHUTDOWN,
 )
 
-
-_tty = TtyController()
 
 _NORMAL_SHUTDOWN_GRACE_SECONDS = 10.0
 _FORCED_SHUTDOWN_JOIN_SECONDS = 0.5
@@ -83,7 +80,6 @@ def run_chat_loop(
     chat_lifecycle = getattr(app, "chat_lifecycle", None)
     if chat_lifecycle is None:
         raise RuntimeError("QuimeraApp.chat_lifecycle não foi inicializado")
-    _tty.suppress_control_echo()
     app.renderer.show_banner(WelcomePresenter.build_welcome_message())
     workspace = getattr(app, "workspace", None)
     project_path = str(getattr(workspace, "cwd", Path.cwd()))
@@ -427,14 +423,11 @@ def run_chat_loop(
         app.runtime_state.chat_queue = None
         app.runtime_state.chat_pending_count = 0
         app._refresh_parallel_toolbar()
-        try:
-            lifecycle = getattr(app, "lifecycle", None)
-            if lifecycle is None:
-                lifecycle = AppLifecycle(app)
-                app.lifecycle = lifecycle
-            lifecycle.close(interrupted=interrupted_shutdown or forced_shutdown)
-        finally:
-            _tty.restore_control_echo()
+        lifecycle = getattr(app, "lifecycle", None)
+        if lifecycle is None:
+            lifecycle = AppLifecycle(app)
+            app.lifecycle = lifecycle
+        lifecycle.close(interrupted=interrupted_shutdown or forced_shutdown)
 
 
 def _handle_command_safely(app, user_input: str):

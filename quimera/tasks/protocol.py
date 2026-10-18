@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
-from ..constants import TaskStatus
+from ..domain.task_states import TaskStatus
 from ..app.config import logger
 from .classifiers import parse_task_command
 from .planning import classify_task

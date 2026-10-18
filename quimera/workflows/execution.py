@@ -10,7 +10,7 @@ import json
 import re
 from pathlib import Path
 
-from ..constants import TaskStatus
+from ..domain.task_states import TaskStatus
 from ..runtime.models import TaskRecord
 from ..tasks.repository import TaskRepository
 from .context import DependencyResult, build_task_context, render_dependency

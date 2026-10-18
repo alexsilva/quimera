@@ -8,7 +8,7 @@ from typing import Any, Callable
 from .display_service import DisplayService
 from .interfaces import IAgentPool
 
-from ..constants import (
+from ..ui.commands import (
     CMD_AGENTS,
     CMD_ALIASES,
     CMD_APPROVE,

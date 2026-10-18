@@ -6,7 +6,7 @@ from typing import Iterator
 from typing import TYPE_CHECKING, Callable
 
 from ..modes import get_mode
-from ..constants import MSG_DOUBLE_PREFIX
+from ..ui.commands import MSG_DOUBLE_PREFIX
 
 if TYPE_CHECKING:
     from .interfaces import IRenderer, IAgentPool

@@ -14,7 +14,7 @@ from enum import Enum
 from typing import Any, Callable
 
 from quimera.app.submission_tracker import TERMINAL_SUBMISSION_STATUSES
-from quimera.constants import USER_ROLE
+from quimera.ui.commands import USER_ROLE
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
 from quimera.ui.text import (
     _apply_stream_diff,

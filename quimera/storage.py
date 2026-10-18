@@ -100,24 +100,19 @@ class SessionStorage:
             except (json.JSONDecodeError, OSError):
                 continue
 
-            # Process this session
-            if isinstance(data, list):
-                # Formato legado (lista pura): sem saved_at — descartado.
+            if not isinstance(data, dict):
                 continue
-            elif isinstance(data, dict):
-                # O diretório recebido já pertence ao Workspace atual; o
-                # storage não precisa inferir identidade pelo cwd do processo.
-                messages = data.get("messages", [])
-                shared_state = data.get("shared_state", {})
-                saved_at_raw = data.get("saved_at")
-                if not saved_at_raw:
-                    # Snapshots sem saved_at não são confiáveis para restauração.
-                    continue
-                try:
-                    snapshot_time = self._normalize_sort_datetime(datetime.fromisoformat(saved_at_raw))
-                except (ValueError, TypeError):
-                    continue
-            else:
+            # O diretório recebido já pertence ao Workspace atual; o
+            # storage não precisa inferir identidade pelo cwd do processo.
+            messages = data.get("messages", [])
+            shared_state = data.get("shared_state", {})
+            saved_at_raw = data.get("saved_at")
+            if not saved_at_raw:
+                # Snapshots sem saved_at não são confiáveis para restauração.
+                continue
+            try:
+                snapshot_time = self._normalize_sort_datetime(datetime.fromisoformat(saved_at_raw))
+            except (ValueError, TypeError):
                 continue
 
             if not isinstance(shared_state, dict):

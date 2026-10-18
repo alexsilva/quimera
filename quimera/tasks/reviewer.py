@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from ..prompt_kinds import PromptKind
-from ..constants import TaskStatus
+from ..domain.task_states import TaskStatus
 from ..runtime.models import TaskRecord
 from .events import TaskReviewReassigned
 

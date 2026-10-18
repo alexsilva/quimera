@@ -10,12 +10,10 @@ quimera_conversa_inicial.txt
 .gemini
 quimera_session_context.md
 quimera_context.md
-quimera/profiles/mock.py
 quimera.db
 .coverage
 coverage.json
 mock.py
-!quimera/profiles/mock.py
 .pytest_cache/
 .codex
 TODO.md

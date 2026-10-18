@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from ..constants import USER_ROLE
+from ..ui.commands import USER_ROLE
 from ..shared_state_presenter import SharedStatePresenter
 
 

@@ -8,7 +8,7 @@
 
 O Quimera é um orquestrador multiagente terminal-based que permite aos usuários interagirem com diversos agentes de IA (Claude, Codex, Gemini, Ollama, OpenCode, etc.) através de uma interface unificada. O sistema executa tarefas em paralelo, gerencia estado de sessão, fornece uma interface rica com suporte a markup, temas e auditoria, e oferece um runtime de execução de tools em ambiente sandboxed.
 
-A arquitetura é organizada em torno de um loop principal de eventos em `quimera/app/core.py`, com separação crescente de responsabilidades entre camadas. O desmonte incremental do monólito original extraiu módulos como `runtime_state`, `session_bootstrap`, `tty_control`, `toolbar`, `bug_services`, `command_router`, `chat_processor` e `ui_event_handler`. As violações de fronteira documentadas anteriormente foram resolvidas (seções 7.2 e 7.3).
+A arquitetura é organizada em torno de um loop principal de eventos em `quimera/app/core.py`, com separação crescente de responsabilidades entre camadas. O desmonte incremental do monólito original extraiu módulos como `runtime_state`, `session_bootstrap`, `toolbar`, `bug_services`, `command_router`, `chat_processor` e `ui_event_handler`. As violações de fronteira documentadas anteriormente foram resolvidas (seções 7.2 e 7.3).
 
 ---
 
@@ -21,7 +21,6 @@ quimera/
 │   ├── runtime_state.py              # AppRuntimeState: estado de runtime (input, chat, slots)
 │   ├── session_bootstrap.py          # Bootstrap/inicialização da sessão (paths, debug, bugs)
 │   ├── session_paths.py              # Resolução de paths de sessão (logs, bugs, debug)
-│   ├── tty_control.py                # Controle de TTY (suspend/resume do renderer)
 │   ├── toolbar.py                    # ToolbarManager: conteúdo da toolbar da TUI
 │   ├── toolbar_coordinator.py        # ToolbarCoordinator: labels, paralelismo e ciclo de temas da toolbar
 │   ├── bug_services.py               # BugServices: detecção e correlação de bugs de runtime
@@ -136,7 +135,6 @@ quimera/
 │   ├── opencode.py                   # Profile para OpenCode (vários backends)
 │   ├── antigravity.py                # Profile para Antigravity (agente de refatoração)
 │   ├── fake.py                       # Profile fake para testes/integrado
-│   ├── mock.py                       # Profile mock para testes
 │   └── spy_utils.py                  # Utilitários de espionagem/observação de profiles
 │
 ├── ui/                               # Camada de apresentação
@@ -157,7 +155,6 @@ quimera/
 │       ├── styles.py                 # Estilos e temas Textual
 │       ├── constants.py              # Constantes da UI Textual
 │       ├── events.py                 # Eventos específicos Textual
-│       ├── direct_input.py           # Modo de input direto
 │       └── terminal_modes.py         # Gerenciamento de modos de terminal
 │
 ├── domain/                           # Modelos de domínio (independentes de framework)
@@ -195,7 +192,7 @@ quimera/
 ├── memory_selector.py                # Seleção de memória relevante para o prompt
 ├── themes.py                         # Definição e carregamento de temas visuais
 ├── config.py                         # Configuração global do projeto
-├── constants.py                      # Constantes (prompts de sistema, comandos, prefixos)
+├── constants.py                      # Constantes de runtime sem módulo próprio (MAX_STDERR_LINES)
 ├── modes.py                          # Modos de operação (debug, produção, etc.)
 ├── metrics.py                        # Rastreamento de métricas de comportamento
 ├── env_config.py                      # Carregamento de variáveis de ambiente
@@ -216,7 +213,6 @@ quimera/
 - **`core.py`**: Orquestrador central. Loop principal, estado da aplicação, coordenação de componentes, despacho para agentes e tasks. Reduzido de ~2300 para ~1611 linhas após extração de módulos especializados (ver abaixo).
 - **`runtime_state.py`** (`AppRuntimeState`): Container de estado de runtime: contadores de chat (em execução e pendentes), semáforo de slots, executor de threads. O estado do prompt (ativo e thread dona) vive no `InputGate`.
 - **`session_bootstrap.py`**: Inicialização da sessão: resolução de paths (logs, bugs, debug), análise de bugs de sessão anterior. Extraído de `core.py` para isolar lógica de startup.
-- **`tty_control.py`**: Controle de TTY: suspend e resume do renderer durante operações bloqueantes (editor, aprovação interativa). Coordena renderer + `InputGate`.
 - **`simple_input_gate.py`** (`SimpleInputGate`): Gate de input sem TUI. Em TTY (`--driver-repl`) usa `input()`; com stdin em pipe é o único leitor do stdin: uma thread lê as linhas em ordem e cada linha vai para quem perguntou (leitura direta de `ask_user`/aprovação tem prioridade sobre o chat, que só lê quando não há prompt em execução).
 - **`toolbar.py`** (`ToolbarManager`): Geração e atualização da toolbar dinâmica. Renderiza estado atual (agentes, turno, tema, métricas).
 - **`bug_services.py`** (`BugServices`): Detecção, correlação e reporte de bugs de runtime (burst de falhas, timeouts). Extraído de `AppBugServices` via rename + flatten.
@@ -255,7 +251,6 @@ Executor de tools e agentes em ambiente potencialmente sandboxed.
 
 - **`base.py`**: Define `ExecutionProfile` (dataclass com metadados: `name`, `driver`, `supports_task_execution`, `runtime_rw_paths`, etc.) e `_profile_registry`.
 - Profiles concretos (`claude.py`, `codex.py`, `gemini.py`, `ollama.py`, `opencode.py`): cada um registra um `ExecutionProfile` com configuração específica do backend.
-- `mock.py`: Profile para testes unitários.
 
 ### 3.5 Camada de Apresentação (`ui/`)
 
@@ -368,7 +363,7 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 | `session_summary.py` | Sumariza histórico longo para caber no contexto dos agentes |
 | `bugs.py` | Detecta, correlaciona e reporta bugs de runtime (burst de falhas, timeouts) |
 | `themes.py` | Carrega e aplica temas visuais ao renderer e toolbar |
-| `constants.py` | Constantes de sistema: prompts goal-driven, regras de revisão, comandos |
+| `constants.py` | Constantes de runtime sem módulo próprio (`MAX_STDERR_LINES`). Comandos e mensagens ficam em `ui/commands.py`; estados de task em `domain/task_states.py` |
 | `paths.py` | Resolve paths de dados (`~/.local/share/quimera/...`), config e workspace |
 | `agent_events.py` | Tipos de eventos emitidos pelos agentes durante execução |
 | `*_presenter.py` | Formatadores de seções específicas do prompt (delegation, shared state, etc.) |
@@ -460,7 +455,7 @@ Fluxo: `/task` → `tasks/services.py` (orquestração) → `tasks/repository.py
 
 O prompt final é montado com estas seções em ordem de prioridade:
 
-1. `<rules>`: regras de conduta e goal-driven execution (de `constants.py` + `prompt.py`).
+1. `<rules>`: regras de conduta e goal-driven execution (template `quimera/prompt.md`, renderizado por `prompt.py`).
 2. `<execution_state>`: estado de execução atual (goal, step, criteria) — injetado por `prompt.py`.
 3. `<shared_state>`: estado compartilhado entre agentes (`shared_state_presenter.py`).
 4. `<evidence>`: evidências acumuladas (`evidence/formatter.py`).
@@ -500,7 +495,7 @@ Quando o MCP está ativo (padrão), os agentes usam a tool `tasks_delegate` expo
 
 ### 6.5 Arquitetura Orientada a Goals
 
-`constants.py` define os prompts: `PROMPT_GOAL_LOCK`, `PROMPT_STEP_LOCK`, `PROMPT_ACCEPTANCE_CRITERIA`, `PROMPT_REVIEWER_RULE` (ACCEPT/RETRY/REPLAN/REJECT). `prompt.py` injeta o bloco de execução quando `shared_state` contém `goal_canonical`.
+As regras ficam nos templates `quimera/prompt.md` (chat) e `quimera/task_reviewer_prompt.md` (revisão, com os veredictos `ACEITE`/`RETENTATIVA`/`REPLANEJAR`/`REJEITAR`). `prompt.py` (`_build_execution_state_block`) injeta o bloco de execução a partir de `goal_canonical`, `current_step`, `acceptance_criteria`, `next_step`, `allowed_scope` e `non_goals` do `shared_state`.
 
 ---
 

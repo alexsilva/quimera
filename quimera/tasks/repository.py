@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from ..constants import TaskStatus, TaskType, can_transition
+from ..domain.task_states import TaskStatus, TaskType, can_transition
 from ..runtime.models import JobRecord, TaskRecord
 from ..app.event_sink import EventSink
 from ..workflows.schema import (

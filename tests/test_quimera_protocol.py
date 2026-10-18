@@ -43,8 +43,22 @@ from quimera.config import (
     DEFAULT_HISTORY_WINDOW,
     DEFAULT_MAX_AGENT_EXECUTION_SECONDS,
 )
-from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_CONTEXT, CMD_DISCONNECT, CMD_HELP, CMD_POLICY, CMD_SANDBOX, CMD_PROMPT, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
-from quimera.constants import CMD_DEBATE
+from quimera.domain.task_states import TaskStatus, TaskType, Visibility
+from quimera.ui.commands import (
+    CMD_AGENTS,
+    CMD_CLEAR,
+    CMD_CONNECT,
+    CMD_CONTEXT,
+    CMD_DISCONNECT,
+    CMD_HELP,
+    CMD_POLICY,
+    CMD_SANDBOX,
+    CMD_PROMPT,
+    MSG_SHUTDOWN,
+    build_agents_help,
+    build_help,
+)
+from quimera.ui.commands import CMD_DEBATE
 from quimera.profiles import ExecutionProfile
 from quimera.prompt_kinds import PromptKind
 from quimera.prompt_templates import PromptText, get_prompt_template
@@ -3374,10 +3388,10 @@ class ProfileTests(unittest.TestCase):
         stdin.isatty.return_value = False
         stdin.readline.return_value = "mensagem\n"
 
-        with patch("quimera.app.inputs._tty._stdin", return_value=stdin), patch(
-            "quimera.app.inputs._tty.select.select",
+        with patch("quimera.app.inputs._stdin", return_value=stdin), patch(
+            "quimera.app.inputs.select.select",
             return_value=([stdin], [], []),
-        ), patch("quimera.app.inputs._tty.threading.Thread") as mock_thread:
+        ), patch("quimera.app.inputs.threading.Thread") as mock_thread:
             result = read_user_input_with_timeout("Você: ", timeout=1)
 
         self.assertEqual(result, "mensagem")
@@ -3388,10 +3402,10 @@ class ProfileTests(unittest.TestCase):
         stdin = Mock()
         stdin.isatty.return_value = False
 
-        with patch("quimera.app.inputs._tty._stdin", return_value=stdin), patch(
-            "quimera.app.inputs._tty.select.select",
+        with patch("quimera.app.inputs._stdin", return_value=stdin), patch(
+            "quimera.app.inputs.select.select",
             return_value=([], [], []),
-        ), patch("quimera.app.inputs._tty.threading.Thread") as mock_thread:
+        ), patch("quimera.app.inputs.threading.Thread") as mock_thread:
             result = read_user_input_with_timeout("Você: ", timeout=1)
 
         self.assertIsNone(result)
@@ -5320,7 +5334,7 @@ class MetricsFeedbackTests(unittest.TestCase):
 
     def test_build_tools_prompt_is_compact_but_preserves_essentials(self):
         """Verifica que build tools prompt is compact but preserves essentials."""
-        from quimera.constants import build_tools_prompt
+        from quimera.runtime.tool_schema_defs import build_tools_prompt
 
         prompt = build_tools_prompt()
 

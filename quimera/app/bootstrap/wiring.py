@@ -56,7 +56,7 @@ from ...bugs import (
     RenderBugDetector,
 )
 from ...config import ConfigManager
-from ...constants import MSG_MIGRATION, Visibility
+from ...domain.task_states import Visibility
 from ...debate import DebateRepository, DebateService
 from ...workflows.commands import WorkflowCommandHandler
 from ...environment import RuntimeSecrets
@@ -482,9 +482,6 @@ class AppAssembler:
             flush_deferred_messages=system_layer.flush_deferred_messages,
             output_lock=plat.output_lock,
         )
-        migrated = plat.workspace.migrate_from_legacy(plat.workspace.cwd)
-        for item in migrated:
-            ui.renderer.show_system(MSG_MIGRATION.format(item))
         return SessionBundle(
             context_manager=context_manager,
             configured_history_window=configured_history_window,

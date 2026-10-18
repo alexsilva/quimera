@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from quimera.constants import MSG_CHAT_STARTED
+from quimera.ui.commands import MSG_CHAT_STARTED
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 #: A TUI quebra a linha de boot em segmentos; o começo dela basta como marcador.

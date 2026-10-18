@@ -11,7 +11,7 @@ import sqlite3
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
-from ..constants import TaskStatus, TaskType
+from ..domain.task_states import TaskStatus, TaskType
 from ..tasks.repository import TaskRepository
 from .models import (
     AttemptRecord,

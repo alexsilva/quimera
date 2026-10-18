@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..agents.capabilities import is_user_cancelled
-from ..constants import MSG_EMPTY_INPUT, USER_ROLE
+from ..ui.commands import MSG_EMPTY_INPUT, USER_ROLE
 from ..domain.session_state import SessionRuntimeState
 from ..ui.messages import format_failover_message
 from .command_router import RoutingDecision

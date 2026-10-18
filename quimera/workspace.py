@@ -366,7 +366,6 @@ class Workspace:
             "name": self.cwd.name,
             "last_used_at": now,
         })
-        meta.setdefault("migrated_from", None)
         meta_file.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     def _update_index(self):
@@ -388,39 +387,3 @@ class Workspace:
         }
         index_file.write_text(json.dumps(index, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    def migrate_from_legacy(self, project_dir: Path) -> list[str]:
-        """Migra arquivos de contexto e logs antigos do diretório do projeto para o workspace."""
-        migrated = []
-
-        legacy_context = project_dir / "quimera_context.md"
-        if legacy_context.exists() and not self.context_persistent.exists():
-            self.context_persistent.write_text(legacy_context.read_text(encoding="utf-8"), encoding="utf-8")
-            migrated.append("quimera_context.md -> context/persistent.md")
-
-        legacy_session = project_dir / "quimera_session_context.md"
-        if legacy_session.exists() and not self.context_session.exists():
-            self.context_session.write_text(legacy_session.read_text(encoding="utf-8"), encoding="utf-8")
-            migrated.append("quimera_session_context.md -> context/session.md")
-
-        legacy_logs = project_dir / "logs"
-        if legacy_logs.is_dir():
-            dest_dir = self.logs_dir / "migrated"
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            for log_file in legacy_logs.iterdir():
-                if log_file.is_file():
-                    dest = dest_dir / log_file.name
-                    if not dest.exists():
-                        dest.write_bytes(log_file.read_bytes())
-                        migrated.append(f"logs/{log_file.name}")
-
-        if migrated:
-            meta_file = self._root / "workspace.json"
-            meta = json.loads(meta_file.read_text(encoding="utf-8"))
-            meta["migrated_from"] = {
-                "path": str(project_dir),
-                "files": migrated,
-                "migrated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            }
-            meta_file.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-        return migrated

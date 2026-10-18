@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from quimera.constants import TaskStatus, can_transition
+from quimera.domain.task_states import TaskStatus, can_transition
 from quimera.tasks import api as tasks
 from tests.helpers import task_row
 

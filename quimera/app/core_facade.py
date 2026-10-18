@@ -22,15 +22,32 @@ from .worker import ChatWorker
 from .. import profiles
 from ..bugs import BugEvidenceRef, BugReport
 from ..config import ConfigManager
-from ..constants import (
-    CMD_AGENTS, CMD_ALIASES, CMD_BUGS, CMD_CLEAR, CMD_CONNECT, CMD_DEBATE,
+from ..domain.task_states import Visibility
+from ..ui.commands import (
+    CMD_AGENTS,
+    CMD_ALIASES,
+    CMD_BUGS,
+    CMD_CLEAR,
+    CMD_CONNECT,
+    CMD_DEBATE,
     CMD_WORKFLOW,
-    CMD_DISCONNECT, CMD_CONTEXT, CMD_EDIT, CMD_EXIT,
-    CMD_APPROVE, CMD_APPROVE_ALL, CMD_FILE_PREFIX, CMD_HELP,
-    CMD_POLICY, CMD_SANDBOX, CMD_PROMPT, CMD_RELOAD, CMD_RESET, CMD_STATS, CMD_TASK,
+    CMD_DISCONNECT,
+    CMD_CONTEXT,
+    CMD_EDIT,
+    CMD_EXIT,
+    CMD_APPROVE,
+    CMD_APPROVE_ALL,
+    CMD_FILE_PREFIX,
+    CMD_HELP,
+    CMD_POLICY,
+    CMD_SANDBOX,
+    CMD_PROMPT,
+    CMD_RELOAD,
+    CMD_RESET,
+    CMD_STATS,
+    CMD_TASK,
     CMD_CONFIG,
     MSG_SESSION_LOG,
-    Visibility,
 )
 from ..modes import MODES
 from ..runtime.workspace_policy import WorkspacePolicy

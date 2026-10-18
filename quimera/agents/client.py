@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import quimera.profiles as profiles
-from quimera.constants import MAX_STDERR_LINES, Visibility
+from quimera.constants import MAX_STDERR_LINES
+from quimera.domain.task_states import Visibility
 from quimera.profiles.base import (
     CliConnection,
     OpenAIConnection,

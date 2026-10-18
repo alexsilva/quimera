@@ -1,7 +1,7 @@
 import pytest
 
 from quimera.profiles.base import ExecutionProfile
-from quimera.constants import TaskType
+from quimera.domain.task_states import TaskType
 from quimera.tasks.planning import (
     TaskClassification,
     classify_task,

@@ -1,6 +1,5 @@
 """Testes de gerenciamento de turno e comportamento de disparo de agentes."""
 import queue
-import sys
 import threading
 import time
 import unittest
@@ -12,7 +11,7 @@ from quimera.app.chat_round import ChatRoundContext, ChatRoundOrchestrator
 from quimera.app.core import QuimeraApp, TurnManager
 from quimera.app.render_event import RenderEvent
 from quimera.app.worker import ChatWorker, ChatWorkItem
-from quimera.constants import CMD_EXIT, MSG_SHUTDOWN
+from quimera.ui.commands import CMD_EXIT, MSG_SHUTDOWN
 from quimera.ui.base import RendererBase
 
 
@@ -1994,31 +1993,6 @@ class TestParallelToolbarState(unittest.TestCase):
         app.input_gate.redisplay.assert_called_once_with()
 
 
-class TestTTYControlEcho(unittest.TestCase):
-    """termios foi banido: TtyController é no-op e não toca no terminal."""
-
-    def test_suppress_and_restore_are_noop_and_never_touch_termios(self):
-        """suppress/restore não chamam termios — nenhuma flag de terminal alterada."""
-        from quimera.app.tty_control import TtyController
-        ctrl = TtyController()
-
-        fake_termios = Mock()
-        with patch.dict(sys.modules, {"termios": fake_termios}):
-            ctrl.suppress_control_echo()
-            ctrl.restore_control_echo()
-
-        fake_termios.tcgetattr.assert_not_called()
-        fake_termios.tcsetattr.assert_not_called()
-        self.assertIsNone(ctrl._echoctl_fd)
-        self.assertIsNone(ctrl._echoctl_attrs)
-
-    def test_module_does_not_import_termios(self):
-        """O módulo tty_control não deve importar termios/tty em nível algum."""
-        import quimera.app.tty_control as mod
-        self.assertFalse(hasattr(mod, "termios"))
-        self.assertFalse(hasattr(mod, "tty"))
-
-
 # =========================================================================
 # Fase 0 — Guardrails: contratos públicos de TurnManager
 # =========================================================================
@@ -2125,7 +2099,7 @@ class TestAiTurnControlPlaneCommands(unittest.TestCase):
 
     def test_slash_command_responds_while_agent_still_processing_single_thread(self):
         """/agents deve ser atendido enquanto a primeira mensagem ainda está em processamento."""
-        from quimera.constants import CMD_AGENTS, CMD_ALIASES, CMD_EXIT
+        from quimera.ui.commands import CMD_AGENTS, CMD_ALIASES, CMD_EXIT
         app = self._make_app()
 
         handle_calls = []
@@ -2178,7 +2152,7 @@ class TestAiTurnControlPlaneCommands(unittest.TestCase):
 
     def test_regular_message_waits_for_free_slot_instead_of_being_dropped(self):
         """Uma segunda mensagem real aguarda o slot liberar (mesma regra do modo threads>1), sem se perder."""
-        from quimera.constants import CMD_EXIT
+        from quimera.ui.commands import CMD_EXIT
         app = self._make_app()
         app.handle_command = Mock(return_value=False)
 

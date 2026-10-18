@@ -3,7 +3,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from ...constants import Visibility
+from ...domain.task_states import Visibility
 from ...profiles.base import ProfileRegistry
 from ...session_paths import SessionPaths
 from ...workspace import Workspace

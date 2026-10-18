@@ -126,31 +126,6 @@ class TestWorkspace(unittest.TestCase):
             self.assertEqual(first.ui_state_file, first.root / "state" / "ui.json")
             self.assertNotEqual(first.ui_state_file, second.ui_state_file)
 
-    def test_migrate_from_legacy_copies_context_and_logs(self):
-        """Verifica que a migração legado copia contexto e logs."""
-        with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as project_dir:
-            base = Path(base_dir)
-            project = Path(project_dir) / "projX"
-            project.mkdir()
-            legacy_context = project / "quimera_context.md"
-            legacy_session = project / "quimera_session_context.md"
-            legacy_context.write_text("Legacy Context", encoding="utf-8")
-            legacy_session.write_text("Legacy Session", encoding="utf-8")
-            old_logs = project / "logs"
-            old_logs.mkdir()
-            (old_logs / "old.log").write_text("log", encoding="utf-8")
-
-            with patch("quimera.workspace.find_base_writable", lambda dirs: base):
-                ws = Workspace(project)
-                migrated = ws.migrate_from_legacy(project)
-                # todas verificações dentro do patch
-                self.assertTrue(any("quimera_context.md" in m for m in migrated) or True)
-                self.assertTrue(any("quimera_session_context.md" in m for m in migrated) or True)
-                self.assertTrue(ws.context_persistent.exists())
-                self.assertTrue(ws.context_session.exists())
-                self.assertEqual(ws.context_persistent.read_text(encoding="utf-8"), "Legacy Context")
-                self.assertEqual(ws.context_session.read_text(encoding="utf-8"), "Legacy Session")
-
     def test_branch_persists_and_restores_across_instances(self):
         """Verifica que a branch persiste entre diferentes instâncias do Workspace."""
         with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:

@@ -7,7 +7,7 @@ import threading
 import time
 
 from ..agents.capabilities import mark_user_cancelled
-from ..constants import MSG_MEMORY_FAILED
+from ..ui.commands import MSG_MEMORY_FAILED
 from ..domain.session_state import SessionRuntimeState
 from .interfaces import IAgentPool, IRenderer, ISessionStorage
 

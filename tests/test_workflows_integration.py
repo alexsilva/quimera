@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from quimera.constants import TaskStatus
+from quimera.domain.task_states import TaskStatus
 from quimera.workflows.models import WorkflowLimits, WorkflowStatus
 from tests.workflow_harness import Harness, handoff_text, plan_payload, task_spec
 

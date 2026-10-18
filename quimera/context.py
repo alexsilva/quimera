@@ -4,7 +4,7 @@ import shlex
 import unicodedata
 from datetime import datetime
 
-from .constants import CMD_CONTEXT
+from .ui.commands import CMD_CONTEXT
 from .editor import Editor
 from . import process_factory as subprocess
 

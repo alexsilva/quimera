@@ -10,7 +10,7 @@ import time
 from quimera.app.submission_tracker import SubmittedInput, SubmissionRecord, SubmissionTracker
 from quimera.agents.capabilities import is_agent_running
 import quimera.themes as themes
-from quimera.constants import CMD_EXIT
+from quimera.ui.commands import CMD_EXIT
 from quimera.ui.textual.events import TextualUiEvent
 
 _logger = logging.getLogger(__name__)

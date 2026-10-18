@@ -6,11 +6,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import quimera.profiles.mock  # noqa: F401
-from quimera.agents import AgentClient, _strip_spinner
-from quimera.constants import Visibility
+from quimera.agents import AgentClient
+from quimera.agents.text_filters import _strip_spinner
+from quimera.domain.task_states import Visibility
 from quimera.context import ContextManager
-from quimera.profiles import get
 from quimera.profiles.base import ExecutionProfile
 from quimera.runtime.approval import ApprovalHandler, ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
@@ -20,7 +19,7 @@ from quimera.runtime.models import TaskRecord, ToolCall, ToolResult
 from quimera.runtime.policy import ToolPolicyError
 from quimera.runtime.registry import ToolRegistry
 from quimera.tasks.executor import TaskExecutor, create_executor
-from quimera.constants import TaskType
+from quimera.domain.task_states import TaskType
 from quimera.tasks.planning import (
     choose_best_agent,
     classify_task_type,
@@ -704,14 +703,3 @@ class TaskToolsCoverageTests(unittest.TestCase):
         ):
             failed_job = self.job_tools.jobs_get(ToolCall(name="jobs_get", arguments={}))
         self.assertFalse(failed_job.ok)
-
-
-class MockProfileCoverageTests(unittest.TestCase):
-    def test_mock_profile_registered(self):
-        """Verifica que Test mock profile registered."""
-        profile = get("mock")
-        self.assertIsNotNone(profile)
-        self.assertEqual(profile.name, "mock")
-        self.assertEqual(profile.prefix, "/mock")
-        self.assertIn("echo", profile.cmd)
-        self.assertTrue(profile.prompt_as_arg)

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import re
 from typing import Iterable, Literal, Protocol, Sequence, runtime_checkable
 
-from ..constants import TaskType
+from ..domain.task_states import TaskType
 
 
 ComplexityLevel = Literal["low", "medium", "high"]
