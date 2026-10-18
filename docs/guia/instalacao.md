@@ -9,9 +9,10 @@
 
 Dependências Python base:
 
-- `rich>=14.0` para renderização terminal;
-- `prompt-toolkit>=3.0` para input interativo com histórico e autocomplete;
-- `openai>=1.0` para drivers OpenAI-compatible. Se qualquer dependência base estiver ausente (`rich`, `prompt-toolkit` ou `openai`), a CLI encerra antes de iniciar o app por instalação incompleta.
+- `textual>=0.86` para a interface (TUI), incluindo o input;
+- `rich>=14.0` para renderização de texto;
+- `httpx>=0.27` para os fluxos OAuth (Codex e Claude);
+- `openai>=1.0` para drivers OpenAI-compatible. Se qualquer dependência base estiver ausente (`rich`, `textual` ou `openai`), a CLI encerra antes de iniciar o app por instalação incompleta.
 
 Dependências opcionais:
 

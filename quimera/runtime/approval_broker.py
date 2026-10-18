@@ -113,19 +113,6 @@ class ApprovalRequest:
     created_at: float = field(default_factory=time.time)
 
     @property
-    def equivalence_key(self) -> tuple[Any, ...]:
-        """Chave de agrupamento para decidir se duas requisições são equivalentes."""
-        return (
-            self.context.scope_key,
-            self.tool_name,
-            self.risk.value,
-            self.path or "",
-            self.command or "",
-            self.context.agent_name or "",
-            self.target_agent_name or "",
-        )
-
-    @property
     def route(self) -> str:
         """Rota legível com encadeamento de agentes, ferramenta e path/comando."""
         parts = [

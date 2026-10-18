@@ -100,15 +100,6 @@ class DisplayService:
         )
 
     @staticmethod
-    def _is_terminal_task_feedback(message: str) -> bool:
-        """Identifica feedback final curto de task que merece aparecer na hora."""
-        return (
-            message.startswith("[task ")
-            and "\n" not in message
-            and " concluída" in message
-        )
-
-    @staticmethod
     def _extract_task_id(message: str) -> int | None:
         """Extrai o ID numérico de uma task no formato [task N]."""
         m = _TASK_ID_RE.search(message)

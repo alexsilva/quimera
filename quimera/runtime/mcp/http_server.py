@@ -99,18 +99,6 @@ _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8080
 
 
-@dataclass(frozen=True)
-class ActiveMCPHTTPClient:
-    """Snapshot de um client MCP autenticado com sessão HTTP ativa."""
-
-    session_id: str
-    oauth_client_id: str
-    oauth_client_name: str
-    mcp_client_name: str
-    mcp_client_version: str
-    scope: str
-    protocol_version: str
-
 HTTP_READ_LOCAL_TOOLS = tools_for_http_profile("read-local")
 HTTP_READ_TOOLS = tools_for_http_profile("read")
 HTTP_AGENT_TOOLS = tools_for_http_profile("agent")
@@ -1138,36 +1126,6 @@ class MCP_HTTPServer:
         for sse_queue in queues_to_close:
             sse_queue.put(None)
         return len(session_ids)
-
-    def active_clients(self) -> list[ActiveMCPHTTPClient]:
-        """Retorna snapshot das sessões MCP HTTP autenticadas atualmente."""
-        with self._sse_lock:
-            states = [dict(state) for state in self._http_sessions.values()]
-        oauth_clients = self._oauth.clients
-        result: list[ActiveMCPHTTPClient] = []
-        for state in states:
-            oauth_client_id = str(state.get("oauth_client_id") or "").strip()
-            client_info = state.get("client_info")
-            if not isinstance(client_info, dict):
-                client_info = {}
-            oauth_client = oauth_clients.get(oauth_client_id)
-            oauth_client_name = ""
-            if oauth_client is not None:
-                oauth_client_name = str(
-                    oauth_client.client_name or oauth_client.client_id or ""
-                ).strip()
-            result.append(
-                ActiveMCPHTTPClient(
-                    session_id=str(state.get("session_id") or "").strip(),
-                    oauth_client_id=oauth_client_id,
-                    oauth_client_name=oauth_client_name,
-                    mcp_client_name=str(client_info.get("name") or "").strip(),
-                    mcp_client_version=str(client_info.get("version") or "").strip(),
-                    scope=str(state.get("oauth_scope") or "").strip(),
-                    protocol_version=str(state.get("protocol_version") or "").strip(),
-                )
-            )
-        return result
 
     def disabled_tools_for_profile(self, profile: str) -> frozenset[str]:
         """Tools a bloquear quando o escopo do token restringe o perfil do transporte.

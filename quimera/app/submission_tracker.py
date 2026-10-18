@@ -112,15 +112,6 @@ class SubmissionTracker:
         with self._lock:
             return self._records.get(str(submission_id or ""))
 
-    def active_ids(self) -> list[str]:
-        """Lista submissões ainda não terminais."""
-        with self._lock:
-            return [
-                key
-                for key, record in self._records.items()
-                if record.status not in TERMINAL_SUBMISSION_STATUSES
-            ]
-
     def transition(
         self,
         submission_id: str,

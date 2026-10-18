@@ -307,22 +307,6 @@ class DebateRepository:
             )
         self.replace_work_items(synthesis.debate_id, synthesis.work_items)
 
-    def list_syntheses(self, debate_id: str) -> list[DebateSynthesis]:
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT payload_json, raw_response FROM debate_syntheses "
-                "WHERE debate_id = ? ORDER BY round_index ASC",
-                (debate_id,),
-            ).fetchall()
-        result: list[DebateSynthesis] = []
-        for row in rows:
-            payload = json.loads(row["payload_json"])
-            payload["raw_response"] = row["raw_response"] or ""
-            synthesis = synthesis_from_dict(payload)
-            if synthesis is not None:
-                result.append(synthesis)
-        return result
-
     def replace_work_items(self, debate_id: str, items: tuple[WorkItem, ...]) -> None:
         with self._conn() as conn:
             conn.execute(

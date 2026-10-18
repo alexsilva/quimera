@@ -289,14 +289,6 @@ class ConsoleApprovalHandler(ApprovalHandler):
         """Renderiza exatamente o preview governado produzido pelo broker."""
         return self.approve(tool_name=request.tool_name, summary=request.summary)
 
-    @staticmethod
-    def _is_stdin_interactive() -> bool:
-        """Verifica se stdin é um terminal interativo no contexto atual."""
-        try:
-            return sys.stdin is not None and sys.stdin.isatty()
-        except (AttributeError, ValueError, OSError):
-            return False
-
     def _approve_interactive(self, tool_name: str, summary: str) -> bool:
         """Aprovação interativa via input_gate ou input_fn (usado em testes/REPL).
 
@@ -525,79 +517,6 @@ def format_approval_question(tool_name: str, summary: str) -> str:
         rest = "\n".join(lines[1:]).strip()
         return f"{header}\n{rest}" if rest else header
     return f"\nAprovar {tool_name}\n{clean_summary}"
-
-
-class NonBlockingConsoleApprovalHandler(ApprovalHandler):
-    """Aprovação não-bloqueante com timeout via select —
-    ideal para uso em loop principal."""
-
-    def __init__(self, timeout_seconds: float = 5.0, renderer=None) -> None:
-        self._timeout = timeout_seconds
-        self._renderer = renderer
-
-    def approve(self, *, tool_name: str, summary: str) -> bool:
-        """Aprova ou nega a ferramenta com timeout não-bloqueante via select."""
-        _emit_approval_message(self._renderer, format_approval_question(tool_name, summary))
-        _emit_approval_message(
-            self._renderer,
-            f"  Digite 'y' em até {self._timeout:.0f}s "
-            f"para aprovar, ou qualquer tecla para negar...",
-        )
-
-        answer = self._read_with_timeout(
-            self._timeout, show_prompt=self._renderer is None
-        )
-        if answer is None:
-            _emit_approval_message(
-                self._renderer, "  timeout — negando automaticamente"
-            )
-            return False
-        approved = answer.strip().lower() in {"y", "yes", "s", "sim"}
-        status = "aprovado" if approved else "negado"
-        _emit_approval_message(self._renderer, f"  {status}")
-        return approved
-
-    def _read_with_timeout(
-        self, timeout: float, *, show_prompt: bool = True
-    ) -> str | None:
-        try:
-            stdin = sys.stdin
-            if stdin is None:
-                return None
-            self._drain_stdin()
-            if show_prompt:
-                sys.stdout.write("  > ")
-                sys.stdout.flush()
-            ready, _, _ = select.select([stdin], [], [], timeout)
-            if not ready:
-                return None
-            return stdin.readline()
-        except (OSError, ValueError, TypeError) as exc:
-            _logger.debug("leitura de aprovação em stdin falhou: %s", exc)
-            return None
-
-    @staticmethod
-    def _drain_stdin() -> None:
-        """Descarta linhas pendentes no stdin sem alterar o modo do terminal.
-
-        Best-effort, sem termios/raw-mode: em modo cooked o select só reporta
-        readable após Enter, então só linhas completas são drenadas. Mantém o
-        terminal intocado para não conflitar com o leitor de input ativo.
-
-        Limitado a um número máximo de iterações para nunca virar busy-loop:
-        se o stdin ficar continuamente "pronto" sem nunca sinalizar EOF (ex.:
-        stdin mockado em teste, ou um pipe patológico), o laço encerra mesmo
-        assim em vez de prender a CPU a 100% e travar o processo.
-        """
-        try:
-            for _ in range(_DRAIN_MAX_ITERATIONS):
-                ready, _, _ = select.select([sys.stdin], [], [], 0.0)
-                if not ready:
-                    break
-                if sys.stdin.readline() == "":
-                    break
-        except (OSError, ValueError, TypeError):
-            return
 
 
 class PreApprovalHandler(ApprovalHandler):

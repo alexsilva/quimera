@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from .paths import CANDIDATE_DIRS, find_base_writable
 
@@ -102,21 +102,6 @@ class DecisionsLogger:
         with self._log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-    def load_recent(self, limit: int = 50) -> List[dict]:
-        """Carrega as decisões mais recentes."""
-        if not self._log_path.exists():
-            return []
-        entries = []
-        with self._log_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        entries.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
-        return entries[-limit:]
-
 
 class Workspace:
     """Resolve e gerencia o diretório de dados de um projeto no armazenamento global do quimera."""
@@ -165,18 +150,6 @@ class Workspace:
         self._branch = sanitized if sanitized else "_default"
         self._persist_branch()
 
-    def list_branches(self) -> list[str]:
-        """Retorna branches de contexto existentes, incluindo a branch ativa."""
-        branches: set[str] = set()
-        ctx_dir = self._root / "data" / "context"
-        if ctx_dir.exists():
-            for d in ctx_dir.iterdir():
-                if d.is_dir():
-                    branches.add(d.name)
-        if self._branch:
-            branches.add(self._branch)
-        return sorted(branches)
-
     def _persist_branch(self) -> None:
         """Persiste a branch atual em workspace.json."""
         meta_file = self._root / "workspace.json"
@@ -190,14 +163,6 @@ class Workspace:
         """Contexto persistente isolado por branch (definida manualmente via set_branch)."""
         branch = self._branch or "_default"
         path = self.data_dir / "context" / branch / "persistent.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
-
-    @property
-    def prompt_persistent(self) -> Path:
-        """Template de prompt isolado por branch."""
-        branch = self._branch or "_default"
-        path = self.data_dir / "prompts" / branch / "prompt.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 

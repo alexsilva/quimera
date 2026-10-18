@@ -90,15 +90,6 @@ class IAgentClient(Protocol):
 
 
 @runtime_checkable
-class IProfileResolver(Protocol):
-    """Resolução de perfis por nome e listagem de todos os perfis registrados."""
-    def get(self, name: str): ...
-
-    @property
-    def profiles(self) -> list: ...
-
-
-@runtime_checkable
 class IAgentPool(Protocol):
     """Coleção mutável de agentes disponíveis com suporte a rotação e agente primário."""
     @property
@@ -173,23 +164,3 @@ class ProfileResolverAdapter:
                 config_setter(url, token)
 
 
-@runtime_checkable
-class ISessionServices(Protocol):
-    """Serviços de ciclo de vida da sessão: persistência de mensagens, sumarização automática e shutdown."""
-    def persist_message(
-        self,
-        role: str,
-        content: str,
-        *,
-        return_history_snapshot: bool = ...,
-    ) -> list | None: ...
-    def maybe_auto_summarize(self, preferred_agent: str | None = ...) -> None: ...
-    def shutdown(self, *, interrupted: bool = ...) -> None: ...
-
-
-@runtime_checkable
-class IInputServices(Protocol):
-    """Serviços de entrada do usuário: leitura via terminal, editor de texto e arquivos."""
-    def read_user_input(self, prompt: str, timeout: int) -> str | None: ...
-    def read_from_editor(self) -> str | None: ...
-    def read_from_file(self, path_str: str) -> str | None: ...

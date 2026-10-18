@@ -76,28 +76,3 @@ class TaskApprovalPolicy:
             handlers.append(handler)
         return handlers
 
-    def make_hooks(
-        self, tool_executor_getter: Callable[[], Any | None]
-    ) -> tuple[
-        Callable[[str], None],
-        Callable[[str], None],
-    ]:
-        """Cria par (before_agent_call, after_agent_call) para ``TaskRunner``.
-
-        ``tool_executor_getter`` é um callable que retorna o
-        ``ToolExecutor`` de background atual, de onde se extrai o
-        ``approval_handler`` específico do executor.
-        """
-        before = lambda agent_name: self.enable(  # noqa: E731
-            agent_name,
-            approval_handler=getattr(
-                tool_executor_getter(), "approval_handler", None
-            ),
-        )
-        after = lambda agent_name: self.disable(  # noqa: E731
-            agent_name,
-            approval_handler=getattr(
-                tool_executor_getter(), "approval_handler", None
-            ),
-        )
-        return before, after

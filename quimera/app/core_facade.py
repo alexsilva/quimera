@@ -385,24 +385,6 @@ class CoreFacadeMixin:
         self.bug_services.run_render_bug_detector(agent_metrics=agent_metrics)
 
     @staticmethod
-    def _unique_encodings(*encodings):
-        """Executa unique encodings."""
-        seen = set()
-        result = []
-        for encoding in encodings:
-            if not encoding:
-                continue
-            normalized = str(encoding).strip()
-            if not normalized:
-                continue
-            key = normalized.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(normalized)
-        return result
-
-    @staticmethod
     def _shorten_middle(value: str, max_chars: int) -> str:
         """Trunca string no meio para manter cabeçalho e sufixo visíveis."""
         if max_chars <= 0 or len(value) <= max_chars:

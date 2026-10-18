@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Literal
 
 from ..runtime.tools.mcp_clients import get_bridge as get_mcp_client_bridge
@@ -99,14 +98,6 @@ class AppLifecycle:
                     bug_store.close()
                 except Exception as exc:
                     _logger.warning("fechar o bug_store falhou: %s", exc, exc_info=True)
-
-    def restore_current_job_env(self) -> None:
-        """Restaura QUIMERA_CURRENT_JOB_ID ao valor anterior ao app."""
-        previous = self._app._previous_current_job_id_env
-        if previous is None:
-            os.environ.pop("QUIMERA_CURRENT_JOB_ID", None)
-        else:
-            os.environ["QUIMERA_CURRENT_JOB_ID"] = previous
 
     def __enter__(self) -> "AppLifecycle":
         self.start()

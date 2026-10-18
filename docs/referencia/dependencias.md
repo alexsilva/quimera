@@ -8,11 +8,12 @@ O projeto requer Python `>=3.10`.
 
 | Pacote | Motivo |
 |---|---|
-| `rich>=14.0` | Renderização terminal, painéis, markdown e estilos. |
-| `prompt-toolkit>=3.0` | Input interativo, histórico e autocomplete quando disponível. |
+| `textual>=0.86` | Interface (TUI), incluindo o input. |
+| `rich>=14.0` | Renderização de texto, painéis, markdown e estilos. |
 | `openai>=1.0` | Drivers OpenAI-compatible remotos e locais. |
+| `httpx>=0.27` | Cliente HTTP dos fluxos OAuth (Codex e Claude). |
 
-A CLI valida essas dependências base na inicialização e encerra antes de subir o app quando alguma delas está ausente.
+A CLI valida `rich`, `textual` e `openai` na inicialização e encerra antes de subir o app quando alguma delas está ausente.
 
 ## Extras do projeto
 

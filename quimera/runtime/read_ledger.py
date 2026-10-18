@@ -229,13 +229,6 @@ class ReadLedger:
                 self._scopes.pop(scope_key, None)
             return removed
 
-    def drop_scope(self, scope: str) -> int:
-        """Descarta um run e retorna quantos paths foram removidos."""
-        scope_key = self._scope_key(scope)
-        with self._lock:
-            paths = self._scopes.pop(scope_key, None)
-            return len(paths) if paths is not None else 0
-
     def clear(self) -> None:
         """Descarta todas as leituras, principalmente para isolamento de testes."""
         with self._lock:
