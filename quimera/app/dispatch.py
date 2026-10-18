@@ -12,6 +12,7 @@ from .agent_call_service import AgentCallService
 from .agent_gateway import AgentGateway, _is_user_cancelled
 from .render_event import RenderEvent
 from .config import logger
+from ..domain.agent_run_scope import current_agent_run_scope
 from ..domain.session_state import SessionRuntimeState
 from ..runtime.drivers.openai_compat import (
     APIExecutionError as _APIExecutionError,
@@ -617,7 +618,12 @@ class AppDispatchServices:
                     RenderEvent.TEXT,
                     response if response is not None else "",
                     agent=agent,
-                    metadata={"no_response": response is None},
+                    metadata={
+                        "no_response": response is None,
+                        # A fila é drenada em outra thread, fora do contexto
+                        # desta execução; a identidade viaja com o evento.
+                        "run_scope": current_agent_run_scope(agent),
+                    },
                 )
             )
             return

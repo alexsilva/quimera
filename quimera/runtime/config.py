@@ -25,6 +25,18 @@ DEFAULT_DELEGATE_TIMEOUT_SECONDS = 3600
 # O cliente MCP (ex.: Codex) deve expirar sempre DEPOIS do servidor, para que
 # o erro estruturado venha do servidor e nunca do cliente abandonando a chamada.
 DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS = 2 * DEFAULT_DELEGATE_TIMEOUT_SECONDS
+# Ambiente que o proxy MCP (``_proxy_stdio_to_socket``) lê para montar o
+# prelude autenticado: identidade da execução, escopo de aprovação e tools
+# desligadas. CLIs que filtram o ambiente dos servidores MCP (Codex) precisam
+# da lista explícita, ou duas execuções do mesmo agente ficam indistinguíveis.
+MCP_PROXY_ENV_VARS = (
+    "QUIMERA_MCP_RUN_ID",
+    "QUIMERA_MCP_AGENT_NAME",
+    "QUIMERA_MCP_PARENT_AGENT",
+    "QUIMERA_MCP_APPROVAL_SCOPE",
+    "QUIMERA_MCP_DISABLED_TOOLS",
+    "QUIMERA_MCP_TOOL_DEFERRAL",
+)
 READ_BEFORE_EDIT_MODES = frozenset({"enforce", "warn", "off"})
 # Deferral de schemas de tools: "api" ativa nos drivers que montam a própria
 # requisição (openai-compat e cloud); "all" estende às conexões MCP, cujos

@@ -5,6 +5,7 @@ import sys
 import threading
 import queue
 
+from ..domain.agent_run_scope import bind_agent_run_scope
 from .render_event import RenderEvent
 from ..tasks.events import (
     BugFiled,
@@ -196,10 +197,11 @@ class UiEventHandler:
                             self._show_muted_message(payload)
                         continue
 
-                    if no_response:
-                        self._renderer.show_no_response(agent_name)
-                    else:
-                        self._renderer.show_message(agent_name, event.payload)
+                    with bind_agent_run_scope((event.metadata or {}).get("run_scope"), remember=False):
+                        if no_response:
+                            self._renderer.show_no_response(agent_name)
+                        else:
+                            self._renderer.show_message(agent_name, event.payload)
                     self._redisplay_after_render()
                 elif event_type == RenderEvent.WARNING:
                     self._show_warning_message(event.payload)

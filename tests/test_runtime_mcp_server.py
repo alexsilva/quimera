@@ -467,6 +467,59 @@ class TestToolsCall:
         assert resp["result"]["isError"] is False
         assert events == []
 
+    @pytest.mark.parametrize(
+        ("state", "expected_run_id"),
+        [
+            ({"agent_name": "codex", "trusted_run_id": "agentrun:codex-1"}, "agentrun:codex-1"),
+            # Sem prelude, o servidor gera um id por conexão: o renderer não
+            # conhece esse run e cai na resolução normal pelo agente.
+            ({"agent_name": "codex"}, "stdio:"),
+            ({"trusted_run_id": "agentrun:sem-agente"}, None),
+            (
+                {"agent_name": "mcp-http", "transport": "http_mcp", "trusted_run_id": "http:run-1"},
+                None,
+            ),
+        ],
+    )
+    def test_socket_tools_call_runs_under_trusted_agent_run_scope(self, state, expected_run_id):
+        """A tool roda no escopo da execução autenticada no prelude do socket.
+
+        Preview, pergunta e aprovação emitidos pela tool numa thread do
+        servidor chegam ao cartão da execução certa do agente.
+        """
+        from quimera.domain.agent_run_scope import current_agent_run_scope
+
+        executor = _make_executor(tool_names=["read_file"])
+        seen = []
+
+        def execute(call, progress_callback=None):
+            seen.append(current_agent_run_scope(state.get("agent_name") or "codex"))
+            return ToolResult(ok=True, tool_name=call.name, content="ok")
+
+        executor.execute.side_effect = execute
+        server = MCPServer(executor)
+        out = io.StringIO()
+        setattr(out, "_mcp_state", dict(state))
+        server.serve(
+            stdin=io.StringIO(
+                json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 11,
+                    "method": "tools/call",
+                    "params": {"name": "read_file", "arguments": {"path": "foo.py"}},
+                })
+                + "\n"
+            ),
+            stdout=out,
+        )
+
+        assert len(seen) == 1
+        if expected_run_id is None:
+            assert seen[0] is None
+        else:
+            assert seen[0].run_id.startswith(expected_run_id)
+            assert seen[0].agent == "codex"
+
     def test_http_mcp_tools_call_emits_agent_run_events(self):
         result = ToolResult(ok=True, tool_name="read_file", content="linhas do arquivo")
         executor = _make_executor(call_result=result)
@@ -1305,6 +1358,21 @@ class TestSocketAuth:
 
         names = [tool["name"] for tool in resp["result"]["tools"]]
         assert names == ["read_file"]
+
+    def test_codex_recebe_todo_o_ambiente_que_o_proxy_le(self):
+        """``MCP_PROXY_ENV_VARS`` cobre cada variável que o proxy lê do ambiente.
+
+        O Codex só repassa ao proxy o que estiver em ``env_vars``; variável
+        nova no prelude que fique fora da lista some em silêncio no Codex.
+        """
+        import inspect
+        import re
+
+        from quimera.runtime.config import MCP_PROXY_ENV_VARS
+
+        source = inspect.getsource(_proxy_stdio_to_socket)
+        read_by_proxy = set(re.findall(r"QUIMERA_MCP_[A-Z_]+", source))
+        assert read_by_proxy == set(MCP_PROXY_ENV_VARS)
 
     def test_proxy_repassa_disabled_tools_da_env(self, tmp_path, monkeypatch):
         """Proxy MCP deve transformar QUIMERA_MCP_DISABLED_TOOLS em policy da conexão."""

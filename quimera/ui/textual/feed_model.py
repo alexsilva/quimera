@@ -305,7 +305,7 @@ class TextualFeedModel:
             if delegation_id and delegation_id in self._delegation_slots:
                 return self._finish_delegation_group(event, delegation_id)
             kept_removed = self._drop_kept_answer_repeated_by(event)
-            summary = self._pending_turn_summary_by_agent.pop(self._agent_base(event), None)
+            summary = self._pop_pending_turn_summary(event)
             burst_stats, bursts_removed = self._consume_mcp_tool_bursts(
                 event, exclude_key=self._final_replacement_key(event)
             )
@@ -331,7 +331,7 @@ class TextualFeedModel:
             # Um resumo cuja resposta final nunca entrou no feed (delegação
             # oculta, tentativa descartada) não pode virar rodapé do próximo
             # turno do mesmo agente.
-            self._pending_turn_summary_by_agent.pop(self._agent_base(event), None)
+            self._pop_pending_turn_summary(event)
         if event.kind == "tool_preview":
             return self._apply_tool_preview(event)
         if event.kind == "tool_state":
@@ -340,10 +340,9 @@ class TextualFeedModel:
             return self._apply_delegation(event)
         if event.kind == "turn_summary":
             # Os stats do turno só existem como rodapé da resposta final, que
-            # chega em seguida. A pendência é pelo agente base porque o resumo
-            # e a resposta saem sem run_id (o contexto de run já foi limpo),
-            # enquanto os transitórios do mesmo turno carregam a chave com run.
-            self._pending_turn_summary_by_agent[self._agent_base(event)] = event
+            # chega em seguida. A pendência é pela chave da execução: outra
+            # execução simultânea do mesmo agente tem resumo próprio.
+            self._pending_turn_summary_by_agent[self._agent_key(event)] = event
             self._last_change = TextualFeedChange(False)
             return False
         if event.kind in self._TRANSIENT_KINDS:
@@ -570,12 +569,23 @@ class TextualFeedModel:
         agent_key = self._agent_key(event)
         self._finalized_agents.add(agent_key)
         self._kept_answer_by_agent.pop(agent_key, None)
-        self._pending_turn_summary_by_agent.pop(self._agent_base(event), None)
+        self._pop_pending_turn_summary(event)
         removed = self._remove_transient_keys(
             self._delegation_group_keys(delegation_id, agent_keys=[agent_key])
         )
         self._last_change = TextualFeedChange(removed, redraw=removed)
         return removed
+
+    def _pop_pending_turn_summary(self, event: TextualUiEvent) -> TextualUiEvent | None:
+        """Retira o resumo pendente da execução do evento.
+
+        Resumo sem execução (chave base) é de quem chegar primeiro; resumo de
+        uma execução nunca vira rodapé de outra.
+        """
+        pending = self._pending_turn_summary_by_agent
+        summary = pending.pop(self._agent_key(event), None)
+        unowned = pending.pop(self._agent_base(event), None)
+        return summary if summary is not None else unowned
 
     @staticmethod
     def _agent_base(event: TextualUiEvent) -> str:
@@ -805,13 +815,20 @@ class TextualFeedModel:
                 keys = [self._agent_key(event)]
             else:
                 agent_prefix = f"{agent}#"
+                # Execuções do agente que seguem vivas não pertencem a este
+                # reset: sem run_id ele não sabe a qual execução se refere.
+                kept = {
+                    f"{agent}#run:{run_id}"
+                    for run_id in payload.get("keep_run_ids") or ()
+                    if str(run_id or "").strip()
+                }
                 keys = [
                     key
                     for key in set(
                         self._transient_index_by_agent
                         | self._transient_tools_by_agent
                     )
-                    if key == agent or key.startswith(agent_prefix)
+                    if (key == agent or key.startswith(agent_prefix)) and key not in kept
                 ]
             removed = self._remove_transient_keys(
                 self._delegation_group_keys(

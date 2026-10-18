@@ -18,6 +18,7 @@ from typing import Any
 
 import quimera.profiles as profiles
 from quimera.constants import MAX_STDERR_LINES
+from quimera.domain.agent_run_scope import run_in_current_context
 from quimera.domain.task_states import Visibility
 from quimera.profiles.base import (
     CliConnection,
@@ -1878,7 +1879,13 @@ class AgentClient:
                 if self._cancel_event.is_set():
                     run.cancel_event.set()
 
-                t = threading.Thread(target=self._run_api_driver, args=(run,), daemon=True)
+                # A thread do driver herda a identidade da execução: os eventos
+                # visuais que ela emite precisam chegar ao cartão deste run.
+                t = threading.Thread(
+                    target=run_in_current_context(self._run_api_driver),
+                    args=(run,),
+                    daemon=True,
+                )
                 self._register_api_run(run.token, run.cancel_event)
                 t.start()
 

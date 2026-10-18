@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from quimera.domain.agent_run_events import AgentRunEvent, coerce_agent_run_sink
+from quimera.domain.agent_run_scope import AgentRunScope, bind_agent_run_scope
 from quimera.runtime.approval import ApprovalManager, TrustedToolExecutionContext
 from quimera.runtime.config import (
     DEFAULT_DELEGATE_TIMEOUT_SECONDS,
@@ -242,6 +243,25 @@ class MCPServer:
             thread_name_prefix="mcp-delegate",
         )
         self._resource_subscriptions: set[str] = set()
+
+    @staticmethod
+    def _trusted_agent_run_scope(state: dict) -> AgentRunScope | None:
+        """Execução do agente CLI dona da conexão MCP local, quando autenticada.
+
+        A tool roda numa thread do servidor, fora do contexto da execução que
+        a pediu. O ``trusted_run_id`` só entra no estado pelo prelude
+        autenticado do socket (``QUIMERA_MCP_RUN_ID``); como escopo, preview,
+        pergunta e aprovação da tool vão para o cartão dessa execução, e não
+        para o de outra execução simultânea do mesmo agente. O renderer só o
+        usa se conhecer a execução.
+        """
+        if state.get("transport") == "http_mcp":
+            return None
+        agent_name = str(state.get("agent_name") or "").strip()
+        run_id = str(state.get("trusted_run_id") or "").strip()
+        if not agent_name or not run_id:
+            return None
+        return AgentRunScope(agent=agent_name, run_id=run_id)
 
     @staticmethod
     def _visual_transport(context: TrustedToolExecutionContext) -> str:
@@ -911,13 +931,16 @@ class MCPServer:
             metadata=call_metadata,
         )
 
+        run_scope = self._trusted_agent_run_scope(state)
+
         def _execute_unless_cancelled():
             # Fecha a janela entre submit e início do worker. Em especial,
             # impede que uma mutação ainda na fila execute depois de o cliente
             # cancelar a request.
             if cancel_event.is_set():
                 return None
-            return self._executor.execute(tool_call, _progress_callback)
+            with bind_agent_run_scope(run_scope, remember=False):
+                return self._executor.execute(tool_call, _progress_callback)
 
         pool = self._delegation_pool if tool_name == "tasks_delegate" else self._thread_pool
         future = pool.submit(_execute_unless_cancelled)

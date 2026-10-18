@@ -21,6 +21,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Optional
 
+from ...domain.agent_run_scope import run_in_current_context
 from ...evidence import Evidence, EvidenceStore
 from ..approval_broker import TrustedToolExecutionContext
 from ...prompt_templates import PromptText
@@ -1245,7 +1246,7 @@ class ToolCallingDriver:
             ) as pool:
                 future_indexes = {
                     pool.submit(
-                        self._execute_one_tool_call,
+                        run_in_current_context(self._execute_one_tool_call),
                         tool_calls[item],
                         tool_executor,
                         agent_name=agent_name,

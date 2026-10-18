@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import contextmanager
 from typing import Any
@@ -27,10 +28,16 @@ from quimera.ui.textual.feed_model import (
     _agent_lifecycle_payload,
 )
 from quimera.ui.textual.terminal_modes import _external_textual_window
+from quimera.domain.agent_run_scope import current_agent_run_scope
 from quimera.domain.execution import ExecutionControlEvent
 from quimera.domain.tool_activity import count_tool_activities
 
 _logger = logging.getLogger(__name__)
+
+# Execuções encerradas sem resposta final mantidas por agente (ver
+# ``_prune_closed_runs_locked``).
+_MAX_TERMINAL_RUNS_PER_AGENT = 4
+_MAX_REMEMBERED_CLOSED_RUNS = 256
 
 
 class _TextualStatus:
@@ -95,7 +102,12 @@ class TextualRenderer(RendererBase):
         self._profile_resolver: Callable | None = None
         self._theme = themes.get(themes.DEFAULT_THEME)
         self._statuses: dict[str, str] = {}
-        self._run_context_by_agent: dict[str, dict[str, str]] = {}
+        # Execuções abertas de cada agente, por run_id, em ordem de início.
+        # O mesmo agente pode ter várias ao mesmo tempo (chat, task, delegação).
+        self._open_runs_by_agent: dict[str, dict[str, dict[str, str]]] = {}
+        # Fechadas há pouco: um evento tardio delas (limpeza do delegador, por
+        # exemplo) continua sendo delas, e não da outra execução aberta.
+        self._closed_run_ids: OrderedDict[str, None] = OrderedDict()
         self._run_context_lock = threading.RLock()
         self._orchestrator_agent: str | None = None
 
@@ -166,7 +178,10 @@ class TextualRenderer(RendererBase):
         agent_name = str(agent or "")
         style, label = self._resolve_agent_style(agent_name)
         payload = {"label": label, "style": style, "theme": self._theme.name}
-        if include_run_context:
+        explicit_identity = any((extra or {}).get(key) for key in ("run_id", "delegation_id"))
+        if include_run_context and not explicit_identity:
+            # Identidade explícita vence: misturar o contexto de outra execução
+            # (transport, delegation_id) corromperia a chave do cartão.
             payload.update(self._agent_run_context(agent_name))
         if self._orchestrator_agent and agent_name.lower().strip() == self._orchestrator_agent:
             payload["orchestrator"] = True
@@ -174,20 +189,74 @@ class TextualRenderer(RendererBase):
             payload.update(extra)
         return payload
 
+    @staticmethod
+    def _is_terminal_run(context: dict[str, str]) -> bool:
+        return str(context.get("status") or "") in {"finished", "failed", "cancelled"}
+
+    def _resolve_open_run_locked(self, agent_name: str) -> tuple[str, dict[str, str]] | None:
+        """Execução a que um evento sem identidade explícita pertence.
+
+        1. A execução do contexto corrente (thread/escopo do gateway), se este
+           renderer a conhece, mesmo fechada há pouco: o evento é dela.
+        2. Sem escopo conhecido no contexto, a única execução aberta do agente.
+        Com várias abertas e nenhum escopo, não há como saber: ``None``.
+        """
+        runs = self._open_runs_by_agent.get(agent_name) or {}
+        scope = current_agent_run_scope(agent_name)
+        if scope is not None:
+            context = runs.get(scope.run_id)
+            if context is not None:
+                return scope.run_id, context
+            if scope.run_id in self._closed_run_ids:
+                return scope.run_id, {"run_id": scope.run_id, **scope.as_payload()}
+            # Escopo que este renderer desconhece (resto de uma execução antiga
+            # nesta thread, run de MCP que não é a execução visual): não prova
+            # a qual execução o evento pertence.
+        if not runs:
+            return None
+        if len(runs) == 1:
+            run_id, context = next(iter(runs.items()))
+            return run_id, context
+        live = [(run_id, context) for run_id, context in runs.items() if not self._is_terminal_run(context)]
+        if len(live) == 1:
+            return live[0]
+        return None
+
     def _agent_run_context(self, agent: str) -> dict[str, str]:
         with self._run_context_lock:
-            return dict(self._run_context_by_agent.get(str(agent or ""), {}))
+            resolved = self._resolve_open_run_locked(str(agent or ""))
+            return dict(resolved[1]) if resolved is not None else {}
 
-    def _clear_agent_run_context(self, agent: str, *, run_id: str = "") -> None:
+    def _open_run_ids(self, agent: str) -> list[str]:
+        with self._run_context_lock:
+            return [run_id for run_id in self._open_runs_by_agent.get(str(agent or "")) or {} if run_id]
+
+    def _clear_agent_run_context(
+        self,
+        agent: str,
+        *,
+        run_id: str = "",
+        only_terminal: bool = False,
+    ) -> None:
+        """Fecha uma execução do agente; nunca as demais que seguem abertas."""
         agent_name = str(agent or "")
         with self._run_context_lock:
-            current = self._run_context_by_agent.get(agent_name)
-            if not current:
+            runs = self._open_runs_by_agent.get(agent_name)
+            if not runs:
                 return
             expected = str(run_id or "").strip()
-            if expected and str(current.get("run_id") or "") != expected:
+            if not expected:
+                resolved = self._resolve_open_run_locked(agent_name)
+                if resolved is None:
+                    return
+                expected = resolved[0]
+            current = runs.get(expected)
+            if current is None or (only_terminal and not self._is_terminal_run(current)):
                 return
-            self._run_context_by_agent.pop(agent_name, None)
+            runs.pop(expected, None)
+            self._remember_closed_run_locked(expected)
+            if not runs:
+                self._open_runs_by_agent.pop(agent_name, None)
 
     def begin_agent_run(
         self,
@@ -210,17 +279,43 @@ class TextualRenderer(RendererBase):
         }
         if not context:
             return
+        agent_name = str(agent or "")
         with self._run_context_lock:
-            self._run_context_by_agent[str(agent or "")] = context
+            runs = self._open_runs_by_agent.setdefault(agent_name, {})
+            runs.pop(context.get("run_id", ""), None)
+            runs[context.get("run_id", "")] = context
+            self._prune_closed_runs_locked(runs)
+
+    def _prune_closed_runs_locked(self, runs: dict[str, dict[str, str]]) -> None:
+        """Descarta as encerradas mais antigas que nunca receberam resposta final.
+
+        Execuções silenciosas terminam sem ``show_message``; sem o corte elas
+        se acumulariam e tornariam ambígua a resolução por agente.
+        """
+        terminal = [run_id for run_id, context in runs.items() if self._is_terminal_run(context)]
+        for run_id in terminal[: max(0, len(terminal) - _MAX_TERMINAL_RUNS_PER_AGENT)]:
+            runs.pop(run_id, None)
+            self._remember_closed_run_locked(run_id)
+
+    def _remember_closed_run_locked(self, run_id: str) -> None:
+        if not run_id:
+            return
+        self._closed_run_ids.pop(run_id, None)
+        self._closed_run_ids[run_id] = None
+        while len(self._closed_run_ids) > _MAX_REMEMBERED_CLOSED_RUNS:
+            self._closed_run_ids.popitem(last=False)
 
     def end_agent_run(self, agent, *, run_id: str = "", status: str = "") -> None:
         agent_name = str(agent or "")
         with self._run_context_lock:
-            current = self._run_context_by_agent.get(agent_name)
-            if not current:
-                return
             expected = str(run_id or "").strip()
-            if expected and str(current.get("run_id") or "") != expected:
+            if not expected:
+                resolved = self._resolve_open_run_locked(agent_name)
+                if resolved is None:
+                    return
+                expected = resolved[0]
+            current = (self._open_runs_by_agent.get(agent_name) or {}).get(expected)
+            if current is None:
                 return
             if status:
                 current["status"] = str(status)
@@ -635,12 +730,13 @@ class TextualRenderer(RendererBase):
         """Exibe ausência de resposta."""
         self.show_message(agent, _NO_RESPONSE_MESSAGE, render_mode="plain")
 
-    def abort_message_stream(self, agent) -> None:
+    def abort_message_stream(self, agent, *, run_id: str = "") -> None:
         """Encerra o estado visual do agente após limpeza externa da execução."""
         agent_key = str(agent)
-        payload = self._agent_event_payload(agent_key)
+        if not run_id:
+            run_id = str(self._agent_event_payload(agent_key).get("run_id") or "")
         self._bridge.clear_agent_active(agent_key)
-        self._clear_agent_run_context(agent_key, run_id=str(payload.get("run_id") or ""))
+        self._clear_agent_run_context(agent_key, run_id=run_id)
 
     def update_agent_transient(
         self,
@@ -703,19 +799,38 @@ class TextualRenderer(RendererBase):
             include_run_context=not bool(run_id or delegation_id),
         )
         scoped_run_id = str(run_id or payload.get("run_id") or "")
-        self._clear_agent_run_context(agent_name, run_id=scoped_run_id)
+        # Limpar o transitório no meio do turno (CLI, presenter) não encerra a
+        # execução; ela só sai do registro depois de terminar.
+        self._clear_agent_run_context(agent_name, run_id=scoped_run_id, only_terminal=True)
+        self._emit_agent_visual_reset(agent_name, payload)
+
+    def _emit_agent_visual_reset(self, agent_name: str, payload: dict[str, Any]) -> None:
+        """Emite o reset visual de um agente sem atingir as outras execuções dele.
+
+        Sem ``run_id``, o feed apagaria todos os cartões do agente; as
+        execuções que seguem abertas vão em ``keep_run_ids``.
+        """
+        if not payload.get("run_id") and not payload.get("delegation_id"):
+            keep = self._open_run_ids(agent_name)
+            if keep:
+                payload = {**payload, "keep_run_ids": keep}
         self._bridge.emit(TextualUiEvent("visual_reset", payload, agent=agent_name))
 
     def reset_visual_state(self, agent: str | None = None) -> None:
         """Limpa estados visuais transitórios após cancelamento."""
         if agent:
-            self._bridge.clear_agent_active(str(agent))
-            self._clear_agent_run_context(str(agent))
-            self._bridge.emit(TextualUiEvent("visual_reset", agent=str(agent)))
+            agent_name = str(agent)
+            payload = self._agent_event_payload(agent_name)
+            self._bridge.clear_agent_active(agent_name)
+            self._clear_agent_run_context(agent_name, run_id=str(payload.get("run_id") or ""))
+            self._emit_agent_visual_reset(agent_name, payload)
             return
         self._statuses.clear()
         with self._run_context_lock:
-            self._run_context_by_agent.clear()
+            for runs in self._open_runs_by_agent.values():
+                for run_id in runs:
+                    self._remember_closed_run_locked(run_id)
+            self._open_runs_by_agent.clear()
         self._bridge.emit(TextualUiEvent("visual_reset"))
 
     def set_agent_pending_input(self, agent: str, kind: str, question: str = "") -> None:

@@ -10,7 +10,7 @@ from quimera.profiles.spy_utils import (
     normalize_spy_text,
     truncate_spy_text,
 )
-from quimera.runtime.config import DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS
+from quimera.runtime.config import DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS, MCP_PROXY_ENV_VARS
 
 _CODEX_STDERR_NOISE_PATTERNS = (
     r"\bOrphan function call output for call id:\s*call_[A-Za-z0-9]+\b",
@@ -195,7 +195,18 @@ class CodexProfile(ExecutionProfile):
             f"mcp_servers.quimera.args={args_toml}",
             "-c",
             f"mcp_servers.quimera.tool_timeout_sec={DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS}",
+            *self._mcp_env_vars_args(),
         ]
+
+    @staticmethod
+    def _mcp_env_vars_args() -> list[str]:
+        """Repassa ao proxy MCP o ambiente do prelude.
+
+        O Codex entrega aos servidores MCP só um ambiente mínimo; sem
+        ``env_vars`` o run_id não chega e as tools da execução caem na
+        execução errada quando o mesmo agente roda duas vezes.
+        """
+        return ["-c", f"mcp_servers.quimera.env_vars={json.dumps(list(MCP_PROXY_ENV_VARS))}"]
 
     def mcp_http_server_args(self, url: str) -> list[str]:
         """Retorna uma lista vazia de argumentos MCP HTTP para o Codex CLI."""
@@ -210,15 +221,19 @@ class CodexProfile(ExecutionProfile):
             return base_cmd
         if any("mcp_servers.quimera." in str(part) for part in base_cmd):
             timeout_key = "mcp_servers.quimera.tool_timeout_sec"
-            if any(timeout_key in str(part) for part in base_cmd):
+            missing_args: list[str] = []
+            if not any(timeout_key in str(part) for part in base_cmd):
+                missing_args += [
+                    "-c",
+                    f"{timeout_key}={DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS}",
+                ]
+            if not any("mcp_servers.quimera.env_vars" in str(part) for part in base_cmd):
+                missing_args += self._mcp_env_vars_args()
+            if not missing_args:
                 return base_cmd
-            timeout_args = [
-                "-c",
-                f"{timeout_key}={DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS}",
-            ]
             if base_cmd and base_cmd[-1] == "-":
-                return [*base_cmd[:-1], *timeout_args, base_cmd[-1]]
-            return [*base_cmd, *timeout_args]
+                return [*base_cmd[:-1], *missing_args, base_cmd[-1]]
+            return [*base_cmd, *missing_args]
         mcp_args = self.mcp_server_args(socket_path)
         if base_cmd and base_cmd[-1] == "-":
             return [*base_cmd[:-1], *mcp_args, base_cmd[-1]]

@@ -39,7 +39,7 @@ from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.evidence import EvidenceStore
 from quimera.ui.base import RendererBase
 from quimera.runtime.approval import AutoApprovalHandler
-from quimera.runtime.config import ToolRuntimeConfig
+from quimera.runtime.config import MCP_PROXY_ENV_VARS, ToolRuntimeConfig
 from quimera.workspace import Workspace
 from quimera.runtime.executor import ToolExecutor
 
@@ -177,6 +177,8 @@ def test_codex_profile_injects_mcp_server_before_stdin_sentinel():
             f"mcp_servers.quimera.args={expected_args}",
             "-c",
             "mcp_servers.quimera.tool_timeout_sec=7200",
+            "-c",
+            f"mcp_servers.quimera.env_vars={json.dumps(list(MCP_PROXY_ENV_VARS))}",
             "-",
         ]
     finally:
@@ -210,6 +212,8 @@ def test_codex_profile_does_not_duplicate_existing_mcp_override():
             'mcp_servers.quimera.command="python"',
             "-c",
             "mcp_servers.quimera.tool_timeout_sec=7200",
+            "-c",
+            f"mcp_servers.quimera.env_vars={json.dumps(list(MCP_PROXY_ENV_VARS))}",
         ]
     finally:
         profile._connection_override = original_override
@@ -3419,6 +3423,48 @@ def test_call_api_propagates_task_approval_scope_to_driver_thread(renderer):
         call(None),
     ]
     renderer.show_system_neutral.assert_not_called()
+
+
+def test_call_api_driver_thread_inherits_agent_run_scope(renderer):
+    """A thread do driver de API emite eventos visuais da execução que a disparou."""
+    from types import SimpleNamespace
+
+    from quimera.domain.agent_run_scope import (
+        AgentRunScope,
+        bind_agent_run_scope,
+        current_agent_run_scope,
+    )
+
+    client = AgentClient(renderer)
+    profile = SimpleNamespace(
+        driver="openai_compat",
+        model="test-model",
+        base_url="http://localhost",
+        api_key_env=None,
+        tool_use_reliability="medium",
+        supports_tools=True,
+    )
+    scope = AgentRunScope(agent="test-agent", run_id="agentrun:driver-thread", transport="task")
+    seen = {}
+
+    def run_driver(*_args, **_kwargs):
+        seen["thread"] = threading.get_ident()
+        seen["scope"] = current_agent_run_scope("test-agent")
+        return "ok"
+
+    with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls, \
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"), \
+            bind_agent_run_scope(scope):
+        mock_driver = MagicMock()
+        mock_driver.run.side_effect = run_driver
+        mock_driver_cls.return_value = mock_driver
+
+        result = client._call_api("test-agent", profile, "prompt")
+
+    assert result == "ok"
+    assert seen["thread"] != threading.get_ident()
+    assert seen["scope"] is scope
 
 
 def test_call_api_cancel_releases_isolated_call_while_driver_thread_drains(renderer):

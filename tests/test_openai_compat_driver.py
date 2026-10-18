@@ -14,6 +14,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
+from quimera.domain.agent_run_scope import AgentRunScope, bind_agent_run_scope, current_agent_run_scope
 from quimera.evidence import EvidenceStore
 from quimera.runtime.drivers import openai_compat as openai_compat_module
 from quimera.runtime.drivers.openai_compat import (
@@ -1519,6 +1520,7 @@ def test_run_parallelizes_safe_tool_batch_and_preserves_protocol_order(tmp_path)
                 "approval_cancel": executor.get_thread_approval_cancel_event(),
                 "tool_cancel": call.metadata.get("_mcp_cancel_event"),
                 "run_id": call.metadata["trusted_context"].run_id,
+                "agent_run_scope": current_agent_run_scope("codex"),
             }
             time.sleep(0.12 if call.call_id == "call_slow" else 0.02)
             return ToolResult(
@@ -1536,8 +1538,10 @@ def test_run_parallelizes_safe_tool_batch_and_preserves_protocol_order(tmp_path)
     executor.registry.register("read_file", read_handler)
     executor.bind_thread_approval_scope("run:parallel-test")
     previous_cancel = executor.bind_approval_cancel_event(approval_cancel_event)
+    # A identidade visual da execução também precisa chegar às threads do pool.
+    run_scope = AgentRunScope(agent="codex", run_id="agentrun:parallel-test", transport="chat")
     try:
-        with patch.object(driver, "_chat", side_effect=chat):
+        with patch.object(driver, "_chat", side_effect=chat), bind_agent_run_scope(run_scope):
             result = driver.run(
                 _prompt("leia os dois arquivos"),
                 tool_executor=executor,
@@ -1562,12 +1566,14 @@ def test_run_parallelizes_safe_tool_batch_and_preserves_protocol_order(tmp_path)
             "approval_cancel": approval_cancel_event,
             "tool_cancel": approval_cancel_event,
             "run_id": "agentrun:parallel-test",
+            "agent_run_scope": run_scope,
         },
         "call_fast": {
             "scope": "run:parallel-test",
             "approval_cancel": approval_cancel_event,
             "tool_cancel": approval_cancel_event,
             "run_id": "agentrun:parallel-test",
+            "agent_run_scope": run_scope,
         },
     }
     tool_messages = [

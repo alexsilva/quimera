@@ -10,6 +10,7 @@ from typing import Any
 from ..agents.capabilities import get_cancel_event, is_user_cancelled
 from ..prompt_kinds import PromptKind
 from ..domain.agent_run_events import AgentRunEvent, ThinkingStreamParser, coerce_agent_run_sink
+from ..domain.agent_run_scope import AgentRunScope, bind_agent_run_scope, current_agent_run_scope
 from .config import logger
 from .render_event import RenderEvent
 
@@ -48,13 +49,18 @@ def cleanup_agent_transient_if_unowned(renderer, agent) -> bool:
     if not callable(clear) and not callable(abort):
         return False
     agent_key = str(agent)
+    scope = current_agent_run_scope(agent_key)
+    if scope is None:
+        # Nenhuma execução desse agente rodou neste fluxo: não há transitório
+        # nosso a limpar, e limpar pelo nome atingiria outra execução dele.
+        return False
     with coordinator.lock:
         if coordinator.active_runs_by_agent.get(agent_key):
             return False
         if callable(clear):
-            clear(agent)
+            clear(agent, **scope.as_payload())
         if callable(abort):
-            abort(agent)
+            abort(agent, run_id=scope.run_id)
     return True
 
 
@@ -72,10 +78,13 @@ class _ThinkingStreamRelay:
     final, que continua sendo entregue de uma vez, substituí-la.
     """
 
-    def __init__(self, renderer, agent, *, publish=None, show_answer=False) -> None:
+    def __init__(self, renderer, agent, *, publish=None, show_answer=False, run_scope=None) -> None:
         self._renderer = renderer
         self._agent = agent
         self._publish_callback = publish
+        # Identidade da execução: outra execução do mesmo agente pode estar
+        # ativa, e o nome sozinho mandaria o texto para o cartão dela.
+        self._identity = run_scope.as_payload() if run_scope is not None else {}
         self._published = False
         self._parser = ThinkingStreamParser(
             on_thinking=self._publish,
@@ -97,11 +106,11 @@ class _ThinkingStreamRelay:
             if self._publish_callback is not None:
                 self._publish_callback(text)
             else:
-                self._renderer.update_agent_transient(self._agent, text)
+                self._renderer.update_agent_transient(self._agent, text, **self._identity)
 
     def _publish_answer(self, text: str) -> None:
         if self._renderer is not None:
-            self._renderer.update_agent_transient(self._agent, text, answer=True)
+            self._renderer.update_agent_transient(self._agent, text, answer=True, **self._identity)
 
 
 def _is_user_cancelled(agent_client) -> bool:
@@ -307,6 +316,13 @@ class AgentGateway:
             "emit_run_deltas": bool(emit_run_deltas),
             "from_agent": from_agent,
         }
+        run_scope = AgentRunScope(
+            agent=str(agent),
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            delegation_id=delegation_id,
+            transport=transport,
+        )
 
         def _close_failed_run_command_sessions() -> None:
             """Limpa comandos persistentes somente quando o run não concluiu."""
@@ -367,6 +383,7 @@ class AgentGateway:
                 ),
                 # Com a saída oculta, quem chamou apresenta a resposta final.
                 show_answer=show_output,
+                run_scope=run_scope,
             )
             if not silent
             and visibility_name != "quiet"
@@ -514,21 +531,24 @@ class AgentGateway:
                 "from_agent": from_agent,
             }
             call_with_activity = getattr(type(agent_client), "call_with_run_activity", None)
-            if callable(call_with_activity):
-                result = call_with_activity(
-                    agent_client,
-                    agent,
-                    prompt,
-                    run_activity_callback=_on_run_activity,
-                    run_id=run_id,
-                    **call_kwargs,
-                )
-            else:
-                result = agent_client.call(
-                    agent,
-                    prompt,
-                    **call_kwargs,
-                )
+            # Eventos visuais emitidos durante a chamada (driver, presenter,
+            # tools) só trazem o nome do agente; o escopo diz de qual execução.
+            with bind_agent_run_scope(run_scope):
+                if callable(call_with_activity):
+                    result = call_with_activity(
+                        agent_client,
+                        agent,
+                        prompt,
+                        run_activity_callback=_on_run_activity,
+                        run_id=run_id,
+                        **call_kwargs,
+                    )
+                else:
+                    result = agent_client.call(
+                        agent,
+                        prompt,
+                        **call_kwargs,
+                    )
         except Exception as exc:
             fail_metadata = dict(event_metadata)
             fail_metadata["error"] = _safe_agent_error(
