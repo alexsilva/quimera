@@ -203,8 +203,8 @@ def test_feed_sync_resumes_pulse_and_transient_keeps_rhythm_untouched():
     app._pulse_thinking_marker()
     assert app._thinking_pulse_paused is True
 
-    bridge.emit(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
-    bridge.emit(TextualUiEvent("stream_chunk", "pensando...", agent="claude"))
+    bridge.emit(TextualUiEvent("agent_update", {"label": "claude", "content": "gerando..."}, agent="claude"))
+    bridge.emit(TextualUiEvent("agent_update", {"content": "pensando..."}, agent="claude"))
     app._drain_bridge_events()
 
     # reset() reativa o timer e recomeça a grade; resume() daria um tick atrasado.
@@ -399,7 +399,7 @@ def test_headless_app_pauses_pulse_timer_and_leaves_hidden_status_alone():
             # O produtor de worker só enfileira; a reconciliação retoma o timer.
             await asyncio.to_thread(
                 bridge.emit,
-                TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"),
+                TextualUiEvent("agent_update", {"label": "claude", "content": "gerando..."}, agent="claude"),
             )
             app.flush_bridge_events()
             assert app._feed_model.has_transients

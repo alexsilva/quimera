@@ -9,9 +9,7 @@ from typing import Any
 
 import quimera.themes as themes
 from quimera.ui.text import (
-    _apply_stream_diff,
     _extract_text_from_renderable,
-    _normalize_stream_diff,
     strip_ansi,
 )
 from quimera.ui.base import RendererBase
@@ -97,7 +95,6 @@ class TextualRenderer(RendererBase):
         self._profile_resolver: Callable | None = None
         self._theme = themes.get(themes.DEFAULT_THEME)
         self._statuses: dict[str, str] = {}
-        self._stream_content_by_agent: dict[str, str] = {}
         self._run_context_by_agent: dict[str, dict[str, str]] = {}
         self._run_context_lock = threading.RLock()
         self._orchestrator_agent: str | None = None
@@ -180,18 +177,6 @@ class TextualRenderer(RendererBase):
     def _agent_run_context(self, agent: str) -> dict[str, str]:
         with self._run_context_lock:
             return dict(self._run_context_by_agent.get(str(agent or ""), {}))
-
-    @staticmethod
-    def _stream_key_from_payload(agent: str, payload: dict[str, Any] | None = None) -> str:
-        payload = payload if isinstance(payload, dict) else {}
-        base = str(agent or "")
-        run_id = str(payload.get("run_id") or "").strip()
-        if run_id:
-            return f"{base}#run:{run_id}"
-        delegation_id = str(payload.get("delegation_id") or "").strip()
-        if delegation_id:
-            return f"{base}#{delegation_id}"
-        return base
 
     def _clear_agent_run_context(self, agent: str, *, run_id: str = "") -> None:
         agent_name = str(agent or "")
@@ -636,9 +621,6 @@ class TextualRenderer(RendererBase):
             {"content": clean_content, "render_mode": render_mode},
         )
         agent_key = str(agent)
-        stream_key = self._stream_key_from_payload(agent_key, payload)
-        self._stream_content_by_agent.pop(stream_key, None)
-        self._stream_content_by_agent.pop(agent_key, None)
         self._bridge.clear_agent_active(agent_key)
         self._bridge.emit(
             TextualUiEvent(
@@ -653,84 +635,11 @@ class TextualRenderer(RendererBase):
         """Exibe ausência de resposta."""
         self.show_message(agent, _NO_RESPONSE_MESSAGE, render_mode="plain")
 
-    def start_message_stream(self, agent) -> None:
-        """Inicia stream visual com ícone do agente."""
-        style, label = self._resolve_agent_style(str(agent))
-        self._bridge.set_agent_active(str(agent), label, style)
-        payload = self._agent_event_payload(agent)
-        self._stream_content_by_agent[self._stream_key_from_payload(str(agent), payload)] = ""
-        self._bridge.emit(
-            TextualUiEvent("stream_start", payload, agent=str(agent))
-        )
-
-    def update_message_stream(self, agent, chunk) -> None:
-        """Atualiza stream visual."""
-        agent_name = str(agent)
-        chunk_payload = chunk if isinstance(chunk, dict) else {"text": strip_ansi(str(chunk))}
-        payload = self._agent_event_payload(agent_name, dict(chunk_payload))
-        agent_key = self._stream_key_from_payload(agent_name, payload)
-        current = self._stream_content_by_agent.get(agent_key, "")
-        if isinstance(chunk, dict):
-            diff = _normalize_stream_diff(chunk.get("diff"))
-            if diff:
-                current = _apply_stream_diff(current, diff)
-            elif chunk.get("text"):
-                current += strip_ansi(str(chunk.get("text")))
-            else:
-                current += strip_ansi(str(chunk))
-        else:
-            current += strip_ansi(str(chunk))
-        self._stream_content_by_agent[agent_key] = current
-        self._bridge.emit(TextualUiEvent("stream_chunk", payload, agent=agent_name))
-
-    def finish_message_stream(
-        self,
-        agent,
-        final_content: str,
-        render_mode: str = "auto",
-    ) -> None:
-        """Finaliza stream visual com ícone do agente."""
-        self.show_message(agent, final_content, render_mode=render_mode)
-
-    def commit_agent_stream(self, agent, render_mode: str = "auto") -> bool:
-        """Parte do contrato de RendererBase."""
-        agent_name = str(agent)
-        payload = self._agent_event_payload(agent_name)
-        agent_key = self._stream_key_from_payload(agent_name, payload)
-        content = self._stream_content_by_agent.get(agent_key, "")
-        if not str(content or "").strip():
-            candidates = [
-                key
-                for key in self._stream_content_by_agent
-                if key == agent_name or key.startswith(f"{agent_name}#")
-            ]
-            if len(candidates) == 1:
-                agent_key = candidates[0]
-                content = self._stream_content_by_agent.get(agent_key, "")
-        if not str(content or "").strip():
-            return False
-        self.show_message(agent_name, content, render_mode=render_mode)
-        return True
-
     def abort_message_stream(self, agent) -> None:
-        """Aborta stream visual, se houver stream ativo em andamento.
-
-        Se o stream já foi finalizado (via show_message) antes desta chamada,
-        não há nada para abortar e nenhum indicador "interrompido" deve ser
-        exibido — evita artefato fixo no feed após limpeza pós-delegate bem-sucedida.
-        """
+        """Encerra o estado visual do agente após limpeza externa da execução."""
         agent_key = str(agent)
         payload = self._agent_event_payload(agent_key)
-        stream_key = self._stream_key_from_payload(agent_key, payload)
-        had_active_stream = stream_key in self._stream_content_by_agent
-        self._stream_content_by_agent.pop(stream_key, None)
-        if stream_key != agent_key:
-            self._stream_content_by_agent.pop(agent_key, None)
         self._bridge.clear_agent_active(agent_key)
-        if had_active_stream:
-            self._bridge.emit(
-                TextualUiEvent("stream_abort", payload, agent=agent_key)
-            )
         self._clear_agent_run_context(agent_key, run_id=str(payload.get("run_id") or ""))
 
     def update_agent_transient(

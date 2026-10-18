@@ -10,10 +10,8 @@ from .base import RendererBase
 from .plain import PlainTextRenderer
 from .text import (
     _agent_style,
-    _apply_stream_diff,
     _extract_text_from_renderable,
     _highlight_tags,
-    _normalize_stream_diff,
     strip_ansi,
 )
 
@@ -22,9 +20,7 @@ __all__ = [
     "RenderAuditLogger",
     "RendererBase",
     "_agent_style",
-    "_apply_stream_diff",
     "_extract_text_from_renderable",
     "_highlight_tags",
-    "_normalize_stream_diff",
     "strip_ansi",
 ]

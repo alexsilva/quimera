@@ -5,16 +5,11 @@ only transform strings and renderables. Safe to import from anywhere.
 """
 from __future__ import annotations
 
-import logging
 import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from rich.text import Text
-
-from quimera.runtime.streaming import apply_stream_diff, normalize_stream_diff
-
-_logger = logging.getLogger(__name__)
 
 _UNICODE_CONTROL_RE = re.compile(
     r"[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]"
@@ -56,14 +51,6 @@ def _agent_style(agent: Any, get_profile_style=None) -> tuple[str, str]:
 def _normalize_completed_content(text: str) -> str:
     normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
     return "\n".join(line.rstrip() for line in normalized.split("\n")).strip()
-
-
-def _normalize_stream_diff(diff) -> list[dict[str, str]]:
-    return normalize_stream_diff(diff, transform_text=strip_ansi)
-
-
-def _apply_stream_diff(content: str, diff: list[dict[str, str]]) -> str:
-    return apply_stream_diff(content, diff)
 
 
 def _extract_text_from_renderable(value: Any) -> str:
@@ -108,33 +95,6 @@ def _preview_text(value: Any, limit: int = _PREVIEW_LIMIT) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "\u2026"
-
-
-def _preview_chunk(chunk: Any) -> str:
-    if isinstance(chunk, dict):
-        text = chunk.get("text")
-        if text:
-            return _preview_text(text)
-        diff = chunk.get("diff")
-        if diff:
-            try:
-                normalized = _normalize_stream_diff(diff)
-            except Exception as exc:
-                _logger.debug("_preview_chunk: diff de stream inválido: %s", exc)
-                normalized = []
-            parts = []
-            for item in normalized:
-                if not isinstance(item, dict):
-                    continue
-                if item.get("op") not in {"append", "replace"}:
-                    continue
-                part_text = item.get("text")
-                if part_text:
-                    parts.append(str(part_text))
-            if parts:
-                return _preview_text(" | ".join(parts))
-            return _preview_text(diff)
-    return _preview_text(chunk)
 
 
 def _highlight_tags(text: str) -> "Text":

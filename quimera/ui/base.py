@@ -177,9 +177,6 @@ class RendererBase:
         """Atualiza o estado associado ao turno humano, quando suportado."""
         return None
 
-    def commit_agent_stream(self, agent, render_mode="auto"):
-        return False
-
     # ------------------------------------------------------------------
     # Infraestrutura — no-op
     # ------------------------------------------------------------------

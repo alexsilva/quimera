@@ -363,8 +363,6 @@ class AgentRunController:
             self._end_agent_run(event)
         if event.kind in {"tool_finished", "tool_failed", "tool_cancelled"}:
             self._show_tool_run_state(event)
-        if event.kind == "human_action_requested":
-            self._commit_agent_output(event.agent)
 
     def _begin_agent_run(self, event: AgentRunEvent) -> None:
         if self._renderer is None:
@@ -412,10 +410,6 @@ class AgentRunController:
             }
         )
         show_state(event.agent, metadata)
-
-    def _commit_agent_output(self, agent: str) -> None:
-        if self._renderer is not None:
-            self._renderer.commit_agent_stream(agent)
 
 
 def coerce_agent_run_sink(sink: AgentRunSink | None) -> AgentRunSink:

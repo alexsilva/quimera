@@ -35,7 +35,6 @@ CONTRACT = [
     "show_notification",
     "update_agent_transient",
     "clear_agent_transient",
-    "commit_agent_stream",
     "show_plain",
     "show_turn_summary",
     "flush",
@@ -146,7 +145,6 @@ class TestRendererBaseContract(unittest.TestCase):
         self.assertIsNone(renderer.show_prompt_preview("a", "p"))
         self.assertIsNone(renderer.update_agent_transient("a", "m"))
         self.assertIsNone(renderer.clear_agent_transient("a"))
-        self.assertFalse(renderer.commit_agent_stream("a"))
         self.assertIsNone(renderer.close())
         with renderer.running_status("status", agent="a") as status:
             self.assertIsNone(status)

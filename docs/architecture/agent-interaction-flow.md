@@ -108,7 +108,8 @@ Agente/Executor produz saída
 ```
 
 **Regras do feed model:**
-- `TextualFeedModel._TRANSIENT_KINDS` (`stream_start`, `stream_chunk`, `stream_abort`, `agent_update`, `agent_lifecycle`, `pending_input`): itens substituíveis que desaparecem quando o final chega.
+- `TextualFeedModel._TRANSIENT_KINDS` (`agent_update`, `agent_lifecycle`, `pending_input`): itens substituíveis que desaparecem quando o final chega.
+- Quando o agente pede input (`pending_input`), a resposta parcial que estava no transitório (`agent_update` com `answer`) vira mensagem fixa antes do cartão da pergunta; as atualizações seguintes, cumulativas, mostram só o trecho novo.
 - Itens muted (tool preview) são permanentes: uma vez emitidos, ficam no feed.
 - `visual_reset` no sync: remove todos os transientes do agente atual.
 

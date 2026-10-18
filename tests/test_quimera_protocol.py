@@ -3973,9 +3973,6 @@ class ProfileTests(unittest.TestCase):
         result = dispatch.delegate_low_level("chatgpt-api", show_output=False)
 
         self.assertEqual(result, "resposta final")
-        app.renderer.start_message_stream.assert_not_called()
-        app.renderer.update_message_stream.assert_not_called()
-        app.renderer.finish_message_stream.assert_not_called()
 
     def test_delegate_low_level_exports_last_spy_turn_detail_to_state(self):
         """Verifica que call agent low level exports last spy turn detail to state."""

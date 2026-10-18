@@ -377,10 +377,10 @@ class QuimeraTextualApp(App):
             if event.agent:
                 self.active_agent = event.agent
             return
-        if event.kind in {"stream_start", "stream_chunk", "agent_update"} and event.agent:
+        if event.kind == "agent_update" and event.agent:
             self.active_agent = event.agent
             return
-        if event.kind in {"agent_message", "stream_abort"} and event.agent:
+        if event.kind == "agent_message" and event.agent:
             self._active_tool_previews.pop(str(event.agent), None)
             if self.active_agent == event.agent:
                 self.active_agent = None

@@ -140,7 +140,7 @@ def test_active_submission_index_follows_boot_delegation_insertion_and_removal()
     model.apply(_user_event("second", "running"))
     model.apply(TextualUiEvent("muted", "boot tardio", boot=True, compact=True))
     _assert_active_slots_match_scan(model)
-    model.apply(TextualUiEvent("stream_start", {"delegation_id": "dlg"}, agent="child"))
+    model.apply(TextualUiEvent("agent_update", {"delegation_id": "dlg", "content": "gerando..."}, agent="child"))
     _assert_active_slots_match_scan(model)
     model.apply(TextualUiEvent("agent_message", {
         "delegation_id": "dlg", "content": "fim",

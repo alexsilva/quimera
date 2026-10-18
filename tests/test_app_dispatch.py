@@ -609,9 +609,6 @@ class TestCallAgentLowLevel:
         app.get_agent_profile = MagicMock(return_value=MagicMock())
         app.prompt_builder.build = MagicMock(return_value="prompt_text")
         app.agent_client.call = MagicMock(return_value="agent response")
-        app.renderer.start_message_stream = MagicMock()
-        app.renderer.update_message_stream = MagicMock()
-        app.renderer.finish_message_stream = MagicMock()
         app.renderer.abort_message_stream = MagicMock()
         app.renderer.flush = MagicMock()
         app.agent_client.flush_pending_summary = MagicMock()
@@ -628,12 +625,6 @@ class TestCallAgentLowLevel:
         ds = dispatch_services_from_app(ll_app)
         result = ds.delegate_low_level("agent1")
         assert result == "agent response"
-
-    def test_silent_does_not_start_stream(self, ll_app):
-        """Verifica que silent does not start stream."""
-        ds = dispatch_services_from_app(ll_app)
-        ds.delegate_low_level("agent1", silent=True)
-        ll_app.renderer.start_message_stream.assert_not_called()
 
     def test_on_text_chunk_starts_stream(self, ll_app):
         """chunks são bufferizados e entregues via show_message"""
@@ -760,28 +751,6 @@ class TestCallAgentLowLevel:
         ds.delegate_low_level("agent1", primary=False)
         kwargs = ll_app.prompt_builder.build.call_args.kwargs
         assert kwargs.get("primary") is False
-
-    def test_show_output_false_ignores_text_chunks(self, ll_app):
-        """Verifica que show output false ignores text chunks."""
-
-        def _call(
-            agent,
-            prompt,
-            silent=False,
-            on_text_chunk=None,
-            progress_callback=None,
-            from_agent=None,
-        ):
-            del from_agent
-            if on_text_chunk:
-                on_text_chunk("hello")
-            return "response"
-
-        ll_app.agent_client.call = _call
-        ds = dispatch_services_from_app(ll_app)
-        ds.delegate_low_level("agent1", show_output=False)
-        ll_app.renderer.start_message_stream.assert_not_called()
-        ll_app.renderer.update_message_stream.assert_not_called()
 
     def test_low_level_can_suppress_protocol_deltas(self, ll_app):
         ds = dispatch_services_from_app(ll_app)

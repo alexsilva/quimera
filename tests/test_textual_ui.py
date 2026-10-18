@@ -815,7 +815,7 @@ def test_textual_feed_discards_stale_turn_summary_when_new_run_starts():
     )
 
     assert model.apply(summary) is False
-    assert model.apply(TextualUiEvent("stream_start", {}, agent="claude-sonnet"))
+    assert model.apply(TextualUiEvent("agent_update", {"content": "gerando..."}, agent="claude-sonnet"))
     assert model.apply(
         TextualUiEvent(
             "agent_message",
@@ -843,8 +843,8 @@ def test_textual_feed_turn_summary_stays_bound_to_final_message_across_runs():
             {**scoped, **_agent_lifecycle_payload("conectando...", status=AgentLifecycleStatus.RUNNING)},
             agent="claude-fable",
         ))
-        model.apply(TextualUiEvent("stream_start", scoped, agent="claude-fable"))
-        model.apply(TextualUiEvent("stream_chunk", {**scoped, "text": "pensando"}, agent="claude-fable"))
+        model.apply(TextualUiEvent("agent_update", {**scoped, "content": "gerando..."}, agent="claude-fable"))
+        model.apply(TextualUiEvent("agent_update", {**scoped, "content": "pensando"}, agent="claude-fable"))
         model.apply(TextualUiEvent(
             "agent_lifecycle",
             {**scoped, **_agent_lifecycle_payload("concluído", status=AgentLifecycleStatus.COMPLETED)},
@@ -869,7 +869,7 @@ def test_textual_feed_turn_summary_stays_bound_to_final_message_across_runs():
 def test_textual_feed_turn_summary_after_final_lifecycle_becomes_footer():
     """No caminho API o lifecycle COMPLETED do running_status antecede o resumo."""
     model = TextualFeedModel()
-    model.apply(TextualUiEvent("stream_start", {"label": "Claude"}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"label": "Claude", "content": "gerando..."}, agent="claude"))
     model.apply(TextualUiEvent(
         "agent_lifecycle",
         _agent_lifecycle_payload("concluído", status=AgentLifecycleStatus.COMPLETED),
@@ -894,7 +894,7 @@ def test_textual_feed_drops_turn_summary_without_final_message_on_next_run():
     """
     scoped = {"label": "Codex", "run_id": "agentrun:2"}
     new_run_signals = [
-        TextualUiEvent("stream_start", scoped, agent="codex"),
+        TextualUiEvent("agent_update", {**scoped, "content": "gerando..."}, agent="codex"),
         TextualUiEvent("agent_update", {**scoped, "content": "lendo arquivos"}, agent="codex"),
         TextualUiEvent(
             "agent_lifecycle",
@@ -933,10 +933,10 @@ def test_textual_feed_marks_plain_events_as_append_only():
 def test_textual_feed_marks_transient_replacement_as_redraw():
     model = TextualFeedModel()
 
-    model.apply(TextualUiEvent("stream_start", {"label": "Claude"}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"label": "Claude", "content": "gerando..."}, agent="claude"))
     assert model.last_change.redraw is False
 
-    model.apply(TextualUiEvent("stream_chunk", "Oi", agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"content": "Oi"}, agent="claude"))
 
     assert model.last_change.redraw is True
     assert model.last_change.appended is None
@@ -1161,24 +1161,6 @@ def test_textual_feed_lifecycle_boundary_uses_status_not_message_text():
 
 
 
-def test_textual_feed_ignores_stream_abort_after_completed_lifecycle():
-    model = TextualFeedModel()
-
-    model.apply(TextualUiEvent("agent_update", "delegando...", agent="claude-sonnet"))
-    model.apply(
-        TextualUiEvent(
-            "agent_lifecycle",
-            _agent_lifecycle_payload("concluído", status=AgentLifecycleStatus.COMPLETED),
-            agent="claude-sonnet",
-        )
-    )
-
-    changed = model.apply(TextualUiEvent("stream_abort", {"label": "Claude Sonnet"}, agent="claude-sonnet"))
-
-    assert changed is False
-    assert model.items == []
-
-
 def test_textual_feed_terminal_failed_lifecycle_removes_transient():
     model = TextualFeedModel()
 
@@ -1207,9 +1189,8 @@ def test_textual_feed_ignores_late_transients_after_failed_lifecycle():
         )
     )
 
-    assert model.apply(TextualUiEvent("stream_chunk", {"text": "late chunk"}, agent="claude")) is False
     assert model.apply(TextualUiEvent("tool_preview", "late tool", agent="claude")) is False
-    assert model.apply(TextualUiEvent("stream_abort", {"label": "Claude"}, agent="claude")) is False
+    assert model.apply(TextualUiEvent("pending_input", {"label": "Claude"}, agent="claude")) is False
 
     assert model.items == []
 
@@ -1238,8 +1219,8 @@ def test_textual_feed_uses_delegation_id_to_isolate_same_agent_runs():
     first = {"label": "Claude", "delegation_id": "one"}
     second = {"label": "Claude", "delegation_id": "two"}
 
-    model.apply(TextualUiEvent("stream_start", first, agent="claude-sonnet"))
-    model.apply(TextualUiEvent("stream_start", second, agent="claude-sonnet"))
+    model.apply(TextualUiEvent("agent_update", {**first, "content": "gerando..."}, agent="claude-sonnet"))
+    model.apply(TextualUiEvent("agent_update", {**second, "content": "gerando..."}, agent="claude-sonnet"))
     model.apply(
         TextualUiEvent(
             "agent_lifecycle",
@@ -1247,10 +1228,10 @@ def test_textual_feed_uses_delegation_id_to_isolate_same_agent_runs():
             agent="claude-sonnet",
         )
     )
-    model.apply(TextualUiEvent("stream_chunk", {**second, "text": "ainda rodando"}, agent="claude-sonnet"))
+    model.apply(TextualUiEvent("agent_update", {**second, "content": "ainda rodando"}, agent="claude-sonnet"))
 
     assert len(model.items) == 1
-    assert model.items[0].event.kind == "stream_chunk"
+    assert model.items[0].event.kind == "agent_update"
     assert model.items[0].event.payload["delegation_id"] == "two"
 
 
@@ -1260,10 +1241,10 @@ def test_textual_feed_uses_run_id_to_isolate_same_agent_runs():
     first = {"label": "Claude", "run_id": "agentrun:one", "delegation_id": "same"}
     second = {"label": "Claude", "run_id": "agentrun:two", "delegation_id": "same"}
 
-    model.apply(TextualUiEvent("stream_start", first, agent="claude-sonnet"))
-    model.apply(TextualUiEvent("stream_start", second, agent="claude-sonnet"))
-    model.apply(TextualUiEvent("stream_chunk", {**first, "text": "primeiro"}, agent="claude-sonnet"))
-    model.apply(TextualUiEvent("stream_chunk", {**second, "text": "segundo"}, agent="claude-sonnet"))
+    model.apply(TextualUiEvent("agent_update", {**first, "content": "gerando..."}, agent="claude-sonnet"))
+    model.apply(TextualUiEvent("agent_update", {**second, "content": "gerando..."}, agent="claude-sonnet"))
+    model.apply(TextualUiEvent("agent_update", {**first, "content": "primeiro"}, agent="claude-sonnet"))
+    model.apply(TextualUiEvent("agent_update", {**second, "content": "segundo"}, agent="claude-sonnet"))
 
     assert len(model.items) == 2
     assert {item.event.payload["run_id"] for item in model.items} == {
@@ -1278,8 +1259,8 @@ def test_textual_feed_exposes_active_transient_slots():
     second = {"label": "Claude", "run_id": "agentrun:two"}
 
     model.apply(TextualUiEvent("plain", "persistente"))
-    model.apply(TextualUiEvent("stream_start", first, agent="claude"))
-    model.apply(TextualUiEvent("stream_start", second, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {**first, "content": "gerando..."}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {**second, "content": "gerando..."}, agent="claude"))
 
     assert model.has_transients is True
     assert [index for index, _ in model.transient_items()] == [1, 2]
@@ -1304,8 +1285,8 @@ def test_textual_feed_agent_message_replaces_run_id_transient():
     model = TextualFeedModel()
 
     payload = {"label": "Claude", "run_id": "agentrun:one"}
-    model.apply(TextualUiEvent("stream_start", payload, agent="claude"))
-    model.apply(TextualUiEvent("stream_chunk", {**payload, "text": "parcial"}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {**payload, "content": "gerando..."}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {**payload, "content": "parcial"}, agent="claude"))
 
     final = TextualUiEvent(
         "agent_message",
@@ -1987,7 +1968,7 @@ def test_textual_feed_structured_tool_preview_stays_in_same_run():
     model = TextualFeedModel()
     payload = {"label": "OpenCode", "style": "blue", "run_id": "agentrun:opencode"}
 
-    model.apply(TextualUiEvent("stream_start", payload, agent="opencode"))
+    model.apply(TextualUiEvent("agent_update", {**payload, "content": "gerando..."}, agent="opencode"))
     model.apply(
         TextualUiEvent(
             "tool_preview",
@@ -2004,8 +1985,8 @@ def test_textual_feed_structured_tool_preview_stays_in_same_run():
 def test_textual_feed_final_without_run_id_replaces_single_active_run():
     model = TextualFeedModel()
 
-    model.apply(TextualUiEvent("stream_start", {"label": "Claude", "run_id": "agentrun:one"}, agent="claude"))
-    model.apply(TextualUiEvent("stream_chunk", {"text": "parcial", "run_id": "agentrun:one"}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"label": "Claude", "run_id": "agentrun:one", "content": "gerando..."}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"content": "parcial", "run_id": "agentrun:one"}, agent="claude"))
 
     final = TextualUiEvent("agent_message", {"content": "final", "label": "Claude"}, agent="claude")
     assert model.apply(final) is True
@@ -2020,8 +2001,8 @@ def test_textual_feed_visual_reset_with_run_id_clears_only_that_run():
 
     first = {"label": "Claude", "run_id": "agentrun:one"}
     second = {"label": "Claude", "run_id": "agentrun:two"}
-    model.apply(TextualUiEvent("stream_start", first, agent="claude"))
-    model.apply(TextualUiEvent("stream_start", second, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {**first, "content": "gerando..."}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {**second, "content": "gerando..."}, agent="claude"))
 
     assert len(model.items) == 2
     assert model.apply(TextualUiEvent("visual_reset", first, agent="claude")) is True
@@ -2034,8 +2015,8 @@ def test_textual_feed_visual_reset_clears_delegated_agent_transients_by_base_age
     model = TextualFeedModel()
 
     model.apply(TextualUiEvent("plain", "persistente"))
-    model.apply(TextualUiEvent("stream_start", {"label": "Claude", "delegation_id": "one"}, agent="claude"))
-    model.apply(TextualUiEvent("stream_start", {"label": "Claude", "delegation_id": "two"}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"label": "Claude", "delegation_id": "one", "content": "gerando..."}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"label": "Claude", "delegation_id": "two", "content": "gerando..."}, agent="claude"))
 
     assert len(model.items) == 3
 
@@ -2094,18 +2075,6 @@ def test_textual_feed_hydrated_history_without_theme_omits_key():
     assert all("theme" not in item.event.payload for item in model.items)
 
 
-def test_textual_feed_clears_tool_preview_on_stream_abort():
-    model = TextualFeedModel()
-
-    model.apply(TextualUiEvent("agent_update", "[thinking] analisando", agent="openai"))
-    model.apply(TextualUiEvent("tool_preview", "⌘ read_file a.py", agent="openai"))
-    model.apply(TextualUiEvent("stream_abort", {"label": "OpenAI"}, agent="openai"))
-
-    assert len(model.items) == 1
-    assert model.items[0].event.kind == "stream_abort"
-    assert "tools" not in model.items[0].event.payload
-
-
 def test_textual_feed_final_message_without_transient_is_append_only():
     model = TextualFeedModel()
 
@@ -2134,11 +2103,11 @@ def test_textual_feed_ignores_late_completed_lifecycle_after_final_message():
     assert model.items[0].event is final
 
 
-def test_textual_feed_accepts_lifecycle_again_after_new_stream_start():
+def test_textual_feed_accepts_lifecycle_again_after_new_agent_update():
     model = TextualFeedModel()
 
     model.apply(TextualUiEvent("agent_message", {"content": "primeira", "label": "Claude"}, agent="claude"))
-    model.apply(TextualUiEvent("stream_start", {"label": "Claude"}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"label": "Claude", "content": "gerando..."}, agent="claude"))
     model.apply(
         TextualUiEvent(
             "agent_lifecycle",
@@ -2149,26 +2118,6 @@ def test_textual_feed_accepts_lifecycle_again_after_new_stream_start():
 
     assert len(model.items) == 1
     assert model.items[0].event.kind == "agent_message"
-
-
-def test_textual_feed_accumulates_stream_chunk_and_replaces_with_final_message():
-    model = TextualFeedModel()
-
-    model.apply(TextualUiEvent("stream_start", {"label": "Claude"}, agent="claude"))
-    model.apply(TextualUiEvent("stream_chunk", "Oi, ", agent="claude"))
-    model.apply(TextualUiEvent("stream_chunk", "Alex", agent="claude"))
-
-    assert len(model.items) == 1
-    assert model.items[0].transient is True
-    assert model.items[0].event.kind == "stream_chunk"
-    assert model.items[0].event.payload["content"] == "Oi, Alex"
-
-    model.apply(TextualUiEvent("agent_message", {"content": "Oi, Alex!", "label": "Claude"}, agent="claude"))
-
-    assert len(model.items) == 1
-    assert model.items[0].transient is False
-    assert model.items[0].event.kind == "agent_message"
-    assert model.items[0].event.payload["content"] == "Oi, Alex!"
 
 
 def test_textual_feed_preserves_other_agents_when_one_agent_finishes():
@@ -2240,22 +2189,6 @@ def test_textual_renderer_abort_message_stream_skips_event_after_show_message():
     bridge.emit.assert_not_called()
 
 
-def test_textual_renderer_abort_message_stream_emits_event_when_stream_active():
-    bridge = TextualUiBridge()
-    bridge.emit = Mock()
-    renderer = TextualRenderer(bridge)
-
-    renderer.start_message_stream("claude-sonnet")
-    bridge.emit.reset_mock()
-
-    renderer.abort_message_stream("claude-sonnet")
-
-    bridge.emit.assert_called_once()
-    event = bridge.emit.call_args.args[0]
-    assert event.kind == "stream_abort"
-    assert event.agent == "claude-sonnet"
-
-
 def test_textual_status_exit_marks_success_as_completed():
     renderer = Mock()
     status = _TextualStatus(renderer, agent="openai")
@@ -2301,7 +2234,7 @@ def test_textual_bridge_queues_cross_thread_events_without_waiting_for_textual()
     bridge = TextualUiBridge()
     textual_app = Mock()
     bridge.attach_textual_app(textual_app)
-    event = TextualUiEvent("stream_chunk", {"text": "token"}, agent="codex")
+    event = TextualUiEvent("agent_update", {"content": "token"}, agent="codex")
 
     worker = threading.Thread(target=bridge.emit, args=(event,))
     worker.start()
@@ -3283,21 +3216,6 @@ def test_textual_render_event_uses_structured_execution_control():
     assert "[cancelado]" not in output
 
 
-def test_textual_render_event_uses_agent_identity_for_stream_abort():
-    event = TextualUiEvent(
-        "stream_abort",
-        {"label": "Claude Sonnet", "style": "magenta", "theme": "chat"},
-        agent="claude-sonnet",
-    )
-    console = Console(record=True, width=80)
-
-    console.print(_render_event(event))
-
-    output = console.export_text()
-    assert "Claude Sonnet · execução interrompida" in output
-    assert "claude-sonnet interrompido" not in output
-
-
 def test_textual_render_event_contextualizes_reconnection_lifecycle():
     event = TextualUiEvent(
         "agent_lifecycle",
@@ -3704,8 +3622,8 @@ def test_textual_feed_delegated_feed_stays_below_its_delegation():
     model.apply(TextualUiEvent("agent_update", {"label": "Codex", "content": "delegando"}, agent="codex"))
     model.apply(_delegation_event())
     model.apply(TextualUiEvent("agent_update", {"label": "Qwen", "content": "outro turno"}, agent="qwen"))
-    model.apply(TextualUiEvent("stream_start", delegated, agent="sonnet"))
-    model.apply(TextualUiEvent("stream_chunk", {**delegated, "text": "lendo arquivos"}, agent="sonnet"))
+    model.apply(TextualUiEvent("agent_update", {**delegated, "content": "gerando..."}, agent="sonnet"))
+    model.apply(TextualUiEvent("agent_update", {**delegated, "content": "lendo arquivos"}, agent="sonnet"))
 
     kinds = [item.event.kind for item in model.items]
     agents = [item.event.agent for item in model.items]
@@ -3719,8 +3637,8 @@ def test_textual_feed_removes_delegation_group_on_visual_reset():
     delegated = {"label": "Sonnet", "run_id": "run-b", "delegation_id": "dlg-1"}
 
     model.apply(_delegation_event())
-    model.apply(TextualUiEvent("stream_start", delegated, agent="sonnet"))
-    model.apply(TextualUiEvent("stream_chunk", {**delegated, "text": "trabalhando"}, agent="sonnet"))
+    model.apply(TextualUiEvent("agent_update", {**delegated, "content": "gerando..."}, agent="sonnet"))
+    model.apply(TextualUiEvent("agent_update", {**delegated, "content": "trabalhando"}, agent="sonnet"))
     changed = model.apply(TextualUiEvent("visual_reset", delegated, agent="sonnet"))
 
     assert changed is True
@@ -3734,7 +3652,7 @@ def test_textual_feed_delegated_final_message_is_not_persisted():
 
     model.apply(TextualUiEvent("user_message", {"content": "faz isso", "label": ">>>"}))
     model.apply(_delegation_event())
-    model.apply(TextualUiEvent("stream_start", delegated, agent="sonnet"))
+    model.apply(TextualUiEvent("agent_update", {**delegated, "content": "gerando..."}, agent="sonnet"))
     model.apply(TextualUiEvent("turn_summary", {"total": 1, "ok_count": 1, "duration": "1.0s"}, agent="sonnet"))
     model.apply(TextualUiEvent("agent_message", {**delegated, "content": "feito"}, agent="sonnet"))
 
@@ -3747,7 +3665,7 @@ def test_textual_feed_removes_delegation_group_on_final_lifecycle():
     delegated = {"label": "Sonnet", "run_id": "run-b", "delegation_id": "dlg-1"}
 
     model.apply(_delegation_event())
-    model.apply(TextualUiEvent("stream_start", delegated, agent="sonnet"))
+    model.apply(TextualUiEvent("agent_update", {**delegated, "content": "gerando..."}, agent="sonnet"))
     model.apply(
         TextualUiEvent(
             "agent_lifecycle",
@@ -3762,7 +3680,7 @@ def test_textual_feed_removes_delegation_group_on_final_lifecycle():
 def test_textual_feed_keeps_regular_agent_message_persistent():
     model = TextualFeedModel()
 
-    model.apply(TextualUiEvent("stream_start", {"label": "Codex"}, agent="codex"))
+    model.apply(TextualUiEvent("agent_update", {"label": "Codex", "content": "gerando..."}, agent="codex"))
     model.apply(TextualUiEvent("agent_message", {"label": "Codex", "content": "resposta"}, agent="codex"))
 
     assert [item.event.kind for item in model.items] == ["agent_message"]
@@ -4881,31 +4799,6 @@ def test_textual_input_gate_arms_direct_input_before_approval_question_event():
     assert [event.kind for event in emitted][-2:] == ["question_clear", "prompt_clear"]
 
 
-def test_textual_renderer_commit_agent_stream_materializes_active_stream():
-    bridge = TextualUiBridge()
-    emitted = []
-    bridge.emit = emitted.append
-    renderer = TextualRenderer(bridge)
-
-    renderer.start_message_stream("claude")
-    renderer.update_message_stream("claude", "linha 1\n")
-    renderer.update_message_stream("claude", {"text": "linha 2"})
-
-    assert renderer.commit_agent_stream("claude", render_mode="plain") is True
-
-    assert emitted[-1].kind == "agent_message"
-    assert emitted[-1].agent == "claude"
-    assert emitted[-1].payload["content"] == "linha 1\nlinha 2"
-
-
-def test_textual_renderer_commit_agent_stream_returns_false_without_content():
-    renderer = TextualRenderer(TextualUiBridge())
-
-    renderer.start_message_stream("claude")
-
-    assert renderer.commit_agent_stream("claude") is False
-
-
 def test_textual_direct_input_submission_clears_approval_overlay_before_queueing_answer():
     bridge = TextualUiBridge()
     emitted = []
@@ -5127,6 +5020,121 @@ def test_textual_feed_treats_pending_input_as_transient_agent_state():
 
     assert len(model.items) == 1
     assert model.items[0].event is final
+
+
+def _answer_update(content, **extra):
+    payload = {"label": "Claude", "content": content, "answer": True, **extra}
+    return TextualUiEvent("agent_update", payload, agent="claude")
+
+
+def _pending_question(**extra):
+    payload = {"label": "Claude", "kind": "input", "question": "Qual banco?", **extra}
+    return TextualUiEvent("pending_input", payload, agent="claude")
+
+
+def test_textual_feed_keeps_partial_answer_when_agent_asks_user():
+    model = TextualFeedModel()
+    model.apply(_answer_update("Achei dois bancos: dev e prod."))
+
+    assert model.apply(_pending_question()) is True
+
+    kept, card = model.items
+    assert kept.transient is False
+    assert kept.event.kind == "agent_message"
+    assert kept.event.payload["content"] == "Achei dois bancos: dev e prod."
+    assert kept.event.payload["label"] == "Claude"
+    assert card.transient is True
+    assert card.event.kind == "pending_input"
+
+
+def test_textual_renderer_partial_answer_survives_pending_input_card():
+    """Sequência real do renderer quando o agente chama ask_user no meio do turno."""
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+    renderer.begin_agent_run("claude", run_id="agentrun:1")
+
+    renderer.update_agent_transient("claude", "Achei dois bancos.", answer=True)
+    renderer.set_agent_pending_input("claude", "input", "Qual banco?")
+
+    model = TextualFeedModel()
+    for event in emitted:
+        model.apply(event)
+    kept, card = model.items
+    assert (kept.transient, kept.event.kind) == (False, "agent_message")
+    assert kept.event.payload["content"] == "Achei dois bancos."
+    assert (card.transient, card.event.kind) == (True, "pending_input")
+
+
+def test_textual_feed_replaces_thinking_with_question_card():
+    model = TextualFeedModel()
+    model.apply(TextualUiEvent("agent_update", {"label": "Claude", "content": "pensando"}, agent="claude"))
+
+    model.apply(_pending_question())
+
+    assert [item.event.kind for item in model.items] == ["pending_input"]
+
+
+def test_textual_feed_shows_only_new_answer_text_after_question():
+    model = TextualFeedModel()
+    model.apply(_answer_update("Achei dois bancos."))
+    model.apply(_pending_question())
+    model.apply(TextualUiEvent("visual_reset", {}, agent="claude"))
+
+    # A resposta parcial é cumulativa: o trecho já fixado no feed não volta.
+    assert model.apply(_answer_update("Achei dois bancos.\n\nUsando prod.")) is True
+    assert model.items[-1].transient is True
+    assert model.items[-1].event.payload["content"] == "Usando prod."
+    assert model.apply(_answer_update("Achei dois bancos.")) is False
+
+    model.apply(_pending_question(question="Confirmar migração?"))
+
+    contents = [item.event.payload.get("content") for item in model.items if not item.transient]
+    assert contents == ["Achei dois bancos.", "Usando prod."]
+
+
+def test_textual_feed_final_repeating_kept_answer_replaces_it():
+    model = TextualFeedModel()
+    scoped = {"run_id": "agentrun:1"}
+    model.apply(_answer_update("Achei dois bancos.", **scoped))
+    model.apply(_pending_question(**scoped))
+    model.apply(TextualUiEvent("visual_reset", scoped, agent="claude"))
+    model.apply(_answer_update("Achei dois bancos.\n\nUsando prod.", **scoped))
+
+    # A final sai sem run_id e repete o trecho já fixado: ele não fica duplicado.
+    final = TextualUiEvent(
+        "agent_message",
+        {"label": "Claude", "content": "Achei dois bancos.\n\nUsando prod."},
+        agent="claude",
+    )
+    model.apply(final)
+
+    assert [item.event for item in model.items] == [final]
+
+
+def test_textual_feed_final_with_only_new_text_keeps_the_kept_answer():
+    model = TextualFeedModel()
+    model.apply(_answer_update("Achei dois bancos."))
+    model.apply(_pending_question())
+    model.apply(TextualUiEvent("visual_reset", {}, agent="claude"))
+
+    model.apply(TextualUiEvent("agent_message", {"label": "Claude", "content": "Usando prod."}, agent="claude"))
+
+    contents = [item.event.payload["content"] for item in model.items]
+    assert contents == ["Achei dois bancos.", "Usando prod."]
+
+
+def test_textual_feed_forgets_kept_answer_when_turn_ends():
+    model = TextualFeedModel()
+    model.apply(_answer_update("Achei dois bancos."))
+    model.apply(_pending_question())
+    model.apply(TextualUiEvent("visual_reset", {}, agent="claude"))
+    model.apply(TextualUiEvent("agent_message", {"label": "Claude", "content": "Pronto."}, agent="claude"))
+
+    model.apply(_answer_update("Achei dois bancos de novo."))
+
+    assert model.items[-1].event.payload["content"] == "Achei dois bancos de novo."
 
 
 def test_textual_normal_chat_input_goes_to_main_input_queue():
@@ -6082,8 +6090,8 @@ def test_textual_feed_clear_chat_keeps_boot_header_and_drops_chat():
         ]
     )
     model.apply(TextualUiEvent("user_message", {"content": "revise"}))
-    model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
-    model.apply(TextualUiEvent("stream_chunk", "pensando", agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"label": "claude", "content": "gerando..."}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"content": "pensando"}, agent="claude"))
     model.apply(TextualUiEvent("tool_preview", {"content": "tool: read_file"}, agent="claude"))
     assert model.has_transients
     assert len(model.items) > len(header)
@@ -6104,8 +6112,8 @@ def test_textual_feed_clear_chat_resets_agent_state_for_the_next_turn():
     model = TextualFeedModel()
     for event in _boot_header_events():
         model.apply(event)
-    model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
-    model.apply(TextualUiEvent("stream_chunk", "metade", agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"label": "claude", "content": "gerando..."}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"content": "metade"}, agent="claude"))
     model.apply(TextualUiEvent("agent_message", {"content": "resposta final"}, agent="claude"))
     model.apply(TextualUiEvent("turn_summary", {"tools": []}, agent="claude"))
 
@@ -6113,8 +6121,8 @@ def test_textual_feed_clear_chat_resets_agent_state_for_the_next_turn():
 
     # Nada do turno anterior sobrevive: o stream recomeça do zero e o resumo
     # pendente não vira rodapé da próxima resposta.
-    assert model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
-    assert model.apply(TextualUiEvent("stream_chunk", "nova", agent="claude"))
+    assert model.apply(TextualUiEvent("agent_update", {"label": "claude", "content": "gerando..."}, agent="claude"))
+    assert model.apply(TextualUiEvent("agent_update", {"content": "nova"}, agent="claude"))
     transient = model.transient_items()
     assert len(transient) == 1
     assert transient[0][1].event.payload["content"] == "nova"
@@ -6125,32 +6133,27 @@ def test_textual_feed_clear_chat_resets_agent_state_for_the_next_turn():
     ]
 
 
-def test_textual_feed_clear_chat_mid_stream_restarts_the_transient_from_scratch():
+def test_textual_feed_clear_chat_forgets_the_kept_partial_answer():
     model = TextualFeedModel()
     for event in _boot_header_events():
         model.apply(event)
-    model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
-    model.apply(TextualUiEvent("stream_chunk", "metade ", agent="claude"))
+    model.apply(_answer_update("metade"))
+    model.apply(_pending_question())
 
     model.clear_chat()
 
-    # Sem novo stream_start, o chunk seguinte não arrasta o texto apagado.
-    assert model.apply(TextualUiEvent("stream_chunk", "resto", agent="claude"))
+    # O trecho fixado saiu com o chat: a atualização cumulativa volta inteira.
+    assert model.apply(_answer_update("metade e resto"))
     transient = model.transient_items()
     assert len(transient) == 1
-    assert transient[0][1].event.payload == "resto"
-    assert model.apply(TextualUiEvent("agent_message", {"content": "final"}, agent="claude"))
-    assert not model.has_transients
-    assert [item.event.kind for item in model.items] == [
-        "banner", "muted", "boot_status", "muted", "boot_separator", "agent_message",
-    ]
+    assert transient[0][1].event.payload["content"] == "metade e resto"
 
 
 def test_textual_feed_clear_chat_keeps_finalized_agents_so_late_events_stay_ignored():
     model = TextualFeedModel()
     for event in _boot_header_events():
         model.apply(event)
-    model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"label": "claude", "content": "gerando..."}, agent="claude"))
     model.apply(TextualUiEvent("agent_message", {"content": "resposta"}, agent="claude"))
     model.apply(
         TextualUiEvent(
@@ -6162,13 +6165,13 @@ def test_textual_feed_clear_chat_keeps_finalized_agents_so_late_events_stay_igno
 
     model.clear_chat()
 
-    # Chunk atrasado de uma run já encerrada não vira transitório fantasma.
-    assert model.apply(TextualUiEvent("stream_chunk", "tardio", agent="claude")) is False
+    # Evento atrasado de uma run já encerrada não vira transitório fantasma.
+    assert model.apply(TextualUiEvent("pending_input", {"label": "claude"}, agent="claude")) is False
     assert not model.has_transients
     assert len(model.items) == 5
     # A próxima run reabre normalmente.
-    assert model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
-    assert model.apply(TextualUiEvent("stream_chunk", "nova run", agent="claude"))
+    assert model.apply(TextualUiEvent("agent_update", {"label": "claude", "content": "gerando..."}, agent="claude"))
+    assert model.apply(TextualUiEvent("agent_update", {"content": "nova run"}, agent="claude"))
     assert model.transient_items()[0][1].event.payload["content"] == "nova run"
 
 
@@ -6295,8 +6298,8 @@ def test_textual_feed_late_boot_item_enters_the_header_and_reindexes_transients(
     for event in _boot_header_events():
         model.apply(event)
     model.apply(TextualUiEvent("user_message", {"content": "revise"}))
-    model.apply(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
-    model.apply(TextualUiEvent("stream_chunk", "pensando", agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"label": "claude", "content": "gerando..."}, agent="claude"))
+    model.apply(TextualUiEvent("agent_update", {"content": "pensando"}, agent="claude"))
     ((index_before, _),) = model.transient_items()
 
     assert model.apply(late)
@@ -6314,7 +6317,7 @@ def test_textual_feed_late_boot_item_enters_the_header_and_reindexes_transients(
     ((index_after, transient_after),) = model.transient_items()
     assert index_after == index_before + 1
     assert transient_after.transient
-    assert model.apply(TextualUiEvent("stream_chunk", " mais", agent="claude"))
+    assert model.apply(TextualUiEvent("agent_update", {"content": " mais"}, agent="claude"))
     ((index_final, transient_final),) = model.transient_items()
     assert index_final == index_after
     assert transient_final.event.payload["content"].endswith("mais")
@@ -6580,8 +6583,8 @@ def test_textual_app_clear_event_keeps_boot_header_and_clears_chat():
     for event in _boot_header_events():
         bridge.emit(event)
     bridge.emit(TextualUiEvent("user_message", {"content": "revise"}))
-    bridge.emit(TextualUiEvent("stream_start", {"label": "claude"}, agent="claude"))
-    bridge.emit(TextualUiEvent("stream_chunk", "pensando", agent="claude"))
+    bridge.emit(TextualUiEvent("agent_update", {"label": "claude", "content": "gerando..."}, agent="claude"))
+    bridge.emit(TextualUiEvent("agent_update", {"content": "pensando"}, agent="claude"))
     bridge.emit(TextualUiEvent("tool_preview", {"content": "tool: read_file"}, agent="claude"))
     app._drain_bridge_events()
     assert _synced_kinds(app, feed)[:5] == [

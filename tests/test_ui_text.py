@@ -7,12 +7,11 @@ from rich.text import Text
 
 from quimera.ui import (
     _agent_style,
-    _apply_stream_diff,
     _extract_text_from_renderable,
     _highlight_tags,
-    _normalize_stream_diff,
     strip_ansi,
 )
+from quimera.runtime.streaming import apply_stream_diff, normalize_stream_diff
 
 
 class TestStripAnsi:
@@ -76,10 +75,10 @@ class TestAgentStyle:
 
 class TestStreamingDiffHelpers:
     def test_normalize_stream_diff_accepts_dict(self):
-        assert _normalize_stream_diff({"op": "add", "content": "abc"}) == [{"op": "add", "text": "abc"}]
+        assert normalize_stream_diff({"op": "add", "content": "abc"}) == [{"op": "add", "text": "abc"}]
 
     def test_apply_stream_diff_supports_replace_and_add(self):
-        assert _apply_stream_diff("old", [{"op": "replace", "text": "new"}, {"op": "add", "text": "!"}]) == "new!"
+        assert apply_stream_diff("old", [{"op": "replace", "text": "new"}, {"op": "add", "text": "!"}]) == "new!"
 
 
 class TestExtractTextFromRenderable:

@@ -335,24 +335,6 @@ def test_input_broker_emits_human_action_events_without_changing_default_flow():
     assert sink.events[1].metadata["result"] == (0, "testar")
 
 
-def test_agent_run_controller_commits_stream_on_human_action_request():
-    class Renderer(RendererBase):
-        def __init__(self):
-            self.committed = []
-
-        def commit_agent_stream(self, agent):
-            self.committed.append(agent)
-            return True
-
-    renderer = Renderer()
-    controller = AgentRunController(renderer)
-
-    controller.emit(AgentRunEvent("started", "codex"))
-    controller.emit(AgentRunEvent("human_action_requested", "codex"))
-
-    assert renderer.committed == ["codex"]
-
-
 def test_agent_run_controller_tracks_registry_and_renderer_context():
     class Renderer(RendererBase):
         def __init__(self):
@@ -456,35 +438,6 @@ def test_agent_run_controller_forwards_http_tool_terminal_state_to_renderer():
     assert detail["msg_id"] == "42"
     assert detail["duration_ms"] == 12
     assert detail["status"] == "finished"
-
-
-def test_input_broker_human_action_request_commits_agent_before_answer():
-    order = []
-
-    class Renderer(RendererBase):
-        def commit_agent_stream(self, agent):
-            order.append(("commit", agent))
-            return True
-
-    class Broker(InputBroker):
-        def _handle_ask_user(self, req, *, allow_direct_gate=False):
-            order.append(("answer", req.source))
-            return req.default
-
-    controller = AgentRunController(Renderer())
-    broker = Broker(renderer=None, input_gate=None, agent_run_sink=controller)
-    req = _InputRequest(
-        kind="ask_user",
-        source="codex",
-        question="Confirmar?",
-        options=["sim"],
-        timeout=0.01,
-        default=(0, "sim"),
-    )
-
-    broker._process_request(req, allow_direct_gate=True)
-
-    assert order == [("commit", "codex"), ("answer", "codex")]
 
 
 def test_agent_gateway_emits_failed_when_prompt_build_raises():

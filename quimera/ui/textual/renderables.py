@@ -799,24 +799,6 @@ def _render_event(event: TextualUiEvent):
         if isinstance(turn_summary, dict) and int(turn_summary.get("total") or 0) > 0:
             return Group(block, _build_turn_summary_renderable(turn_summary, event.agent))
         return block
-    if event.kind == "stream_start":
-        payload = event.payload or {}
-        label = _resolve_transport_label(payload, event.agent)
-        style = str(payload.get("style", "cyan") or "cyan")
-        theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
-        return _build_stream_renderable(theme_name, label, style, "gerando...")
-    if event.kind == "stream_abort":
-        payload = dict(event.payload or {}) if isinstance(event.payload, dict) else {}
-        payload.update({"activity": "aborted", "message": "execução interrompida"})
-        return _build_agent_activity_renderable(payload, event.agent)
-    if event.kind == "stream_chunk":
-        payload = event.payload if isinstance(event.payload, dict) else {}
-        content = str(payload.get("content") or payload.get("text") or event.payload)
-        tools = payload.get("tools") if isinstance(payload, dict) else None
-        label = _resolve_transport_label(payload, event.agent)
-        style = str(payload.get("style", "cyan") or "cyan")
-        theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
-        return _build_stream_renderable(theme_name, label, style, content, tools=tools)
     if event.kind == "pending_input":
         payload = event.payload if isinstance(event.payload, dict) else {}
         label = _resolve_transport_label(payload, event.agent)

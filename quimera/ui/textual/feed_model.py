@@ -2,7 +2,7 @@
 
 Este módulo não depende de Textual nem de widgets. Ele recebe eventos semânticos
 e decide como o scrollback lógico deve mudar: anexar itens persistentes,
-substituir estados transitórios, acumular stream e limpar previews.
+substituir estados transitórios e limpar previews.
 """
 from __future__ import annotations
 
@@ -16,11 +16,7 @@ from typing import Any, Callable, ClassVar
 from quimera.app.submission_tracker import TERMINAL_SUBMISSION_STATUSES
 from quimera.ui.commands import USER_ROLE
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
-from quimera.ui.text import (
-    _apply_stream_diff,
-    _normalize_stream_diff,
-    strip_ansi,
-)
+from quimera.ui.text import strip_ansi
 from quimera.ui.textual.events import TextualUiEvent
 
 _logger = logging.getLogger(__name__)
@@ -103,7 +99,7 @@ class TextualFeedChange:
 class TextualFeedModel:
     """Modelo testável do feed: transitórios por agente são substituíveis."""
 
-    _TRANSIENT_KINDS: ClassVar[set[str]] = {"stream_start", "stream_chunk", "stream_abort", "agent_update", "agent_lifecycle", "pending_input"}
+    _TRANSIENT_KINDS: ClassVar[set[str]] = {"agent_update", "agent_lifecycle", "pending_input"}
     _MCP_HTTP_TOOL_MARKER = "◇"
     # Máximo de linhas de tools visíveis no bloco transitório; o excedente
     # colapsa na linha "⋮ +N ferramentas anteriores".
@@ -130,8 +126,10 @@ class TextualFeedModel:
         self._items: list[TextualFeedItem] = []
         self._transient_index_by_agent: dict[str, int] = {}
         self._active_submissions_by_index: dict[int, TextualFeedItem] = {}
-        self._stream_buffer_by_agent: dict[str, str] = {}
-        self._stream_meta_by_agent: dict[str, dict[str, Any]] = {}
+        # Resposta parcial já fixada no feed por agente (texto cumulativo e os
+        # itens fixados): a próxima atualização é cumulativa e só o trecho novo
+        # continua no transitório.
+        self._kept_answer_by_agent: dict[str, tuple[str, list[TextualFeedItem]]] = {}
         self._transient_tools_by_agent: dict[str, list[str]] = {}
         self._tool_request_lines_by_agent: dict[str, dict[str, str]] = {}
         self._tool_request_seen_at_by_agent: dict[str, dict[str, float]] = {}
@@ -212,8 +210,7 @@ class TextualFeedModel:
         """Zera o estado por agente que só existe por causa de itens do chat."""
         self._transient_index_by_agent.clear()
         self._active_submissions_by_index.clear()
-        self._stream_buffer_by_agent.clear()
-        self._stream_meta_by_agent.clear()
+        self._kept_answer_by_agent.clear()
         self._transient_tools_by_agent.clear()
         self._tool_request_lines_by_agent.clear()
         self._tool_request_seen_at_by_agent.clear()
@@ -307,6 +304,7 @@ class TextualFeedModel:
             delegation_id = self._event_delegation_id(event)
             if delegation_id and delegation_id in self._delegation_slots:
                 return self._finish_delegation_group(event, delegation_id)
+            kept_removed = self._drop_kept_answer_repeated_by(event)
             summary = self._pending_turn_summary_by_agent.pop(self._agent_base(event), None)
             burst_stats, bursts_removed = self._consume_mcp_tool_bursts(
                 event, exclude_key=self._final_replacement_key(event)
@@ -322,7 +320,7 @@ class TextualFeedModel:
                 payload["turn_summary"] = footer
                 final_event = TextualUiEvent(event.kind, payload, agent=event.agent)
             replaced, _ = self._replace_transient_with_final(final_event)
-            redraw = replaced or bursts_removed
+            redraw = replaced or bursts_removed or kept_removed
             self._last_change = TextualFeedChange(
                 True,
                 redraw=redraw,
@@ -334,23 +332,6 @@ class TextualFeedModel:
             # oculta, tentativa descartada) não pode virar rodapé do próximo
             # turno do mesmo agente.
             self._pending_turn_summary_by_agent.pop(self._agent_base(event), None)
-        if event.kind == "stream_start":
-            agent = self._agent_key(event)
-            self._finalized_agents.discard(agent)
-            self._transient_tools_by_agent.pop(agent, None)
-            self._stream_buffer_by_agent[agent] = ""
-            self._stream_meta_by_agent[agent] = dict(event.payload or {}) if isinstance(event.payload, dict) else {}
-            replaced = self._upsert_transient(event)
-            self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
-            return True
-        if event.kind == "stream_chunk":
-            return self._apply_stream_chunk(event)
-        if event.kind == "stream_abort":
-            agent = self._agent_key(event)
-            if self._is_finalized_agent(agent):
-                self._last_change = TextualFeedChange(False)
-                return False
-            self._transient_tools_by_agent.pop(agent, None)
         if event.kind == "tool_preview":
             return self._apply_tool_preview(event)
         if event.kind == "tool_state":
@@ -368,7 +349,6 @@ class TextualFeedModel:
         if event.kind in self._TRANSIENT_KINDS:
             agent = self._agent_key(event)
             if self._is_finalized_agent(agent):
-                # Agentes CLI (opencode etc.) não emitem stream_start; para eles
                 # agent_update e lifecycle RUNNING sinalizam a nova run e evitam
                 # que ela fique invisível.
                 if self._is_new_run_signal(event):
@@ -379,6 +359,7 @@ class TextualFeedModel:
                     return False
             if self._is_run_boundary_lifecycle(event):
                 self._transient_tools_by_agent.pop(agent, None)
+                self._kept_answer_by_agent.pop(agent, None)
                 if self._is_final_lifecycle(event):
                     self._finalized_agents.add(agent)
                     removed = self._remove_transient_keys(
@@ -389,8 +370,16 @@ class TextualFeedModel:
                     )
                     self._last_change = TextualFeedChange(removed, redraw=removed)
                     return removed
+            if event.kind == "agent_update" and self._is_answer_event(event):
+                trimmed = self._without_kept_answer(agent, event)
+                if trimmed is None:
+                    self._last_change = TextualFeedChange(False)
+                    return False
+                event = trimmed
+            kept = event.kind == "pending_input" and self._keep_partial_answer(agent)
             replaced = self._upsert_transient(event)
-            self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
+            redraw = replaced or kept
+            self._last_change = TextualFeedChange(True, redraw=redraw, appended=None if redraw else self._items[-1])
             return True
         item = TextualFeedItem(event, transient=False)
         self._items.append(item)
@@ -580,6 +569,7 @@ class TextualFeedModel:
         """Encerra a delegação removendo cartão e feed do agente delegado."""
         agent_key = self._agent_key(event)
         self._finalized_agents.add(agent_key)
+        self._kept_answer_by_agent.pop(agent_key, None)
         self._pending_turn_summary_by_agent.pop(self._agent_base(event), None)
         removed = self._remove_transient_keys(
             self._delegation_group_keys(delegation_id, agent_keys=[agent_key])
@@ -656,8 +646,7 @@ class TextualFeedModel:
 
     def _replace_transient_with_final(self, event: TextualUiEvent) -> tuple[bool, str]:
         agent = self._final_replacement_key(event)
-        self._stream_buffer_by_agent.pop(agent, None)
-        self._stream_meta_by_agent.pop(agent, None)
+        self._kept_answer_by_agent.pop(agent, None)
         self._transient_tools_by_agent.pop(agent, None)
         self._finalized_agents.add(agent)
         item = TextualFeedItem(event, transient=False)
@@ -707,7 +696,7 @@ class TextualFeedModel:
     @staticmethod
     def _is_new_run_signal(event: TextualUiEvent) -> bool:
         """Retorna True para o primeiro sinal visual de uma nova execução do agente."""
-        if event.kind in {"stream_start", "agent_update"}:
+        if event.kind == "agent_update":
             return True
         if event.kind != "agent_lifecycle":
             return False
@@ -722,51 +711,90 @@ class TextualFeedModel:
         payload = event.payload if isinstance(event.payload, dict) else {}
         return _coerce_lifecycle_status(payload.get("status")) in RUN_BOUNDARY_LIFECYCLE_STATUSES
 
-    def _apply_stream_chunk(self, event: TextualUiEvent) -> bool:
-        agent = self._agent_key(event)
-        if self._is_finalized_agent(agent):
-            self._last_change = TextualFeedChange(False)
+    @staticmethod
+    def _is_answer_event(event: TextualUiEvent) -> bool:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        return bool(payload.get("answer"))
+
+    def _without_kept_answer(self, agent: str, event: TextualUiEvent) -> TextualUiEvent | None:
+        """Tira da resposta parcial o trecho já fixado; None se nada sobrar."""
+        kept, _ = self._kept_answer_by_agent.get(agent, ("", []))
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        content = str(payload.get("content") or "")
+        # Se o modelo reescreveu o texto já fixado, a atualização entra inteira.
+        if not kept or not content.startswith(kept):
+            return event
+        remainder = content[len(kept):].strip()
+        if not remainder:
+            return None
+        return TextualUiEvent(
+            event.kind,
+            {**payload, "content": remainder, "answer_full": content},
+            agent=event.agent,
+        )
+
+    def _keep_partial_answer(self, agent: str) -> bool:
+        """Fixa no feed a resposta parcial do agente antes do cartão de pergunta.
+
+        Sem isso o cartão ``pending_input`` ocupa o lugar do transitório e o
+        texto que o agente escreveu para contextualizar a pergunta some.
+        """
+        index = self._transient_index_by_agent.get(agent)
+        if index is None or not (0 <= index < len(self._items)):
             return False
-        current = self._stream_buffer_by_agent.get(agent, "")
-        payload = event.payload
-        if isinstance(payload, dict):
-            diff = _normalize_stream_diff(payload.get("diff"))
-            if diff:
-                current = _apply_stream_diff(current, diff)
-            elif payload.get("text"):
-                current += strip_ansi(str(payload.get("text")))
-            else:
-                current += strip_ansi(str(payload))
+        event = self._items[index].event
+        if event.kind != "agent_update" or not self._is_answer_event(event):
+            return False
+        payload = dict(event.payload)
+        content = str(payload.get("content") or "").strip()
+        if not content:
+            return False
+        full_answer = str(payload.pop("answer_full", "") or content).strip()
+        payload.pop("answer", None)
+        payload.pop("tools", None)
+        payload["content"] = content
+        kept_item = TextualFeedItem(
+            TextualUiEvent("agent_message", payload, agent=event.agent),
+            transient=False,
+        )
+        self._items[index] = kept_item
+        self._transient_index_by_agent.pop(agent, None)
+        self._transient_tools_by_agent.pop(agent, None)
+        _, kept_items = self._kept_answer_by_agent.get(agent, ("", []))
+        self._kept_answer_by_agent[agent] = (full_answer, [*kept_items, kept_item])
+        return True
+
+    def _drop_kept_answer_repeated_by(self, event: TextualUiEvent) -> bool:
+        """Remove os trechos fixados quando a resposta final já os repete.
+
+        A final pode chegar sem ``run_id`` enquanto o trecho foi fixado com a
+        chave da run; sem chave exata, vale o único trecho fixado do agente.
+        """
+        key = self._agent_key(event)
+        if key not in self._kept_answer_by_agent:
+            base = self._agent_base(event)
+            candidates = [
+                candidate
+                for candidate in self._kept_answer_by_agent
+                if candidate == base or candidate.startswith(f"{base}#")
+            ]
+            if len(candidates) != 1:
+                return False
+            key = candidates[0]
+        kept, kept_items = self._kept_answer_by_agent[key]
+        if isinstance(event.payload, dict):
+            content = str(event.payload.get("content") or "").strip()
         else:
-            current += strip_ansi(str(payload))
-        self._stream_buffer_by_agent[agent] = current
-        if current.strip():
-            payload = current
-            meta = self._stream_meta_by_agent.get(agent)
-            if isinstance(event.payload, dict):
-                stream_payload = event.payload
-                runtime_meta = {
-                    key: stream_payload[key]
-                    for key in (
-                        "run_id",
-                        "parent_run_id",
-                        "delegation_id",
-                        "transport",
-                        "label",
-                        "style",
-                        "theme",
-                        "orchestrator",
-                    )
-                    if key in stream_payload
-                }
-                meta = {**runtime_meta, **(meta or {})}
-            if meta:
-                payload = {**meta, "content": current}
-            replaced = self._upsert_transient(TextualUiEvent("stream_chunk", payload, agent=event.agent))
-            self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
-            return True
-        self._last_change = TextualFeedChange(False)
-        return False
+            content = str(event.payload or "").strip()
+        if not content.startswith(kept):
+            return False
+        self._kept_answer_by_agent.pop(key, None)
+        before = len(self._items)
+        self._items = [item for item in self._items if not any(item is kept_item for kept_item in kept_items)]
+        if len(self._items) == before:
+            return False
+        self._reindex_transients()
+        return True
 
     def _apply_visual_reset(self, event: TextualUiEvent) -> bool:
         """Remove estado visual transitório sem apagar mensagens persistentes."""
@@ -781,8 +809,6 @@ class TextualFeedModel:
                     key
                     for key in set(
                         self._transient_index_by_agent
-                        | self._stream_buffer_by_agent
-                        | self._stream_meta_by_agent
                         | self._transient_tools_by_agent
                     )
                     if key == agent or key.startswith(agent_prefix)
@@ -802,8 +828,7 @@ class TextualFeedModel:
         before = len(self._items)
         self._items = [item for item in self._items if not item.transient]
         self._transient_index_by_agent.clear()
-        self._stream_buffer_by_agent.clear()
-        self._stream_meta_by_agent.clear()
+        self._kept_answer_by_agent.clear()
         self._transient_tools_by_agent.clear()
         self._tool_request_lines_by_agent.clear()
         self._tool_request_seen_at_by_agent.clear()
@@ -835,8 +860,6 @@ class TextualFeedModel:
             for delegation_id, slot_key in list(self._delegation_slots.items()):
                 if slot_key == key:
                     self._delegation_slots.pop(delegation_id, None)
-            self._stream_buffer_by_agent.pop(key, None)
-            self._stream_meta_by_agent.pop(key, None)
             self._transient_tools_by_agent.pop(key, None)
             self._tool_request_lines_by_agent.pop(key, None)
             self._tool_request_seen_at_by_agent.pop(key, None)
