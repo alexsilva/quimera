@@ -136,22 +136,6 @@ class ToolResult:
             )
         return None
 
-    def to_model_payload(self) -> dict[str, Any]:
-        """Serializa o resultado completo com metadados de erro para o runtime."""
-        error_metadata = self.error.metadata.copy() if isinstance(self.error, ToolError) else {}
-        return {
-            "ok": self.ok,
-            "tool_name": self.tool_name,
-            "content": self.content,
-            "error": str(self.error) if isinstance(self.error, ToolError) else self.error,
-            "error_type": self.error_type,
-            "error_metadata": error_metadata,
-            "exit_code": self.exit_code,
-            "duration_ms": self.duration_ms,
-            "truncated": self.truncated,
-            "data": self.data,
-        }
-
     def to_prompt_payload(self, max_chars: int) -> dict[str, Any]:
         """Retorna payload seguro e truncado para envio ao modelo de linguagem."""
         content, content_truncated = self._truncate_text(self.content, max_chars)

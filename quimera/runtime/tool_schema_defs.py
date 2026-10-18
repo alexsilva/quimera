@@ -196,16 +196,3 @@ TOOL_SCHEMA: dict[str, dict] = {
     },
 }
 
-
-def build_tools_prompt() -> str:
-    """Renderiza apenas dados dinâmicos das ferramentas disponíveis."""
-    lines = []
-    for tool in TOOL_SCHEMA.values():
-        params = ", ".join(f"{k}: {v['type']}" for k, v in tool["parameters"].items())
-        line = f"- {tool['name']}"
-        if params:
-            line += f": {params}"
-        if tool.get("description"):
-            line += f" — {tool['description']}"
-        lines.append(line)
-    return "\n".join(lines)

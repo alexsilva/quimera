@@ -12,39 +12,6 @@ _MAX_TASK_FEEDBACK_SUMMARY_CHARS = 140
 _MAX_TASK_FEEDBACK_SUMMARY_LINES = 6
 
 
-def truncate_tool_result(content: str, max_lines: int = 10) -> str:
-    """Trunca tool result para evitar que respostas gigantes poluam o prompt."""
-    if not content:
-        return content
-    lines = content.split("\n")
-    if len(lines) <= max_lines:
-        return content
-    truncated = lines[:max_lines]
-    truncated.append(f"... ({len(lines) - max_lines} linhas truncadas)")
-    return "\n".join(truncated)
-
-
-def truncate_payload(payload, max_lines: int = 10):
-    """Trunca campos do payload de tool result para evitar estouro de contexto."""
-    if not payload:
-        return payload
-    if not isinstance(payload, dict):
-        return payload
-
-    truncated = payload.copy()
-    if isinstance(truncated.get("content"), str):
-        truncated["content"] = truncate_tool_result(truncated["content"], max_lines)
-    if isinstance(truncated.get("error"), str):
-        truncated["error"] = truncate_tool_result(truncated["error"], max_lines)
-    if isinstance(truncated.get("data"), dict):
-        data = truncated["data"].copy()
-        for key, value in data.items():
-            if isinstance(value, str):
-                data[key] = truncate_tool_result(value, max_lines)
-        truncated["data"] = data
-    return truncated
-
-
 def format_completed_task_result(
     task,
     *,

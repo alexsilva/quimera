@@ -666,6 +666,6 @@ def test_ledger_evicts_least_recently_used_path(tmp_path: Path) -> None:
     ledger.record("scope-a", third)
 
     assert ledger.path_count("scope-a") == 2
-    assert ledger.get_entry("scope-a", first) is None
+    assert ledger.check("scope-a", first) is LedgerVerdict.NOT_READ
     assert ledger.check("scope-a", second) is LedgerVerdict.OK
     assert ledger.check("scope-a", third) is LedgerVerdict.OK

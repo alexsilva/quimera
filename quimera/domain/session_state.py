@@ -33,11 +33,6 @@ class SessionMetrics:
     delegations_failed: int = 0
     total_latency: float = 0.0
     agent_metrics: dict[str, Any] = field(default_factory=dict)
-    rounds_without_progress: int = 0
-    consecutive_redundant_responses: int = 0
-    delegation_invalid_count: int = 0
-    responses_with_clear_next_step: int = 0
-    total_responses: int = 0
 
 
 _META_FIELDS = {f.name for f in fields(SessionMeta)} - {"extra"}
@@ -310,25 +305,3 @@ class SessionRuntimeState(dict):
         """Setter thread-safe para ``summary_agent_preference``."""
         with self._shared_state_lock:
             self.summary_agent_preference = value
-
-    def record_session_response(self, *, has_clear_next_step: bool = False) -> None:
-        """Registra uma resposta e, separadamente, a presença de próximo passo.
-
-        Redundância é uma classificação semântica independente e deve ser
-        atualizada exclusivamente por ``increment_redundant_responses`` ou
-        ``reset_consecutive_redundant``.
-        """
-        with self._shared_state_lock:
-            self.metrics.total_responses += 1
-            if has_clear_next_step:
-                self.metrics.responses_with_clear_next_step += 1
-
-    def reset_consecutive_redundant(self) -> None:
-        """Reseta o contador de respostas redundantes consecutivas."""
-        with self._shared_state_lock:
-            self.metrics.consecutive_redundant_responses = 0
-
-    def increment_redundant_responses(self) -> None:
-        """Incrementa o contador de respostas redundantes consecutivas."""
-        with self._shared_state_lock:
-            self.metrics.consecutive_redundant_responses += 1

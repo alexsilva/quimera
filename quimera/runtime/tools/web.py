@@ -70,45 +70,6 @@ def _tool_environment(config: ToolRuntimeConfig) -> dict[str, str]:
     )
 
 
-def fetch_url_text(url: str, *, timeout: int = 30) -> str:
-    """Baixa uma URL publica e retorna o texto sem HTML.
-
-    Aplica as mesmas guardas do http_request: apenas http/https, resolução via
-    getaddrinfo com rejeição de qualquer IP não global e IP fixado no curl via
-    --resolve (anti-SSRF/DNS rebinding). Levanta ValueError para URL invalida,
-    bloqueada ou host irresolvível e TimeoutError em timeout de rede.
-    """
-    cleaned = str(url or "").strip()
-    parsed = urllib.parse.urlparse(cleaned)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError(f"URL invalida: {cleaned}")
-    resolved_ip = _resolve_public_address(parsed)
-    args = [
-        "curl",
-        "-s",
-        "--max-redirs",
-        "0",
-        "-m",
-        str(timeout),
-        "-A",
-        "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
-        "--resolve",
-        _curl_resolve_spec(parsed, resolved_ip),
-        cleaned,
-    ]
-    try:
-        result = subprocess.run(
-            args,
-            env=build_env_vars(os.environ),
-            capture_output=True,
-            text=True,
-            timeout=timeout + 5,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(f"curl excedeu o tempo limite de {timeout}s.") from exc
-    return WebTool._strip_html(result.stdout)
-
-
 class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)):
     """Implementa `WebTool` — busca na web usando curl."""
     _MAX_URLS = 5

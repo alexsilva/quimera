@@ -202,20 +202,6 @@ class ReadLedger:
         """Retorna somente o veredito da inspecao."""
         return self.inspect(scope, path).verdict
 
-    def get_entry(self, scope: str, path: Path) -> LedgerEntry | None:
-        """Retorna a entrada registrada sem consultar novamente o arquivo."""
-        scope_key = self._scope_key(scope)
-        path_key = self._path_key(path)
-        with self._lock:
-            paths = self._scopes.get(scope_key)
-            if paths is None:
-                return None
-            entry = paths.get(path_key)
-            if entry is not None:
-                self._scopes.move_to_end(scope_key)
-                paths.move_to_end(path_key)
-            return entry
-
     def forget(self, scope: str, path: Path) -> bool:
         """Remove um path do escopo, retornando se havia uma entrada."""
         scope_key = self._scope_key(scope)

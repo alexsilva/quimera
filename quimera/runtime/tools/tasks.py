@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Callable, Protocol
 
 from ..approval import TrustedToolExecutionContext
@@ -344,11 +343,6 @@ class TaskTools(
             data=payload,
         )
 
-    @staticmethod
-    def _normalize_text(value: str) -> str:
-        """Normaliza text."""
-        return re.sub(r"\s+", " ", value.strip().lower())
-
     def _build_filters(self, arguments: dict) -> dict:
         """Monta filters."""
         filt = dict(arguments.get("filters", {}) or {})
@@ -357,19 +351,6 @@ class TaskTools(
             if value is not None:
                 filt[key] = value
         return filt
-
-    def _find_duplicate_task(self, job_id: int, description: str) -> dict | None:
-        """Executa find duplicate task."""
-        normalized_description = self._normalize_text(description)
-        if not normalized_description:
-            return None
-        open_statuses = ("proposed", "approved", "in_progress")
-        for status in open_statuses:
-            tasks = _list_tasks({"job_id": job_id, "status": status}, db_path=self.workspace.tasks_db)
-            for task in tasks:
-                if self._normalize_text(task["description"]) == normalized_description:
-                    return task
-        return None
 
     def _attach_live_delegation(self, task: dict) -> dict:
         """Anexa o estado ao vivo (thinking) a tasks de delegação em execução.

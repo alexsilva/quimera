@@ -566,11 +566,6 @@ class AppAssembler:
             "delegations_failed": 0,
             "total_latency": 0.0,
             "agent_metrics": {},
-            "rounds_without_progress": 0,
-            "consecutive_redundant_responses": 0,
-            "delegation_invalid_count": 0,
-            "responses_with_clear_next_step": 0,
-            "total_responses": 0,
         })
         # Persist metrics state to workspace so agents can resume with previous metrics
         metrics_state_path = plat.workspace.state_dir / "metrics_state.json"

@@ -365,23 +365,6 @@ class DebateRepository:
             if cursor.rowcount != 1:
                 raise KeyError(f"debate inexistente: {debate_id}")
 
-    def recover_incomplete(
-        self, *, reason: str = "interrompido pelo encerramento anterior"
-    ) -> int:
-        now = self._now()
-        active = (
-            DebateStatus.CREATED.value,
-            DebateStatus.RUNNING.value,
-            DebateStatus.SYNTHESIZING.value,
-        )
-        with self._conn() as conn:
-            cursor = conn.execute(
-                "UPDATE debates SET status = ?, error = ?, updated_at = ?, completed_at = ? "
-                "WHERE status IN (?, ?, ?)",
-                (DebateStatus.FAILED.value, reason, now, now, *active),
-            )
-            return int(cursor.rowcount)
-
     def recover_expired(
         self,
         *,

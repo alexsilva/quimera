@@ -9,7 +9,7 @@ from quimera.runtime.config import ToolRuntimeConfig
 from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicyError
-from quimera.runtime.tools.web import WebTool, WebToolValidator, fetch_url_text
+from quimera.runtime.tools.web import WebTool, WebToolValidator
 
 
 # ---------------------------------------------------------------------------
@@ -325,49 +325,6 @@ def test_web_fetch_pins_validated_address(web_tool, mock_curl, mock_public_dns):
 
     assert result.ok is True
     assert mock_curl.call_args[1]["resolve"] == "exemplo.com:443:93.184.216.34"
-
-
-# ---------------------------------------------------------------------------
-# fetch_url_text – guardas SSRF
-# ---------------------------------------------------------------------------
-
-def test_fetch_url_text_rejects_non_global_resolved_address():
-    """fetch_url_text bloqueia IP resolvido não global sem executar curl."""
-    with patch(
-        "quimera.runtime.tools.web.socket.getaddrinfo",
-        return_value=[(2, 1, 6, "", ("10.0.0.5", 443))],
-    ), patch("quimera.runtime.tools.web.subprocess.run") as run:
-        with pytest.raises(ValueError, match="não público"):
-            fetch_url_text("https://exemplo.com")
-    run.assert_not_called()
-
-
-def test_fetch_url_text_fails_closed_on_dns_error():
-    """Falha de resolução DNS levanta ValueError sem executar curl."""
-    with patch(
-        "quimera.runtime.tools.web.socket.getaddrinfo",
-        side_effect=OSError("dns down"),
-    ), patch("quimera.runtime.tools.web.subprocess.run") as run:
-        with pytest.raises(ValueError, match="resolver"):
-            fetch_url_text("https://exemplo.com")
-    run.assert_not_called()
-
-
-def test_fetch_url_text_pins_validated_address():
-    """fetch_url_text fixa o IP validado no curl via --resolve."""
-    completed = MagicMock(stdout="<p>ok</p>", stderr="", returncode=0)
-    with patch(
-        "quimera.runtime.tools.web.socket.getaddrinfo",
-        return_value=[(2, 1, 6, "", ("93.184.216.34", 443))],
-    ), patch(
-        "quimera.runtime.tools.web.subprocess.run", return_value=completed
-    ) as run:
-        text = fetch_url_text("https://exemplo.com")
-
-    assert text == "ok"
-    args = run.call_args.args[0]
-    resolve_index = args.index("--resolve")
-    assert args[resolve_index + 1] == "exemplo.com:443:93.184.216.34"
 
 
 def test_http_request_rejects_url_without_host(web_tool):

@@ -121,18 +121,6 @@ def test_resolve_job_id_fallback(mock_list, job_tools):
         assert job_tools._resolve_job_id(None, allow_recent_fallback=True) is None
 
 
-def test_find_duplicate_task(tools):
-    """Verifica que _find_duplicate_task detecta tasks duplicadas por descrição."""
-    # Line 53-62 coverage
-    with patch("quimera.runtime.tools.tasks._list_tasks") as mock_list:
-        mock_list.return_value = [{"description": "  TEST description  "}]
-        assert tools._find_duplicate_task(1, "test description") is not None
-        assert tools._find_duplicate_task(1, "") is None
-
-        mock_list.return_value = []
-        assert tools._find_duplicate_task(1, "unique") is None
-
-
 @patch("quimera.runtime.tools.tasks._list_tasks")
 def test_list_tasks_error(mock_list, tools, monkeypatch):
     """Verifica que tasks_list trata exceção do banco (sem filtro cai no job atual)."""

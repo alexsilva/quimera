@@ -322,8 +322,6 @@ class RuntimeConfigAndModelsCoverageTests(unittest.TestCase):
 
     def test_models_payload_and_defaults(self):
         """Verifica que Test models payload and defaults."""
-        result = ToolResult(ok=True, tool_name="test", content="done", data={"a": 1})
-        self.assertEqual(result.to_model_payload()["data"], {"a": 1})
         call = ToolCall(name="list_files", arguments={"path": "."})
         self.assertEqual(call.metadata, {})
 
@@ -668,13 +666,6 @@ class TaskToolsCoverageTests(unittest.TestCase):
                 "quimera.runtime.tools.tasks._list_jobs", side_effect=RuntimeError("db down")
         ):
             self.assertIsNone(self.job_tools._resolve_job_id(None, allow_recent_fallback=True))
-        with patch(
-                "quimera.runtime.tools.tasks._list_tasks",
-                side_effect=[[{"description": " TEST task "}], [], [], []],
-        ):
-            self.assertIsNotNone(self.tools._find_duplicate_task(1, "test task"))
-            self.assertIsNone(self.tools._find_duplicate_task(1, ""))
-            self.assertIsNone(self.tools._find_duplicate_task(1, "unique task"))
 
     def test_list_jobs_tasks_and_get_job_paths(self):
         """Verifica que Test list jobs tasks and get job paths."""

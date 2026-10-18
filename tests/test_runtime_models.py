@@ -1,24 +1,5 @@
-from quimera.runtime.errors import ToolPolicyViolationError, ToolValidationError
+from quimera.runtime.errors import ToolPolicyViolationError
 from quimera.runtime.models import ToolResult, ToolCall
-
-
-def test_tool_result_to_model_payload():
-    """Verifica que to_model_payload retorna dict com todos os campos."""
-    result = ToolResult(
-        ok=True,
-        tool_name="test",
-        content="success",
-        error=None,
-        exit_code=0,
-        duration_ms=100,
-        truncated=False,
-        data={"meta": "info"}
-    )
-    payload = result.to_model_payload()
-    assert payload["ok"] is True
-    assert payload["tool_name"] == "test"
-    assert payload["content"] == "success"
-    assert payload["data"] == {"meta": "info"}
 
 
 def test_tool_call_init():
@@ -27,21 +8,6 @@ def test_tool_call_init():
     assert call.name == "test"
     assert call.arguments == {"a": 1}
     assert call.metadata == {}
-
-
-def test_tool_result_to_model_payload_includes_error_metadata():
-    """Verifica que to_model_payload inclui error_type e error_metadata."""
-    result = ToolResult(
-        ok=False,
-        tool_name="test",
-        error=ToolValidationError("Campo inválido", field="path", hint="use caminho absoluto"),
-    )
-
-    payload = result.to_model_payload()
-
-    assert payload["error"] == "Campo inválido"
-    assert payload["error_type"] == "validation"
-    assert payload["error_metadata"] == {"field": "path", "hint": "use caminho absoluto"}
 
 
 def test_tool_result_to_prompt_payload_is_minimal_and_truncated():

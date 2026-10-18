@@ -182,28 +182,3 @@ class SessionMetricsService:
                 if similarity > 0.7:
                     return True
         return False
-
-    def update_persisted_message_metrics(self, app, role, content):
-        """Atualiza persisted message metrics."""
-        if not hasattr(app, "session_state") or not app.session_state or role == "human":
-            return
-        try:
-            has_next = self.has_clear_next_step(content)
-            is_redundant = self.is_response_redundant(content, app.history)
-            is_empty = not content or not content.strip()
-            app.session_state.record_session_response(has_clear_next_step=has_next)
-            if is_redundant:
-                app.session_state.increment_redundant_responses()
-            else:
-                app.session_state.reset_consecutive_redundant()
-            if hasattr(app, "behavior_metrics") and app.behavior_metrics:
-                app.behavior_metrics.record_response(
-                    role,
-                    0.0,
-                    has_next_step=has_next,
-                    is_empty=is_empty,
-                    is_redundant=is_redundant,
-                    response_text=content,
-                )
-        except KeyError:
-            pass

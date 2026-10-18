@@ -107,7 +107,6 @@ def dispatch_app():
     app = MagicMock()
     app.tool_executor = MagicMock()
     app.task_services = MagicMock()
-    app.task_services.truncate_payload = MagicMock(side_effect=lambda x: x)
     app.get_agent_profile = MagicMock(return_value=MagicMock())
     app.prompt_builder = MagicMock()
     app.agent_client = MagicMock()

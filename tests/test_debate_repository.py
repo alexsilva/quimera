@@ -115,20 +115,6 @@ def test_repository_migrates_legacy_schema_without_context(tmp_path):
     assert repository.get_session("deb-new").context == "resumo neutro do problema"
 
 
-def test_repository_recovers_incomplete_sessions(tmp_path):
-    db_path = str(tmp_path / "state.db")
-    TaskRepository(db_path)
-    repository = DebateRepository(db_path)
-    repository.create_session(_session("deb-running"))
-    repository.set_status("deb-running", DebateStatus.RUNNING)
-
-    assert repository.recover_incomplete(reason="restart") == 1
-    loaded = repository.get_session("deb-running")
-    assert loaded is not None
-    assert loaded.status == DebateStatus.FAILED
-    assert loaded.error == "restart"
-
-
 def test_repository_recovers_only_expired_active_sessions(tmp_path):
     db_path = str(tmp_path / "state.db")
     TaskRepository(db_path)

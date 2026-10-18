@@ -2469,7 +2469,6 @@ class ProtocolTests(unittest.TestCase):
         app.resolve_agent_response = QuimeraApp.resolve_agent_response.__get__(app, QuimeraApp)
         app.task_services = Mock()
         app.task_services.refresh_task_shared_state = Mock()
-        app.task_services.truncate_payload = lambda payload: payload
         app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         app.session_services = Mock()
         app.session_services.persist_message = lambda role, content, **kwargs: persisted.append((role, content))
@@ -5111,22 +5110,6 @@ class MetricsFeedbackTests(unittest.TestCase):
         different_response = "Vou corrigir o bug Y no parser."
         self.assertFalse(SessionMetricsService.is_response_redundant(different_response, history))
 
-    def test_session_state_tracks_new_metrics(self):
-        """session_state deve rastrear as novas métricas."""
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.session_state = {}
-
-        app.session_state["total_responses"] = 5
-        app.session_state["responses_with_clear_next_step"] = 3
-        app.session_state["consecutive_redundant_responses"] = 2
-        app.session_state["delegation_invalid_count"] = 1
-        app.session_state["rounds_without_progress"] = 0
-
-        self.assertEqual(app.session_state["total_responses"], 5)
-        self.assertEqual(app.session_state["responses_with_clear_next_step"], 3)
-        self.assertEqual(app.session_state["consecutive_redundant_responses"], 2)
-        self.assertEqual(app.session_state["delegation_invalid_count"], 1)
-
     def test_delegation_format_includes_chain(self):
         """Delegation format deve incluir cadeia de delegação quando presente."""
         delegation = {
@@ -5290,25 +5273,6 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertNotIn("não escreva chamadas como list_files(...)", main)
         self.assertNotIn('function="apply_patch"', main)
         self.assertNotIn("exec_command / write_stdin / close_command_session", main)
-
-    def test_build_tools_prompt_is_compact_but_preserves_essentials(self):
-        """Verifica que build tools prompt is compact but preserves essentials."""
-        from quimera.runtime.tool_schema_defs import build_tools_prompt
-
-        prompt = build_tools_prompt()
-
-        self.assertIn('apply_patch: patch: str', prompt)
-        self.assertIn('list_files: path: str', prompt)
-        self.assertIn('exec_command: cmd: str', prompt)
-        self.assertIn("- list_files:", prompt)
-        self.assertIn("- read_file:", prompt)
-        self.assertIn("- apply_patch:", prompt)
-        self.assertIn("- run_shell:", prompt)
-        self.assertNotIn("| exemplo:", prompt)
-        self.assertNotIn("Ferramentas disponíveis", prompt)
-        self.assertNotIn("a ferramenta não executa", prompt)
-        self.assertNotIn("não escreva chamadas como list_files(...)", prompt)
-        self.assertLess(len(prompt), 3400)
 
     def test_build_task_body_includes_operational_protocol(self):
         """Verifica que build task body includes operational protocol."""
