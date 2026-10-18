@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Protocol
 
 from ..shared_state import MAX_AGENT_UPDATE_KEYS
 from .config import ToolRuntimeConfig
@@ -20,6 +21,12 @@ def is_path_inside(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+class _ToolValidator(Protocol):
+    """Tool que valida as próprias chamadas (ver ``register_tool_validator``)."""
+
+    def validate(self, call: ToolCall) -> None: ...
 
 
 class ToolPolicyError(Exception):
@@ -55,10 +62,10 @@ class ToolPolicy:
         self.config = config
         self.blocked_tools: list[str] = []
         self.allowed_tools: list[str] | None = None
-        self._tool_validators: dict[str, object] = {}
+        self._tool_validators: dict[str, _ToolValidator] = {}
         self._external_mcp_tools: set[str] = set()
 
-    def register_tool_validator(self, tool_names: list[str], tool) -> None:
+    def register_tool_validator(self, tool_names: list[str], tool: _ToolValidator) -> None:
         """Registra um ValidatableTool como responsável pela validação das tools listadas."""
         for name in tool_names:
             self._tool_validators[name] = tool

@@ -86,6 +86,8 @@ class WorkflowTaskHooks:
     def begin(self, task: TaskRecord, agent: str) -> None:
         """Registra o início da tentativa com um run id rastreável."""
         link = self._workflows.link_for_task(task.id)
+        if link is None:
+            raise ValueError(f"task {task.id} tem origem workflow mas não está vinculada a nenhum")
         run_id = run_id_for(link.workflow_id, task.id, task.attempt_count, agent)
         self._workflows.begin_attempt(task.id, task.attempt_count, agent, run_id)
 

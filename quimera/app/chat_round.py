@@ -287,7 +287,7 @@ class ChatRoundOrchestrator:
             self._set_round_index(self._get_round_index() + 1)
             self._set_summary_agent_preference(first_agent)
             history_snapshot = self._persist_user_message(message)
-            prompt_binding = {"request_override": message}
+            prompt_binding: dict[str, Any] = {"request_override": message}
             if history_snapshot:
                 prompt_binding["history_snapshot"] = history_snapshot
 

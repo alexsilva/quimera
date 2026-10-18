@@ -84,7 +84,7 @@ class AgentStatsReporter:
         if agent_name:
             if not self.tracker.has_metrics(agent_name):
                 return f"[stats] nenhuma métrica registrada para {agent_name}."
-            payload = self.tracker.get_agent_summary(agent_name)
+            payload: dict | list[dict] = self.tracker.get_agent_summary(agent_name)
         else:
             payload = self.tracker.get_all_summaries()
             if not payload:

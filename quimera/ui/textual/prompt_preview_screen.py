@@ -92,7 +92,9 @@ class PromptPreviewScreen(ModalScreen[None]):
     def on_mount(self) -> None:
         """Carrega o texto no visualizador e posiciona a rolagem no início."""
         self._previous_app_allow_select = bool(self.app.ALLOW_SELECT)
-        self.app.ALLOW_SELECT = False
+        # Textual lê ALLOW_SELECT na instância do app; sobrescrever aqui (e não
+        # na classe) mantém o efeito restrito a esta app e reversível no unmount.
+        self.app.ALLOW_SELECT = False  # type: ignore[misc]
         for screen in self.app.screen_stack:
             screen.clear_selection()
         content = self.query_one("#prompt_preview_content", PromptPreviewLog)
@@ -102,7 +104,7 @@ class PromptPreviewScreen(ModalScreen[None]):
     def on_unmount(self) -> None:
         """Restaura a política de seleção vigente antes de abrir o modal."""
         if self._previous_app_allow_select is not None:
-            self.app.ALLOW_SELECT = self._previous_app_allow_select
+            self.app.ALLOW_SELECT = self._previous_app_allow_select  # type: ignore[misc]
             self._previous_app_allow_select = None
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

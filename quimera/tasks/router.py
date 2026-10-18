@@ -6,16 +6,13 @@ from collections.abc import Callable, Iterable, Sequence
 from typing import Protocol
 
 from ..runtime.models import TaskRecord
-from .planning import can_execute_task, choose_best_agent, score_profile_for_task
+from .planning import _TaskAgentProto, can_execute_task, choose_best_agent, score_profile_for_task
 from .repository import TaskRepository
 
 
-class _TaskProfileProto(Protocol):
-    """Interface mínima de profile usada no roteamento de tasks."""
+class _TaskProfileProto(_TaskAgentProto, Protocol):
+    """Interface mínima de profile usada no roteamento de tasks (estende a do planejamento)."""
 
-    name: str
-    supports_task_execution: bool
-    avoid_task_types: Sequence[str]
     driver: str
     prefix: str
     aliases: Sequence[str]

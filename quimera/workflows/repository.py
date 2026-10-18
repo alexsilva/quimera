@@ -119,6 +119,8 @@ class WorkflowRepository:
                     now,
                 ),
             )
+            if cur.lastrowid is None:
+                raise RuntimeError("INSERT em workflows não devolveu rowid")
             workflow_id = int(cur.lastrowid)
             self._insert_plan_version(conn, workflow_id, 1, plan)
             self._create_tasks(conn, workflow_id, job_id, 1, resolved.tasks, existing={})
@@ -547,7 +549,8 @@ class WorkflowRepository:
         statuses: Iterable[WorkflowStatus] | None = None,
     ) -> list[WorkflowRecord]:
         """Workflows (mais antigos primeiro) filtrados por job e/ou estado."""
-        clauses, params = [], []
+        clauses: list[str] = []
+        params: list[object] = []
         if job_id is not None:
             clauses.append("job_id = ?")
             params.append(job_id)

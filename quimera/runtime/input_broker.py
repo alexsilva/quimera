@@ -371,6 +371,7 @@ class InputBroker:
             )
         )
         try:
+            result: bool | tuple[int, str]
             if req.kind == "approval":
                 result = self._handle_approval(req, allow_direct_gate=allow_direct_gate)
             else:

@@ -5,6 +5,7 @@ import time
 import uuid
 import weakref
 from contextlib import nullcontext
+from typing import Any
 
 from ..agents.capabilities import get_cancel_event, is_user_cancelled
 from ..prompt_kinds import PromptKind
@@ -22,7 +23,7 @@ class _ThinkingRelayCoordinator:
 
 
 _THINKING_COORDINATORS_LOCK = threading.Lock()
-_THINKING_COORDINATORS = weakref.WeakKeyDictionary()
+_THINKING_COORDINATORS: "weakref.WeakKeyDictionary[Any, _ThinkingRelayCoordinator]" = weakref.WeakKeyDictionary()
 
 
 def _thinking_relay_coordinator(renderer) -> _ThinkingRelayCoordinator | None:

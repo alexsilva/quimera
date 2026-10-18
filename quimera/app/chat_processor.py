@@ -139,7 +139,7 @@ def run_chat_loop(
         app.input_services.set_nonblocking_tty(threaded_chat)
         if threaded_chat:
             app.input_services.set_wakeup_event(_ui_wakeup)
-    chat_queue = None
+    chat_queue: queue.Queue | None = None
     chat_worker = None
     chat_executor = None
     chat_slot_semaphore = None

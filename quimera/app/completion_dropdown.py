@@ -73,7 +73,7 @@ class CompletionDropdown(Vertical):
             yield Static("", id=f"cd-{i}", classes="completion-item")
 
     def on_mount(self) -> None:
-        self._widgets = [self.query_one(f"#cd-{i}") for i in range(self.MAX_VISIBLE)]
+        self._widgets = [self.query_one(f"#cd-{i}", Static) for i in range(self.MAX_VISIBLE)]
 
     def set_completions(self, completions: list[str]) -> None:
         self._all = completions or []

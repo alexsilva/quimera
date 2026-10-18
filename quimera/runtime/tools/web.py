@@ -187,7 +187,7 @@ class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)
         max_chars = 50_000
         truncated = len(body_text) > max_chars
         visible = body_text[:max_chars]
-        payload = {
+        result_payload = {
             "url": url,
             "method": method_name,
             "status_code": status_code,
@@ -204,7 +204,7 @@ class WebTool(ToolBase, tool_prefix="web", tool_public_methods=("http_request",)
             exit_code=status_code,
             truncated=truncated,
             error=None if ok else (result.stderr or first or "http_request falhou"),
-            data=payload,
+            data=result_payload,
         )
 
     def _resolve_public_http_target(

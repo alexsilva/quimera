@@ -8,11 +8,16 @@ Quimera, então o agente enxerga exclusivamente as ferramentas do Quimera.
 from __future__ import annotations
 
 import logging
-import tomllib
+import sys
 from functools import lru_cache
 from pathlib import Path
 
-from quimera.profiles.base import ExecutionProfile, OpenAIConnection, register
+from quimera.profiles.base import Connection, ExecutionProfile, OpenAIConnection, register
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # Python 3.10 não tem parser TOML na stdlib: o perfil usa os defaults.
+    tomllib = None
 
 _logger = logging.getLogger(__name__)
 
@@ -33,6 +38,9 @@ def _codex_config_defaults() -> tuple[str, str]:
     config_path = Path.home() / ".codex" / "config.toml"
     model = _FALLBACK_MODEL
     effort = _FALLBACK_REASONING_EFFORT
+    if tomllib is None:
+        _logger.debug("codexcloud: sem tomllib (Python < 3.11); usando defaults")
+        return model, effort
     try:
         with config_path.open("rb") as handle:
             config = tomllib.load(handle)
@@ -51,7 +59,7 @@ def _codex_config_defaults() -> tuple[str, str]:
 class CodexCloudProfile(ExecutionProfile):
     """Profile do Codex Cloud (backend Codex via conta ChatGPT do Codex CLI)."""
 
-    def effective_connection(self) -> OpenAIConnection:
+    def effective_connection(self) -> Connection:
         """Retorna conexão API espelhando modelo/effort do config do Codex CLI."""
         if self._connection_override is not None:
             return self._connection_override

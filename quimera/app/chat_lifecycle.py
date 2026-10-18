@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from concurrent.futures import Future
 
 from .chat_round import ChatRoundContext
 
@@ -61,7 +62,7 @@ class ChatLifecycle:
             0.0,
             float(queue_wait_timeout_seconds),
         )
-        self._submission_futures: dict[int, tuple[object, str, bool]] = {}
+        self._submission_futures: dict[int, tuple[Future, str, bool]] = {}
         self._active_submission_ids: set[str] = set()
         self._queued_submission_ids: set[str] = set()
         self._cancelled_submission_ids: set[str] = set()

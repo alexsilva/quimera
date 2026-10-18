@@ -11,7 +11,8 @@ from ..bugs import (
 from ..tasks.events import BugFiled
 
 if TYPE_CHECKING:
-    from .interfaces import IRenderer, IEventSink
+    from .interfaces import IRenderer
+    from .event_sink import EventSink
     from ..bugs import BugStore, RenderBugDetector, AgentRuntimeBugDetector, BugCorrelator
     from ..session_paths import SessionPaths
     from ..storage import SessionStorage
@@ -31,7 +32,7 @@ class BugServices:
         session_paths: SessionPaths,
         storage: SessionStorage,
         renderer: IRenderer,
-        event_sink: IEventSink,
+        event_sink: EventSink,
         show_system_message,
         show_warning_message,
         show_muted_message,
@@ -143,7 +144,7 @@ class BugServices:
             session_id_actual = getattr(self.storage, "session_id", "")
             if action == "list":
                 session_id = parts[2] if len(parts) >= 3 else session_id_actual
-                reports = self.bug_store.query(session_id=session_id, status="open", limit=20) if session_id else self.bug_store.query(status="open", limit=20)
+                reports: list[BugReport] = self.bug_store.query(session_id=session_id, status="open", limit=20) if session_id else self.bug_store.query(status="open", limit=20)
                 if not reports:
                     self.show_system_message("[bugs] nenhum bug aberto.")
                     return True
@@ -216,7 +217,7 @@ class BugServices:
                 if not session_id:
                     self.show_warning_message("[bugs] session_id inválido para análise.")
                     return True
-                reports: list[BugReport] = []
+                reports = []
                 if mode in {"render", "all"}:
                     if self.bug_detector is None:
                         self.show_warning_message("[bugs] detector de render não disponível.")

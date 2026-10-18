@@ -216,7 +216,7 @@ def classify_task_type(description: str, classifier: TaskClassifier | None = Non
     return classify_task(description, classifier=classifier).task_type
 
 
-CAPABILITY_BOOST = {
+CAPABILITY_BOOST: dict[str, dict[str, int]] = {
     "code_editing": {TaskType.CODE_EDIT: 4, TaskType.BUG_INVESTIGATION: 1},
     "bug_investigation": {TaskType.BUG_INVESTIGATION: 4, TaskType.CODE_EDIT: 1},
     "documentation": {TaskType.DOCUMENTATION: 4},
@@ -233,7 +233,7 @@ TOOL_RELIABILITY_SCORES = {
 }
 
 
-def can_execute_task(profile: _TaskAgentProto) -> bool:
+def can_execute_task(profile: object) -> bool:
     """Indica se pode execute task."""
     return getattr(profile, "supports_task_execution", True)
 
@@ -282,10 +282,10 @@ def choose_best_agent(task_type: str, active_profiles: Iterable[_TaskAgentProto]
         return None
 
     best_profile = None
-    best_score = None
+    best_score: int | None = None
     for profile in profiles:
         score = score_profile_for_task(profile, task_type)
-        if best_profile is None or score > best_score:
+        if best_score is None or score > best_score:
             best_profile = profile
             best_score = score
 

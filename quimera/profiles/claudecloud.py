@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from quimera.profiles.base import ExecutionProfile, OpenAIConnection, register
+from quimera.profiles.base import Connection, ExecutionProfile, OpenAIConnection, register
 
 # Mesmo endpoint usado pelo driver em quimera.runtime.drivers.claudecloud;
 # duplicado aqui para não importar httpx na carga dos profiles.
@@ -39,7 +39,7 @@ def _claude_home() -> str:
 class ClaudeCloudProfile(ExecutionProfile):
     """Template de execução Claude Cloud (Messages API via conta do Claude Code)."""
 
-    def effective_connection(self) -> OpenAIConnection | None:
+    def effective_connection(self) -> Connection | None:
         """Retorna somente a conexão nomeada já configurada.
 
         O registro estático ``claudecloud`` é um template, portanto não

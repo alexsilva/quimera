@@ -297,7 +297,7 @@ class TaskProtocolService:
         )
 
     def _build_task_prompt_factory(self) -> TaskPromptFactory:
-        history = []
+        history: list = []
         if self._session_state is not None:
             history = self._session_state.history or []
         elif callable(self._get_history_fn):

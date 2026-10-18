@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from quimera import profiles
-from quimera.profiles.base import OpenAIConnection
+from quimera.profiles.base import CliConnection, OpenAIConnection
 from quimera.prompt_templates import PromptText
 from quimera.profiles.codexcloud import (
     CODEX_CLOUD_BASE_URL,
@@ -686,6 +686,23 @@ def test_codexcloud_profile_registered_with_api_driver():
     assert not connection.api_key_env
     assert connection.extra_body["reasoning"]["summary"] == "auto"
     assert connection.max_model_requests is None
+
+
+def test_codexcloud_profile_keeps_cli_connection_override():
+    # Regressão: o /connect permite trocar o driver de um perfil dinâmico para
+    # "cli". O override CliConnection persistido tem de ser devolvido como está,
+    # não trocado em silêncio pela conexão padrão do Codex Cloud.
+    from quimera.profiles.base import _resolve_registry, register_connection_profile
+
+    cli = CliConnection(cmd=["codex", "exec"])
+    dynamic = register_connection_profile(
+        "codexcloud-cli-test", metadata={"profile": "codexcloud"}, connection=cli
+    )
+    try:
+        assert isinstance(dynamic, CodexCloudProfile)
+        assert dynamic.effective_connection() is cli
+    finally:
+        _resolve_registry()._profiles.pop("codexcloud-cli-test", None)
 
 
 def test_codexcloud_profile_configure_with_model_returns_api_connection():

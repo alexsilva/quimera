@@ -104,6 +104,8 @@ class ClaudeCloudAuth(FileOAuthSession):
     @staticmethod
     def _needs_refresh(oauth: dict) -> bool:
         expires_at = oauth.get("expiresAt")
+        if expires_at is None:
+            return False
         try:
             expires_s = float(expires_at) / 1000.0
         except (TypeError, ValueError):

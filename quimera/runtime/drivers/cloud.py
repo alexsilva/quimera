@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator, Protocol
+from typing import Any, Iterator, Protocol
 
 import httpx
 
@@ -62,7 +62,14 @@ class CloudBackend(Protocol):
     def network_error(self, exc: httpx.HTTPError) -> TransientAPIError: ...
 
 
-CloudBackendFactory = Callable[..., CloudBackend]
+class CloudBackendFactory(Protocol):
+    """Classe de backend registrada: endpoint padrão e construtor com as opções do driver."""
+
+    default_base_url: str
+
+    def __call__(self, *args: Any, **kwargs: Any) -> CloudBackend: ...
+
+
 _BACKENDS: dict[str, CloudBackendFactory] = {}
 _BUILTINS_LOADED = False
 

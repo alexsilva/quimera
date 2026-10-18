@@ -6,8 +6,10 @@ import locale
 import logging
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from .connection_configurator import ConnectionConfigurator
 from .constants import Visibility
@@ -105,7 +107,8 @@ def _start_test_fake_openai_backend() -> object:
     thread.start()
     try:
         host, port = httpd.server_address[:2]
-        base_url = f"http://{host}:{port}/v1"
+        host_text = host.decode() if isinstance(host, bytes) else str(host)
+        base_url = f"http://{host_text}:{port}/v1"
         set_connection(
             "fake-openai",
             OpenAIConnection(
@@ -744,6 +747,7 @@ def _run_session(
         # automação: mesmo renderer, sem TUI.
         use_textual = _is_tty() and not args.interactive_test
         textual_bridge = TextualUiBridge() if use_textual else None
+        input_gate_factory: Callable[..., Any]
         if textual_bridge is not None:
             renderer = textual_bridge.create_renderer()
             input_gate_factory = textual_bridge.create_input_gate

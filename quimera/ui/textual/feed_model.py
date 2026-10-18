@@ -741,7 +741,7 @@ class TextualFeedModel:
             current += strip_ansi(str(payload))
         self._stream_buffer_by_agent[agent] = current
         if current.strip():
-            payload: Any = current
+            payload = current
             meta = self._stream_meta_by_agent.get(agent)
             if isinstance(event.payload, dict):
                 stream_payload = event.payload
@@ -1278,10 +1278,10 @@ class TextualFeedModel:
         if isinstance(duration_ms, int) and duration_ms >= 0:
             stats["duration_ms"] += duration_ms
 
-        index = self._transient_index_by_agent.get(agent)
-        if index is not None and 0 <= index < len(self._items):
-            current = self._items[index].event
-            self._items[index] = TextualFeedItem(
+        transient_index = self._transient_index_by_agent.get(agent)
+        if transient_index is not None and 0 <= transient_index < len(self._items):
+            current = self._items[transient_index].event
+            self._items[transient_index] = TextualFeedItem(
                 self._with_transient_tools(current),
                 transient=True,
             )

@@ -39,7 +39,7 @@ class RoutingDecision:
     @classmethod
     def coerce(cls, value: "RoutingDecision | tuple[str | None, str | None, bool]") -> "RoutingDecision":
         """Normaliza resultado de roteamento antigo ou novo para RoutingDecision."""
-        if isinstance(value, cls):
+        if isinstance(value, RoutingDecision):
             return value
         agent, message, explicit = value
         return cls(agent, message, bool(explicit), source="legacy_tuple")

@@ -83,7 +83,11 @@ def coerce_boot_status_lines(lines: Iterable[object] | object) -> list[BootStatu
     """Normaliza qualquer coleção de linhas (ou uma linha solta) para a forma tipada."""
     if isinstance(lines, (str, BootStatusLine, dict)):
         return [coerce_boot_status_line(lines)]
-    return [coerce_boot_status_line(item) for item in (lines or [])]
+    if not lines:
+        return []
+    if not isinstance(lines, Iterable):
+        raise TypeError(f"linhas de boot status não iteráveis: {type(lines).__name__}")
+    return [coerce_boot_status_line(item) for item in lines]
 
 
 def format_boot_status_line(line: BootStatusLine) -> str:

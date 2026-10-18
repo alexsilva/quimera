@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from quimera import profiles
-from quimera.profiles.base import OpenAIConnection
+from quimera.profiles.base import CliConnection, OpenAIConnection
 from quimera.profiles.claudecloud import ClaudeCloudProfile
 from quimera.runtime.claude_auth import ClaudeAuthError, ClaudeCloudAuth
 from quimera.runtime.drivers.claudecloud import (
@@ -680,3 +680,21 @@ def test_claudecloud_connection_profile_without_override_has_printable_label():
         assert "sem conexão" in label
     finally:
         _resolve_registry()._profiles.pop("claudecloud-sonnet-test", None)
+
+
+def test_claudecloud_connection_profile_keeps_cli_connection_override():
+    # Regressão: o /connect permite trocar o driver de um perfil dinâmico para
+    # "cli" (ConnectionConfigurator). O override CliConnection persistido tem de
+    # ser devolvido como está — não descartado em silêncio por ser de outro tipo,
+    # o que faria o agente cair numa OpenAIConnection inventada.
+    from quimera.profiles.base import _resolve_registry, register_connection_profile
+
+    cli = CliConnection(cmd=["claude", "-p"])
+    dynamic = register_connection_profile(
+        "claudecloud-cli-test", metadata={"profile": "claudecloud"}, connection=cli
+    )
+    try:
+        assert isinstance(dynamic, ClaudeCloudProfile)
+        assert dynamic.effective_connection() is cli
+    finally:
+        _resolve_registry()._profiles.pop("claudecloud-cli-test", None)

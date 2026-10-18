@@ -1,5 +1,7 @@
 """Opções de construção de `QuimeraApp` (parâmetros do `__init__` atual)."""
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from ...constants import Visibility
 from ...profiles.base import ProfileRegistry
@@ -23,4 +25,4 @@ class AppOptions:
     auto_approve_mutations: bool = False
     profile_registry: ProfileRegistry | None = None
     renderer_override: object = None
-    input_gate_factory: object = None
+    input_gate_factory: Callable[..., Any] | None = None

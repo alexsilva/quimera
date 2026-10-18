@@ -9,6 +9,7 @@ from textual.widgets import Button, Input, Label, Select
 from quimera.domain.prompt_formatter import PromptFormatter
 from quimera.config import ConfigManager
 from quimera.themes import DENSITY_OPTIONS, names as theme_names
+from quimera.ui.textual.widgets import _CompletionInput
 
 if TYPE_CHECKING:
     from quimera.ui.textual.app import QuimeraTextualApp
@@ -305,7 +306,7 @@ class ConfigScreen(ModalScreen[None]):
             self.config.set_visibility(str(visibility))
 
         # Atualizar dinamicamente
-        input_widget = self.parent_app.query_one("#input")
+        input_widget = self.parent_app.query_one("#input", _CompletionInput)
         input_widget.set_prefix(PromptFormatter.format_user_prompt(user_name))
         effective_user_name = user_name or self.config.user_name
         if hasattr(self.quimera_app, "user_name"):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, Literal
 
 from ..runtime.tools.mcp_clients import get_bridge as get_mcp_client_bridge
 from ..runtime.tools.todo import TodoRegistry
@@ -112,6 +112,6 @@ class AppLifecycle:
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, exc_type, exc, tb) -> Literal[False]:
         self.close(interrupted=exc_type is KeyboardInterrupt)
         return False

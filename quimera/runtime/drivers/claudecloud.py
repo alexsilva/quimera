@@ -182,7 +182,7 @@ class ClaudeCloudBackend:
     display_name = "Claude Cloud"
     order = 20
     default_base_url = DEFAULT_CLAUDE_CLOUD_BASE_URL
-    default_loop_budget = None
+    default_loop_budget: ToolLoopBudget | None = None
 
     def __init__(
         self,
@@ -653,16 +653,16 @@ class ClaudeCloudBackend:
             has_thinking = False
             for index in sorted(blocks):
                 block = blocks[index]
-                btype = block.get("type")
-                if btype == "text" and not block.get("text"):
+                block_type = block.get("type")
+                if block_type == "text" and not block.get("text"):
                     continue
-                if btype == "thinking":
+                if block_type == "thinking":
                     # Sem signature (ex.: stream truncado) o bloco é rejeitado
                     # no replay; melhor cair na reconstrução sem thinking.
                     if not block.get("signature"):
                         continue
                     has_thinking = True
-                elif btype == "redacted_thinking":
+                elif block_type == "redacted_thinking":
                     has_thinking = True
                 retained.append(block)
             # Só vale reter quando há thinking a preservar; sem ele a

@@ -110,7 +110,7 @@ class ToolbarCoordinator:
         )
         parallel_state = self.get_parallel_toolbar_state()
         active_agents = parallel_state.get("active_agents", ())
-        if active_agents:
+        if isinstance(active_agents, (list, tuple)) and active_agents:
             parallel_state["active_agents"] = tuple(
                 self._format_agent_label(agent) or str(agent)
                 for agent in active_agents

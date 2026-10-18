@@ -92,7 +92,7 @@ def parse_http_allowed_tools(value: str | Iterable[str] | None) -> frozenset[str
             return DEFAULT_HTTP_READ_ONLY_TOOLS
         if normalized in HTTP_TOOL_PROFILES:
             return HTTP_TOOL_PROFILES[normalized]
-        items = value.split(",")
+        items: Iterable[str] = value.split(",")
     else:
         items = value
     tools = frozenset(str(item).strip() for item in items if str(item).strip())
@@ -177,8 +177,8 @@ def load_persisted_authorized_clients(workspace: Any) -> list[ConnectedMCPClient
     result: list[ConnectedMCPClient] = []
     seen_client_ids: set[str] = set()
     for client_id, client in clients.items():
-        token = token_by_client.get(client_id)
-        if token is None:
+        client_token = token_by_client.get(client_id)
+        if client_token is None:
             continue
         seen_client_ids.add(client_id)
         result.append(
@@ -186,7 +186,7 @@ def load_persisted_authorized_clients(workspace: Any) -> list[ConnectedMCPClient
                 session_id="",
                 client_id=client_id,
                 client_name=str(client.client_name or client_id),
-                scope=str(client.scope or token.scope or "mcp"),
+                scope=str(client.scope or client_token.scope or "mcp"),
                 profile="",
                 initialized=False,
                 connected=False,

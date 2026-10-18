@@ -6,6 +6,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from .render_event import RenderEvent
 
@@ -77,7 +78,7 @@ class ChatWorker:
         """Processa uma mensagem sem derrubar a thread em caso de erro."""
         try:
             if isinstance(msg, ChatWorkItem):
-                kwargs = {"slot_reserved": msg.slot_reserved}
+                kwargs: dict[str, Any] = {"slot_reserved": msg.slot_reserved}
                 if msg.submission_id:
                     kwargs["submission_id"] = msg.submission_id
                 self._agent_executor(msg.message, **kwargs)

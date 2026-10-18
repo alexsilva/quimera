@@ -674,7 +674,7 @@ class BrowserService:
     def _screenshot(self, session: _BrowserSession, args: dict[str, Any]) -> dict[str, Any]:
         path = Path(args["path"])
         path.parent.mkdir(parents=True, exist_ok=True)
-        screenshot_args = {
+        screenshot_args: dict[str, Any] = {
             "path": str(path),
             "type": "jpeg" if path.suffix.lower() in {".jpg", ".jpeg"} else "png",
         }

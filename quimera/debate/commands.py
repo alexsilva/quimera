@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import shlex
 from dataclasses import dataclass
+from typing import NoReturn
 
 from .models import DebateMode
 
@@ -18,7 +19,7 @@ class DebateCommandError(ValueError):
 
 
 class _Parser(argparse.ArgumentParser):
-    def error(self, message: str) -> None:
+    def error(self, message: str) -> NoReturn:
         raise DebateCommandError(message)
 
 

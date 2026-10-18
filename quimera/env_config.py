@@ -20,7 +20,7 @@ class EnvConfig:
         Linhas vazias e comentários (``#``) são ignorados.
         Retorna dict vazio se o arquivo não existir.
         """
-        data = {}
+        data: dict[str, str] = {}
         if not self._path.exists():
             return data
         for line in self._path.read_text(encoding="utf-8").splitlines():

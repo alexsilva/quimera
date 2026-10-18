@@ -1542,7 +1542,7 @@ class AgentClient:
         if isinstance(extra_body, dict):
             # Snapshot profundo: tuple(sorted(items)) retinha referências para
             # dicts internos; mutações in-place ficavam invisíveis ao cache.
-            extra_body_sig = json.dumps(
+            extra_body_sig: object = json.dumps(
                 extra_body,
                 ensure_ascii=False,
                 sort_keys=True,
@@ -1735,7 +1735,7 @@ class AgentClient:
                 approval_scope = get_approval_scope()
                 if approval_scope:
                     extra_env["QUIMERA_MCP_APPROVAL_SCOPE"] = approval_scope
-        extra_env = extra_env or None
+        env_override = extra_env or None
         cwd = connection.cwd if isinstance(connection, CliConnection) else None
         run_kwargs = {
             "silent": silent,
@@ -1751,8 +1751,8 @@ class AgentClient:
                 self._notify_cli_run_activities(agent, line, run_activity_callback)
 
             run_kwargs["on_text_chunk"] = _on_cli_stdout_line
-        if extra_env is not None:
-            run_kwargs["extra_env"] = extra_env
+        if env_override is not None:
+            run_kwargs["extra_env"] = env_override
         if cwd is not None:
             run_kwargs["cwd"] = cwd
         if prompt_as_arg:

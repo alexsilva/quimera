@@ -981,7 +981,7 @@ def _render_event(event: TextualUiEvent):
             return _gutter_row(
                 "◦",
                 "dim cyan",
-                Text.assemble((f"{event.agent} ", "dim cyan"), (content,)),
+                Text.assemble((f"{event.agent} ", "dim cyan"), content),
             )
         return Text(content)
     if event.kind == "muted":

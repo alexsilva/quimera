@@ -4,6 +4,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import quimera.profiles as profiles
 from quimera.agent_events import SpyEvent
@@ -255,7 +256,8 @@ class SpyOutputPresenter:
             record["output_meta"] = data.get("output_meta")
         if data.get("error"):
             record["error"] = data.get("error")
-        self._active_tool_calls.pop(key, None)
+        if key:
+            self._active_tool_calls.pop(key, None)
 
     @staticmethod
     def _tool_call_event(
@@ -286,7 +288,7 @@ class SpyOutputPresenter:
         tool = str(getattr(result, "tool_name", None) or "ferramenta")
         ok = bool(getattr(result, "ok", False))
         error = str(getattr(result, "error", None) or "").strip()
-        data = {
+        data: dict[str, Any] = {
             "tool": tool,
             "operation": "end",
             "status": "ok" if ok else "error",

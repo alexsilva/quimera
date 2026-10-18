@@ -149,7 +149,7 @@ class CodexCloudBackend:
     display_name = "Codex Cloud"
     order = 10
     default_base_url = DEFAULT_CODEX_CLOUD_BASE_URL
-    default_loop_budget = CODEX_LOOP_BUDGET
+    default_loop_budget: ToolLoopBudget | None = CODEX_LOOP_BUDGET
 
     def __init__(
         self,

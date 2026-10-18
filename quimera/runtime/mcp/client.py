@@ -462,8 +462,11 @@ class StdioMCPTransport(MCPTransport):
                 extra_rw_paths=extra_rw_paths,
                 die_with_parent=True,
             )
-        self._process = self._spawn_in_keeper_thread(command, proc_env)
-        return self._process.stdout, self._process.stdin
+        process = self._spawn_in_keeper_thread(command, proc_env)
+        self._process = process
+        if process.stdout is None or process.stdin is None:
+            raise RuntimeError("servidor MCP iniciado sem pipes de stdin/stdout")
+        return process.stdout, process.stdin
 
     def _spawn_in_keeper_thread(
         self, command: list[str], proc_env: dict[str, str]
@@ -768,7 +771,9 @@ class HttpMCPTransport(MCPTransport):
         self._session_id: str | None = None
         self._session_lock = threading.Lock()
 
-    def connect(self) -> tuple[IO[str], IO[str]]:
+    def connect(self) -> tuple[Any, Any]:
+        # HTTP não expõe streams: a sessão usa http_initialize()/http_request()
+        # e os placeholders só cumprem o contrato (reader, writer) de connect().
         return _HttpReaderWriter(self), _HttpWriterDummy()
 
     def disconnect(self) -> None:

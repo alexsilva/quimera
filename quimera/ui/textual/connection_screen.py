@@ -139,7 +139,7 @@ class ConnectionScreen(ModalScreen[None]):
                 command = self.query_one("#conn_command", Input).value.strip()
                 if not command:
                     raise ValueError("O comando CLI não pode ficar vazio.")
-                connection = CliConnection(
+                connection: CliConnection | OpenAIConnection = CliConnection(
                     cmd=shlex.split(command),
                     prompt_as_arg=self.query_one("#conn_prompt_as_arg", Switch).value,
                     output_format=self.query_one("#conn_output_format", Input).value.strip() or None,

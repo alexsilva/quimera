@@ -7,7 +7,7 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, replace
-from typing import Callable
+from typing import Any, Callable
 
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class SubmissionTracker:
         *,
         clock: Callable[[], float] = time.monotonic,
         watchdog_seconds: float = 5.0,
-        timer_factory: Callable[..., object] = threading.Timer,
+        timer_factory: Callable[..., Any] = threading.Timer,
         max_records: int = 200,
     ) -> None:
         self._emit = emit

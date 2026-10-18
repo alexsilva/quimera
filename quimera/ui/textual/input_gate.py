@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+from typing import Any
 
 from rich.cells import cell_len
 from rich.text import Text
@@ -171,7 +172,7 @@ class TextualInputGate:
         session_id = str(context.get("session", "")).strip()
         theme = str(context.get("theme", "")).strip()
 
-        specs: list[dict[str, object]] = []
+        specs: list[dict[str, Any]] = []
 
         def add(label_prefix: str, value: str, kind: str, max_len: int, min_len: int, *, middle: bool = False) -> None:
             if value:

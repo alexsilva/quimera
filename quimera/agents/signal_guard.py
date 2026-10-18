@@ -3,6 +3,8 @@ import logging
 import os
 import signal
 import threading
+from types import FrameType
+from typing import Any, Callable
 
 _logger = logging.getLogger(__name__)
 
@@ -29,7 +31,7 @@ class EscMonitor:
 
     def __init__(self, cancel_event: threading.Event):
         self._cancel_event = cancel_event
-        self._old_handler = None
+        self._old_handler: Callable[[int, FrameType | None], Any] | int | None = None
 
     def start(self) -> None:
         self._cancel_event.clear()
