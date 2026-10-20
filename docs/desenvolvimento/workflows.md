@@ -8,8 +8,9 @@ há uma decisão a tomar.
 
 Para trabalho simples, o agente resolve sozinho ou usa `tasks_delegate`. O
 workflow é a opção para trabalho amplo, com etapas dependentes ou
-paralelizáveis. O prompt do chat apenas indica essa opção; nada obriga a criar
-um workflow.
+paralelizáveis. O prompt do chat não menciona essa opção; só o prompt do
+orquestrador a menciona, como alternativa a `tasks_delegate` para cumprir a
+exigência de chamar agentes.
 
 ## Componentes
 
