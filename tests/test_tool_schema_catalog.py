@@ -19,11 +19,11 @@ from quimera.runtime.tools import todo as todo_tools
 from quimera.runtime.tools import tui as tui_tools
 
 _EXPECTED_SCHEMA_FINGERPRINT = (
-    "a5137422556086ef5c5a87eb475e1810d92419d0341dc8dcfcc0a54611f642ba"
+    "07e4e30f13b7dfb4f2786d7f41aa1f2fe16a488c5a3439b968c316d4fb1eaeed"
 )
 # Contrato anterior à família workflows_*: as 60 tools existentes não mudaram.
 _PRE_WORKFLOWS_SCHEMA_FINGERPRINT = (
-    "8891c141d4a4ebdf143c5aa6a8e438dd2346b28728009025925bb316a589e687"
+    "5c0777993f3cd0449d166a2f3caf79065f302d62eb10ad5c683862ba6c27119b"
 )
 
 

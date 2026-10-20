@@ -62,6 +62,72 @@ def test_browser_screenshot_path_is_confined_to_workspace(tmp_path: Path):
         )
 
 
+class _FakePage:
+    url = "about:blank"
+
+    def set_default_timeout(self, timeout):
+        pass
+
+    def on(self, event, handler):
+        pass
+
+    def title(self):
+        return ""
+
+    def evaluate(self, expression, arg=None):
+        return {"width": 1272, "height": 635}
+
+
+class _FakeChromium:
+    def __init__(self):
+        self.launch_options = {}
+        self.context_options = {}
+
+    def launch(self, **options):
+        self.launch_options = options
+        return self
+
+    def new_context(self, **options):
+        self.context_options = options
+        return self
+
+    def new_page(self):
+        return _FakePage()
+
+
+@pytest.mark.parametrize(
+    ("args", "launch_flags", "context_options"),
+    [
+        (
+            {"headless": True, "width": 1440, "height": 900},
+            [],
+            {"viewport": {"width": 1440, "height": 900}, "device_scale_factor": 1.0},
+        ),
+        (
+            {"headless": False, "width": 1440, "height": 900},
+            ["--window-size=1440,900"],
+            {"no_viewport": True},
+        ),
+        (
+            {"headless": False, "device_scale_factor": 2},
+            ["--window-size=1280,720", "--force-device-scale-factor=2.0"],
+            {"no_viewport": True},
+        ),
+    ],
+)
+def test_browser_start_visible_window_does_not_freeze_viewport(args, launch_flags, context_options):
+    """Com janela visível, a página acompanha o redimensionamento da janela."""
+    chromium = _FakeChromium()
+    playwright = type("FakePlaywright", (), {"chromium": chromium})()
+    service = BrowserService(_worker_process=True)
+
+    started = service._start_session(playwright, {}, {"executable_path": "chrome", **args})
+
+    assert chromium.launch_options["args"] == ["--disable-dev-shm-usage", *launch_flags]
+    assert chromium.context_options == {"ignore_https_errors": True, **context_options}
+    assert started["viewport"] == {"width": 1272, "height": 635}
+
+
 def test_browser_screenshot_custom_path_stays_inside_session(tmp_path: Path, monkeypatch):
     tool = BrowserTool(_config(tmp_path))
 

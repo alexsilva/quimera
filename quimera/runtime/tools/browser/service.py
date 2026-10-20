@@ -406,23 +406,34 @@ class BrowserService:
         args: dict[str, Any],
     ) -> dict[str, Any]:
         executable_path = args.get("executable_path") or self._find_browser_executable()
+        headless = bool(args.get("headless", True))
+        width = int(args.get("width", 1280))
+        height = int(args.get("height", 720))
         launch_args = ["--disable-dev-shm-usage"]
         if bool(args.get("disable_gpu", False)):
             launch_args.append("--disable-gpu")
+        context_options: dict[str, Any] = {
+            "ignore_https_errors": bool(args.get("ignore_https_errors", True)),
+        }
+        if headless:
+            context_options["viewport"] = {"width": width, "height": height}
+            context_options["device_scale_factor"] = float(args.get("device_scale_factor", 1.0))
+        else:
+            # Viewport emulado congela a página no tamanho inicial: com a janela
+            # visível, maximizar ou redimensionar deixa uma faixa em branco. Sem
+            # ele, a página acompanha a janela como num navegador comum.
+            launch_args.append(f"--window-size={width},{height}")
+            context_options["no_viewport"] = True
+            if "device_scale_factor" in args:
+                launch_args.append(
+                    f"--force-device-scale-factor={float(args['device_scale_factor'])}"
+                )
         browser = playwright.chromium.launch(
-            headless=bool(args.get("headless", True)),
+            headless=headless,
             executable_path=executable_path,
             args=launch_args,
         )
-        viewport = {
-            "width": int(args.get("width", 1280)),
-            "height": int(args.get("height", 720)),
-        }
-        context = browser.new_context(
-            viewport=viewport,
-            device_scale_factor=float(args.get("device_scale_factor", 1.0)),
-            ignore_https_errors=bool(args.get("ignore_https_errors", True)),
-        )
+        context = browser.new_context(**context_options)
         page = context.new_page()
         page.set_default_timeout(int(args.get("timeout_ms", 15_000)))
         session_id = uuid.uuid4().hex[:12]
@@ -431,7 +442,7 @@ class BrowserService:
             browser=browser,
             context=context,
             page=page,
-            headless=bool(args.get("headless", True)),
+            headless=headless,
         )
         sessions[session_id] = session
         self._bind_events(session)
@@ -446,7 +457,7 @@ class BrowserService:
             )
         return {
             **self._page_state(session, response=response),
-            "viewport": viewport,
+            "viewport": page.evaluate("() => ({width: innerWidth, height: innerHeight})"),
             "headless": session.headless,
             "executable_path": executable_path,
         }

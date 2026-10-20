@@ -1253,9 +1253,22 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                         'description': 'URL http(s), about:blank ou file:// dentro do workspace.'},
                 'headless': {'type': 'boolean',
                              'description': 'Executa sem janela visível. Padrão true.'},
-                'width': {'type': 'integer', 'minimum': 240, 'maximum': 7680},
-                'height': {'type': 'integer', 'minimum': 200, 'maximum': 4320},
-                'device_scale_factor': {'type': 'number', 'minimum': 0.5, 'maximum': 4},
+                'width': {'type': 'integer',
+                          'minimum': 240,
+                          'maximum': 7680,
+                          'description': 'Largura do viewport (padrão 1280). Com headless=false, '
+                                         'largura inicial da janela; a página acompanha o '
+                                         'redimensionamento.'},
+                'height': {'type': 'integer',
+                           'minimum': 200,
+                           'maximum': 4320,
+                           'description': 'Altura do viewport (padrão 720). Com headless=false, '
+                                          'altura inicial da janela.'},
+                'device_scale_factor': {'type': 'number',
+                                        'minimum': 0.5,
+                                        'maximum': 4,
+                                        'description': 'Padrão 1 em headless; com '
+                                                       'headless=false, o do sistema.'},
                 'timeout_ms': {'type': 'integer',
                                'minimum': 0,
                                'description': 'Timeout da operação em milissegundos.'},
