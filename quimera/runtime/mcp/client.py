@@ -170,13 +170,14 @@ def shorten_text(text: object, limit: int) -> str:
     return flat[: max(limit - 1, 1)].rstrip() + "…"
 
 
-def summarize_stderr(stderr: str, *, limit: int = 160) -> str:
+def summarize_stderr(stderr: str, *, limit: int = 160, errors_only: bool = False) -> str:
     """Resume o stderr de um servidor stdio em uma única linha apresentável.
 
     Prefere a última linha que nomeia um erro (``Fatal error``, ``Error:``,
-    códigos ``EROFS``/``EACCES``…) e ignora frames de stack trace e JSON. O
-    texto completo continua disponível para o log; este resumo é o que o
-    bloco de status e o MCP Hub exibem.
+    códigos ``EROFS``/``EACCES``…) e ignora frames de stack trace e JSON. Sem
+    linha de erro, devolve a última linha, a menos que ``errors_only`` peça
+    vazio. O texto completo continua disponível para o log; este resumo é o
+    que o bloco de status e o MCP Hub exibem.
     """
     lines: list[str] = []
     for raw in str(stderr or "").splitlines():
@@ -193,7 +194,7 @@ def summarize_stderr(stderr: str, *, limit: int = 160) -> str:
         for index in range(len(lines) - 1, -1, -1):
             if pattern in lowered[index]:
                 return shorten_text(lines[index], limit)
-    return shorten_text(lines[-1], limit)
+    return "" if errors_only else shorten_text(lines[-1], limit)
 
 
 def _looks_like_read_only_fs(stderr: str) -> bool:
@@ -240,6 +241,14 @@ def _build_request(
 
 #: Prazo do handshake e da descoberta (``initialize``, ``tools/list``, ``ping``).
 MCP_CLIENT_REQUEST_TIMEOUT_SECONDS = 30.0
+#: Prazo do handshake via ``mcp-remote``. Antes de repassar o nosso
+#: ``initialize``, o proxy faz um de teste com o servidor remoto, com limite
+#: interno de 60 s (SDK do MCP); com 30 s, o Quimera matava tentativas que o
+#: proxy ainda completaria.
+MCP_CLIENT_REMOTE_HANDSHAKE_TIMEOUT_SECONDS = 120.0
+#: Janela para concluir no navegador a autorização OAuth pedida pelo servidor,
+#: contada do pedido. Enquanto ela dura, o prazo do pedido não se esgota.
+MCP_CLIENT_OAUTH_TIMEOUT_SECONDS = 600.0
 #: Prazo de um ``tools/call`` em servidor externo. A chamada também termina
 #: antes se o run do agente for cancelado ou a sessão for encerrada.
 MCP_CLIENT_TOOL_CALL_TIMEOUT_SECONDS = 300.0
@@ -299,18 +308,32 @@ def _read_response(
     request_id: str | int,
     timeout: float = MCP_CLIENT_REQUEST_TIMEOUT_SECONDS,
     cancel_event: threading.Event | None = None,
+    *,
+    method: str = "",
+    authorization_deadline: Callable[[], float | None] | None = None,
 ) -> dict:
     """Espera a resposta de ``request_id`` respeitando prazo e cancelamento.
 
     Mensagens sem ``id`` (notificações) e respostas de pedidos já abandonados
-    por prazo ou cancelamento são descartadas.
+    por prazo ou cancelamento são descartadas. ``method`` nomeia o pedido no
+    erro de prazo: o id (``mcp-1``) não diz ao usuário que etapa travou.
+    ``authorization_deadline`` devolve até quando (``time.monotonic``) o
+    servidor espera o usuário autorizar no navegador; até lá o prazo não se
+    esgota.
     """
     deadline = time.monotonic() + timeout
     while True:
-        remaining = deadline - time.monotonic()
+        auth_deadline = authorization_deadline() if authorization_deadline else None
+        remaining = max(deadline, auth_deadline or 0.0) - time.monotonic()
         if remaining <= 0:
+            if auth_deadline is not None and auth_deadline > deadline:
+                raise TimeoutError(
+                    f"MCP client: autorização OAuth não concluída no navegador em "
+                    f"{MCP_CLIENT_OAUTH_TIMEOUT_SECONDS / 60:.0f} min"
+                )
             raise TimeoutError(
-                f"MCP client: timeout de {timeout:.0f}s aguardando resposta para {request_id}"
+                f"MCP client: sem resposta do servidor para {method or request_id} "
+                f"em {timeout:.0f}s"
             )
         if cancel_event is not None and cancel_event.is_set():
             raise MCPRequestCancelled(
@@ -338,6 +361,16 @@ def _read_response(
 
 class MCPTransport(ABC):
     """Interface para transporte MCP bidirecional."""
+
+    #: Prazo de ``initialize`` e ``tools/list`` nesta conexão.
+    handshake_timeout: float = MCP_CLIENT_REQUEST_TIMEOUT_SECONDS
+
+    def authorization_deadline(self) -> float | None:
+        """Até quando (``time.monotonic``) esperar a autorização OAuth pedida.
+
+        ``None`` quando o servidor não pediu autorização.
+        """
+        return None
 
     @abstractmethod
     def connect(self) -> tuple[IO[str], IO[str]]:
@@ -418,9 +451,16 @@ class StdioMCPTransport(MCPTransport):
         self._stderr_thread: threading.Thread | None = None
         self._sandboxed = False
         self._notice_callback: MCPNoticeCallback | None = None
+        self._auth_requested_at: float | None = None
 
     def set_notice_callback(self, callback: MCPNoticeCallback | None) -> None:
         self._notice_callback = callback
+
+    def authorization_deadline(self) -> float | None:
+        requested_at = self._auth_requested_at
+        if requested_at is None:
+            return None
+        return requested_at + MCP_CLIENT_OAUTH_TIMEOUT_SECONDS
 
     def sandbox_rw_paths(self) -> list[str]:
         """Diretórios fora do workspace que o servidor precisa escrever no sandbox.
@@ -607,6 +647,7 @@ class StdioMCPTransport(MCPTransport):
         if url in self._stderr_printed:
             return
         self._stderr_printed.add(url)
+        self._auth_requested_at = time.monotonic()
         if self._emit_notice("auth", url):
             return
         label = f" '{self._name}'" if self._name else ""
@@ -650,7 +691,8 @@ class StdioMCPTransport(MCPTransport):
         """
         self._drain_stderr()
         stderr = self.stderr_tail()
-        reason = str(exc).strip() or exc.__class__.__name__
+        # Quem exibe o motivo já o rotula com "MCP client '<nome>'".
+        reason = str(exc).strip().removeprefix("MCP client: ") or exc.__class__.__name__
         if self._sandboxed and _looks_like_read_only_fs(stderr):
             # A causa acionável vem antes do trecho do stderr: o bloco de
             # status corta detalhes longos pelo fim.
@@ -658,7 +700,11 @@ class StdioMCPTransport(MCPTransport):
                 f"{reason} · escrita bloqueada pelo sandbox do workspace "
                 f"(/sandbox status)"
             )
-        summary = summarize_stderr(stderr)
+        # Processo ainda vivo (prazo esgotado): o stderr é progresso, como o
+        # "Using transport strategy" do mcp-remote, e só uma linha de erro
+        # explica a falha.
+        still_running = self._process is not None and self._process.poll() is None
+        summary = summarize_stderr(stderr, errors_only=still_running)
         if summary and summary not in reason:
             reason = f"{reason} · {summary}"
         return MCPConnectError(
@@ -704,6 +750,8 @@ class StdioMCPTransport(MCPTransport):
 
 class RemoteMCPTransport(StdioMCPTransport):
     """STDIO proxy para MCP remoto com compatibilidade de credenciais OAuth."""
+
+    handshake_timeout = MCP_CLIENT_REMOTE_HANDSHAKE_TIMEOUT_SECONDS
 
     def __init__(
         self,
@@ -970,6 +1018,7 @@ class MCPClientSession:
                             "version": "0.1.0",
                         },
                     },
+                    timeout=self._transport.handshake_timeout,
                 )
             self._server_info = result.get("serverInfo", result)
             self._protocol_version = result.get("protocolVersion", "")
@@ -1004,7 +1053,9 @@ class MCPClientSession:
 
     def list_tools(self) -> list[dict]:
         """Consulta ``tools/list`` no servidor; use :attr:`tools` para o catálogo já descoberto."""
-        result = self._send_request("tools/list", {})
+        result = self._send_request(
+            "tools/list", {}, timeout=self._transport.handshake_timeout
+        )
         raw = result.get("tools", []) if isinstance(result, dict) else []
         return list(raw)
 
@@ -1059,7 +1110,12 @@ class MCPClientSession:
             self._writer.write(line)
             self._writer.flush()
             resp = _read_response(
-                self._reader, msg_id, timeout=timeout, cancel_event=cancel_event
+                self._reader,
+                msg_id,
+                timeout=timeout,
+                cancel_event=cancel_event,
+                method=method,
+                authorization_deadline=self._transport.authorization_deadline,
             )
 
         if "error" in resp:

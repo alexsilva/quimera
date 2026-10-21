@@ -45,6 +45,12 @@ mesmo que um servidor esteja lento, exigindo autorização OAuth ou fora do ar.
    quando há falha (`/tmp/quimera/<hash>/data/logs/app-<sessão>.log`). Corrija
    a causa (rede, token, comando) e use o MCP Hub (`F9` → aba Servidores →
    Reconectar) sem reiniciar.
+   O handshake (`initialize` e `tools/list`) tem prazo de 30 s por pedido, ou
+   de 120 s em `remote:`, porque o `mcp-remote` faz um `initialize` de teste
+   com o servidor remoto (com limite próprio de 60 s) antes de repassar o do
+   Quimera. Um servidor remoto lento aparece como
+   `sem resposta do servidor para initialize em 120s` ou, quando o teste do
+   proxy estoura, `conexão fechada pelo servidor · Fatal error: … Request timed out`.
 4. As tools de uma conexão só entram no `tools/list` dos agentes depois que ela
    conecta; agentes que já listaram as tools antes disso precisam listar de novo.
 5. O catálogo de cada conexão é lido uma única vez, no handshake. Se o servidor
@@ -75,6 +81,11 @@ nada abrir (sem `DISPLAY`/`WAYLAND_DISPLAY`, sessão SSH, ou
 - No MCP Hub (`F9` → aba Servidores), selecione a conexão: a linha
   `Autorizar no navegador` / `Copiar link` aparece enquanto a autorização
   está pendente, e o rodapé mostra a URL completa.
+
+O handshake espera a autorização por até 10 minutos, contados do pedido, e o
+prazo do handshake não se esgota nesse intervalo. Passado esse tempo, a
+conexão falha com
+`autorização OAuth não concluída no navegador em 10 min`.
 
 Reconectar pelo hub durante uma autorização pendente abandona o handshake
 preso (o processo antigo é encerrado) e começa outro, com uma URL nova; o

@@ -22,6 +22,7 @@ from quimera.runtime.drivers.tool_schemas import (
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.mcp.client import (
     DEFAULT_MCP_REMOTE_VERSION,
+    MCP_CLIENT_REMOTE_HANDSHAKE_TIMEOUT_SECONDS,
     MCP_CLIENT_REQUEST_TIMEOUT_SECONDS,
     MCP_CLIENT_TOOL_CALL_TIMEOUT_SECONDS,
     HttpMCPTransport,
@@ -930,6 +931,8 @@ def test_summarize_stderr_escolhe_a_linha_fatal_sem_stack_trace():
     assert "\n" not in summary
     assert summarize_stderr("") == ""
     assert summarize_stderr("[a] [b] only progress\n{\n}") == "only progress"
+    assert summarize_stderr("[a] [b] only progress", errors_only=True) == ""
+    assert summarize_stderr(MCP_REMOTE_EROFS_STDERR, errors_only=True) == summary
     assert len(summarize_stderr("x" * 500)) == 160
     assert summarize_stderr("x" * 500).endswith("…")
 
@@ -963,7 +966,7 @@ def test_stdio_handshake_failure_resume_o_motivo_e_manda_stderr_para_o_log(tmp_p
     reason = str(info.value)
     assert "\n" not in reason
     assert reason.startswith(
-        "MCP client: conexão fechada pelo servidor · "
+        "conexão fechada pelo servidor · "
         "escrita bloqueada pelo sandbox do workspace (/sandbox status) · "
         "Fatal error: Error: EROFS: read-only file system"
     )
@@ -984,6 +987,58 @@ def test_stdio_handshake_failure_resume_o_motivo_e_manda_stderr_para_o_log(tmp_p
     assert any(
         "Proactive token refresh failed" in record.getMessage() for record in records
     )
+
+
+MCP_REMOTE_PROGRESS_STDERR = """\
+[15] Using callback port derived from the server URL: 3736
+[15] Discovering OAuth server configuration...
+[15] [15] Connecting to remote server: https://mcp.example.test/v1/mcp
+[15] Using transport strategy: http-first
+"""
+
+
+class _SilentProcess(_CrashedProcess):
+    """Processo vivo que nunca responde: stdout aberto e sem linhas."""
+
+    def __init__(self, stderr_text: str, stdout) -> None:
+        super().__init__(stderr_text)
+        self.stdout = stdout
+
+    def poll(self) -> None:
+        return None
+
+
+def test_handshake_sem_resposta_nomeia_a_etapa_e_ignora_o_progresso_do_stderr(tmp_path):
+    """Caso do Jira: mcp-remote vivo e servidor remoto mudo no ``initialize``.
+
+    A última linha de progresso do stderr não é o motivo e não entra no resumo.
+    """
+    read_fd, write_fd = os.pipe()
+    stdout = os.fdopen(read_fd, "r", encoding="utf-8")
+    transport = StdioMCPTransport(
+        ["npx", "-y", "mcp-remote@0.3.2", "https://mcp.example.test/v1/mcp"],
+        name="jira",
+        workspace=Workspace(tmp_path),
+    )
+
+    def short_deadline(reader, request_id, timeout, cancel_event=None, **kwargs):
+        return _read_response(reader, request_id, 0.2, cancel_event, **kwargs)
+
+    try:
+        with patch(
+            "quimera.runtime.mcp.client.wrap_subprocess_cmd", side_effect=_passthrough_wrap({})
+        ), patch(
+            "quimera.runtime.mcp.client.subprocess.Popen",
+            return_value=_SilentProcess(MCP_REMOTE_PROGRESS_STDERR, stdout),
+        ), patch("quimera.runtime.mcp.client._read_response", side_effect=short_deadline):
+            with pytest.raises(MCPConnectError) as info:
+                MCPClientSession(transport, name="jira").connect()
+    finally:
+        os.close(write_fd)
+
+    assert str(info.value) == "sem resposta do servidor para initialize em 0s"
+    # O progresso continua disponível para o log.
+    assert "Using transport strategy: http-first" in info.value.stderr
 
 
 def test_connect_mcp_client_spec_publica_apenas_o_resumo_da_falha_stdio(tmp_path):
@@ -1690,7 +1745,7 @@ def test_read_response_expira_quando_o_servidor_emudece():
     reader, write_fd = _pipe_reader()
     try:
         started = time.monotonic()
-        with pytest.raises(TimeoutError, match="timeout de 0s"):
+        with pytest.raises(TimeoutError, match="sem resposta do servidor para mcp-1 em 0s"):
             _read_response(reader, "mcp-1", timeout=0.3)
         assert time.monotonic() - started < 2.0
     finally:
@@ -1753,7 +1808,7 @@ def test_read_response_termina_quando_o_run_do_agente_e_cancelado():
 def test_call_tool_usa_prazo_longo_e_handshake_usa_prazo_curto(monkeypatch):
     observed: list[tuple[str, float, object]] = []
 
-    def fake_read_response(reader, request_id, timeout, cancel_event=None):
+    def fake_read_response(reader, request_id, timeout, cancel_event=None, **_kwargs):
         observed.append((request_id, timeout, cancel_event))
         if len(observed) == 1:
             return _initialize_response(request_id)
@@ -1774,6 +1829,111 @@ def test_call_tool_usa_prazo_longo_e_handshake_usa_prazo_curto(monkeypatch):
         MCP_CLIENT_TOOL_CALL_TIMEOUT_SECONDS,
     ]
     assert observed[-1][2] is cancel_event
+
+
+def test_handshake_usa_o_prazo_do_transporte_e_o_do_mcp_remote_cobre_o_teste_do_proxy(
+    monkeypatch,
+):
+    """O ``mcp-remote`` faz um ``initialize`` de teste (limite de 60 s) antes de repassar o nosso."""
+    observed: list[float] = []
+
+    def fake_read_response(reader, request_id, timeout, cancel_event=None, **_kwargs):
+        observed.append(timeout)
+        if len(observed) == 1:
+            return _initialize_response(request_id)
+        return _tools_response([], request_id)
+
+    monkeypatch.setattr("quimera.runtime.mcp.client._read_response", fake_read_response)
+    transport = _ScriptedTransport([])
+    transport.handshake_timeout = MCP_CLIENT_REMOTE_HANDSHAKE_TIMEOUT_SECONDS
+
+    MCPClientSession(transport, name="jira").connect()
+
+    assert observed == [MCP_CLIENT_REMOTE_HANDSHAKE_TIMEOUT_SECONDS] * 2
+    assert RemoteMCPTransport.handshake_timeout == MCP_CLIENT_REMOTE_HANDSHAKE_TIMEOUT_SECONDS
+    assert MCP_CLIENT_REMOTE_HANDSHAKE_TIMEOUT_SECONDS > 60
+    assert StdioMCPTransport.handshake_timeout == MCP_CLIENT_REQUEST_TIMEOUT_SECONDS
+
+
+def test_read_response_nao_expira_enquanto_a_autorizacao_oauth_esta_aberta():
+    reader, write_fd = _pipe_reader()
+    window = time.monotonic() + 5.0
+    timer = threading.Timer(
+        0.6, os.write, args=(write_fd, b'{"jsonrpc":"2.0","id":"mcp-1","result":{"ok":true}}\n')
+    )
+    try:
+        timer.start()
+        response = _read_response(
+            reader, "mcp-1", timeout=0.2, authorization_deadline=lambda: window
+        )
+        assert response["result"] == {"ok": True}
+    finally:
+        timer.join()
+        os.close(write_fd)
+
+
+def test_read_response_expira_quando_a_autorizacao_oauth_nao_e_concluida():
+    reader, write_fd = _pipe_reader()
+    window = time.monotonic() + 0.4
+    try:
+        with pytest.raises(
+            TimeoutError, match="autorização OAuth não concluída no navegador em 10 min"
+        ):
+            _read_response(reader, "mcp-1", timeout=0.1, authorization_deadline=lambda: window)
+    finally:
+        os.close(write_fd)
+
+
+# Servidor stdio que, como o ``mcp-remote``, pode pedir autorização OAuth no
+# stderr e só responde depois de uma pausa (o usuário autorizando no navegador).
+_OAUTH_SERVER = (
+    "import json, sys, time\n"
+    "if sys.argv[1] == 'oauth':\n"
+    "    sys.stderr.write('[9] Please authorize this client by visiting:\\n')\n"
+    "    sys.stderr.write('[9] https://auth.example.test/authorize?state=x\\n')\n"
+    "    sys.stderr.flush()\n"
+    "time.sleep(float(sys.argv[2]))\n"
+    "for line in sys.stdin:\n"
+    "    msg = json.loads(line)\n"
+    "    if 'id' not in msg:\n"
+    "        continue\n"
+    "    if msg['method'] == 'tools/list':\n"
+    "        result = {'tools': [{'name': 'search', 'inputSchema': {'type': 'object'}}]}\n"
+    "    else:\n"
+    "        result = {'protocolVersion': '2025-11-25', 'serverInfo': {'name': 'oauth'}}\n"
+    "    print(json.dumps({'jsonrpc': '2.0', 'id': msg['id'], 'result': result}), flush=True)\n"
+)
+
+
+def _oauth_server_session(mode: str) -> MCPClientSession:
+    transport = StdioMCPTransport(
+        [sys.executable, "-c", _OAUTH_SERVER, mode, "1.5"], name="jira"
+    )
+    transport.handshake_timeout = 0.5
+    return MCPClientSession(transport, name="jira")
+
+
+def test_handshake_espera_a_autorizacao_oauth_alem_do_prazo():
+    """Caso do Jira: o prazo do handshake matava o ``mcp-remote`` enquanto o
+    usuário autorizava no navegador, e a autorização se perdia."""
+    session = _oauth_server_session("oauth")
+    try:
+        session.connect()
+
+        assert [tool["name"] for tool in session.tools] == ["search"]
+        assert session.transport.authorization_deadline() is not None
+    finally:
+        session.disconnect()
+
+
+def test_handshake_sem_pedido_de_autorizacao_mantem_o_prazo():
+    session = _oauth_server_session("mudo")
+    try:
+        with pytest.raises(MCPConnectError, match="sem resposta do servidor para initialize"):
+            session.connect()
+        assert session.transport.authorization_deadline() is None
+    finally:
+        session.disconnect()
 
 
 def test_handler_repassa_o_cancel_event_do_run_a_sessao():
