@@ -4,9 +4,9 @@ O ``mcp-remote`` passou de stores por versão (``mcp-remote-0.x.y``) para um
 store estável por layout (``mcp-remote-v1``). A mudança evita logout em upgrades
 futuros, mas não migra automaticamente credenciais já válidas do layout antigo.
 
-Este módulo faz somente a migração conservadora desse salto de layout. Ele não
-interpreta tokens, não renova credenciais e não gerencia OAuth no lugar do
-``mcp-remote``.
+Também permite retirar do cache uma credencial recusada pelo servidor, para
+que o próprio ``mcp-remote`` refaça o OAuth. Não renova tokens nem executa o
+fluxo de autorização no lugar do proxy.
 """
 from __future__ import annotations
 
@@ -36,6 +36,79 @@ class LegacyCredentialMigration:
     source_store: str | None = None
     destination_store: str | None = None
     reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteCredentialSnapshot:
+    """Identifica o cache usado por uma tentativa sem carregar tokens no diagnóstico."""
+
+    token_path: Path
+    digest: bytes
+
+    def invalidate(self) -> None:
+        """Retira somente o token recusado; preserva uma renovação concorrente."""
+        try:
+            current = self.token_path.read_bytes()
+        except FileNotFoundError:
+            current = None
+        if current is not None and hashlib.sha256(current).digest() != self.digest:
+            return
+        # A marca é permanente: sem token no layout estável, a migração do
+        # layout antigo nunca mais ressuscita uma credencial deste servidor
+        # (ver migrate_legacy_remote_credentials). O registro do client e as
+        # demais conexões ficam intactos.
+        _atomic_write_json(_reauthorization_marker(self.token_path), {})
+        self.token_path.unlink(missing_ok=True)
+
+
+def snapshot_remote_credentials(
+    arguments: list[str], *, env: dict[str, str] | None = None
+) -> RemoteCredentialSnapshot | None:
+    """Captura o namespace do mcp-remote v1, incluindo --resource e --header.
+
+    Reproduz o ``getServerUrlHash`` do mcp-remote fixado pelo Quimera: URL,
+    ``--resource`` e os headers literais (antes da expansão de variáveis) em
+    JSON ordenado. Outra versão do proxy pode mudar essa regra; aí o arquivo
+    não é encontrado e a recuperação de credencial recusada não dispara, sem
+    outro efeito. Valores secretos nunca saem desta função.
+    """
+    if not arguments:
+        return None
+    headers: dict[str, str] = {}
+    args = list(arguments)
+    index = 0
+    while index < len(args) - 1:
+        if args[index] == "--header":
+            match = re.fullmatch(r"([A-Za-z0-9_-]+):\s*(.*)", args[index + 1])
+            if match:
+                headers[match[1]] = match[2]
+            del args[index:index + 2]
+        else:
+            index += 1
+    parsed = urlparse(args[0]) if args else None
+    if parsed is None or parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    parts = [args[0]]
+    if "--resource" in args and "--disable-resource-parameter" not in args:
+        index = args.index("--resource")
+        if index + 1 < len(args) and args[index + 1].strip():
+            parts.append(args[index + 1].strip())
+    if headers:
+        parts.append(json.dumps(headers, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
+    server_hash = _server_url_hash("|".join(parts))
+    token_path = remote_config_dir(env) / _STABLE_STORE_NAME / f"{server_hash}_tokens.json"
+    try:
+        content = token_path.read_bytes()
+        tokens = json.loads(content)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(tokens, dict) or not (tokens.get("access_token") or tokens.get("refresh_token")):
+        return None
+    return RemoteCredentialSnapshot(token_path, hashlib.sha256(content).digest())
+
+
+def _reauthorization_marker(token_path: Path) -> Path:
+    return token_path.with_name(token_path.name.removesuffix("tokens.json") + "quimera_reauth.json")
 
 
 def migrate_legacy_remote_credentials(
@@ -72,6 +145,8 @@ def migrate_legacy_remote_credentials(
             destination_store=stable_dir.name,
             reason="stable_tokens_present",
         )
+    if _reauthorization_marker(stable_tokens).exists():
+        return LegacyCredentialMigration(False, reason="reauthorization_required")
 
     expected_redirect = _default_redirect_url(server_hash)
     current_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)

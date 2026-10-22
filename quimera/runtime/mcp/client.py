@@ -36,8 +36,10 @@ from quimera import process_factory as subprocess
 from quimera.environment import build_env_vars
 from quimera.sandbox.state import is_sandbox_enabled, wrap_subprocess_cmd
 from quimera.runtime.mcp.remote_credentials import (
+    RemoteCredentialSnapshot,
     migrate_legacy_remote_credentials,
     remote_config_dir,
+    snapshot_remote_credentials,
 )
 from quimera.runtime.models import ToolCall, ToolResult
 
@@ -311,6 +313,7 @@ def _read_response(
     *,
     method: str = "",
     authorization_deadline: Callable[[], float | None] | None = None,
+    authorization_response_at: Callable[[], float | None] | None = None,
 ) -> dict:
     """Espera a resposta de ``request_id`` respeitando prazo e cancelamento.
 
@@ -319,11 +322,15 @@ def _read_response(
     erro de prazo: o id (``mcp-1``) não diz ao usuário que etapa travou.
     ``authorization_deadline`` devolve até quando (``time.monotonic``) o
     servidor espera o usuário autorizar no navegador; até lá o prazo não se
-    esgota.
+    esgota. Depois do retorno, ``authorization_response_at`` dá ao servidor
+    um novo prazo de resposta, sem manter a espera de 10 min pelo navegador.
     """
     deadline = time.monotonic() + timeout
     while True:
         auth_deadline = authorization_deadline() if authorization_deadline else None
+        response_at = authorization_response_at() if authorization_response_at else None
+        if response_at is not None:
+            deadline = max(deadline, response_at + timeout)
         remaining = max(deadline, auth_deadline or 0.0) - time.monotonic()
         if remaining <= 0:
             if auth_deadline is not None and auth_deadline > deadline:
@@ -339,7 +346,12 @@ def _read_response(
             raise MCPRequestCancelled(
                 f"MCP client: pedido {request_id} cancelado pelo run do agente"
             )
-        wait = remaining if cancel_event is None else min(remaining, _CANCEL_POLL_SECONDS)
+        # Com uma autorização OAuth aberta, o retorno do navegador chega pelo
+        # stderr enquanto o stdout segue mudo: acordamos a cada 0,5 s para
+        # reavaliar o prazo. Fora disso só o cancel_event do agente pede
+        # polling; um tools/call comum dorme até a resposta ou o prazo.
+        poll = cancel_event is not None or auth_deadline is not None
+        wait = min(remaining, _CANCEL_POLL_SECONDS) if poll else remaining
         try:
             line = reader.readline(timeout=wait)
         except TimeoutError:
@@ -372,6 +384,10 @@ class MCPTransport(ABC):
         """
         return None
 
+    def authorization_response_at(self) -> float | None:
+        """Último progresso OAuth após o navegador retornar (``monotonic``)."""
+        return None
+
     @abstractmethod
     def connect(self) -> tuple[IO[str], IO[str]]:
         """Estabelece conexão e retorna (reader, writer)."""
@@ -386,7 +402,7 @@ class MCPTransport(ABC):
         """Identificador do tipo de transporte (stdio, socket, http)."""
 
     def set_notice_callback(self, callback: MCPNoticeCallback | None) -> None:
-        """Registra destino para avisos operacionais (``auth``/``error``).
+        """Registra destino para avisos OAuth, de recuperação e de erro.
 
         Transportes sem diagnóstico próprio ignoram o callback. Quando
         definido, o transporte deixa de escrever no stderr — a UI é quem
@@ -421,6 +437,31 @@ class StdioMCPTransport(MCPTransport):
         "Local STDIO server running",
     )
 
+    # Linhas literais do stderr do mcp-remote fixado em DEFAULT_MCP_REMOTE_VERSION.
+    # Outra versão (QUIMERA_MCP_REMOTE_CMD) pode não emiti-las; aí o Hub fica
+    # sem o progresso OAuth e a recuperação da credencial recusada não dispara:
+    # a falha é publicada como qualquer outra e o usuário reconecta à mão.
+    _MCP_REMOTE_AUTH_RECEIVED_LINES = (
+        "Auth code received, resolving promise",
+        "Completing authorization...",
+    )
+    _MCP_REMOTE_AUTH_COMPLETE_PREFIXES = (
+        "Recursively reconnecting for reason: authentication-needed",
+        "Authentication was completed by another instance",
+        "Connected to remote server",
+    )
+    _MCP_REMOTE_REJECTED_CREDENTIAL_RE = re.compile(
+        r"\b(?:InvalidGrantError|InvalidTokenError)\b"
+    )
+    # Frame do stack trace que distingue o invalid_request de um refresh
+    # revogado (caso Atlassian) de um pedido MCP malformado.
+    _MCP_REMOTE_REFRESH_FRAME = "at async refreshAuthorization ("
+    # "Request timed out" é do SDK do MCP dentro do mcp-remote: o initialize de
+    # teste com o servidor remoto estoura DEFAULT_REQUEST_TIMEOUT_MSEC (60 s,
+    # sem flag) e o proxy encerra; o Quimera só vê o stdio fechar.
+    _MCP_REMOTE_TIMEOUT_MARKER = "Request timed out"
+    _MCP_REMOTE_REQUEST_TIMEOUT_SECONDS = 60
+
     _STDERR_EXPECTED_PATTERNS = (
         "Missing sessionId parameter",
         "falling-back-to-alternate-transport",
@@ -452,15 +493,23 @@ class StdioMCPTransport(MCPTransport):
         self._sandboxed = False
         self._notice_callback: MCPNoticeCallback | None = None
         self._auth_requested_at: float | None = None
+        self._auth_response_at: float | None = None
+        self._auth_completed = False
+        self._lifecycle_lock = threading.RLock()
+        self._closed = False
+        self._credential_snapshot: RemoteCredentialSnapshot | None = None
 
     def set_notice_callback(self, callback: MCPNoticeCallback | None) -> None:
         self._notice_callback = callback
 
     def authorization_deadline(self) -> float | None:
         requested_at = self._auth_requested_at
-        if requested_at is None:
+        if requested_at is None or self._auth_response_at is not None:
             return None
         return requested_at + MCP_CLIENT_OAUTH_TIMEOUT_SECONDS
+
+    def authorization_response_at(self) -> float | None:
+        return self._auth_response_at
 
     def sandbox_rw_paths(self) -> list[str]:
         """Diretórios fora do workspace que o servidor precisa escrever no sandbox.
@@ -470,9 +519,13 @@ class StdioMCPTransport(MCPTransport):
         ``$HOME`` somente leitura do sandbox derruba o handshake com ``EROFS``.
         O diretório é criado aqui porque o bwrap só monta origens existentes.
         """
-        if not _uses_mcp_remote(self._command):
+        if not self._proxies_remote_server():
             return []
         return [_ensure_directory(remote_config_dir(self._env))]
+
+    def _proxies_remote_server(self) -> bool:
+        """Se o processo é o ``mcp-remote``, proxy stdio de um servidor remoto."""
+        return _uses_mcp_remote(self._command)
 
     def _emit_notice(self, kind: str, text: str) -> bool:
         """Entrega o aviso ao callback registrado; False se não houver."""
@@ -486,10 +539,25 @@ class StdioMCPTransport(MCPTransport):
         return True
 
     def connect(self) -> tuple[IO[str], IO[str]]:
+        with self._lifecycle_lock:
+            if self._closed:
+                raise MCPConnectSuperseded("transporte MCP encerrado", name=self._name or "")
+            return self._connect()
+
+    def _remote_arguments(self) -> list[str]:
+        for index, part in enumerate(self._command):
+            if re.search(r"(?:^|[/\\])mcp-remote(?:@[^/\\]+)?$", part):
+                return self._command[index + 1:]
+        return []
+
+    def _connect(self) -> tuple[IO[str], IO[str]]:
         proc_env = build_env_vars(
             os.environ,
             workspace=self.workspace,
             extra_env=self._env,
+        )
+        self._credential_snapshot = snapshot_remote_credentials(
+            self._remote_arguments(), env=proc_env
         )
         command = list(self._command)
         if self.workspace is not None:
@@ -507,6 +575,47 @@ class StdioMCPTransport(MCPTransport):
         if process.stdout is None or process.stdin is None:
             raise RuntimeError("servidor MCP iniciado sem pipes de stdin/stdout")
         return process.stdout, process.stdin
+
+    def reauthorize_after_failure(self, error: MCPConnectError) -> bool:
+        """Recupera rejeição OAuth terminal; rede e autorização já pedida não entram."""
+        with self._lifecycle_lock:
+            if (
+                self._closed
+                or self._credential_snapshot is None
+                or self._auth_requested_at is not None
+                or self._process is None
+                or self._process.poll() is None
+            ):
+                return False
+            stderr = error.stderr
+            rejected = bool(self._MCP_REMOTE_REJECTED_CREDENTIAL_RE.search(stderr))
+            # Alguns servidores, como a Atlassian, devolvem invalid_request
+            # para refresh revogado. Só recuperamos esse erro no refresh;
+            # um pedido MCP malformado não é evidência de token recusado.
+            rejected = rejected or (
+                "InvalidRequestError" in stderr and self._MCP_REMOTE_REFRESH_FRAME in stderr
+            )
+            if not rejected:
+                return False
+            self._stop_process()
+            self._drain_stderr()
+            try:
+                self._credential_snapshot.invalidate()
+            except OSError as exc:
+                raise MCPConnectError(
+                    f"não foi possível retirar a credencial OAuth recusada do cache: {exc}",
+                    name=self._name or "",
+                ) from exc
+            with self._stderr_lock:
+                self._stderr_lines.clear()
+            self._stderr_printed.clear()
+            self._auth_requested_at = None
+            self._auth_response_at = None
+            self._auth_completed = False
+            detail = "credencial OAuth recusada; iniciando nova autorização no navegador"
+            _logger.info("MCP client '%s': %s", self._name or "external", detail)
+            self._emit_notice("reauthorize", detail)
+            return True
 
     def _spawn_in_keeper_thread(
         self, command: list[str], proc_env: dict[str, str]
@@ -601,6 +710,15 @@ class StdioMCPTransport(MCPTransport):
         if not clean:
             return
 
+        if self._auth_requested_at is not None:
+            if clean in self._MCP_REMOTE_AUTH_RECEIVED_LINES:
+                self._auth_response_at = time.monotonic()
+                self._emit_notice("auth_received", "retorno OAuth recebido; concluindo autenticação")
+            elif clean.startswith(self._MCP_REMOTE_AUTH_COMPLETE_PREFIXES):
+                self._auth_response_at = time.monotonic()
+                self._auth_completed = True
+                self._emit_notice("auth_complete", "autorização OAuth concluída; aguardando resposta do servidor")
+
         if clean in self._STDERR_NOISE_PATTERNS:
             return
         if any(pattern in clean for pattern in self._STDERR_NOISE_PATTERNS):
@@ -648,6 +766,8 @@ class StdioMCPTransport(MCPTransport):
             return
         self._stderr_printed.add(url)
         self._auth_requested_at = time.monotonic()
+        self._auth_response_at = None
+        self._auth_completed = False
         if self._emit_notice("auth", url):
             return
         label = f" '{self._name}'" if self._name else ""
@@ -693,6 +813,16 @@ class StdioMCPTransport(MCPTransport):
         stderr = self.stderr_tail()
         # Quem exibe o motivo já o rotula com "MCP client '<nome>'".
         reason = str(exc).strip().removeprefix("MCP client: ") or exc.__class__.__name__
+        if self._proxies_remote_server() and self._MCP_REMOTE_TIMEOUT_MARKER in stderr:
+            # "conexão fechada pelo servidor" apontaria para o lado errado: quem
+            # fechou foi o proxy local, depois que o servidor remoto não
+            # respondeu ao seu initialize de teste.
+            reason = (
+                f"mcp-remote encerrou após {self._MCP_REMOTE_REQUEST_TIMEOUT_SECONDS}s "
+                "sem resposta do servidor remoto ao initialize"
+            )
+            if self._auth_completed:
+                reason = f"autorização OAuth concluída; {reason}"
         if self._sandboxed and _looks_like_read_only_fs(stderr):
             # A causa acionável vem antes do trecho do stderr: o bloco de
             # status corta detalhes longos pelo fim.
@@ -719,6 +849,13 @@ class StdioMCPTransport(MCPTransport):
         return " ".join(shlex.quote(part) for part in self._command)
 
     def disconnect(self) -> None:
+        # Sinaliza antes de esperar o lock: uma recuperação em andamento não
+        # pode reacquiri-lo e iniciar outro processo antes deste cancelamento.
+        self._closed = True
+        with self._lifecycle_lock:
+            self._stop_process()
+
+    def _stop_process(self) -> None:
         if self._process:
             try:
                 pid = self._process.pid
@@ -769,7 +906,13 @@ class RemoteMCPTransport(StdioMCPTransport):
         # "mcp-remote" no nome; o transporte remote sempre usa o store OAuth.
         return [_ensure_directory(remote_config_dir(self._env))]
 
-    def connect(self) -> tuple[IO[str], IO[str]]:
+    def _proxies_remote_server(self) -> bool:
+        return True
+
+    def _remote_arguments(self) -> list[str]:
+        return shlex.split(self._remote_endpoint)
+
+    def _connect(self) -> tuple[IO[str], IO[str]]:
         migration = migrate_legacy_remote_credentials(
             self._remote_endpoint,
             env=self._env,
@@ -780,7 +923,7 @@ class RemoteMCPTransport(StdioMCPTransport):
                 migration.source_store,
                 migration.destination_store,
             )
-        return super().connect()
+        return super()._connect()
 
 
 class SocketMCPTransport(MCPTransport):
@@ -1000,6 +1143,20 @@ class MCPClientSession:
         Uma sessão cujo ``tools/list`` falha não é utilizável e, portanto,
         não conecta: o bridge publica a falha e o MCP Hub permite refazer.
         """
+        for attempt in range(2):
+            try:
+                self._connect_once()
+                return
+            except MCPConnectError as exc:
+                if (
+                    attempt == 0
+                    and isinstance(self._transport, StdioMCPTransport)
+                    and self._transport.reauthorize_after_failure(exc)
+                ):
+                    continue
+                raise
+
+    def _connect_once(self) -> None:
         reader, self._writer = self._transport.connect()
         self._connected = True
 
@@ -1116,6 +1273,7 @@ class MCPClientSession:
                 cancel_event=cancel_event,
                 method=method,
                 authorization_deadline=self._transport.authorization_deadline,
+                authorization_response_at=self._transport.authorization_response_at,
             )
 
         if "error" in resp:
@@ -1296,6 +1454,24 @@ class MCPClientBridge:
             )
             return None
         return self._set_state(name, auth_url=str(url or ""))
+
+    def set_auth_progress(
+        self, name: str, detail: str, *, transport: MCPTransport | None = None
+    ) -> MCPConnectionState | None:
+        """Publica o progresso da autorização OAuth e retira o link pendente.
+
+        Vale para o retorno do navegador, a conclusão da autenticação e a
+        recuperação de uma credencial recusada: em todos, o link anterior
+        deixou de valer. Como em :meth:`set_auth_url`, o aviso de um
+        transporte substituído é ignorado.
+        """
+        if transport is not None and not self._transport_is_active(name, transport):
+            _logger.debug(
+                "MCP bridge '%s': progresso OAuth de transporte substituído ignorado",
+                name,
+            )
+            return None
+        return self._set_state(name, detail=str(detail or ""), auth_url="")
 
     def _transport_is_active(self, name: str, transport: MCPTransport) -> bool:
         with self._lock:
@@ -2000,9 +2176,9 @@ def bind_bridge_notices(
 ) -> None:
     """Encaminha os avisos do transporte ao estado da conexão no bridge.
 
-    Só a autorização OAuth vira estado visível (``auth_url``): é uma ação do
-    usuário. As linhas de erro do stderr já foram para o log do app pelo
-    transporte; se o handshake falhar, o resumo chega via
+    A recuperação da credencial e a autorização OAuth viram estado visível
+    (``detail``/``auth_url``). As linhas de erro do stderr já foram para o log
+    do app pelo transporte; se o handshake falhar, o resumo chega via
     :class:`MCPConnectError`. Com o callback registrado o transporte também
     deixa de escrever no stderr do processo, o que mantém o chat (Textual ou
     pipe) limpo.
@@ -2011,6 +2187,8 @@ def bind_bridge_notices(
     def _on_notice(kind: str, text: str) -> None:
         if kind == "auth":
             bridge.set_auth_url(name, text, transport=transport)
+        elif kind in {"reauthorize", "auth_received", "auth_complete"}:
+            bridge.set_auth_progress(name, text, transport=transport)
 
     transport.set_notice_callback(_on_notice)
 

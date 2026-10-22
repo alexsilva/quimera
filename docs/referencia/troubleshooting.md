@@ -50,7 +50,10 @@ mesmo que um servidor esteja lento, exigindo autorização OAuth ou fora do ar.
    com o servidor remoto (com limite próprio de 60 s) antes de repassar o do
    Quimera. Um servidor remoto lento aparece como
    `sem resposta do servidor para initialize em 120s` ou, quando o teste do
-   proxy estoura, `conexão fechada pelo servidor · Fatal error: … Request timed out`.
+   proxy estoura, `mcp-remote encerrou após 60s sem resposta do servidor remoto
+   ao initialize · Fatal error: … Request timed out`. Nos dois casos quem não
+   respondeu foi o servidor remoto; confira a página de status do serviço
+   antes de mexer na conexão.
 4. As tools de uma conexão só entram no `tools/list` dos agentes depois que ela
    conecta; agentes que já listaram as tools antes disso precisam listar de novo.
 5. O catálogo de cada conexão é lido uma única vez, no handshake. Se o servidor
@@ -87,10 +90,40 @@ prazo do handshake não se esgota nesse intervalo. Passado esse tempo, a
 conexão falha com
 `autorização OAuth não concluída no navegador em 10 min`.
 
+Quando o callback chega, o Hub deixa de mostrar `autorização pendente` e
+indica que está concluindo a autenticação. Depois que o proxy troca o código
+por tokens, o detalhe passa a `autorização OAuth concluída; aguardando
+resposta do servidor`. A conexão só aparece como conectada após
+`initialize` e `tools/list` responderem. O retorno do navegador inicia um
+novo prazo de resposta (120 s em `remote:`), sem prolongar a espera pelos
+10 minutos reservados ao consentimento. O `mcp-remote` pode encerrar antes,
+no limite interno de 60 s da inicialização de teste; nesse caso a falha
+explica que a autorização foi concluída e o servidor MCP não respondeu.
+Os tokens novos são preservados para a próxima tentativa de Reconectar.
+
 Reconectar pelo hub durante uma autorização pendente abandona o handshake
 preso (o processo antigo é encerrado) e começa outro, com uma URL nova; o
 hub continua utilizável e pode ser fechado enquanto o servidor espera.
 `Desconectar` cancela o handshake sem tentar de novo.
+
+### Autorização revogada ou renovação OAuth recusada
+
+No boot ou ao Reconectar, o Quimera recupera uma rejeição OAuth do
+`mcp-remote` sem exigir que você apague `~/.mcp-auth`. Se o proxy encerrar
+com `InvalidGrantError`/`InvalidTokenError`, ou com `InvalidRequestError`
+durante a renovação do token (caso observado na Atlassian), o Quimera retira
+somente a credencial recusada do cache daquela conexão e tenta novamente
+uma vez. O registro do cliente e as credenciais de outros servidores são
+preservados. O progresso indica `credencial OAuth recusada; iniciando nova
+autorização no navegador`; quando o servidor pedir consentimento, o link
+aparece no bloco de status e no MCP Hub como em qualquer autorização inicial.
+
+A recuperação vale para `remote:` e para comandos `stdio:` que invocam
+`mcp-remote`. Uma credencial que outro processo já renovou é preservada, e
+credenciais recusadas nunca mais voltam do layout antigo do `mcp-remote`.
+Timeout, falha de rede, pedido MCP malformado e consentimento negado não
+disparam essa limpeza. Se a nova tentativa falhar ou a autorização for
+cancelada, a conexão para; use Reconectar quando quiser tentar novamente.
 
 ### `EROFS: read-only file system` com o sandbox ativo
 

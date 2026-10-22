@@ -1805,6 +1805,84 @@ def test_read_response_termina_quando_o_run_do_agente_e_cancelado():
         os.close(write_fd)
 
 
+def test_read_response_so_acorda_a_cada_meio_segundo_com_oauth_aberto_ou_cancel_event():
+    """Fora da autorização OAuth, um tools/call dorme até a resposta ou o prazo."""
+    clock = [0.0]
+    waits: list[float] = []
+
+    class SilentReader:
+        def readline(self, timeout):
+            waits.append(timeout)
+            clock[0] += timeout
+            raise TimeoutError
+
+    with patch("quimera.runtime.mcp.client.time.monotonic", side_effect=lambda: clock[0]):
+        with pytest.raises(TimeoutError, match="sem resposta do servidor para tools/call em 3s"):
+            _read_response(
+                SilentReader(), "mcp-7", timeout=3.0, method="tools/call",
+                authorization_deadline=lambda: None,
+                authorization_response_at=lambda: None,
+            )
+        assert waits == [3.0]
+
+        waits.clear()
+        clock[0] = 0.0
+        with pytest.raises(TimeoutError, match="autorização OAuth não concluída"):
+            _read_response(
+                SilentReader(), "mcp-1", timeout=1.0, method="initialize",
+                authorization_deadline=lambda: 2.0,
+                authorization_response_at=lambda: None,
+            )
+        assert waits == [0.5] * 4 and clock[0] == 2.0
+
+
+MCP_REMOTE_TIMEOUT_STDERR = """\
+[15] Using callback port derived from the server URL: 3736
+[15] [15] Connecting to remote server: https://mcp.example.test/v2/mcp
+[15] Using transport strategy: http-first
+[15] Fatal error: _McpError: MCP error -32001: Request timed out
+    at Timeout._onTimeout (file:///mcp-remote/dist/chunk.js:25521:50)
+"""
+
+
+@pytest.mark.parametrize("spec_kind", ["remote", "stdio-mcp-remote", "stdio-generico"])
+def test_timeout_do_proxy_nomeia_o_mcp_remote_e_o_servidor_remoto(tmp_path, spec_kind):
+    """Caso do Jira: o `Fatal error … Request timed out` é o mcp-remote desistindo
+    do servidor remoto, não o servidor fechando a conexão."""
+    kwargs = {"name": "jira", "workspace": Workspace(tmp_path)}
+    if spec_kind == "remote":
+        transport = RemoteMCPTransport(
+            "https://mcp.example.test/v2/mcp",
+            [sys.executable, "proxy.py", "https://mcp.example.test/v2/mcp"],
+            **kwargs,
+        )
+    elif spec_kind == "stdio-mcp-remote":
+        transport = StdioMCPTransport(
+            ["npx", "-y", "mcp-remote@0.3.2", "https://mcp.example.test/v2/mcp"], **kwargs
+        )
+    else:
+        transport = StdioMCPTransport([sys.executable, "server.py"], **kwargs)
+
+    with patch(
+        "quimera.runtime.mcp.client.wrap_subprocess_cmd", side_effect=_passthrough_wrap({})
+    ), patch(
+        "quimera.runtime.mcp.client.subprocess.Popen",
+        return_value=_CrashedProcess(MCP_REMOTE_TIMEOUT_STDERR),
+    ):
+        with pytest.raises(MCPConnectError) as info:
+            MCPClientSession(transport, name="jira").connect()
+
+    reason = str(info.value)
+    if spec_kind == "stdio-generico":
+        assert reason.startswith("conexão fechada pelo servidor · Fatal error")
+    else:
+        assert reason == (
+            "mcp-remote encerrou após 60s sem resposta do servidor remoto ao initialize · "
+            "Fatal error: _McpError: MCP error -32001: Request timed out"
+        )
+    assert "at Timeout" not in reason
+
+
 def test_call_tool_usa_prazo_longo_e_handshake_usa_prazo_curto(monkeypatch):
     observed: list[tuple[str, float, object]] = []
 
