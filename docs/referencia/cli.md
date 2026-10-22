@@ -69,6 +69,14 @@ completa, suas tools passam a aparecer no `tools/list` do MCP embutido e ficam
 disponíveis aos agentes. Conexões com falha ou presas podem ser refeitas no MCP
 Hub (`F9`) sem travar a interface.
 
+O servidor vê o Quimera pelo nome e versão. No `initialize`, o `clientInfo` é
+`Quimera` com a versão instalada. Em `remote:`, o `mcp-remote` registra o
+cliente OAuth como `Quimera <versão>`, nome exibido na tela de consentimento e
+na lista de apps conectados do serviço. Uma conexão que passe o próprio
+`--static-oauth-client-metadata` mantém o dela. O nome só é enviado no
+registro: um `client_info.json` já salvo em `~/.mcp-auth` conserva o nome e a
+versão com que foi registrado até ser apagado e o serviço autorizado de novo.
+
 ## Exemplos
 
 ### Sessão simples

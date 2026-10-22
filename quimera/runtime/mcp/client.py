@@ -42,6 +42,7 @@ from quimera.runtime.mcp.remote_credentials import (
     snapshot_remote_credentials,
 )
 from quimera.runtime.models import ToolCall, ToolResult
+from quimera.version import __version__
 
 _logger = logging.getLogger(__name__)
 
@@ -256,6 +257,8 @@ MCP_CLIENT_OAUTH_TIMEOUT_SECONDS = 600.0
 MCP_CLIENT_TOOL_CALL_TIMEOUT_SECONDS = 300.0
 #: Intervalo em que uma leitura pendente confere o cancelamento do run.
 _CANCEL_POLL_SECONDS = 0.5
+#: Identificação do Quimera no ``initialize`` de todo servidor MCP externo.
+MCP_CLIENT_INFO = {"name": "Quimera", "version": __version__}
 
 
 class MCPRequestCancelled(RuntimeError):
@@ -1017,10 +1020,7 @@ class HttpMCPTransport(MCPTransport):
             {
                 "protocolVersion": "2025-11-25",
                 "capabilities": {},
-                "clientInfo": {
-                    "name": "quimera-mcp-client",
-                    "version": "0.1.0",
-                },
+                "clientInfo": MCP_CLIENT_INFO,
             },
             "init-1",
         )
@@ -1170,10 +1170,7 @@ class MCPClientSession:
                     {
                         "protocolVersion": "2025-11-25",
                         "capabilities": {},
-                        "clientInfo": {
-                            "name": "quimera-mcp-client",
-                            "version": "0.1.0",
-                        },
+                        "clientInfo": MCP_CLIENT_INFO,
                     },
                     timeout=self._transport.handshake_timeout,
                 )
@@ -1877,6 +1874,14 @@ class MCPClientBridge:
 
 DEFAULT_MCP_REMOTE_VERSION = "0.3.2"
 DEFAULT_MCP_REMOTE_RUNNER = f"npx -y mcp-remote@{DEFAULT_MCP_REMOTE_VERSION}"
+#: Cliente OAuth que o ``mcp-remote`` registra no servidor; ``client_name`` é o
+#: nome do app na tela de consentimento e na lista de apps conectados. O proxy
+#: só o envia ao registrar: um ``client_info.json`` já salvo mantém o nome (e a
+#: versão) com que foi registrado.
+MCP_REMOTE_OAUTH_CLIENT_METADATA = {
+    "client_name": f"Quimera {__version__}",
+    "client_uri": "https://github.com/alexsilva/quimera",
+}
 
 
 def build_mcp_remote_command(endpoint: str) -> list[str]:
@@ -1886,10 +1891,17 @@ def build_mcp_remote_command(endpoint: str) -> list[str]:
     extras do ``mcp-remote`` (ex.: ``--header ...``). O runner padrão fixa a
     versão conhecida/testada do pacote e pode ser sobrescrito via
     ``QUIMERA_MCP_REMOTE_CMD`` (útil para testar outra versão ou executor).
+    O cliente OAuth é registrado como Quimera, salvo se a conexão já trouxer o
+    seu ``--static-oauth-client-metadata``.
     """
     tail = shlex.split(endpoint or "")
     if not tail:
         return []
+    if "--static-oauth-client-metadata" not in tail:
+        tail += [
+            "--static-oauth-client-metadata",
+            json.dumps(MCP_REMOTE_OAUTH_CLIENT_METADATA),
+        ]
     runner = os.environ.get("QUIMERA_MCP_REMOTE_CMD", DEFAULT_MCP_REMOTE_RUNNER).strip()
     return shlex.split(runner) + tail
 

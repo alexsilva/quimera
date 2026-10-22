@@ -22,9 +22,11 @@ from quimera.runtime.drivers.tool_schemas import (
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.mcp.client import (
     DEFAULT_MCP_REMOTE_VERSION,
+    MCP_CLIENT_INFO,
     MCP_CLIENT_REMOTE_HANDSHAKE_TIMEOUT_SECONDS,
     MCP_CLIENT_REQUEST_TIMEOUT_SECONDS,
     MCP_CLIENT_TOOL_CALL_TIMEOUT_SECONDS,
+    MCP_REMOTE_OAUTH_CLIENT_METADATA,
     HttpMCPTransport,
     MCPClientBridge,
     MCPClientSession,
@@ -52,7 +54,13 @@ from quimera.runtime.models import ToolCall, ToolResult
 from quimera.runtime.registry import ToolRegistry
 from quimera.sandbox.bwrap import SandboxUnavailableError
 from quimera.runtime.tools.mcp_clients import get_bridge, set_bridge
+from quimera.version import __version__
 from quimera.workspace import Workspace
+
+QUIMERA_OAUTH_CLIENT_ARGS = [
+    "--static-oauth-client-metadata",
+    json.dumps(MCP_REMOTE_OAUTH_CLIENT_METADATA),
+]
 
 
 def test_stdio_mcp_fails_closed_when_workspace_sandbox_is_unavailable(tmp_path):
@@ -261,6 +269,7 @@ def test_parse_remote_shortcut_expands_to_mcp_remote_command():
         "-y",
         f"mcp-remote@{DEFAULT_MCP_REMOTE_VERSION}",
         "https://mcp.atlassian.com/v1/sse",
+        *QUIMERA_OAUTH_CLIENT_ARGS,
     ]
     assert transport._name == "atlassian"
 
@@ -277,6 +286,7 @@ def test_parse_remote_shortcut_preserves_extra_mcp_remote_args():
         "https://api.githubcopilot.com/mcp/",
         "--transport",
         "sse-only",
+        *QUIMERA_OAUTH_CLIENT_ARGS,
     ]
 
 
@@ -298,6 +308,7 @@ def test_build_mcp_remote_command_honors_runner_override(monkeypatch):
         "bunx",
         "mcp-remote@0.1.0",
         "https://mcp.example.test/sse",
+        *QUIMERA_OAUTH_CLIENT_ARGS,
     ]
 
 
@@ -311,7 +322,65 @@ def test_build_mcp_remote_command_pins_tested_default_version(monkeypatch):
         "-y",
         f"mcp-remote@{DEFAULT_MCP_REMOTE_VERSION}",
         "https://mcp.example.test/mcp",
+        *QUIMERA_OAUTH_CLIENT_ARGS,
     ]
+
+
+def test_mcp_remote_registra_o_cliente_oauth_como_quimera_com_a_versao():
+    assert MCP_REMOTE_OAUTH_CLIENT_METADATA["client_name"] == f"Quimera {__version__}"
+    assert MCP_REMOTE_OAUTH_CLIENT_METADATA["client_uri"] == (
+        "https://github.com/alexsilva/quimera"
+    )
+
+
+def test_build_mcp_remote_command_preserva_metadata_oauth_da_conexao(monkeypatch):
+    monkeypatch.delenv("QUIMERA_MCP_REMOTE_CMD", raising=False)
+    own = '{"client_name":"Meu App"}'
+
+    command = build_mcp_remote_command(
+        f"https://mcp.example.test/mcp --static-oauth-client-metadata '{own}'"
+    )
+
+    assert command[-2:] == ["--static-oauth-client-metadata", own]
+    assert command.count("--static-oauth-client-metadata") == 1
+
+
+_ECHO_CLIENT_INFO_SERVER = (
+    "import json, sys\n"
+    "for line in sys.stdin:\n"
+    "    msg = json.loads(line)\n"
+    "    if 'id' not in msg:\n"
+    "        continue\n"
+    "    if msg['method'] == 'initialize':\n"
+    "        result = {'protocolVersion': '2025-11-25', 'serverInfo': msg['params']['clientInfo']}\n"
+    "    else:\n"
+    "        result = {'tools': []}\n"
+    "    print(json.dumps({'jsonrpc': '2.0', 'id': msg['id'], 'result': result}), flush=True)\n"
+)
+
+
+def test_initialize_stdio_identifica_o_quimera_com_a_versao():
+    transport = StdioMCPTransport([sys.executable, "-c", _ECHO_CLIENT_INFO_SERVER], name="eco")
+    session = MCPClientSession(transport, name="eco")
+    try:
+        session.connect()
+
+        assert session.server_info == {"name": "Quimera", "version": __version__}
+    finally:
+        session.disconnect()
+
+
+def test_initialize_http_identifica_o_quimera_com_a_versao(monkeypatch):
+    transport = HttpMCPTransport("https://mcp.example.test/mcp")
+    sent = []
+    monkeypatch.setattr(
+        transport, "_http_request", lambda method, **kwargs: sent.append(kwargs["data"]) or {}
+    )
+
+    transport.http_initialize()
+
+    assert sent[0]["params"]["clientInfo"] == MCP_CLIENT_INFO
+    assert MCP_CLIENT_INFO == {"name": "Quimera", "version": __version__}
 
 
 def test_parse_http_mcp_client_accepts_simple_bearer_token():
