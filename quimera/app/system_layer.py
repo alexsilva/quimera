@@ -34,6 +34,7 @@ from ..ui.commands import (
     DEFAULT_FIRST_AGENT,
     build_agents_help,
     build_help,
+    format_cooldown,
 )
 from ..connection_configurator import ConnectionConfigurator
 from ..profiles import remove_connection
@@ -619,7 +620,11 @@ class AppSystemLayer:
         return True
 
     def _handle_agents_command(self, command: str, renderer: Any) -> bool:
-        renderer.show_system(build_agents_help(self._get_active_agents()))
+        unavailable = {
+            suspended.name: f"{suspended.reason}, volta em {format_cooldown(suspended.remaining_seconds)}"
+            for suspended in self.agent_pool.suspensions()
+        }
+        renderer.show_system(build_agents_help(self._get_active_agents(), unavailable))
         return True
 
     def _handle_bugs_command(self, command: str, renderer: Any) -> bool:

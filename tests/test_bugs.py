@@ -239,11 +239,12 @@ def test_record_failure_files_agent_failure_burst_only_once_per_streak():
     assert file_bug.call_count == 1
 
 
-def test_record_failure_logs_pool_removal_as_warning():
+def test_record_failure_logs_pool_suspension_as_warning():
     from quimera.app import agent_failure_tracker as tracker_module
     from quimera.app.agent_failure_tracker import AgentFailureTracker
+    from quimera.app.agent_pool import AgentPool
 
-    pool = ["claudecloud-fable"]
+    pool = AgentPool(["claudecloud-fable"], clock=lambda: 0.0)
     tracker = AgentFailureTracker(
         normalize_agent_name=lambda agent: str(agent),
         agent_pool=pool,
@@ -254,9 +255,11 @@ def test_record_failure_logs_pool_removal_as_warning():
         tracker.record_failure("claudecloud-fable")
         tracker.record_failure("claudecloud-fable")
 
-    assert pool == []
+    # Suspenso, não removido: continua membro, sai só da rotação.
+    assert pool.agents == ["claudecloud-fable"]
+    assert pool.available_agents() == []
     warning.assert_called_once()
-    assert warning.call_args.args[1:] == ("claudecloud-fable", 2)
+    assert warning.call_args.args[1:] == ("claudecloud-fable", 300, 2)
 
 
 def test_bug_correlator_produces_combined_bug_when_render_and_agent_failure_overlap():

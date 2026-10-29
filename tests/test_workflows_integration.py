@@ -313,8 +313,8 @@ def test_agent_pool_change_releases_assignment_to_unavailable_agent(make):
 
 
 
-def test_cancelled_run_is_not_recorded_as_agent_failure(tmp_path):
-    """Cancelar o workflow interrompe a execucao sem penalizar o agente executor."""
+def test_cancelled_run_interrupts_without_blaming_the_agent(tmp_path):
+    """Cancelar o workflow interrompe a execucao e encerra a tentativa como cancelada."""
     from quimera.tasks.classifiers import classify_task_execution_result
     from quimera.tasks.failover import TaskFailoverPolicy
     from quimera.tasks.runner import TaskRunner
@@ -325,7 +325,6 @@ def test_cancelled_run_is_not_recorded_as_agent_failure(tmp_path):
     wf = _start(h, [task_spec("T1")])
     task_id = h.tasks.claim_task("a1")
     task = h.tasks.list_tasks({"id": task_id})[0]
-    failures = []
 
     class _Interrupted:
         def delegate(self, agent, **kwargs):
@@ -339,11 +338,10 @@ def test_cancelled_run_is_not_recorded_as_agent_failure(tmp_path):
     )
     runner = TaskRunner(
         _Interrupted(), _Silent(), h.tasks, policy, classify_task_execution_result,
-        lambda: False, record_failure=failures.append,
+        lambda: False,
         task_hooks=WorkflowTaskHooks(h.workflows, h.tasks, tmp_path),
     )
     assert runner.run(task, "a1") is False
-    assert failures == []  # nao e falha do agente
     assert h.tasks.list_tasks({"id": task_id})[0].status == TaskStatus.CANCELLED
     assert h.workflows.list_attempts(task_id)[-1].status == "cancelled"
 

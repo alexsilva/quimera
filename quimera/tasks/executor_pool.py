@@ -122,6 +122,7 @@ class TaskExecutorPool:
         task_executor_factory: Callable[..., Any] = create_executor,
         agent_pool: Any = None,
         get_active_agents: Callable[[], list[Any]] | None = None,
+        get_available_agents: Callable[[], list[Any]] | None = None,
         workspace: Any = None,
         get_workspace: Callable[[], Any] | None = None,
         session_paths: Any = None,
@@ -154,6 +155,8 @@ class TaskExecutorPool:
         get_record_tool_event: Callable[[], Callable[..., None] | None] | None = None,
         record_failure: Callable[[str], None] | None = None,
         get_record_failure: Callable[[], Callable[[str], None] | None] | None = None,
+        record_success: Callable[[str], None] | None = None,
+        get_record_success: Callable[[], Callable[[str], None] | None] | None = None,
         show_muted_message: Callable[[str], None] | None = None,
         get_show_muted_message: Callable[[], Callable[[str], None] | None] | None = None,
         session_metrics: Any = None,
@@ -186,6 +189,7 @@ class TaskExecutorPool:
         self._task_executor_factory = task_executor_factory
         self._agent_pool = agent_pool
         self._get_active_agents = get_active_agents
+        self._get_available_agents = get_available_agents
         self._workspace = workspace
         self._get_workspace = get_workspace
         self._session_paths = session_paths
@@ -218,6 +222,8 @@ class TaskExecutorPool:
         self._get_record_tool_event = get_record_tool_event
         self._record_failure = record_failure
         self._get_record_failure = get_record_failure
+        self._record_success = record_success
+        self._get_record_success = get_record_success
         self._show_muted_message = show_muted_message
         self._get_show_muted_message = get_show_muted_message
         self._session_metrics = session_metrics
@@ -318,11 +324,12 @@ class TaskExecutorPool:
 
     @staticmethod
     def _claim_gate_for(agent: str, failover_policy: TaskFailoverPolicy, claim_gate):
-        """Gate de claim do executor de ``agent``: só reivindica enquanto estiver no pool.
+        """Gate de claim do executor de ``agent``: só reivindica enquanto estiver disponível.
 
-        Um agente removido do pool (``AgentFailureTracker`` após falhas seguidas)
+        Um agente suspenso do pool (``AgentFailureTracker`` após falhas seguidas)
         mantém o executor vivo; sem este gate ele continuava reivindicando tasks
         livres e falhando em segundos, consumindo as tentativas de workflows.
+        Vencido o prazo da suspensão, o mesmo gate volta a liberá-lo.
         """
 
         def _allowed() -> bool:
@@ -470,6 +477,11 @@ class TaskExecutorPool:
             return self._record_failure
         return self._get_record_failure() if self._get_record_failure else None
 
+    def get_record_success(self):
+        if self._record_success is not None:
+            return self._record_success
+        return self._get_record_success() if self._get_record_success else None
+
     def get_record_tool_event(self):
         if self._record_tool_event is not None:
             return self._record_tool_event
@@ -550,6 +562,12 @@ class TaskExecutorPool:
         if self._agent_pool is not None:
             return list(getattr(self._agent_pool, "agents", []) or [])
         return []
+
+    def _available_agents(self) -> list[Any]:
+        """Membros do pool fora de suspensão: os únicos que reivindicam, revisam e recebem failover."""
+        if self._get_available_agents is not None:
+            return list(self._get_available_agents() or [])
+        return self._agent_pool_agents()
 
     def _task_executors(self) -> list[Any]:
         if self._task_executors_ref is not None:
@@ -702,7 +720,10 @@ class TaskExecutorPool:
             DispatchDependencies(
                 agent_client_override=background_agent_client,
                 tool_executor_override=background_agent_client.tool_executor,
-                cancel_checker_override=cancel_checker_override or self._background_was_user_cancelled,
+                # Sem override, o dispatch consulta o cancelamento do próprio
+                # AgentClient de background; um stub sempre falso fazia o
+                # cancelamento do usuário contar como falha do agente.
+                cancel_checker_override=cancel_checker_override,
                 prompt_builder=self.get_prompt_builder,
                 renderer=self.get_renderer,
                 get_agent_profile=self.get_agent_profile,
@@ -728,6 +749,7 @@ class TaskExecutorPool:
                 retry_backoff=self._retry_backoff_seconds,
                 rate_limit_backoff=self._get_rate_limit_backoff_seconds or (lambda: 30),
                 record_failure=self.get_record_failure(),
+                record_success=self.get_record_success(),
             )
         )
 
@@ -844,7 +866,6 @@ class TaskExecutorPool:
             failover_policy=failover_policy,
             classify_task_execution_result=self._classify_task_execution_result,
             was_user_cancelled=self._background_was_user_cancelled,
-            record_failure=self.get_record_failure(),
             task_hooks=self._build_workflow_hooks(),
         )
 
@@ -871,7 +892,7 @@ class TaskExecutorPool:
 
     def _build_task_failover_policy(self) -> TaskFailoverPolicy:
         return TaskFailoverPolicy(
-            active_agents=self._agent_pool_agents,
+            active_agents=self._available_agents,
             get_agent_profile=self._get_agent_profile or (lambda _name: None),
             repository=self._build_task_repository(),
         )

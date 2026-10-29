@@ -147,6 +147,25 @@ class TestProcessMainFlow(unittest.TestCase):
         # Chamado: claude (None), codex (None), deepseek (ok)
         self.assertEqual(app.dispatch_services.delegate.call_count, 3)
 
+    def test_fallback_skips_suspended_agents(self):
+        """Agente suspenso não entra na rotação nem na lista de failover."""
+        app = _make_app(active_agents=["claude", "codex", "deepseek"])
+        app.agent_pool.suspend("codex", seconds=300, reason="2 falhas seguidas")
+        responses = iter([None, "deepseek respondeu"])
+        app.dispatch_services.delegate = Mock(side_effect=lambda *a, **kw: next(responses))
+
+        def fake_parse(resp):
+            if resp is None:
+                return (None, None, None, None)
+            return (resp, None, None, None)
+
+        app.parse_response = Mock(side_effect=fake_parse)
+
+        app.chat_round_orchestrator.process("hello")
+
+        called = [call.args[0] for call in app.dispatch_services.delegate.call_args_list]
+        self.assertEqual(called, ["claude", "deepseek"])
+
     def test_process_does_not_dispatch_other_agents_for_same_prompt(self):
         """Uma mensagem sem delegation aciona apenas o agente reservado para o prompt."""
         app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)

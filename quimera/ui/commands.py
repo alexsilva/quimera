@@ -1,7 +1,7 @@
 """Comandos, mensagens e helpers de UI do Quimera."""
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Mapping, Sequence
 
 
 DEFAULT_FIRST_AGENT = "claude"
@@ -96,7 +96,25 @@ def build_help(agent_names: Sequence[str]) -> str:
     return help_text
 
 
-def build_agents_help(agent_names: Sequence[str]) -> str:
-    """Monta a lista de agentes disponíveis."""
-    agents = "\n".join(f"- /{name} <mensagem>: {name.capitalize()} responde" for name in agent_names)
-    return "\nAgentes:\n" + (agents if agents else "- nenhum")
+def build_agents_help(agent_names: Sequence[str], unavailable: Mapping[str, str] | None = None) -> str:
+    """Monta a lista de agentes do pool; ``unavailable`` anota os suspensos (nome -> motivo)."""
+    notes = unavailable or {}
+    lines = []
+    for name in agent_names:
+        line = f"- /{name} <mensagem>: {name.capitalize()} responde"
+        if name in notes:
+            line += f" — indisponível: {notes[name]}"
+        lines.append(line)
+    return "\nAgentes:\n" + ("\n".join(lines) if lines else "- nenhum")
+
+
+def format_cooldown(seconds: float) -> str:
+    """Tempo restante de uma suspensão em texto curto (``45 s``, ``12 min``, ``1 h``)."""
+    total = max(0, int(round(seconds)))
+    if total < 60:
+        return f"{total} s"
+    if total < 3600:
+        return f"{total // 60} min"
+    hours, rest = divmod(total, 3600)
+    minutes = rest // 60
+    return f"{hours} h" if minutes == 0 else f"{hours} h {minutes} min"

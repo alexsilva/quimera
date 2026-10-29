@@ -126,7 +126,6 @@ def test_runner_requeues_when_agent_returns_no_response_and_failover_possible():
     system = SystemLayerSpy()
     repo = RepositorySpy()
     policy = FailoverPolicyStub(review_agents=[], can_failover=True)
-    failures = []
     runner = TaskRunner(
         dispatch_services=dispatch,
         system_layer=system,
@@ -134,13 +133,11 @@ def test_runner_requeues_when_agent_returns_no_response_and_failover_possible():
         failover_policy=policy,
         classify_task_execution_result=lambda response: (True, response or ""),
         was_user_cancelled=lambda: False,
-        record_failure=lambda agent_name: failures.append(agent_name),
     )
 
     ok = runner.run(TaskRecord(id=3, job_id=0, description="rodar validação", status="in_progress"), agent_name="codex")
 
     assert ok is False
-    assert failures == ["codex"]
     assert repo.requeue_calls == [(3, "codex", "communication failed")]
     assert repo.fail_calls == []
 

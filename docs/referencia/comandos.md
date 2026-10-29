@@ -5,7 +5,7 @@
 | Comando | Aliases | Descrição |
 |---|---|---|
 | `/help` | `/g` | Mostra ajuda. |
-| `/agents` | — | Lista agentes ativos. |
+| `/agents` | — | Lista os agentes do pool; um agente suspenso por falhas seguidas aparece com o motivo e quando volta. |
 | `/connect <agente>` | — | Configura conexão pelo chat. |
 | `/disconnect <agente>` | — | Remove conexão persistida. |
 | `/reload` | — | Recarrega profiles/conexões. |

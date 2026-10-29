@@ -129,7 +129,7 @@ python quimera.py --help
 - `/design <msg>`: modo design sem execução de código.
 - `/review <msg>`: modo revisão sem edição.
 - `/execute <msg>`: remove restrições de modo e libera execução.
-- `/agents`: lista agentes ativos.
+- `/agents`: lista os agentes do pool, marcando os suspensos por falhas seguidas (motivo e quando voltam).
 - `/connect <agente>`: configura conexão no próprio chat.
 - `/disconnect <agente>`: remove conexão de agente.
 - `/prompt [agente]`: preview do prompt final (debug operacional).

@@ -109,7 +109,6 @@ class TaskRunner:
         failover_policy: _FailoverPolicyProto,
         classify_task_execution_result: Callable[[str | None], tuple[bool, str]],
         was_user_cancelled: Callable[[], bool],
-        record_failure: Callable[[str], None] | None = None,
         before_agent_call: Callable[[str], None] | None = None,
         after_agent_call: Callable[[str], None] | None = None,
         task_hooks: _TaskHooksProto | None = None,
@@ -120,7 +119,6 @@ class TaskRunner:
         self.failover_policy = failover_policy
         self.classify_task_execution_result = classify_task_execution_result
         self.was_user_cancelled = was_user_cancelled
-        self.record_failure = record_failure or (lambda _agent_name: None)
         self.before_agent_call = before_agent_call or (lambda _agent_name: None)
         self.after_agent_call = after_agent_call or (lambda _agent_name: None)
         self.task_hooks = task_hooks
@@ -198,8 +196,10 @@ class TaskRunner:
                 return False
 
             if response is None:
+                # A falha do agente já foi contabilizada pelo AgentCallService do
+                # dispatch, depois dos retries internos; contar aqui de novo
+                # suspendia o agente com uma única task sem resposta.
                 self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: sem resposta")
-                self.record_failure(agent_name)
                 self._abort(hooks, task, agent_name, "communication failed")
                 if self.failover_policy.can_failover(task_id, agent_name):
                     self.repository.requeue_task(

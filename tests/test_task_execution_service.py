@@ -76,6 +76,8 @@ def build_task_services(app):
         app._record_tool_event = None
     if not hasattr(app, "record_failure"):
         app.record_failure = None
+    if not hasattr(app, "record_success"):
+        app.record_success = None
     if not hasattr(app, "session_metrics"):
         app.session_metrics = None
     if not hasattr(app, "round_index"):
@@ -135,6 +137,7 @@ def build_task_services(app):
         get_execution_mode=lambda: app.execution_mode,
         get_record_tool_event=lambda: app._record_tool_event,
         get_record_failure=lambda: app.record_failure,
+        get_record_success=lambda: app.record_success,
         get_session_metrics=lambda: app.session_metrics,
         get_round_index=lambda: app.round_index,
         get_debug_prompt_metrics=lambda: app.debug_prompt_metrics,
@@ -245,6 +248,33 @@ def test_background_dispatch_exposes_agent_run_sink(tmp_path, monkeypatch):
     dispatch = services._create_background_dispatch_services()
 
     assert dispatch._call(dispatch._agent_run_sink) is sink
+
+
+def test_background_dispatch_records_success_and_consults_its_own_client_for_cancel(tmp_path, monkeypatch):
+    """Sucesso em background zera falhas; cancelamento vem do AgentClient da chamada, não de um stub falso."""
+    app = type("App", (), {})()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
+    app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"})()
+    app.visibility = "summary"
+    app.auto_approve_mutations = False
+    app.record_failure = lambda agent: None
+    app.record_success = lambda agent: None
+    services = build_task_services(app)
+
+    class AgentClientStub:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.execution_mode = None
+            self.tool_event_callback = None
+            self.tool_executor = None
+
+    monkeypatch.setattr("quimera.tasks.executor_pool.AgentClient", AgentClientStub)
+    dispatch = services._create_background_dispatch_services()
+
+    assert dispatch._dependencies.record_failure is app.record_failure
+    assert dispatch._dependencies.record_success is app.record_success
+    assert dispatch._dependencies.cancel_checker_override is None
 
 
 def test_background_dispatch_client_inherits_supervision_from_chat_client(tmp_path, monkeypatch):
@@ -618,7 +648,6 @@ def test_handler_requeues_when_agent_returns_no_response_and_failover_is_possibl
     system = SystemLayerSpy()
     repo = RepositorySpy()
     policy = FailoverPolicyStub(review_agents=[], can_failover=True)
-    failures = []
     service = TaskRunner(
         dispatch_services=dispatch,
         system_layer=system,
@@ -626,13 +655,11 @@ def test_handler_requeues_when_agent_returns_no_response_and_failover_is_possibl
         failover_policy=policy,
         classify_task_execution_result=lambda response: (True, response or ""),
         was_user_cancelled=lambda: False,
-        record_failure=lambda agent_name: failures.append(agent_name),
     )
 
     ok = service.handler_for("codex")(TaskRecord(id=3, job_id=0, description="rodar validação", status="in_progress"))
 
     assert ok is False
-    assert failures == ["codex"]
     assert repo.requeue_calls == [(3, "codex", "communication failed")]
     assert repo.fail_calls == []
 

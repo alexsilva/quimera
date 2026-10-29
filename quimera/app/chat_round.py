@@ -308,7 +308,9 @@ class ChatRoundOrchestrator:
                     self._handle_cancelled()
                     return
 
-                fallback_candidates = [agent for agent in self._agent_pool.agents if agent != first_agent]
+                fallback_candidates = [
+                    agent for agent in self._agent_pool.available_agents() if agent != first_agent
+                ]
                 failed_agent = first_agent
                 for fallback_agent in fallback_candidates:
                     if self._is_cancelled():

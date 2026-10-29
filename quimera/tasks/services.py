@@ -113,6 +113,8 @@ class AppTaskServices:
         get_record_tool_event: Callable[[], Callable[..., None] | None] = None,
         record_failure: Callable[[str], None] | None = None,
         get_record_failure: Callable[[], Callable[[str], None] | None] = None,
+        record_success: Callable[[str], None] | None = None,
+        get_record_success: Callable[[], Callable[[str], None] | None] | None = None,
         session_metrics: Any = None,
         get_session_metrics: Callable[[], Any] = None,
         debug_prompt_metrics: bool | None = None,
@@ -195,6 +197,8 @@ class AppTaskServices:
         self._record_tool_event_getter = get_record_tool_event
         self._record_failure = record_failure
         self._record_failure_getter = get_record_failure
+        self._record_success = record_success
+        self._record_success_getter = get_record_success
         self._session_metrics = session_metrics
         self._session_metrics_getter = get_session_metrics
         self._debug_prompt_metrics = debug_prompt_metrics
@@ -225,7 +229,7 @@ class AppTaskServices:
             workspace=workspace,
             get_workspace=self._get_workspace,
             agent_pool=agent_pool,
-            get_active_agents=self._agent_pool_agents,
+            get_active_agents=self._available_agents,
             profile_resolver=self._build_profile_resolver(),
             get_agent_profile=self._get_agent_profile,
             get_available_profiles=self._get_available_profiles,
@@ -250,6 +254,7 @@ class AppTaskServices:
             task_executor_factory=task_executor_factory,
             agent_pool=agent_pool,
             get_active_agents=self._agent_pool_agents,
+            get_available_agents=self._available_agents,
             workspace=workspace,
             get_workspace=self._get_workspace,
             session_paths=self._session_paths,
@@ -282,6 +287,8 @@ class AppTaskServices:
             get_record_tool_event=self._get_record_tool_event,
             record_failure=record_failure,
             get_record_failure=self._get_record_failure,
+            record_success=record_success,
+            get_record_success=self._get_record_success,
             show_muted_message=show_muted_message,
             get_show_muted_message=self._get_show_muted_message,
             session_metrics=session_metrics,
@@ -348,6 +355,13 @@ class AppTaskServices:
         if self._agent_pool is not None:
             return list(getattr(self._agent_pool, "agents", []) or [])
         return list(self._agent_pool_agents_getter() or []) if self._agent_pool_agents_getter else []
+
+    def _available_agents(self) -> list[Any]:
+        """Membros do pool fora de suspensão (roteamento, failover, review)."""
+        available = getattr(self._agent_pool, "available_agents", None)
+        if callable(available):
+            return list(available() or [])
+        return self._agent_pool_agents()
 
     def _task_executors(self) -> list[Any]:
         if self._task_executors_ref is not None:
@@ -489,6 +503,11 @@ class AppTaskServices:
         if self._record_failure is not None:
             return self._record_failure
         return self._record_failure_getter() if self._record_failure_getter else None
+
+    def _get_record_success(self):
+        if self._record_success is not None:
+            return self._record_success
+        return self._record_success_getter() if self._record_success_getter else None
 
     def _get_session_metrics(self):
         if self._session_metrics is not None:

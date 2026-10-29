@@ -549,7 +549,7 @@ class AppAssembler:
             ui.renderer,
             summarizer_call=build_chain_summarizer(
                 agent_client,
-                plat.agent_pool.list_agents,
+                plat.agent_pool.available_agents,
             ),
         )
         session_context = sess.context_manager.load_session()
@@ -721,6 +721,7 @@ class AppAssembler:
             get_execution_mode=app.execution_mode_state.get,
             record_tool_event=app._record_tool_event,
             record_failure=app.record_failure,
+            record_success=app.record_success,
             session_metrics=ui.session_metrics,
             get_debug_prompt_metrics=app.is_debug_prompt_enabled,
             get_workspace_policy=app.get_workspace_policy_ref,
@@ -791,7 +792,7 @@ class AppAssembler:
                 cancel_event,
                 execution_mode=DEBATE_MODE,
             ),
-            active_agents=plat.agent_pool.list_agents,
+            active_agents=plat.agent_pool.available_agents,
             renderer=ui.renderer,
             session_id=plat.session_id,
             current_job_id=rt.current_job_id,
@@ -995,7 +996,9 @@ class AppAssembler:
         # que possuem cancel_event próprio.
         rt.agent_client.add_cancel_listener(tasks.task_services.cancel_background_work)
         rt.agent_client.add_cancel_listener(tasks.debate_service.cancel_active)
-        tasks.tool_executor.set_active_agents_provider(plat.agent_pool.list_agents)
+        # Disponíveis, não membros: `list_agents` e a validação de `tasks_delegate`
+        # não devem oferecer um agente suspenso como alvo.
+        tasks.tool_executor.set_active_agents_provider(plat.agent_pool.available_agents)
         tasks.tool_executor.set_agent_stats_provider(
             lambda agent_name: (
                 app.behavior_metrics.get_agent_summary(agent_name)
