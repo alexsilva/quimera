@@ -10,7 +10,7 @@ import time
 from quimera.app.submission_tracker import SubmittedInput, SubmissionRecord, SubmissionTracker
 from quimera.agents.capabilities import is_agent_running
 import quimera.themes as themes
-from quimera.ui.commands import CMD_EXIT
+from quimera.ui.commands import CMD_EXIT, parse_routing_command
 from quimera.ui.textual.events import TextualUiEvent
 
 _logger = logging.getLogger(__name__)
@@ -200,6 +200,10 @@ class TextualUiBridge:
     def _visible_user_message(self, text: str) -> str:
         """Remove prefixo de agente e oculta comandos de controle do feed."""
         clean = str(text).strip()
+        routing = parse_routing_command(clean)
+        if routing is not None:
+            # s/, o/ e r/ mudam a rotação; só o texto depois do alvo é chat.
+            return routing.message
         if not clean or not clean.startswith("/"):
             return clean
 

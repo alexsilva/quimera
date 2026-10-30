@@ -33,9 +33,13 @@ from ..ui.commands import (
     CMD_WORKFLOW,
     CMD_CONFIG,
     DEFAULT_FIRST_AGENT,
+    ROUTING_PREFIX_FREEZE,
+    ROUTING_PREFIX_ORCHESTRATOR,
+    ROUTING_PREFIX_ROTATION,
     build_agents_help,
     build_help,
     format_cooldown,
+    parse_routing_command,
 )
 from ..connection_configurator import ConnectionConfigurator
 from ..profiles import remove_connection
@@ -138,9 +142,9 @@ class AppSystemLayer:
     # s/ e o/ exigem um alvo, enquanto r/ sozinho já retoma a rotação.
     _PREFIX_COMMAND_HANDLERS: ClassVar[tuple[tuple[str, int, str], ...]] = (
         (CMD_TASK, len(CMD_TASK), "_handle_task_command"),
-        ("s/", 3, "_handle_freeze_command"),
-        ("o/", 3, "_handle_orchestrator_command"),
-        ("r/", 2, "_handle_rotation_command"),
+        (ROUTING_PREFIX_FREEZE, 3, "_handle_freeze_command"),
+        (ROUTING_PREFIX_ORCHESTRATOR, 3, "_handle_orchestrator_command"),
+        (ROUTING_PREFIX_ROTATION, 2, "_handle_rotation_command"),
     )
 
     @classmethod
@@ -858,9 +862,10 @@ class AppSystemLayer:
         return True
 
     def _handle_freeze_command(self, command: str, renderer: Any) -> bool | str:
-        parts = command[2:].strip().split(None, 1)
-        agent = parts[0]
-        trailing = parts[1].strip() if len(parts) > 1 else ""
+        routing = parse_routing_command(command)
+        if routing is None:
+            return False
+        agent, trailing = routing.agent, routing.message
         try:
             self.agent_pool.freeze(agent)
         except ValueError:
@@ -877,9 +882,10 @@ class AppSystemLayer:
         return True
 
     def _handle_orchestrator_command(self, command: str, renderer: Any) -> bool | str:
-        parts = command[2:].strip().split(None, 1)
-        agent = parts[0]
-        trailing = parts[1].strip() if len(parts) > 1 else ""
+        routing = parse_routing_command(command)
+        if routing is None:
+            return False
+        agent, trailing = routing.agent, routing.message
         others = [a for a in self.agent_pool.agents if a != agent]
         if not others:
             self._display.show_warning_message(

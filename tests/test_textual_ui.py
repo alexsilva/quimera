@@ -4041,6 +4041,65 @@ def test_textual_bridge_echoes_agent_prefixed_prompt_without_prefix():
     assert emitted[0].payload["label"] == "Alex"
 
 
+@pytest.mark.parametrize("text", ["s/claude-opus", "o/claude-opus", "r/", "r/ argumento", "  s/claude-opus  "])
+def test_textual_bridge_hides_routing_commands_from_feed(text):
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    app = Mock(is_agent_running=False, active_agent_stdin=None, user_name="Alex")
+    bridge.attach_quimera_app(app)
+
+    bridge.submit_input(text)
+
+    queued = bridge.input_queue.get_nowait()
+    assert queued == text
+    # Sem mensagem para o agente não há submissão: a linha de sistema do
+    # congelamento é o único rastro no feed.
+    assert not hasattr(queued, "submission_id")
+    assert emitted == []
+    app.chat_lifecycle.register_submission.assert_not_called()
+
+
+@pytest.mark.parametrize("prefix", ["s/", "o/"])
+def test_textual_bridge_echoes_only_the_message_after_routing_target(prefix):
+    bridge = TextualUiBridge()
+    emitted = []
+
+    def capture(event):
+        assert bridge.input_queue.empty()
+        emitted.append(event)
+
+    bridge.emit = capture
+    app = Mock(is_agent_running=False, active_agent_stdin=None, user_name="Alex")
+    bridge.attach_quimera_app(app)
+
+    bridge.submit_input(f"{prefix}claude-opus  revise o módulo ")
+
+    queued = bridge.input_queue.get_nowait()
+    assert queued == f"{prefix}claude-opus  revise o módulo "
+    assert len(emitted) == 1
+    assert emitted[0].kind == "user_message"
+    assert emitted[0].payload["content"] == "revise o módulo"
+    assert emitted[0].payload["submission_id"] == queued.submission_id
+    app.chat_lifecycle.register_submission.assert_called_once_with(
+        queued.submission_id,
+        "revise o módulo",
+    )
+
+
+def test_textual_bridge_keeps_bare_routing_prefix_as_plain_message():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    bridge.attach_quimera_app(SimpleNamespace(user_name="Alex"))
+
+    bridge.submit_input("s/")
+
+    assert bridge.input_queue.get_nowait() == "s/"
+    assert emitted[-1].kind == "user_message"
+    assert emitted[-1].payload["content"] == "s/"
+
+
 def test_textual_user_message_renders_as_chat_turn():
     rendered = _render_event(TextualUiEvent("user_message", {"content": "oi", "label": "Alex"}))
 

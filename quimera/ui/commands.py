@@ -1,6 +1,7 @@
 """Comandos, mensagens e helpers de UI do Quimera."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 
@@ -42,6 +43,43 @@ CMD_ALIASES = {
     "/aa": CMD_APPROVE_ALL,
 }
 USER_ROLE = "human"
+
+# Prefixos de roteamento do chat. `s/` congela a rotação num agente, `o/`
+# ativa o orquestrador e `r/` desfaz os dois. São controle, não mensagem:
+# o que chega ao agente (e ao feed) é só o texto depois do alvo.
+ROUTING_PREFIX_FREEZE = "s/"
+ROUTING_PREFIX_ORCHESTRATOR = "o/"
+ROUTING_PREFIX_ROTATION = "r/"
+
+
+@dataclass(frozen=True)
+class RoutingCommand:
+    """`s/<agente> [mensagem]`, `o/<agente> [mensagem]` ou `r/` já separados."""
+
+    prefix: str
+    agent: str = ""
+    message: str = ""
+
+
+def parse_routing_command(text: str) -> RoutingCommand | None:
+    """Separa prefixo, agente e mensagem de um comando de roteamento.
+
+    Devolve ``None`` quando o texto não é comando de roteamento: ``s/`` e
+    ``o/`` sem alvo seguem como mensagem comum. ``r/`` é só controle, então
+    qualquer texto depois dele é descartado, como no despacho.
+    """
+    command = str(text or "").strip()
+    if command.startswith(ROUTING_PREFIX_ROTATION):
+        return RoutingCommand(ROUTING_PREFIX_ROTATION)
+    for prefix in (ROUTING_PREFIX_FREEZE, ROUTING_PREFIX_ORCHESTRATOR):
+        if not command.startswith(prefix):
+            continue
+        parts = command[len(prefix):].strip().split(None, 1)
+        if not parts:
+            return None
+        message = parts[1].strip() if len(parts) > 1 else ""
+        return RoutingCommand(prefix, parts[0], message)
+    return None
 
 # Messages
 MSG_CHAT_STARTED = "Chat multi-agente iniciado (/exit para sair)\n"

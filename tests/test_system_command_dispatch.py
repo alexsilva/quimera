@@ -7,6 +7,7 @@ import pytest
 
 from quimera.app.agent_pool import AgentPool
 from quimera.app.system_layer import AppSystemLayer
+from quimera.ui.commands import RoutingCommand, parse_routing_command
 
 
 @pytest.fixture
@@ -210,6 +211,39 @@ def test_rotation_reset_keeps_prefix_matching(layer, command):
 
     assert layer.agent_pool.frozen_agent is None
     assert layer.agent_pool.orchestrator_agent is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("s/cli", RoutingCommand("s/", "cli")),
+        ("  s/cli  ", RoutingCommand("s/", "cli")),
+        ("s/cli  revise o módulo ", RoutingCommand("s/", "cli", "revise o módulo")),
+        ("s/cli mensagem\nem duas linhas", RoutingCommand("s/", "cli", "mensagem\nem duas linhas")),
+        ("o/mcp", RoutingCommand("o/", "mcp")),
+        ("o/mcp planeje a entrega", RoutingCommand("o/", "mcp", "planeje a entrega")),
+        ("r/", RoutingCommand("r/")),
+        ("r/qualquer-coisa", RoutingCommand("r/")),
+        ("r/ argumento", RoutingCommand("r/")),
+    ],
+)
+def test_parse_routing_command_separates_prefix_agent_and_message(text, expected):
+    assert parse_routing_command(text) == expected
+
+
+@pytest.mark.parametrize("text", ["", "s/", "o/", "s/   ", "texto normal", "/cli mensagem", "/stop", "S/cli"])
+def test_parse_routing_command_leaves_other_inputs_to_the_chat(text):
+    assert parse_routing_command(text) is None
+
+
+@pytest.mark.parametrize("text", ["s/cli", "s/cli mensagem", "o/mcp", "o/mcp mensagem", "r/", "r/ argumento"])
+def test_routing_dispatch_forwards_exactly_what_the_parser_calls_message(layer, text):
+    parsed = parse_routing_command(text)
+    assert parsed is not None
+
+    result = layer.handle_command(text)
+
+    assert result == (parsed.message or True)
 
 
 def test_context_prefixes_do_not_steal_each_others_subcommands(layer):
