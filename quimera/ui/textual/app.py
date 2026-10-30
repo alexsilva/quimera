@@ -66,6 +66,7 @@ from textual.widgets import Input, Static
 
 from quimera.app.completion_dropdown import CompletionDropdown
 from quimera.ui.textual.config_screen import ConfigScreen
+from quimera.ui.textual.chat_runs_screen import ChatRunsScreen
 from quimera.ui.textual.connection_screen import ConnectionScreen
 from quimera.ui.textual.mcp_screen import MCPConnectionsScreen
 from quimera.ui.textual.prompt_preview_screen import PromptPreviewScreen
@@ -144,6 +145,7 @@ class QuimeraTextualApp(App):
         ("f10", "open_config", "Configurações"),
         ("ctrl+comma", "open_config", "Configurações"),
         ("f9", "open_mcp", "MCP Hub"),
+        ("f7", "open_chat_runs", "Execuções do chat"),
     ]
 
     def __init__(
@@ -264,6 +266,11 @@ class QuimeraTextualApp(App):
         yield from super().get_system_commands(screen)
         yield SystemCommand("Configurações", "Abrir tela de configurações", self.action_open_config)
         yield SystemCommand("MCP Hub", "Gerenciar conexões e transportes MCP", self.action_open_mcp)
+        yield SystemCommand(
+            "Execuções do chat",
+            "Listar slots ativos e parar uma execução",
+            self.action_open_chat_runs,
+        )
 
     def action_open_config(self) -> None:
         """Abre a janela popup de configurações."""
@@ -272,6 +279,10 @@ class QuimeraTextualApp(App):
     def action_open_mcp(self) -> None:
         """Abre o hub de conexões MCP."""
         self.push_screen(MCPConnectionsScreen(self._quimera_app, self))
+
+    def action_open_chat_runs(self) -> None:
+        """Abre o menu acionado pelo contador de slots da toolbar."""
+        self.push_screen(ChatRunsScreen(self._quimera_app, self))
 
     def action_open_external_url(self, url: str) -> None:
         """Abre um link do feed (ex.: autorização OAuth) no navegador.

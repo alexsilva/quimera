@@ -7,7 +7,11 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.widgets import Input
 
-from quimera.app.completion_dropdown import CompletionDropdown, history_suggestion_for
+from quimera.app.completion_dropdown import (
+    Completion,
+    CompletionDropdown,
+    history_suggestion_for,
+)
 
 COMPLETIONS = ["/agents", "/agent-status", "/agent-run"]
 
@@ -224,12 +228,9 @@ class TestCompletionDropdownTwoEnter(unittest.TestCase):
 class TestCompletionDropdownUnit(unittest.TestCase):
     """Testes unitários do CompletionDropdown sem app Textual."""
 
-    def _make_dropdown(self, completions: list[str]) -> CompletionDropdown:
+    def _make_dropdown(self, completions: list) -> CompletionDropdown:
         dd = CompletionDropdown()
-        dd._all = completions
-        dd._filtered = []
-        dd._selected = 0
-        dd._widgets = []
+        dd.set_completions(completions)
         return dd
 
     def test_get_selected_vazio(self):
@@ -237,34 +238,47 @@ class TestCompletionDropdownUnit(unittest.TestCase):
         self.assertIsNone(dd.get_selected())
 
     def test_hide_limpa_filtered(self):
-        """hide() deve zerar _filtered imediatamente."""
+        """hide() deve zerar a seleção imediatamente."""
         dd = self._make_dropdown(["/agents"])
-        dd._filtered = ["/agents"]
-        dd._selected = 0
-        # Não chama set_class pois não há app, mas _filtered deve zerar
-        dd._filtered = []  # simula hide() interno
+        dd.filter("/ag")
+        self.assertEqual(dd.get_selected(), "/agents")
+        dd.hide()
         self.assertIsNone(dd.get_selected())
 
     def test_filter_prefixo(self):
-        """filter() com prefixo correto retorna matches."""
+        """filter() com prefixo correto retorna matches, sem distinguir caixa."""
         dd = self._make_dropdown(["/agents", "/agent-status", "/other"])
-        dd._widgets = []  # sem app, _refresh não renderiza
-        dd._filtered = [c for c in dd._all if c.lower().startswith("/ag")]
-        dd._selected = 0
-        self.assertEqual(dd._filtered, ["/agents", "/agent-status"])
+        dd.filter("/AG")
+        self.assertEqual([c.value for c in dd._filtered], ["/agents", "/agent-status"])
         self.assertEqual(dd.get_selected(), "/agents")
 
     def test_single_match(self):
         dd = self._make_dropdown(["/agents"])
-        dd._filtered = ["/agents"]
+        dd.filter("/agents")
         self.assertEqual(dd.single_match(), "/agents")
 
     def test_has_options_requer_dois(self):
         dd = self._make_dropdown(["/agents"])
-        dd._filtered = ["/agents"]
+        dd.filter("/")
         self.assertFalse(dd.has_options)
-        dd._filtered = ["/agents", "/agent-status"]
+        dd = self._make_dropdown(["/agents", "/agent-status"])
+        dd.filter("/")
         self.assertTrue(dd.has_options)
+
+    def test_item_rotulado_insere_valor_e_filtra_por_apelido(self):
+        """O rótulo é só exibição: o valor curto é o que entra no input."""
+        dd = self._make_dropdown(
+            [
+                Completion("/stop #1", "#1 codex · 00:12 · revisa", aliases=("/stop codex",)),
+                Completion("/stop #2", "#2 claude · 00:03 · documenta", aliases=("/stop claude",)),
+            ]
+        )
+        dd.filter("/stop cl")
+        self.assertEqual(dd.get_selected(), "/stop #2")
+        self.assertEqual(dd.single_match(), "/stop #2")
+        dd.filter("/stop #")
+        self.assertTrue(dd.has_options)
+        self.assertEqual(dd.get_selected(), "/stop #1")
 
     def test_history_suggestion_prefere_match_mais_recente(self):
         history = [
@@ -284,3 +298,137 @@ class TestCompletionDropdownUnit(unittest.TestCase):
         self.assertIsNone(history_suggestion_for(history, ""))
         self.assertIsNone(history_suggestion_for(history, "/context reset"))
         self.assertIsNone(history_suggestion_for(history, "/missing"))
+
+
+class TestCompletion(unittest.TestCase):
+    """Semântica de ``Completion``: valor, rótulo e apelidos."""
+
+    def test_display_cai_no_valor_sem_rotulo(self):
+        self.assertEqual(Completion("/stop #1").display, "/stop #1")
+        self.assertEqual(Completion("/stop #1", "#1 codex").display, "#1 codex")
+
+    def test_matches_por_valor_ou_apelido_sem_distinguir_caixa(self):
+        item = Completion("#1", "#1 codex-gpt-5-6-sol · 00:12", aliases=("codex-gpt-5-6-sol",))
+        self.assertTrue(item.matches(""))
+        self.assertTrue(item.matches("#"))
+        self.assertTrue(item.matches("Codex"))
+        self.assertFalse(item.matches("claude"))
+        self.assertFalse(item.matches("00:12"), "o rótulo não é critério de busca")
+
+    def test_matches_nao_ignora_espaco_final(self):
+        """Depois de aceitar ``/stop #1 `` o item não pode reaparecer e comer o Enter."""
+        item = Completion("#1", aliases=("codex",))
+        self.assertFalse(item.matches("#1 "))
+        self.assertFalse(item.matches("codex "))
+
+    def test_prefixed_antepoe_comando_ao_valor_e_aos_apelidos(self):
+        item = Completion("#1", "#1 codex", aliases=("codex",)).prefixed("/stop ")
+        self.assertEqual(item, Completion("/stop #1", "#1 codex", aliases=("/stop codex",)))
+
+
+class _GateApp(App):
+    """App mínimo que usa o ``TextualInputGate`` real como fonte do dropdown."""
+
+    submitted_values: list[str]
+
+    def __init__(self, gate) -> None:
+        super().__init__()
+        self._gate = gate
+        self.submitted_values = []
+
+    def compose(self) -> ComposeResult:
+        yield CompletionDropdown()
+        yield _TestInput(id="input")
+
+    def on_mount(self) -> None:
+        self.query_one("#input").focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if not isinstance(event.input, _TestInput):
+            return
+        dropdown = self.query_one(CompletionDropdown)
+        value = str(event.value)
+        if not value.startswith("/"):
+            dropdown.hide()
+            return
+        dropdown.set_completions(self._gate.completions_for(value))
+        dropdown.filter(value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.submitted_values.append(event.value)
+        self.query_one(CompletionDropdown).hide()
+        event.input.value = ""
+
+
+def _visible_labels(dropdown: CompletionDropdown) -> list[str]:
+    return [
+        str(widget.render())
+        for widget in dropdown.query(".completion-item")
+        if widget.display
+    ]
+
+
+class TestCompletionDropdownLabeled(unittest.TestCase):
+    """``/stop`` lista as execuções em voo com rótulo e insere só o número."""
+
+    def _make_gate(self):
+        from quimera.ui.textual.bridge import TextualUiBridge
+
+        executions = [
+            Completion("#1", "#1 codex-gpt-5-6-sol · 00:12 · revisa o módulo", aliases=("codex-gpt-5-6-sol",)),
+            Completion("#2", "#2 claude-sonnet · 00:03 · documenta o protocolo", aliases=("claude-sonnet",)),
+        ]
+        return TextualUiBridge().create_input_gate(
+            command_resolver=lambda: ["/stop", "/stats"],
+            argument_resolver=lambda command, partial: executions if command == "/stop" else [],
+        )
+
+    def test_enter_apos_stop_lista_rotulos_e_insere_numero(self):
+        async def run():
+            app = _GateApp(self._make_gate())
+            async with app.run_test(size=(100, 24)) as pilot:
+                await _type(pilot, "/sto")
+                await pilot.press("enter")
+                await pilot.pause()
+
+                input_widget = app.query_one("#input", Input)
+                dropdown = app.query_one(CompletionDropdown)
+                self.assertEqual(input_widget.value, "/stop ")
+                self.assertTrue(dropdown.has_class("-show"), "as execuções aparecem logo após o comando")
+                self.assertEqual(
+                    _visible_labels(dropdown),
+                    [
+                        "#1 codex-gpt-5-6-sol · 00:12 · revisa o módulo",
+                        "#2 claude-sonnet · 00:03 · documenta o protocolo",
+                    ],
+                )
+
+                await pilot.press("down")
+                await pilot.press("enter")
+                await pilot.pause()
+                self.assertEqual(input_widget.value, "/stop #2 ")
+                self.assertFalse(dropdown.has_class("-show"), "item aceito não reaparece")
+
+                await pilot.press("enter")
+                await pilot.pause()
+                self.assertEqual(app.submitted_values, ["/stop #2 "])
+
+        asyncio.run(run())
+
+    def test_nome_do_agente_filtra_a_execucao_e_insere_numero(self):
+        async def run():
+            app = _GateApp(self._make_gate())
+            async with app.run_test(size=(100, 24)) as pilot:
+                await _type(pilot, "/stop cla")
+                dropdown = app.query_one(CompletionDropdown)
+                self.assertEqual(
+                    _visible_labels(dropdown),
+                    ["#2 claude-sonnet · 00:03 · documenta o protocolo"],
+                )
+
+                await pilot.press("enter")
+                await pilot.pause()
+                self.assertEqual(app.query_one("#input", Input).value, "/stop #2 ")
+
+        asyncio.run(run())

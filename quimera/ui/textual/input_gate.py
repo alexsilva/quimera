@@ -7,8 +7,10 @@ import threading
 from typing import Any
 
 from rich.cells import cell_len
+from rich.style import Style
 from rich.text import Text
 
+from quimera.app.completion_dropdown import Completion
 from quimera.ui.textual.bridge import TextualUiBridge
 from quimera.ui.textual.constants import (
     APPROVAL_OPTIONS as _APPROVAL_OPTIONS,
@@ -22,6 +24,18 @@ _logger = logging.getLogger(__name__)
 def _approval_options() -> list[str]:
     """Retorna opções de aprovação exibidas no prompt inline."""
     return list(_APPROVAL_OPTIONS)
+
+
+def _matches(item: object, partial: str) -> bool:
+    if isinstance(item, Completion):
+        return item.matches(partial)
+    return str(item).startswith(partial)
+
+
+def _prefixed(prefix: str, item: str | Completion) -> str | Completion:
+    if isinstance(item, Completion):
+        return item.prefixed(prefix)
+    return f"{prefix}{item}"
 
 
 class TextualInputGate:
@@ -254,7 +268,13 @@ class TextualInputGate:
         for index, (label, kind) in enumerate((*left, *right)):
             if index > 0:
                 text.append(" ", style="on #1a1a1a")
-            text.append(f" {label} ", style=style_by_kind.get(kind, "white on #3e3e3e"))
+            style = Style.parse(style_by_kind.get(kind, "white on #3e3e3e"))
+            if label.startswith("⚡ "):
+                style += Style(
+                    underline=True,
+                    meta={"@click": "app.open_chat_runs()"},
+                )
+            text.append(f" {label} ", style=style)
         text.append(" ", style="on #1a1a1a")
         return text
 
@@ -268,7 +288,9 @@ class TextualInputGate:
             _logger.debug("command_resolver falhou: %s", exc)
             return []
 
-    def completions_for(self, value: str, cursor_position: int | None = None) -> list[str]:
+    def completions_for(
+        self, value: str, cursor_position: int | None = None
+    ) -> list[str | Completion]:
         """Retorna sugestões de autocomplete para o input Textual."""
         if cursor_position is None:
             cursor_position = len(value)
@@ -276,19 +298,21 @@ class TextualInputGate:
         for prefix in ("s/", "r/", "o/"):
             if text_before_cursor.startswith(prefix):
                 partial = text_before_cursor[len(prefix):]
-                suggestions = self._argument_suggestions(prefix.rstrip("/"), partial)
-                return [f"{prefix}{suggestion}" for suggestion in suggestions]
+                return [
+                    _prefixed(prefix, suggestion)
+                    for suggestion in self._argument_suggestions(prefix.rstrip("/"), partial)
+                ]
         if not text_before_cursor.startswith("/"):
             return []
         if " " in text_before_cursor:
             command, partial = text_before_cursor.split(" ", 1)
             return [
-                f"{command} {suggestion}"
+                _prefixed(f"{command} ", suggestion)
                 for suggestion in self._argument_suggestions(command, partial)
             ]
         return [command for command in self._commands() if command.startswith(text_before_cursor)]
 
-    def _argument_suggestions(self, command: str, partial: str) -> list[str]:
+    def _argument_suggestions(self, command: str, partial: str) -> list[str | Completion]:
         resolver = self._argument_resolver
         if not callable(resolver):
             return []
@@ -297,7 +321,11 @@ class TextualInputGate:
         except Exception as exc:
             _logger.debug("argument_resolver falhou para %s: %s", command, exc)
             return []
-        return [str(item) for item in suggestions if str(item).startswith(partial)]
+        return [
+            item if isinstance(item, Completion) else str(item)
+            for item in suggestions
+            if _matches(item, partial)
+        ]
 
     def __call__(self, prompt: str) -> str:
         """Bloqueia o loop do Quimera até o usuário submeter uma linha na TUI."""

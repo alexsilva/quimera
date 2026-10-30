@@ -1,7 +1,8 @@
 """Dropdown inline de autocomplete com filtragem e navegação por setas."""
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
@@ -35,6 +36,44 @@ class PromptHistorySuggester(Suggester):
         return history_suggestion_for(list(self._history_provider() or []), value)
 
 
+@dataclass(frozen=True, slots=True)
+class Completion:
+    """Item do dropdown: ``value`` entra no input, ``label`` é o que se vê.
+
+    ``aliases`` são outros textos que o usuário pode digitar para alcançar o
+    item (``/stop codex`` chega em ``/stop #1``). Um ``str`` simples equivale a
+    ``Completion(value)``.
+    """
+
+    value: str
+    label: str = ""
+    aliases: tuple[str, ...] = ()
+
+    @property
+    def display(self) -> str:
+        return self.label or self.value
+
+    def matches(self, prefix: str) -> bool:
+        """Casa pelo prefixo do valor ou de um dos apelidos, sem distinguir caixa."""
+        needle = prefix.casefold()
+        return any(
+            candidate.casefold().startswith(needle)
+            for candidate in (self.value, *self.aliases)
+        )
+
+    def prefixed(self, prefix: str) -> Completion:
+        """Antepõe o comando ao valor e aos apelidos, preservando o rótulo."""
+        return Completion(
+            f"{prefix}{self.value}",
+            self.label,
+            tuple(f"{prefix}{alias}" for alias in self.aliases),
+        )
+
+
+def _as_completion(item: str | Completion) -> Completion:
+    return item if isinstance(item, Completion) else Completion(str(item))
+
+
 class CompletionDropdown(Vertical):
     """Dropdown de autocomplete com filtragem por digitação e navegação por setas."""
 
@@ -63,8 +102,8 @@ class CompletionDropdown(Vertical):
 
     def __init__(self) -> None:
         super().__init__()
-        self._all: list[str] = []
-        self._filtered: list[str] = []
+        self._all: list[Completion] = []
+        self._filtered: list[Completion] = []
         self._selected = 0
         self._widgets: list[Static] = []
 
@@ -75,15 +114,12 @@ class CompletionDropdown(Vertical):
     def on_mount(self) -> None:
         self._widgets = [self.query_one(f"#cd-{i}", Static) for i in range(self.MAX_VISIBLE)]
 
-    def set_completions(self, completions: list[str]) -> None:
-        self._all = completions or []
+    def set_completions(self, completions: Sequence[str | Completion]) -> None:
+        self._all = [_as_completion(item) for item in completions or ()]
 
     def filter(self, query: str) -> None:
-        q = query.strip().lower()
-        if not q:
-            self._filtered = list(self._all)
-        else:
-            self._filtered = [c for c in self._all if c.lower().startswith(q)]
+        q = query.strip()
+        self._filtered = [c for c in self._all if c.matches(q)]
         self._selected = 0
         self._refresh()
 
@@ -98,7 +134,7 @@ class CompletionDropdown(Vertical):
         visible = self._visible_count()
         for i, w in enumerate(self._widgets):
             if i < visible:
-                w.update(self._filtered[i])
+                w.update(self._filtered[i].display)
                 w.display = True
                 w.set_class(i == self._selected, "-mark")
             else:
@@ -120,7 +156,7 @@ class CompletionDropdown(Vertical):
 
     def get_selected(self) -> str | None:
         if self._filtered:
-            return self._filtered[self._selected]
+            return self._filtered[self._selected].value
         return None
 
     def hide(self) -> None:
@@ -134,5 +170,5 @@ class CompletionDropdown(Vertical):
 
     def single_match(self) -> str | None:
         if len(self._filtered) == 1:
-            return self._filtered[0]
+            return self._filtered[0].value
         return None

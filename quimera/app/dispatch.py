@@ -436,6 +436,29 @@ class AppDispatchServices:
             self._primary_delegate_in_use = False
             self._primary_delegate_condition.notify_all()
 
+    @staticmethod
+    def _run_with_chat_registration(
+        registration,
+        agent: str,
+        agent_client,
+        run: Callable[[], Any],
+    ):
+        """Expõe o client de uma chamada de chat durante sua vida útil."""
+        cleanup = None
+        if callable(registration):
+            try:
+                cleanup = registration(agent, agent_client)
+            except Exception:
+                logger.exception("falha ao registrar execução seletiva de chat")
+        try:
+            return run()
+        finally:
+            if callable(cleanup):
+                try:
+                    cleanup()
+                except Exception:
+                    logger.exception("falha ao liberar registro de execução de chat")
+
     def _fork_for_concurrent_delegate(self):
         """Replica o dispatch usando um AgentClient não reentrante isolado."""
         agent_client = self._get_agent_client()
@@ -475,6 +498,7 @@ class AppDispatchServices:
 
     def delegate(self, agent, **options):
         """Executa despacho com retry e finalização padrão da resposta."""
+        chat_run_registration = options.pop("_chat_run_registration", None)
         delegate_fn_override = self._call(self._get_delegate_fn_override)
         if delegate_fn_override is not None:
             return delegate_fn_override(agent, **options)
@@ -487,11 +511,24 @@ class AppDispatchServices:
                 # corretas, ainda que serializadas no client principal.
                 self._wait_and_reserve_primary_delegate()
                 try:
-                    return self._delegate_reserved(agent, **options)
+                    # Sem fork não há cancelamento seletivo seguro: registrar
+                    # ``None`` ainda deixa o menu identificar a execução, mas
+                    # nunca transforma /stop num cancelamento global do client.
+                    return self._run_with_chat_registration(
+                        chat_run_registration,
+                        agent,
+                        None,
+                        lambda: self._delegate_reserved(agent, **options),
+                    )
                 finally:
                     self._release_primary_delegate()
             try:
-                return isolated_dispatch._delegate_reserved(agent, **options)
+                return self._run_with_chat_registration(
+                    chat_run_registration,
+                    agent,
+                    isolated_dispatch._get_agent_client(),
+                    lambda: isolated_dispatch._delegate_reserved(agent, **options),
+                )
             finally:
                 isolated_dispatch.close()
 

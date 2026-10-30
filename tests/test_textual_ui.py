@@ -27,6 +27,7 @@ from quimera.ui.textual.prompt_preview_screen import (
 )
 from quimera.ui.textual.connection_screen import ConnectionScreen
 from quimera.ui.textual.config_screen import ConfigScreen
+from quimera.ui.textual.chat_runs_screen import ChatRunsScreen
 from quimera.ui.textual.mcp_screen import MCPConnectionsScreen
 from quimera.ui.textual.renderer import TextualRenderer, _TextualStatus
 from quimera.ui.textual.theme_store import TuiThemeStore
@@ -2365,7 +2366,10 @@ def test_textual_bridge_submit_input_echoes_user_before_queueing_message():
     assert queued == "revise"
     assert queued.submission_id == events[0][1]["submission_id"]
     assert events[0][1]["submission"]["status"] == "accepted"
-    app.chat_lifecycle.register_submission.assert_called_once_with(queued.submission_id)
+    app.chat_lifecycle.register_submission.assert_called_once_with(
+        queued.submission_id,
+        "revise",
+    )
 
 
 def test_textual_feed_updates_submission_inside_existing_user_turn():
@@ -4461,6 +4465,199 @@ def test_textual_toolbar_renderable_uses_main_tui_chip_styles():
     assert "🔗 " in plain
     assert "sessao-" in plain
     assert "…" in plain
+
+
+def test_textual_slot_counter_opens_chat_runs_menu_on_click():
+    gate = TextualInputGate(
+        TextualUiBridge(),
+        toolbar_context_resolver=lambda: {
+            "responder": "🔮 Claude",
+            "parallel": "2/3",
+        },
+    )
+
+    renderable = gate._build_toolbar_renderable(max_width=80)
+    clickable = [
+        span
+        for span in renderable.spans
+        if getattr(span.style, "meta", {}).get("@click")
+        == "app.open_chat_runs()"
+    ]
+
+    assert len(clickable) == 1
+    assert "⚡ 2/3" in renderable.plain[
+        clickable[0].start : clickable[0].end
+    ]
+
+
+def test_textual_app_f7_opens_and_closes_chat_runs_menu():
+    """F7 é o atalho do menu dos slots; dentro do modal, F7 e Esc fecham.
+
+    F8 não serve: o input já o usa para colar o clipboard e, focado, vence a app.
+    """
+    from quimera.ui.textual.app import QuimeraTextualApp
+
+    app_bindings = {
+        (b.key if hasattr(b, "key") else b[0]): (b.action if hasattr(b, "action") else b[1])
+        for b in QuimeraTextualApp.BINDINGS
+    }
+    assert app_bindings["f7"] == "open_chat_runs"
+    assert "f8" not in app_bindings
+    assert app_bindings["f9"] == "open_mcp"
+    assert app_bindings["f10"] == "open_config"
+
+    screen_bindings = {
+        (b.key if hasattr(b, "key") else b[0]): (b.action if hasattr(b, "action") else b[1])
+        for b in ChatRunsScreen.BINDINGS
+    }
+    assert screen_bindings["f7"] == "close"
+    assert screen_bindings["escape"] == "close"
+    assert screen_bindings["s"] == "stop_selected"
+
+
+def test_chat_runs_screen_stops_only_selected_row():
+    from quimera.app.chat_lifecycle import ChatExecutionSnapshot, ChatStopResult
+    from textual.app import App
+    from textual.widgets import DataTable
+
+    executions = [
+        ChatExecutionSnapshot(
+            number=1,
+            submission_id="submission:one",
+            agent="claude",
+            prompt="primeiro pedido",
+            status="running",
+            queue_position=None,
+            elapsed_seconds=12,
+        ),
+        ChatExecutionSnapshot(
+            number=2,
+            submission_id="submission:two",
+            agent="codex",
+            prompt="segundo pedido",
+            status="running",
+            queue_position=None,
+            elapsed_seconds=4,
+        ),
+    ]
+    stopped = []
+
+    def stop_submission(submission_id):
+        stopped.append(submission_id)
+        executions[:] = [
+            item for item in executions if item.submission_id != submission_id
+        ]
+        return ChatStopResult(True, "Execução parada.", submission_id)
+
+    quimera_app = SimpleNamespace(
+        threads=3,
+        runtime_state=SimpleNamespace(
+            get_chat_inflight_count=lambda: len(executions),
+            get_chat_pending_count=lambda: 0,
+        ),
+        chat_lifecycle=SimpleNamespace(
+            list_chat_executions=lambda: list(executions),
+            stop_chat_submission=stop_submission,
+        ),
+    )
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(110, 28)) as pilot:
+            app.push_screen(ChatRunsScreen(quimera_app, app))
+            await pilot.pause()
+            screen = app.screen
+            table = screen.query_one("#chat_runs_table", DataTable)
+            assert table.row_count == 2
+
+            table.move_cursor(row=1, animate=False)
+            await pilot.pause()
+            await pilot.click("#chat_runs_stop")
+            await pilot.pause()
+
+            assert stopped == ["submission:two"]
+            assert table.row_count == 1
+            assert table.get_row_at(0)[1] == "claude"
+
+            await pilot.click("#chat_runs_close")
+            await pilot.pause()
+            assert not isinstance(app.screen, ChatRunsScreen)
+
+    asyncio.run(run_test())
+
+
+def test_chat_runs_screen_refresh_keeps_horizontal_scroll():
+    """O refresh periódico atualiza as células no lugar.
+
+    ``DataTable.clear()`` zera ``scroll_x``: reconstruir a tabela a cada tick
+    devolvia a visão ao início assim que o usuário rolava para a direita.
+    """
+    from quimera.app.chat_lifecycle import ChatExecutionSnapshot
+    from textual.app import App
+    from textual.widgets import DataTable
+
+    clock = [100.0]
+    started = [(1, "submission:one", "claude", 88.0), (2, "submission:two", "codex", 96.0)]
+    long_prompt = " ".join(["pedido comprido"] * 10)
+
+    def list_executions():
+        return [
+            ChatExecutionSnapshot(
+                number=number,
+                submission_id=submission_id,
+                agent=agent,
+                prompt=long_prompt,
+                status="running",
+                queue_position=None,
+                elapsed_seconds=clock[0] - began,
+            )
+            for number, submission_id, agent, began in started
+        ]
+
+    quimera_app = SimpleNamespace(
+        threads=3,
+        runtime_state=SimpleNamespace(
+            get_chat_inflight_count=lambda: len(started),
+            get_chat_pending_count=lambda: 0,
+        ),
+        chat_lifecycle=SimpleNamespace(
+            list_chat_executions=list_executions,
+            stop_chat_submission=lambda submission_id: None,
+        ),
+    )
+
+    async def run_test() -> None:
+        app = App()
+        async with app.run_test(size=(110, 28)) as pilot:
+            app.push_screen(ChatRunsScreen(quimera_app, app))
+            await pilot.pause()
+            screen = app.screen
+            table = screen.query_one("#chat_runs_table", DataTable)
+            assert table.row_count == 2
+            assert table.get_row_at(1)[3] == "00:04"
+
+            table.move_cursor(row=1, animate=False)
+            await pilot.press("end")
+            await pilot.pause()
+            scrolled = table.scroll_x
+            assert scrolled > 0
+
+            clock[0] += 61
+            await pilot.pause(1.2)  # pelo menos dois ticks do refresh de 0,5 s
+            assert table.scroll_x == scrolled
+            assert table.get_row_at(1)[3] == "01:05"
+            assert table.cursor_row == 1
+            assert screen._selected_submission_id == "submission:two"
+
+            del started[0]  # a primeira termina: a seleção segue a chave, não o índice
+            await pilot.pause(0.7)
+            assert table.row_count == 1
+            assert table.get_row_at(0)[0] == "#2"
+            assert table.cursor_row == 0
+            assert screen._selected_submission_id == "submission:two"
+            assert table.scroll_x == scrolled
+
+    asyncio.run(run_test())
 
 
 def test_textual_toolbar_uses_full_session_when_width_allows():

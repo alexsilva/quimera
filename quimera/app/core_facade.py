@@ -12,6 +12,7 @@ from pathlib import Path
 from .agent_gateway import cleanup_agent_transient_if_unowned
 from .agent_pool import AgentPoolView
 from .chat_processor import run_chat_loop
+from .completion_dropdown import Completion
 from .inputs import AskUserPrompter
 from .lifecycle import AppLifecycle
 from ..domain.prompt_formatter import PromptFormatter
@@ -44,6 +45,7 @@ from ..ui.commands import (
     CMD_PROMPT,
     CMD_RELOAD,
     CMD_RESET,
+    CMD_STOP,
     CMD_STATS,
     CMD_TASK,
     CMD_CONFIG,
@@ -164,6 +166,7 @@ class CoreFacadeMixin:
             CMD_PROMPT,
             CMD_RELOAD,
             CMD_RESET,
+            CMD_STOP,
             CMD_STATS,
             CMD_TASK,
             CMD_CONFIG,
@@ -186,7 +189,9 @@ class CoreFacadeMixin:
                 commands.add(profile.prefix)
         return sorted(commands)
 
-    def _command_argument_resolver(self, command: str, partial: str) -> list[str]:
+    def _command_argument_resolver(
+        self, command: str, partial: str
+    ) -> list[str | Completion]:
         """Resolve sugestões de argumentos para comandos com autocomplete contextual."""
         if command == CMD_CONTEXT:
             if partial.startswith("resumer "):
@@ -200,6 +205,22 @@ class CoreFacadeMixin:
             return ["list", "show", "close", "analyze", "stats"]
         if command == CMD_STATS:
             return ["json", "reset", *sorted(self.agent_pool)]
+        if command == CMD_STOP:
+            lifecycle = self.__dict__.get("chat_lifecycle")
+            list_executions = getattr(lifecycle, "list_chat_executions", None)
+            if not callable(list_executions):
+                return []
+            # Uma linha por execução em voo: o número é o que entra no input,
+            # o rótulo mostra agente, tempo e prompt, e o nome do agente também
+            # filtra (``/stop codex`` alcança ``#1``).
+            return [
+                Completion(
+                    f"#{item.number}",
+                    item.label,
+                    aliases=(item.agent,) if item.agent else (),
+                )
+                for item in list_executions()
+            ]
         if command == CMD_WORKFLOW:
             return ["list", "show ", "pause ", "resume ", "cancel "]
         if command == CMD_DEBATE:

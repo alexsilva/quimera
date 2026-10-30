@@ -6,6 +6,8 @@ import logging
 import threading
 import time
 from concurrent.futures import Future
+from dataclasses import dataclass
+from typing import Callable
 
 from .chat_round import ChatRoundContext
 
@@ -19,6 +21,64 @@ class ChatQueueWaitTimeoutError(TimeoutError):
     """A fila não disponibilizou capacidade dentro do limite operacional."""
 
     user_message = "A execução não conseguiu sair da fila dentro do limite de espera."
+
+
+@dataclass(frozen=True, slots=True)
+class ChatExecutionSnapshot:
+    """Visão pública e imutável de um prompt que ocupa ou aguarda slot."""
+
+    number: int
+    submission_id: str
+    agent: str
+    prompt: str
+    status: str
+    queue_position: int | None
+    elapsed_seconds: float
+
+    @property
+    def elapsed_label(self) -> str:
+        """``mm:ss`` até uma hora; ``h:mm:ss`` depois."""
+        total = max(0, int(self.elapsed_seconds))
+        minutes, seconds = divmod(total, 60)
+        if minutes < 60:
+            return f"{minutes:02d}:{seconds:02d}"
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+
+    @property
+    def label(self) -> str:
+        """Linha única usada pelo ``/stop`` e pelo autocomplete: ``#n agente · tempo · prompt``."""
+        agent = self.agent or "aguardando agente"
+        prompt = " ".join(self.prompt.split())
+        if len(prompt) > 72:
+            prompt = f"{prompt[:71].rstrip()}…"
+        suffix = f" · {prompt}" if prompt else ""
+        return f"#{self.number} {agent} · {self.elapsed_label}{suffix}"
+
+
+@dataclass(frozen=True, slots=True)
+class ChatStopResult:
+    """Resultado textual comum ao menu da TUI e ao comando ``/stop``."""
+
+    stopped: bool
+    message: str
+    submission_id: str = ""
+
+
+@dataclass(slots=True)
+class _ChatExecutionState:
+    """Estado interno mutável de uma submission de chat."""
+
+    number: int
+    submission_id: str
+    prompt: str
+    created_at: float
+    status: str = "accepted"
+    agent: str = ""
+    queue_position: int | None = None
+    started_at: float | None = None
+    client: object | None = None
+    binding_token: object | None = None
 
 
 class ChatLifecycle:
@@ -67,6 +127,8 @@ class ChatLifecycle:
         self._queued_submission_ids: set[str] = set()
         self._cancelled_submission_ids: set[str] = set()
         self._running_submission_ids: set[str] = set()
+        self._chat_executions: dict[str, _ChatExecutionState] = {}
+        self._chat_execution_sequence = 0
         self._submission_lock = threading.RLock()
         self._processing_tls = threading.local()
 
@@ -99,18 +161,215 @@ class ChatLifecycle:
                     self._queued_submission_ids.add(submission_id)
                 elif normalized == "running":
                     self._queued_submission_ids.discard(submission_id)
+            execution = self._chat_executions.get(submission_id)
+            if execution is not None:
+                if normalized in {"completed", "failed", "cancelled"}:
+                    self._chat_executions.pop(submission_id, None)
+                else:
+                    execution.status = normalized
+                    queue_position = metadata.get("queue_position")
+                    execution.queue_position = (
+                        int(queue_position) if isinstance(queue_position, int) else None
+                    )
+                    agent = str(metadata.get("agent") or "").strip()
+                    if agent:
+                        execution.agent = agent
+                    if normalized == "running" and execution.started_at is None:
+                        execution.started_at = time.monotonic()
         if getattr(
             self._renderer, "supports_submission_status", False
         ) is not True:
             return None
         return self._renderer.update_submission_status(submission_id, status, **metadata)
 
-    def register_submission(self, submission_id: str) -> None:
+    def register_submission(self, submission_id: str, message: str = "") -> None:
         """Registra aceitação antes de o loop de chat materializar a fila."""
         if not submission_id:
             return
         with self._submission_lock:
             self._active_submission_ids.add(submission_id)
+            execution = self._chat_executions.get(submission_id)
+            if execution is None:
+                self._chat_execution_sequence += 1
+                self._chat_executions[submission_id] = _ChatExecutionState(
+                    number=self._chat_execution_sequence,
+                    submission_id=submission_id,
+                    prompt=str(message or "").strip(),
+                    created_at=time.monotonic(),
+                )
+            elif message and not execution.prompt:
+                execution.prompt = str(message).strip()
+
+    def list_chat_executions(self) -> list[ChatExecutionSnapshot]:
+        """Lista slots ocupados e prompts na fila em ordem de chegada."""
+        now = time.monotonic()
+        with self._submission_lock:
+            states = sorted(
+                self._chat_executions.values(),
+                key=lambda item: item.number,
+            )
+            return [
+                ChatExecutionSnapshot(
+                    number=state.number,
+                    submission_id=state.submission_id,
+                    agent=state.agent,
+                    prompt=state.prompt,
+                    status=state.status,
+                    queue_position=state.queue_position,
+                    elapsed_seconds=max(
+                        0.0,
+                        now - (state.started_at or state.created_at),
+                    ),
+                )
+                for state in states
+            ]
+
+    def _execution_list_message(
+        self,
+        executions: list[ChatExecutionSnapshot],
+        *,
+        heading: str = "Execuções do chat",
+    ) -> str:
+        if not executions:
+            return "Nenhuma execução de chat está ativa ou na fila."
+        lines = [f"{heading}:"]
+        lines.extend(f"- {item.label}" for item in executions)
+        lines.append("Use /stop #<número> ou /stop <agente>.")
+        return "\n".join(lines)
+
+    def stop_chat_execution(self, selector: str = "") -> ChatStopResult:
+        """Resolve um seletor humano e cancela somente a submission escolhida."""
+        executions = self.list_chat_executions()
+        wanted = str(selector or "").strip()
+        if not executions:
+            return ChatStopResult(False, self._execution_list_message(executions))
+        if not wanted:
+            if len(executions) == 1:
+                return self.stop_chat_submission(executions[0].submission_id)
+            return ChatStopResult(False, self._execution_list_message(executions))
+
+        normalized = wanted.casefold()
+        number_text = normalized[1:] if normalized.startswith("#") else normalized
+        matches: list[ChatExecutionSnapshot]
+        if number_text.isdigit():
+            number = int(number_text)
+            matches = [item for item in executions if item.number == number]
+        elif normalized.startswith("submission:"):
+            matches = [item for item in executions if item.submission_id.casefold() == normalized]
+        else:
+            agent_name = normalized[1:] if normalized.startswith("/") else normalized
+            matches = [item for item in executions if item.agent.casefold() == agent_name]
+            if not matches and agent_name:
+                # Nomes reais são longos (``codex-gpt-5-6-sol``); um prefixo que
+                # identifica um único agente basta, como no autocomplete.
+                matches = [
+                    item
+                    for item in executions
+                    if item.agent.casefold().startswith(agent_name)
+                ]
+
+        if len(matches) == 1:
+            return self.stop_chat_submission(matches[0].submission_id)
+        if len(matches) > 1:
+            return ChatStopResult(
+                False,
+                self._execution_list_message(
+                    matches,
+                    heading=f"Há mais de uma execução para {wanted}",
+                ),
+            )
+        return ChatStopResult(
+            False,
+            f"Execução '{wanted}' não encontrada.\n"
+            f"{self._execution_list_message(executions)}",
+        )
+
+    def stop_chat_submission(self, submission_id: str) -> ChatStopResult:
+        """Cancela um prompt específico sem tocar nas demais execuções."""
+        key = str(submission_id or "")
+        with self._submission_lock:
+            state = self._chat_executions.get(key)
+            if state is None:
+                return ChatStopResult(False, "A execução já terminou ou não existe.")
+            snapshot = ChatExecutionSnapshot(
+                number=state.number,
+                submission_id=state.submission_id,
+                agent=state.agent,
+                prompt=state.prompt,
+                status=state.status,
+                queue_position=state.queue_position,
+                elapsed_seconds=max(
+                    0.0,
+                    time.monotonic() - (state.started_at or state.created_at),
+                ),
+            )
+            state.status = "stopping"
+            client = state.client
+            futures = [
+                future
+                for future, candidate_id, _slot_reserved in self._submission_futures.values()
+                if candidate_id == key
+            ]
+            self._cancelled_submission_ids.add(key)
+
+        self.update_submission_status(key, "cancelled", agent=snapshot.agent)
+        for future in futures:
+            future.cancel()
+        self._cancel_chat_client(client)
+        self._refresh_parallel_toolbar()
+        return ChatStopResult(
+            True,
+            f"Execução {snapshot.label} parada.",
+            submission_id=key,
+        )
+
+    @staticmethod
+    def _cancel_chat_client(client: object | None) -> None:
+        """Aciona apenas o cancelamento seletivo oferecido por um client isolado."""
+        if client is None:
+            return
+        cancel = getattr(client, "cancel_own_work", None)
+        if callable(cancel):
+            try:
+                cancel()
+            except Exception:
+                logger.exception("falha ao parar client isolado de chat")
+
+    def _bind_chat_client(
+        self,
+        submission_id: str,
+        agent: str,
+        client: object | None,
+    ) -> Callable[[], None]:
+        """Vincula o client isolado atual ao slot e devolve seu cleanup."""
+        token = object()
+        should_cancel = False
+        with self._submission_lock:
+            if submission_id in self._cancelled_submission_ids:
+                should_cancel = True
+            else:
+                state = self._chat_executions.get(submission_id)
+                if state is not None:
+                    state.agent = str(agent or "").strip()
+                    state.status = "running"
+                    state.queue_position = None
+                    state.started_at = state.started_at or time.monotonic()
+                    state.client = client
+                    state.binding_token = token
+        self.update_submission_status(submission_id, "running", agent=agent)
+        if should_cancel:
+            self._cancel_chat_client(client)
+        self._refresh_parallel_toolbar()
+
+        def _unbind() -> None:
+            with self._submission_lock:
+                state = self._chat_executions.get(submission_id)
+                if state is not None and state.binding_token is token:
+                    state.client = None
+                    state.binding_token = None
+            self._refresh_parallel_toolbar()
+
+        return _unbind
 
     def _is_submission_cancelled(self, submission_id: str) -> bool:
         with self._submission_lock:
@@ -128,6 +387,11 @@ class ChatLifecycle:
 
     def process_message(self, user, *, submission_id: str = ""):
         """Executa process chat message com controle de turno."""
+        if submission_id:
+            with self._submission_lock:
+                is_registered = submission_id in self._chat_executions
+            if not is_registered:
+                self.register_submission(submission_id, str(user))
         if self._is_submission_cancelled(submission_id):
             self.update_submission_status(submission_id, "cancelled")
             return
@@ -183,6 +447,13 @@ class ChatLifecycle:
             show_system_message=self._system_layer.show_system_message,
             ui_queue=self._ui_event_queue,
             is_cancelled=lambda sid=submission_id: self._is_processing_cancelled(sid),
+            bind_agent_run=(
+                lambda agent, client, sid=submission_id: self._bind_chat_client(
+                    sid,
+                    agent,
+                    client,
+                )
+            ),
         )
         self._chat_round_orchestrator.process(user, ctx=ctx)
 

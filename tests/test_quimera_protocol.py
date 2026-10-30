@@ -1177,6 +1177,35 @@ class ProtocolTests(unittest.TestCase):
             ],
         )
 
+    def test_stop_command_argument_resolver_lists_live_executions(self):
+        """``/stop`` sugere uma linha por execução em voo, com o número como valor."""
+        from quimera.app.chat_lifecycle import ChatExecutionSnapshot
+        from quimera.app.completion_dropdown import Completion
+        from quimera.ui.commands import CMD_STOP
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        self.assertEqual(app._command_argument_resolver(CMD_STOP, ""), [])
+
+        executions = [
+            ChatExecutionSnapshot(1, "submission:a", "codex-gpt-5-6-sol", "revisa o módulo", "running", None, 72),
+            ChatExecutionSnapshot(2, "submission:b", "", "documenta", "queued", 1, 3),
+        ]
+        app.__dict__["chat_lifecycle"] = SimpleNamespace(
+            list_chat_executions=lambda: list(executions),
+        )
+
+        self.assertEqual(
+            app._command_argument_resolver(CMD_STOP, ""),
+            [
+                Completion(
+                    "#1",
+                    "#1 codex-gpt-5-6-sol · 01:12 · revisa o módulo",
+                    aliases=("codex-gpt-5-6-sol",),
+                ),
+                Completion("#2", "#2 aguardando agente · 00:03 · documenta"),
+            ],
+        )
+
     def test_policy_command_argument_resolver_suggests_presets(self):
         """Verifica que policy command argument resolver suggests presets."""
         app = QuimeraApp.__new__(QuimeraApp)

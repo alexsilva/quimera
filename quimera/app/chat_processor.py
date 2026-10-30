@@ -283,7 +283,7 @@ def run_chat_loop(
             # cancelamento de uma rodada anterior via reset_cancel_state().
             if not submission_id:
                 submission_id = new_submission_id()
-                chat_lifecycle.register_submission(submission_id)
+                chat_lifecycle.register_submission(submission_id, str(user))
 
             session_state_manager.advance_turn()
 

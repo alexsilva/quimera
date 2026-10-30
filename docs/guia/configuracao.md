@@ -93,6 +93,9 @@ quando o `bubblewrap` não está instalado ou não funciona no sistema.
 
 - `--threads N` limita quantos agentes rodam em paralelo por rodada; sem a
   flag, vale o valor salvo em `config.json`.
+- Na TUI, clique no contador `⚡ ativos/capacidade` ou pressione `F7` para
+  inspecionar os slots e parar apenas uma execução. Fora da TUI, use
+  `/stop [#número|agente]`.
 - `--idle-timeout N` define o limite de silêncio do agente, sem stdout.
 - Na janela `/config`, **Tempo Máximo do Agente** limita a duração total de
   cada execução, incluindo o tempo gasto em tools. O padrão é 3.600 segundos.

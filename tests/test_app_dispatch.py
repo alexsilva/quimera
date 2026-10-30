@@ -323,6 +323,61 @@ class TestCallAgent:
         assert all(client.closed for client in forks)
         assert primary.closed is False
 
+    def test_isolated_chat_run_exposes_its_fork_until_dispatch_finishes(self):
+        """Lifecycle recebe exatamente o client que /stop pode encerrar."""
+        calls = []
+
+        class Client:
+            def __init__(self, label):
+                self.label = label
+                self._user_cancelled = False
+                self._cancel_event = threading.Event()
+                self.rate_limit_detected = False
+                self.execution_mode = None
+                self.tool_executor = None
+
+            def fork_for_concurrent_run(self):
+                return Client("fork")
+
+            def close(self):
+                calls.append(("closed", self.label))
+
+        primary = Client("primary")
+        dispatch = AppDispatchServices(
+            agent_client_override=primary,
+            refresh_task_state=lambda: None,
+            get_execution_mode=lambda: None,
+            max_retries=1,
+        )
+
+        def registration(agent, client):
+            calls.append(("registered", agent, client.label))
+            return lambda: calls.append(("unregistered", agent, client.label))
+
+        def low_level(service, agent, **_options):
+            calls.append(("called", agent, service._get_agent_client().label))
+            return "ok"
+
+        with patch.object(
+            AppDispatchServices,
+            "delegate_low_level",
+            autospec=True,
+            side_effect=low_level,
+        ):
+            result = dispatch.delegate(
+                "codex",
+                isolated_run=True,
+                _chat_run_registration=registration,
+            )
+
+        assert result == "ok"
+        assert calls == [
+            ("registered", "codex", "fork"),
+            ("called", "codex", "fork"),
+            ("unregistered", "codex", "fork"),
+            ("closed", "fork"),
+        ]
+
     def test_retry_on_none_low_level(self, dispatch_app):
         """response None → retry até max_retries, depois record_failure"""
         dispatch_app.MAX_RETRIES = 2

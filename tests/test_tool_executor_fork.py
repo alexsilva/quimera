@@ -249,8 +249,10 @@ def test_concurrent_agent_client_forks_get_distinct_executors(workspace, tmp_pat
     assert all(executor is not None for executor in executors)
     assert len({id(executor) for executor in executors}) == 6
     assert client.tool_executor not in executors
-    # Cancelamento continua compartilhado com o client do chat.
-    assert all(forked.cancel_event is client.cancel_event for forked in forks)
+    # Cada fork pode ser parado sozinho e continua observando o cancelamento
+    # global do client do chat.
+    assert all(forked.cancel_event is not client.cancel_event for forked in forks)
+    assert all(forked.cancel_event.round_event is client.cancel_event for forked in forks)
 
 
 def test_client_refuses_fork_when_executor_cannot_isolate(workspace):

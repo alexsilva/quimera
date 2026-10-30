@@ -85,6 +85,7 @@ def test_exact_commands_and_aliases_do_not_accept_arguments(layer, command):
 @pytest.mark.parametrize("command", [
     "/bugs", "/stats", "/connect", "/disconnect", "/prompt", "/debate", "/workflow",
     "/reset", "/policy", "/sandbox", "/context-edit", "/context-branch", "/context",
+    "/stop",
 ])
 @pytest.mark.parametrize("suffix", ["suffix", "\targumento", "\nargumento", "/argumento"])
 def test_argument_commands_require_literal_space_boundary(layer, command, suffix):
@@ -104,6 +105,7 @@ def test_task_keeps_its_historical_unrestricted_prefix_matching(layer, command):
     "/help", "/agents", "/bugs", "/stats", "/connect cli", "/disconnect cli", "/clear",
     "/reload", "/prompt", "/task", "/debate", "/workflow", "/reset", "/approve-all",
     "/approve", "/policy", "/sandbox", "/context-edit", "/context-branch", "/context",
+    "/stop",
     "s/cli", "o/cli", "r/", "/g", "/r", "/aa",
 ])
 def test_renderer_guard_keeps_all_other_commands_out_of_handlers(layer, command):
@@ -130,6 +132,23 @@ def test_config_is_consumed_even_before_renderer_initialization(layer, renderer_
 def test_config_is_consumed_when_renderer_does_not_offer_a_modal(layer):
     layer._display.renderer = SimpleNamespace()
     assert layer.handle_command("/config") is True
+
+
+def test_stop_command_uses_bound_selective_stopper(layer):
+    result = SimpleNamespace(message="Execução #2 codex parada.")
+    stopper = Mock(return_value=result)
+    layer.bind_chat_execution_stopper(stopper)
+
+    assert layer.handle_command("/stop #2") is True
+
+    stopper.assert_called_once_with("#2")
+    layer._display.renderer.show_system.assert_called_once_with(result.message)
+
+
+def test_stop_command_is_consumed_when_lifecycle_is_unavailable(layer):
+    assert layer.handle_command("/stop") is True
+
+    assert "indisponível" in layer._display.renderer.show_warning.call_args.args[0]
 
 
 def test_renderer_provider_is_resolved_once_per_dispatch_and_not_cached(layer):

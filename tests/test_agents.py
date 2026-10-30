@@ -581,7 +581,8 @@ def test_agent_client_fork_for_concurrent_run_isolates_process_state(renderer):
     assert forked.tool_executor is not tool_executor
     assert forked.tool_event_callback is callback
     assert forked.execution_mode == "sandbox"
-    assert forked._cancel_event is client._cancel_event
+    assert forked._cancel_event is not client._cancel_event
+    assert forked._cancel_event.round_event is client._cancel_event
     assert forked._esc_monitor is not client._esc_monitor
     assert forked._agent_running is False
     assert forked._running_agent is None
@@ -3762,6 +3763,107 @@ def test_cancel_notice_is_deduplicated_across_isolated_clients(renderer):
     primary._show_cancelled_once()
 
     renderer.show_execution_control.assert_called_once()
+
+
+def test_cancel_own_work_isolated_fork_does_not_cancel_siblings(renderer):
+    """A parada seletiva sinaliza só o fork; o sinal da rodada segue global."""
+    primary = AgentClient(renderer)
+    first = primary.fork_for_concurrent_run()
+    second = primary.fork_for_concurrent_run()
+
+    first.cancel_own_work()
+
+    assert first.is_cancelled() is True
+    assert primary.is_cancelled() is False
+    assert second.is_cancelled() is False
+
+    primary.cancel_active_work()
+
+    assert second.is_cancelled() is True
+
+
+def test_cancel_own_work_announces_cancellation_attributed_to_that_fork(renderer):
+    """A parada seletiva avisa uma vez, em nome do agente parado, sem gastar o aviso da rodada."""
+    primary = AgentClient(renderer)
+    first = primary.fork_for_concurrent_run()
+    second = primary.fork_for_concurrent_run()
+    first._running_agent = "codex"
+
+    first.cancel_own_work()
+    # O laço do run também tenta avisar ao notar o cancelamento: deduplicado.
+    first._show_cancelled_once()
+
+    renderer.show_execution_control.assert_called_once()
+    event = renderer.show_execution_control.call_args.args[0]
+    assert event.status.value == "cancelled"
+    assert event.agent == "codex"
+
+    # O aviso único da rodada (Ctrl+C) continua disponível para os demais.
+    second._show_cancelled_once()
+    assert renderer.show_execution_control.call_count == 2
+
+
+def test_cancel_own_work_only_signals_api_runs_owned_by_that_fork(renderer):
+    primary = AgentClient(renderer)
+    first = primary.fork_for_concurrent_run()
+    second = primary.fork_for_concurrent_run()
+    first_api_cancel = threading.Event()
+    second_api_cancel = threading.Event()
+    first._register_api_run(object(), first_api_cancel)
+    second._register_api_run(object(), second_api_cancel)
+
+    first.cancel_own_work()
+
+    assert first_api_cancel.is_set() is True
+    assert second_api_cancel.is_set() is False
+
+    primary.cancel_active_work()
+
+    assert second_api_cancel.is_set() is True
+
+
+def test_cancel_own_work_terminates_only_that_forks_process(renderer):
+    """Dois CLIs reais confirmam que parar um slot não mata o processo irmão."""
+    import time
+
+    primary = AgentClient(renderer)
+    first = primary.fork_for_concurrent_run()
+    second = primary.fork_for_concurrent_run()
+    command = [
+        sys.executable,
+        "-c",
+        "import time; print('ready', flush=True); time.sleep(30)",
+    ]
+
+    def run(client, name):
+        client.run(command, silent=True, agent=name)
+
+    first_thread = threading.Thread(target=run, args=(first, "first"))
+    second_thread = threading.Thread(target=run, args=(second, "second"))
+    first_thread.start()
+    second_thread.start()
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if first.agent_running and second.agent_running:
+                break
+            time.sleep(0.01)
+        assert first.agent_running is True
+        assert second.agent_running is True
+
+        first.cancel_own_work()
+        first_thread.join(timeout=3)
+
+        assert first_thread.is_alive() is False
+        assert second_thread.is_alive() is True
+        assert second.agent_running is True
+    finally:
+        first.cancel_own_work()
+        second.cancel_own_work()
+        first_thread.join(timeout=3)
+        second_thread.join(timeout=3)
+
+    assert second_thread.is_alive() is False
 
 
 def test_spy_output_presenter_drops_interrupt_echo_from_raw_stdout(renderer):

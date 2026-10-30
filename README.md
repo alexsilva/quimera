@@ -130,6 +130,7 @@ python quimera.py --help
 - `/review <msg>`: modo revisão sem edição.
 - `/execute <msg>`: remove restrições de modo e libera execução.
 - `/agents`: lista os agentes do pool, marcando os suspensos por falhas seguidas (motivo e quando voltam).
+- `/stop [#número|agente]`: para somente uma execução de chat; na TUI o autocomplete de `/stop ` lista as execuções em voo (`#n agente · tempo · prompt`) e insere o número, e o mesmo menu abre com `F7` ou ao clicar no contador `⚡ ativos/capacidade`.
 - `/connect <agente>`: configura conexão no próprio chat.
 - `/disconnect <agente>`: remove conexão de agente.
 - `/prompt [agente]`: preview do prompt final (debug operacional).

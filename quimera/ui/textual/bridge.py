@@ -132,7 +132,7 @@ class TextualUiBridge:
             with self._lock:
                 watch = self.textual_app is not None
             submission = self.submission_tracker.start(emit=False, watch=watch)
-            self._register_submission(submission.submission_id)
+            self._register_submission(submission.submission_id, clean)
             queued_value = SubmittedInput(value, submission.submission_id)
         self._emit_user_message(text, clean=clean, submission=submission)
         self.input_queue.put(queued_value)
@@ -190,12 +190,12 @@ class TextualUiBridge:
         """Atualiza uma submissão a partir do scheduler/lifecycle."""
         return self.submission_tracker.transition(submission_id, status, **metadata)
 
-    def _register_submission(self, submission_id: str) -> None:
+    def _register_submission(self, submission_id: str, message: str = "") -> None:
         with self._lock:
             lifecycle = getattr(self.quimera_app, "chat_lifecycle", None)
         register = getattr(lifecycle, "register_submission", None)
         if callable(register):
-            register(submission_id)
+            register(submission_id, message)
 
     def _visible_user_message(self, text: str) -> str:
         """Remove prefixo de agente e oculta comandos de controle do feed."""

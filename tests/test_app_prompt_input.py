@@ -116,6 +116,30 @@ def test_textual_input_gate_completes_debate_command_and_mode():
     ]
 
 
+def test_textual_input_gate_prefixes_labeled_completions():
+    from quimera.app.completion_dropdown import Completion
+    from quimera.ui.textual.bridge import TextualUiBridge
+
+    executions = [
+        Completion("#1", "#1 codex · 00:12 · revisa", aliases=("codex",)),
+        Completion("#2", "#2 claude · 00:03 · documenta", aliases=("claude",)),
+    ]
+    bridge = TextualUiBridge()
+    gate = bridge.create_input_gate(
+        command_resolver=lambda: ["/stop"],
+        argument_resolver=lambda command, partial: executions if command == "/stop" else [],
+    )
+
+    assert gate.completions_for("/stop ") == [
+        Completion("/stop #1", "#1 codex · 00:12 · revisa", aliases=("/stop codex",)),
+        Completion("/stop #2", "#2 claude · 00:03 · documenta", aliases=("/stop claude",)),
+    ]
+    assert gate.completions_for("/stop cl") == [
+        Completion("/stop #2", "#2 claude · 00:03 · documenta", aliases=("/stop claude",)),
+    ]
+    assert gate.completions_for("/stop #2 ") == []
+
+
 def test_textual_input_gate_get_line_buffer_returns_empty():
     from quimera.ui.textual.bridge import TextualUiBridge
 

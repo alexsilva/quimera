@@ -892,6 +892,9 @@ class AppAssembler:
             parse_response=app.parse_response,
             refresh_parallel_toolbar=toolbar_coordinator.refresh,
         )
+        sess.system_layer.bind_chat_execution_stopper(
+            chat_lifecycle.stop_chat_execution
+        )
         bug_services = BugServices(
             bug_store=plat.bug_store,
             bug_detector=plat.bug_detector,

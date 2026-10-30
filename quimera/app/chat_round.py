@@ -34,6 +34,7 @@ class ChatRoundContext:
     show_system_message: Any | None = None
     ui_queue: Any | None = None
     is_cancelled: Any | None = None
+    bind_agent_run: Any | None = None
 
 
 class ChatRoundOrchestrator:
@@ -117,6 +118,9 @@ class ChatRoundOrchestrator:
         # enquanto os seguintes usam clients forkados, produzindo dois fluxos
         # operacionais diferentes para a mesma rodada de chat.
         kwargs.setdefault("isolated_run", True)
+        bind_agent_run = getattr(self._cancel_notice_tls, "bind_agent_run", None)
+        if callable(bind_agent_run):
+            kwargs["_chat_run_registration"] = bind_agent_run
         if self._threads > 1 and "max_retries" not in kwargs:
             # Em modo threaded cada prompt deve executar uma vez por agente;
             # retries automáticos causam efeito de loop/cascata no chat.
@@ -263,6 +267,9 @@ class ChatRoundOrchestrator:
             self._apply_runtime_context(ctx)
         self._cancel_notice_tls.shown = False
         self._cancel_notice_tls.is_cancelled = ctx.is_cancelled if ctx is not None else None
+        self._cancel_notice_tls.bind_agent_run = (
+            ctx.bind_agent_run if ctx is not None else None
+        )
         try:
             self._set_parallel_toolbar_state(
                 active=0,
@@ -360,3 +367,4 @@ class ChatRoundOrchestrator:
             self._session_services.maybe_auto_summarize(preferred_agent=first_agent)
         finally:
             self._cancel_notice_tls.is_cancelled = None
+            self._cancel_notice_tls.bind_agent_run = None

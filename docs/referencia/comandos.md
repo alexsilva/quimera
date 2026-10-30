@@ -6,6 +6,7 @@
 |---|---|---|
 | `/help` | `/g` | Mostra ajuda. |
 | `/agents` | — | Lista os agentes do pool; um agente suspenso por falhas seguidas aparece com o motivo e quando volta. |
+| `/stop [#número\|agente]` | — | Para somente a execução de chat escolhida; sem alvo, para a única ativa ou lista as opções. |
 | `/connect <agente>` | — | Configura conexão pelo chat. |
 | `/disconnect <agente>` | — | Remove conexão persistida. |
 | `/reload` | — | Recarrega profiles/conexões. |
@@ -45,6 +46,20 @@ Prefixos dependem dos profiles ativos. Os padrões são:
 - `/ollama-granite4`
 
 Agentes dinâmicos criados por `--connect meu-agente` recebem prefixo `/<nome>`.
+
+## `/stop` e slots paralelos
+
+Na TUI, o bloco `⚡ ativos/capacidade` da barra inferior é clicável e `F7` abre o mesmo menu pelo teclado (`F7` ou `Esc` fecham). O menu mostra os prompts que ocupam slots e os que aguardam na fila; selecione uma linha e use **Parar selecionado** (ou a tecla `s`). Fora da TUI, `/stop` oferece a mesma operação:
+
+Ainda na TUI, o próprio `/stop` tem autocomplete dinâmico: ao digitar `/stop ` o dropdown lista as execuções em voo no formato `#n agente · tempo · trecho do prompt`; `Enter` ou `Tab` inserem só o número (`/stop #2`) e o nome do agente filtra a lista (`/stop cod` mostra as execuções de `codex-gpt-5-6-sol`). Não é preciso saber o nome exato nem o número de cabeça.
+
+| Comando | Efeito |
+|---|---|
+| `/stop` | Para a única execução existente; se houver várias, lista os números com agente, tempo decorrido e trecho do prompt. |
+| `/stop #2` | Para exatamente a execução `#2`, inclusive se o mesmo agente estiver em mais de um prompt. |
+| `/stop codex` | Para o agente cujo nome é `codex` ou começa por `codex` (ex.: `codex-gpt-5-6-sol`) quando isso identifica uma única execução; se houver mais de uma, pede o número. |
+
+A parada marca a submission inteira como cancelada, portanto não dispara failover para outro agente e não conta como falha. As outras execuções continuam. `Ctrl+C` conserva o comportamento global existente.
 
 ## `/bugs`
 

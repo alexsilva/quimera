@@ -39,6 +39,7 @@ from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.runtime.tool_preview import ToolPreview
 from quimera.prompt_templates import PromptText
 
+from quimera.agents.cancel_signal import ForkCancelEvent
 from quimera.agents.parsers import parse_stream_json, parse_codex_json, parse_opencode_json
 from quimera.agents.process_runner import ProcessRunner, MAX_WALL_CLOCK_SECONDS
 from quimera.agents.signal_guard import EscMonitor, terminate_process_group
@@ -217,7 +218,11 @@ class AgentClient:
         # Cache de instâncias de driver por nome de agente.
         self._api_drivers: dict = {}
         self._api_driver_signatures: dict = {}
+        # Runs de API vivos. ``_active_api_runs`` é compartilhado com os forks
+        # (o dono da rodada enxerga e cancela todos, inclusive os abandonados);
+        # ``_own_api_runs`` é só deste client, para a parada seletiva de um fork.
         self._active_api_runs: dict[object, threading.Event] = {}
+        self._own_api_runs: dict[object, threading.Event] = {}
         self._active_api_runs_lock = threading.Lock()
         self._can_abandon_cancelled_api_run = False
         self.tool_event_callback = None
@@ -650,9 +655,10 @@ class AgentClient:
         mutável por processo (``_current_proc``, ``_agent_running``, warm pool e
         drivers de API). O fork preserva a configuração operacional do client do
         chat, mas recebe estado de execução próprio — inclusive um
-        ``ToolExecutor`` isolado. O evento de cancelamento é compartilhado para
-        que Ctrl+C continue cancelando todas as execuções da rodada, inclusive as
-        que usam clients isolados.
+        ``ToolExecutor`` isolado. O evento de cancelamento do fork observa o da
+        rodada, para que Ctrl+C continue cancelando todas as execuções, mas é
+        próprio: ``cancel_own_work`` para só este fork (``/stop``, menu de
+        agentes em execução) sem tocar nos demais.
 
         Retorna ``None`` quando há um ``tool_executor`` injetado que não sabe se
         isolar: sem executor próprio o fork não é seguro, e o chamador deve
@@ -678,7 +684,7 @@ class AgentClient:
         )
         forked.execution_mode = self.execution_mode
         forked.tool_event_callback = self.tool_event_callback
-        forked.share_cancel_event(self._cancel_event)
+        forked.share_cancel_event(ForkCancelEvent(self._cancel_event))
         forked._cancel_notice_lock = self._cancel_notice_lock
         forked._cancel_notice_state = self._cancel_notice_state
         forked._active_api_runs = self._active_api_runs
@@ -696,14 +702,23 @@ class AgentClient:
     def _register_api_run(self, token: object, cancel_event: threading.Event) -> None:
         with self._active_api_runs_lock:
             self._active_api_runs[token] = cancel_event
+            self._own_api_runs[token] = cancel_event
 
     def _unregister_api_run(self, token: object) -> None:
         with self._active_api_runs_lock:
             self._active_api_runs.pop(token, None)
+            self._own_api_runs.pop(token, None)
 
     def _cancel_active_api_runs(self) -> None:
+        """Cancela os runs de API ao alcance deste client.
+
+        O dono do evento da rodada alcança todos os runs registrados, inclusive
+        os abandonados por forks; um fork alcança só os próprios, para que
+        parar um prompt não derrube os demais.
+        """
         with self._active_api_runs_lock:
-            cancel_events = list(self._active_api_runs.values())
+            runs = self._active_api_runs if self._owns_cancel_event else self._own_api_runs
+            cancel_events = list(runs.values())
         for cancel_event in cancel_events:
             cancel_event.set()
 
@@ -779,6 +794,37 @@ class AgentClient:
         # Listeners primeiro: clients de background precisam do cancel_event
         # setado antes do SIGTERM chegar, para tratar -15 como término esperado.
         self._notify_cancel_listeners()
+        self._terminate_own_processes()
+
+    def cancel_own_work(
+        self, source: ExecutionControlSource = ExecutionControlSource.USER
+    ) -> None:
+        """Para só o trabalho deste client, sem cancelar a rodada.
+
+        É o caminho do ``/stop`` e do menu de agentes em execução: aciona o
+        evento próprio do fork, os runs de API próprios e os processos do seu
+        escopo. O evento da rodada, os listeners e o aviso único de
+        cancelamento seguem reservados ao dono (Ctrl+C); este client passa a
+        emitir o próprio aviso, atribuído ao agente parado. No dono da rodada
+        equivale a ``cancel_active_work``.
+
+        O aviso é emitido aqui, e não só pelo laço do ``run``: como o Ctrl+C
+        (``ChatLifecycle.handle_local_interrupt``), a parada precisa aparecer
+        no feed mesmo quando o processo morre antes de o runner observar o
+        evento e o ``run`` termina pelo código de saída, em silêncio.
+        """
+        if self._owns_cancel_event:
+            self.cancel_active_work(source)
+            return
+        self._user_cancelled = True
+        self._cancel_notice_lock = threading.Lock()
+        self._cancel_notice_state = {"shown": False, "source": source}
+        self._cancel_event.set()
+        self._cancel_active_api_runs()
+        self._terminate_own_processes()
+        self._show_cancelled_once()
+
+    def _terminate_own_processes(self) -> None:
         current_proc = self._current_proc
         if current_proc is not None:
             try:

@@ -27,6 +27,7 @@ from ..ui.commands import (
     CMD_RELOAD,
     CMD_RESET,
     CMD_STATS,
+    CMD_STOP,
     CMD_TASK,
     CMD_DEBATE,
     CMD_WORKFLOW,
@@ -120,6 +121,7 @@ class AppSystemLayer:
     _ARGUMENT_COMMAND_HANDLERS: ClassVar[dict[str, str]] = {
         CMD_BUGS: "_handle_bugs_command",
         CMD_STATS: "_handle_stats_command",
+        CMD_STOP: "_handle_stop_command",
         CMD_CONNECT: "_handle_connect_command",
         CMD_DISCONNECT: "_handle_disconnect_command",
         CMD_PROMPT: "_handle_prompt_command",
@@ -223,6 +225,7 @@ class AppSystemLayer:
         self.workflow_command_handler = workflow_command_handler
         self.bugs_command_handler = bugs_command_handler
         self.stats_command_handler = stats_command_handler
+        self.chat_execution_stopper: Callable[[str], Any] | None = None
         self.session_state_manager = session_state_manager
         self.approval_handler_getter = approval_handler_getter or (lambda: None)
         self.context_manager = context_manager
@@ -637,6 +640,23 @@ class AppSystemLayer:
         if callable(self.stats_command_handler):
             return bool(self.stats_command_handler(command))
         self._display.show_warning_message("Comando /stats indisponível nesta sessão.")
+        return True
+
+    def bind_chat_execution_stopper(self, stopper: Callable[[str], Any]) -> None:
+        """Liga ``/stop`` ao lifecycle depois que o chat termina de ser composto."""
+        self.chat_execution_stopper = stopper
+
+    def _handle_stop_command(self, command: str, renderer: Any) -> bool:
+        del renderer
+        stopper = self.chat_execution_stopper
+        if not callable(stopper):
+            self._display.show_warning_message("Comando /stop indisponível nesta sessão.")
+            return True
+        selector = command[len(CMD_STOP):].strip()
+        result = stopper(selector)
+        message = str(getattr(result, "message", result) or "").strip()
+        if message:
+            self._display.show_system(message)
         return True
 
     def _handle_connect_command(self, command: str, renderer: Any) -> bool:
