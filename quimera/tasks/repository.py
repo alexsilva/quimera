@@ -17,6 +17,7 @@ from ..workflows.schema import (
     ensure_workflow_schema,
 )
 from .events import (
+    TaskEvent,
     TaskProposed,
     TaskApproved,
     TaskRejected,
@@ -31,6 +32,14 @@ from .events import (
 _logger = logging.getLogger(__name__)
 
 _UNSET = object()
+
+
+def _inserted_row_id(cur: sqlite3.Cursor) -> int:
+    """Id da linha recém-inserida; ``lastrowid`` só é None antes de um INSERT."""
+    row_id = cur.lastrowid
+    if row_id is None:
+        raise RuntimeError("INSERT não devolveu rowid")
+    return int(row_id)
 
 
 class TaskRepository:
@@ -51,7 +60,7 @@ class TaskRepository:
         conn.execute("PRAGMA journal_mode=WAL;")
         return conn
 
-    def _publish(self, event: object) -> None:
+    def _publish(self, event: TaskEvent) -> None:
         if self.event_sink is not None:
             try:
                 self.event_sink.publish(event)
@@ -67,7 +76,7 @@ class TaskRepository:
         return self._now()
 
     @staticmethod
-    def _stale_attempt(current: object, expected: int | None) -> bool:
+    def _stale_attempt(current: int | None, expected: int | None) -> bool:
         """True quando uma tentativa antiga tenta escrever sobre uma mais nova."""
         return expected is not None and int(current or 0) != int(expected)
 
@@ -224,7 +233,7 @@ class TaskRepository:
                     "INSERT INTO jobs(description, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
                     (description, "planning", created_by, now, now),
                 )
-                job_id = cur.lastrowid
+                job_id = _inserted_row_id(cur)
             conn.commit()
             conn.close()
             return int(job_id)
@@ -677,7 +686,7 @@ class TaskRepository:
                 source_context,
             ),
         )
-        return int(cur.lastrowid)
+        return _inserted_row_id(cur)
 
     def update_task(
         self,

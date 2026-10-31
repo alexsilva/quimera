@@ -16,6 +16,7 @@ import os
 import shlex
 import shutil
 import sys
+from collections.abc import Mapping
 
 from quimera import process_factory as subprocess
 
@@ -31,13 +32,13 @@ _LINUX_OPENERS: tuple[tuple[str, ...], ...] = (
 )
 
 
-def browser_opening_enabled(environ: dict[str, str] | None = None) -> bool:
+def browser_opening_enabled(environ: Mapping[str, str] | None = None) -> bool:
     """False quando ``QUIMERA_OPEN_BROWSER`` desliga a abertura automática."""
     env = os.environ if environ is None else environ
     return str(env.get(OPEN_BROWSER_ENV, "")).strip().lower() not in _DISABLED_VALUES
 
 
-def browser_available(environ: dict[str, str] | None = None) -> bool:
+def browser_available(environ: Mapping[str, str] | None = None) -> bool:
     """Há um navegador gráfico alcançável a partir deste processo?"""
     env = os.environ if environ is None else environ
     if not browser_opening_enabled(env):
@@ -47,7 +48,7 @@ def browser_available(environ: dict[str, str] | None = None) -> bool:
     return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
 
 
-def _opener_command(url: str, environ: dict[str, str]) -> list[str] | None:
+def _opener_command(url: str, environ: Mapping[str, str]) -> list[str] | None:
     browser = str(environ.get("BROWSER", "")).strip()
     if browser:
         parts = shlex.split(browser)
@@ -65,7 +66,7 @@ def _opener_command(url: str, environ: dict[str, str]) -> list[str] | None:
     return None
 
 
-def open_in_browser(url: str, environ: dict[str, str] | None = None) -> bool:
+def open_in_browser(url: str, environ: Mapping[str, str] | None = None) -> bool:
     """Abre ``url`` no navegador gráfico; True se o lançador foi disparado.
 
     Nunca levanta exceção e nunca escreve no terminal: o lançador roda em

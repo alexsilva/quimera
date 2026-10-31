@@ -9,6 +9,7 @@ from typing import Protocol
 from ..prompt_kinds import PromptKind
 from ..domain.task_states import TaskStatus
 from ..runtime.models import TaskRecord
+from .attempt_fence import AttemptFence, RetryFence
 from .events import TaskReviewReassigned
 
 _logger = logging.getLogger(__name__)
@@ -131,8 +132,10 @@ class TaskReviewer:
         task_id = task.id
         hooks = self.task_hooks if task.origin == "workflow" else None
         # Tasks de workflow só aceitam escrita da tentativa que está sendo revisada.
-        fence = {"expected_attempt": task.attempt_count} if hooks is not None else {}
-        retry = {**fence, "max_attempts": hooks.max_attempts} if hooks is not None else {}
+        fence: AttemptFence = {"expected_attempt": task.attempt_count} if hooks is not None else {}
+        retry: RetryFence = (
+            {**fence, "max_attempts": hooks.max_attempts} if hooks is not None else {}
+        )
         try:
             executor = task.assigned_to
             if executor == agent_name:
@@ -171,7 +174,7 @@ class TaskReviewer:
             task_result = task.result or ""
             description = task.description or ""
             body = task.body or description
-            review_delegation = {
+            review_delegation: dict[str, object] = {
                 "delegation_id": f"task-review-{task_id}",
                 "task": description or f"Revisar task {task_id}",
                 "context": (

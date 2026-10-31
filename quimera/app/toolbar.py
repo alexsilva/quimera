@@ -3,8 +3,9 @@
 import logging
 import time
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 from ..profiles.base import extract_model_from_cli_cmd
 
@@ -16,7 +17,7 @@ class ActiveModelRequest:
     """Dados necessários para resolver o rótulo do modelo ativo."""
 
     primary_agent: str | None
-    get_agent_profile: Callable[[str], object | None]
+    get_agent_profile: Callable[[str], Any]
     workspace_cwd: str
 
 
@@ -221,7 +222,7 @@ class ToolbarManager:
     def build_input_toolbar_context(
         self,
         request: ToolbarContextRequest,
-        parallel_state: dict[str, object],
+        parallel_state: Mapping[str, Any],
     ) -> dict[str, str]:
         """Retorna dados de contexto exibidos na toolbar do input."""
         ctx = {

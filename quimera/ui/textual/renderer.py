@@ -177,7 +177,7 @@ class TextualRenderer(RendererBase):
         """Monta payload visual comum para eventos de agente."""
         agent_name = str(agent or "")
         style, label = self._resolve_agent_style(agent_name)
-        payload = {"label": label, "style": style, "theme": self._theme.name}
+        payload: dict[str, Any] = {"label": label, "style": style, "theme": self._theme.name}
         explicit_identity = any((extra or {}).get(key) for key in ("run_id", "delegation_id"))
         if include_run_context and not explicit_identity:
             # Identidade explícita vence: misturar o contexto de outra execução

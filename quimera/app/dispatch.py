@@ -180,8 +180,8 @@ class AppDispatchServices:
             notify_error=notify_error,
             agent_run_sink=agent_run_sink,
         )
-        self._gateway = None
-        self._agent_call_service = None
+        self._gateway: AgentGateway | None = None
+        self._agent_call_service: AgentCallService | None = None
         self._primary_delegate_condition = threading.Condition()
         self._primary_delegate_in_use = False
 

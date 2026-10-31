@@ -1,6 +1,7 @@
 """Componentes de `quimera.profiles.opencode`."""
 import json
 from pathlib import Path
+from typing import Any
 
 from quimera.agent_events import SpyEvent
 from quimera.paths import TMP_BASE_DIR
@@ -100,7 +101,7 @@ class OpenCodeProfile(ExecutionProfile):
         por ``OPENCODE_CONFIG_CONTENT`` evita depender de um ``opencode.json``
         em cada workspace.
         """
-        config = {
+        config: dict[str, Any] = {
             "permission": {
                 "external_directory": {
                     str(TMP_BASE_DIR / "**"): "allow",

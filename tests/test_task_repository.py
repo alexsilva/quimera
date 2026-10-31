@@ -2,6 +2,7 @@ import sqlite3
 
 import pytest
 
+from quimera.tasks.repository import _inserted_row_id
 from quimera.tasks.events import (
     TaskProposed,
     TaskStarted,
@@ -483,3 +484,17 @@ def test_transition_task_publishes_failed(sink_repository):
     ev = received[0]
     assert isinstance(ev, TaskFailed)
     assert ev.reason == "erro crítico"
+
+
+class _FakeCursor:
+    def __init__(self, lastrowid):
+        self.lastrowid = lastrowid
+
+
+def test_inserted_row_id_returns_int_after_insert():
+    assert _inserted_row_id(_FakeCursor(7)) == 7
+
+
+def test_inserted_row_id_fails_explicitly_without_rowid():
+    with pytest.raises(RuntimeError, match="rowid"):
+        _inserted_row_id(_FakeCursor(None))

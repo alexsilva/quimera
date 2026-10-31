@@ -7,6 +7,7 @@ from typing import Protocol
 
 from ..prompt_kinds import PromptKind
 from ..runtime.models import TaskRecord
+from .attempt_fence import AttemptFence, RetryFence
 
 
 class _DispatchServicesProto(Protocol):
@@ -132,9 +133,11 @@ class TaskRunner:
         task_id = task.id
         hooks = self.task_hooks if task.origin == "workflow" else None
         # Tasks de workflow só aceitam escrita da tentativa que as reivindicou.
-        fence = {"expected_attempt": task.attempt_count} if hooks is not None else {}
+        fence: AttemptFence = {"expected_attempt": task.attempt_count} if hooks is not None else {}
         # Requeue de workflow respeita o limite de tentativas na própria transação.
-        retry = {**fence, "max_attempts": hooks.max_attempts} if hooks is not None else {}
+        retry: RetryFence = (
+            {**fence, "max_attempts": hooks.max_attempts} if hooks is not None else {}
+        )
         try:
             description = task.description or ""
             body = task.body or description
@@ -142,7 +145,7 @@ class TaskRunner:
                 self.repository.fail_task(task_id, reason="empty body", **fence)
                 return False
 
-            delegation = {
+            delegation: dict[str, object] = {
                 "delegation_id": f"task-{task_id}",
                 "task": description or f"Executar task {task_id}",
                 "context": body,

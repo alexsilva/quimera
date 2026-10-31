@@ -8,7 +8,7 @@ import sys
 import threading
 import traceback
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from quimera.clipboard_support import ClipboardManager
 
@@ -77,6 +77,9 @@ from quimera.ui.textual.widgets import (
     _SummarySpinner,
     _UnifiedFeed,
 )
+
+if TYPE_CHECKING:
+    from textual.visual import VisualType
 
 
 def _resolve_textual_feed_limit(quimera_app) -> int | None:
@@ -189,7 +192,7 @@ class QuimeraTextualApp(App):
         self._history_file_path: Path | None = None
         self._restored_history_hydrated = False
         self._breadcrumb_chain: list[str] = []
-        self._feed_renderable_cache: dict[int, object] = {}
+        self._feed_renderable_cache: dict[int, VisualType] = {}
         self._scroll_feed_on_submit = False
         self._tui_theme_store = _tui_theme_store_for_app(self._quimera_app)
         self._tui_theme_persisted: str | None = None
@@ -789,7 +792,7 @@ class QuimeraTextualApp(App):
         # ou expiries; o pulso decide no próximo tick se volta a dormir.
         self._resume_thinking_pulse()
         feed = self.query_one("#feed", _UnifiedFeed)
-        entries: list[tuple[int, bool, object, bool]] = []
+        entries: list[tuple[int, bool, VisualType, bool]] = []
         active_tokens: set[int] = set()
         for item in self._feed_model.items:
             token = id(item.event)

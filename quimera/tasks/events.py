@@ -17,7 +17,7 @@ class TaskEvent:
 class TaskProposed(TaskEvent):
     """Task foi proposta (status PROPOSED)."""
     description: str
-    task_type: TaskType = TaskType.GENERAL
+    task_type: TaskType | str = TaskType.GENERAL
     requested_by: str | None = None
     source_context: str | None = None
 

@@ -7,6 +7,7 @@ import select
 import threading
 import sys
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from contextlib import nullcontext
 
 from .approval_broker import ApprovalBroker, TrustedToolExecutionContext  # noqa: F401
@@ -118,8 +119,8 @@ class ConsoleApprovalHandler(ApprovalHandler):
         self._renderer = renderer
         self._suspend_fn = suspend_fn
         self._resume_fn = resume_fn
-        self._suspend_spinner_fn = {}
-        self._resume_spinner_fn = {}
+        self._suspend_spinner_fn: dict[int, Callable[[], object] | None] = {}
+        self._resume_spinner_fn: dict[int, Callable[[], object] | None] = {}
         self._suspend_spinner_fn_default = None
         self._resume_spinner_fn_default = None
         self._approve_all_callback = None
@@ -577,6 +578,7 @@ class PreApprovalHandler(ApprovalHandler):
         """Ativa/desativa approve-all para a thread atual, com escopo opcional."""
         thread_id = threading.get_ident()
         with self._lock:
+            resolved_scope: str | None
             if enabled:
                 resolved_scope = (
                     scope_key
@@ -717,6 +719,7 @@ class ApprovalManager(ApprovalHandler):
         self.config = config
         self._renderer = renderer
 
+        self._console_handler: ApprovalHandler
         if base_handler is None:
             self._console_handler = ConsoleApprovalHandler(
                 input_fn=input_fn,

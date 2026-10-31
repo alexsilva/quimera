@@ -146,6 +146,21 @@ def test_pool_tracks_runs_per_task_and_cancels_only_requested():
     assert pool.live_task_ids() == set()
 
 
+def test_pool_without_classifiers_fails_fast_when_building_services():
+    pool = TaskExecutorPool()
+    with pytest.raises(RuntimeError, match="classify_task_execution_result"):
+        pool._build_task_execution_service(object())
+    with pytest.raises(RuntimeError, match="classify_task_review_result"):
+        pool._build_task_review_service(object())
+
+
+def test_pool_setup_without_classifiers_fails_before_starting_executors(tmp_path):
+    workspace = SimpleNamespace(tasks_db=str(tmp_path / "tasks.db"))
+    pool = TaskExecutorPool(get_workspace=lambda: workspace)
+    with pytest.raises(RuntimeError, match="classify_task_execution_result"):
+        pool.setup_task_executors()
+
+
 @pytest.mark.parametrize(
     "delegation, expected",
     [

@@ -213,11 +213,11 @@ class AppSystemLayer:
 
         self.profile_resolver = profile_resolver or _NullProfileResolver()
         self._prompt_builder = prompt_builder
-        self._history_getter = history_getter or (lambda: [])
+        self._history_getter: Callable[[], Any] = history_getter or (lambda: [])
         self._shared_state_getter = shared_state_getter or (lambda: None)
         self._execution_mode_getter = execution_mode_getter or (lambda: None)
         self.agent_pool = agent_pool
-        self.get_selected_agents = get_selected_agents or (lambda: [])
+        self.get_selected_agents: Callable[[], Any] = get_selected_agents or (lambda: [])
         self.set_selected_agents = set_selected_agents or (lambda _agents: None)
         self.clear_screen = clear_screen or (lambda: None)
         self.prompt_owner_thread_id_getter = (

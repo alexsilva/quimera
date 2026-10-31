@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Callable, ClassVar, Iterable
+from typing import TYPE_CHECKING, Callable, ClassVar, Iterable
 
 from rich.highlighter import Highlighter
 from rich.text import Text
@@ -21,6 +21,9 @@ from textual.widgets._input import Selection
 from quimera.app.completion_dropdown import CompletionDropdown, PromptHistorySuggester
 from quimera.clipboard_support import ClipboardManager
 from quimera.ui.textual.screenshot import feed_widget_geometry
+
+if TYPE_CHECKING:
+    from textual.visual import VisualType
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +154,7 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
 
     def sync_entries(
         self,
-        entries: Iterable[tuple[int, bool, object, bool]],
+        entries: Iterable[tuple[int, bool, VisualType, bool]],
         *,
         force: bool = False,
     ) -> None:
@@ -189,7 +192,7 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
                 token for token, _, _, _ in desired[len(self._entry_tokens):]
             )
 
-    def update_entry(self, index: int, token: int, renderable: object) -> bool:
+    def update_entry(self, index: int, token: int, renderable: VisualType) -> bool:
         """Atualiza um slot existente quando a identidade ainda coincide."""
         if not 0 <= index < len(self._entry_widgets):
             return False

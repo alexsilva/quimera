@@ -56,7 +56,7 @@ def _on_tool_call(name: str, args: dict, tool_call_id: str | None = None) -> Non
 def _on_tool_result(result: ToolResult) -> None:
     """Executa on tool result."""
     status = "✓ OK" if result.ok else "✗ ERRO"
-    content = result.content or result.error or ""
+    content = result.content or str(result.error or "")
     if len(content) > 400:
         content = content[:400] + " …"
     print(f"  ◀ TOOL RESULT: {result.tool_name} [{status}]")
@@ -126,7 +126,7 @@ class DriverRepl:
         self.session_paths = SessionPaths(self.workspace)
         self._runtime_secrets = RuntimeSecrets(self.workspace)
         self._runtime_secrets.apply_to_environ()
-        self._last_connection_signature = None
+        self._last_connection_signature: tuple | None = None
         self._update_driver()
         self._input_prompt = self._resolve_input_prompt()
         self._input_gate = input_gate

@@ -176,8 +176,8 @@ class TaskExecutorPool:
         get_rate_limit_backoff_seconds: Callable[[], int] | None = None,
         get_workspace_policy: Callable[[], Any] | None = None,
         parse_response: Callable[[Any], tuple[Any, Any, Any, Any, Any]] | None = None,
-        classify_task_execution_result: Callable[..., Any] | None = None,
-        classify_task_review_result: Callable[..., Any] | None = None,
+        classify_task_execution_result: Callable[[str | None], tuple[bool, str]] | None = None,
+        classify_task_review_result: Callable[[str | None], tuple[bool, str, str]] | None = None,
         delegate: Callable[..., Any] | None = None,
         allow_delegate_fallback: bool = False,
         approval_owner_id: int | None = None,
@@ -859,23 +859,29 @@ class TaskExecutorPool:
         return TaskRepository(workspace.tasks_db, event_sink=self.get_event_sink())
 
     def _build_task_execution_service(self, failover_policy: TaskFailoverPolicy) -> TaskRunner:
+        classify = self._classify_task_execution_result
+        if classify is None:
+            raise RuntimeError("TaskExecutorPool sem classify_task_execution_result")
         return TaskRunner(
             dispatch_services=self._background_dispatch_per_call(auto_approve_task_tools=True),
             system_layer=self.get_system_layer(),
             repository=self._build_task_repository(),
             failover_policy=failover_policy,
-            classify_task_execution_result=self._classify_task_execution_result,
+            classify_task_execution_result=classify,
             was_user_cancelled=self._background_was_user_cancelled,
             task_hooks=self._build_workflow_hooks(),
         )
 
     def _build_task_review_service(self, failover_policy: TaskFailoverPolicy) -> TaskReviewer:
+        classify = self._classify_task_review_result
+        if classify is None:
+            raise RuntimeError("TaskExecutorPool sem classify_task_review_result")
         return TaskReviewer(
             dispatch_services=self._background_dispatch_per_call(),
             system_layer=self.get_system_layer(),
             repository=self._build_task_repository(),
             failover_policy=failover_policy,
-            classify_task_review_result=self._classify_task_review_result,
+            classify_task_review_result=classify,
             was_user_cancelled=self._background_was_user_cancelled,
             event_sink=self.get_event_sink(),
             task_hooks=self._build_workflow_hooks(),

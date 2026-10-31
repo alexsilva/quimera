@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, overload
 
 from . import profiles
 from .env_config import EnvConfig
@@ -69,6 +69,12 @@ class RuntimeSecrets:
         for path in self.files:
             values.update(EnvConfig(path).all())
         return values
+
+    @overload
+    def get(self, key: str, default: None = None) -> str | None: ...
+
+    @overload
+    def get(self, key: str, default: str) -> str: ...
 
     def get(self, key: str, default: str | None = None) -> str | None:
         """Retorna setting privado; ambiente explícito do processo tem precedência."""

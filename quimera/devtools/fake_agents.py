@@ -18,7 +18,7 @@ import time
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, TextIO
 
 from quimera.prompt_templates import PromptParser
 
@@ -67,8 +67,8 @@ class MCPJsonRpcClient:
         self.timeout = timeout
         self._next_id = 1
         self._sock: socket.socket | None = None
-        self._inp = None
-        self._out = None
+        self._inp: TextIO | None = None
+        self._out: TextIO | None = None
 
     def __enter__(self) -> "MCPJsonRpcClient":
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -76,10 +76,11 @@ class MCPJsonRpcClient:
         sock.connect(self.socket_path)
         self._sock = sock
         self._inp = sock.makefile("r", encoding="utf-8", errors="replace")
-        self._out = sock.makefile("w", encoding="utf-8")
+        out = sock.makefile("w", encoding="utf-8")
+        self._out = out
         if self.token:
-            self._out.write(json.dumps({"quimera_auth_token": self.token}) + "\n")
-            self._out.flush()
+            out.write(json.dumps({"quimera_auth_token": self.token}) + "\n")
+            out.flush()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

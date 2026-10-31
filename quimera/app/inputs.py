@@ -113,7 +113,7 @@ def read_user_input_with_timeout(prompt: str, timeout: int, input_fn=input):
             return None
         return line.rstrip("\r\n")
 
-    result_queue = queue.Queue()
+    result_queue: queue.Queue[str | None] = queue.Queue()
 
     def _reader():
         try:
@@ -224,21 +224,22 @@ class AppInputServices:
         return None
 
     def _start_input_reader(self, prompt: str) -> None:
-        if self._input_queue is None:
-            self._input_queue = queue.Queue()
+        input_queue = self._input_queue
+        if input_queue is None:
+            input_queue = self._input_queue = queue.Queue()
         input_fn = self.input_resolver()
 
         def _reader() -> None:
             try:
                 value = input_fn(prompt)
             except EOFError:
-                self._input_queue.put(("eof", None))
+                input_queue.put(("eof", None))
             except KeyboardInterrupt:
-                self._input_queue.put(("interrupt", None))
+                input_queue.put(("interrupt", None))
             except Exception:
-                self._input_queue.put(("error", None))
+                input_queue.put(("error", None))
             else:
-                self._input_queue.put(("line", value))
+                input_queue.put(("line", value))
 
         self._input_thread = threading.Thread(target=_reader, daemon=True)
         self._input_thread.start()

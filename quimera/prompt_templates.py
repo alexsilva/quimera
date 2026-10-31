@@ -30,6 +30,9 @@ class PromptText(str):
     Iterar o objeto devolve os blocos top-level já parseados.
     """
 
+    kind: PromptKind
+    parser: "PromptParser"
+
     def __new__(cls, text: str, kind: PromptKind | str = PromptKind.CHAT, strict: bool = True):
         rendered = str(text or "")
         parser = PromptParser(rendered, strict=strict)

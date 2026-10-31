@@ -3552,3 +3552,19 @@ def test_driver_splits_recent_conversation_independently_of_context_pruning():
     ]
     assert [m["role"] for m in rolling_messages][-4:] == ["user", "assistant", "user", "user"]
     assert rolling_messages[-1]["content"] == "do it now"
+
+
+def test_on_tool_result_prints_tool_error_message(capsys):
+    _on_tool_result(
+        ToolResult(ok=False, tool_name="shell", error=ToolValidationError("comando vazio"))
+    )
+    out = capsys.readouterr().out
+    assert "shell" in out
+    assert "comando vazio" in out
+
+
+def test_on_tool_result_keeps_printing_string_errors(capsys):
+    _on_tool_result(ToolResult(ok=False, tool_name="shell", error="exit 1"))
+    out = capsys.readouterr().out
+    assert "shell" in out
+    assert "exit 1" in out
