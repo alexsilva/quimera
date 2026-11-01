@@ -2,14 +2,18 @@
 from __future__ import annotations
 
 import asyncio
+from io import StringIO
 import random
 from unittest.mock import patch
 
 import pytest
+from rich.console import Console
+from rich.text import Text
 from textual.app import App, ComposeResult
 
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.feed_model import TextualFeedModel
+from quimera.ui.textual import renderables
 from quimera.ui.textual.renderables import _live_tail
 from quimera.ui.textual.widgets import _UnifiedFeed
 
@@ -61,6 +65,40 @@ def test_live_tail_matches_previous_output_for_deterministic_mixed_documents():
         lines = ["x" * rng.randrange(0, 5000) for _ in range(rng.randrange(1, 25))]
         text = "\n".join(lines) + ("\n" if rng.randrange(2) else "")
         assert _live_tail(text) == _reference_live_tail(text)
+
+
+@pytest.mark.parametrize("source_size", [50_000, 200_000])
+def test_live_tail_paint_never_sends_the_accumulated_document_to_rich(source_size):
+    row = renderables._build_agent_live_body("x" * source_size, None, "cyan")
+    assert isinstance(row, renderables._GutterRow)
+    live = row.content
+    assert isinstance(live, renderables._LiveTailRenderable)
+
+    console = Console(file=StringIO(), width=56, color_system=None)
+    rendered_text_lengths = []
+    original_render_lines = console.render_lines
+
+    def observe_render_lines(renderable, *args, **kwargs):
+        if isinstance(renderable, Text):
+            rendered_text_lengths.append(len(renderable.plain))
+        return original_render_lines(renderable, *args, **kwargs)
+
+    with patch.object(console, "render_lines", side_effect=observe_render_lines):
+        lines = console.render_lines(
+            live,
+            console.options.update_width(56 - renderables._GUTTER_WIDTH),
+            pad=True,
+        )
+
+    render_bound = (
+        renderables._LIVE_TAIL_LINE_LIMIT
+        * 56
+        * renderables._LIVE_TAIL_RENDER_CHAR_FACTOR
+    )
+    assert rendered_text_lengths
+    assert len(rendered_text_lengths) == 1
+    assert max(rendered_text_lengths) <= render_bound
+    assert len(lines) == renderables._LIVE_TAIL_LINE_LIMIT + 1
 
 
 def _user_event(submission_id: str, status: str, revision: int = 0) -> TextualUiEvent:

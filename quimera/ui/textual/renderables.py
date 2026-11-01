@@ -33,6 +33,7 @@ from quimera.ui.boot_status import (
     coerce_boot_status_lines,
 )
 from quimera.ui.branding import banner_gradient_text
+from quimera.ui.messages import format_duration
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.clipboard_support import ClipboardManager
 
@@ -142,6 +143,11 @@ _live_markdown_cache: dict[tuple[str, str], Markdown] = {}
 # texto integral entra no feed como mensagem final do turno.
 _LIVE_TAIL_LINE_LIMIT = 8
 _LIVE_TAIL_MAX_CHARS = 1_600
+# A janela entregue ao Rich pode ser maior que as oito linhas finais para que
+# palavras largas/combining marks e quebras próximas à borda ainda sejam
+# medidas pelo renderer. O fator é constante: o custo de cada paint continua
+# O(linhas visíveis × largura), independentemente do documento acumulado.
+_LIVE_TAIL_RENDER_CHAR_FACTOR = 4
 # splitlines reconhece mais separadores que LF. O caminho de memória limitada
 # abaixo só trata LF; documentos pequenos e os demais separadores mantêm a
 # semântica exata do splitlines (inclusive CRLF e separadores Unicode).
@@ -246,6 +252,134 @@ class _GutterRow:
                 yield Segment(" " * padding)
             yield from line
             yield Segment.line()
+
+
+class _LiveTailRenderable:
+    """Limita pensamento vivo pela altura visual na largura de renderização."""
+
+    def __init__(
+        self,
+        text: str,
+        text_style: str,
+        head,
+        body,
+        marker: str,
+        marker_style: str,
+        hidden_logical_lines: int = 0,
+        hidden_prefix_cells: int = 0,
+    ) -> None:
+        self.text = text
+        self.text_style = text_style
+        self.head = head
+        self.body = body
+        self.marker = marker
+        self.marker_style = marker_style
+        self.hidden_logical_lines = max(hidden_logical_lines, 0)
+        self.hidden_prefix_cells = max(hidden_prefix_cells, 0)
+        self.text_cells = cell_len(text)
+
+    @staticmethod
+    def _emit_lines(lines):
+        for line in lines:
+            yield from line
+            yield Segment.line()
+
+    def _plain_head_fits(self, width: int) -> bool:
+        """Decide o caminho curto sem pedir ao Rich que meça texto excessivo."""
+        if len(self.text) > _LIVE_TAIL_LINE_LIMIT * width:
+            return False
+        visual_lines = 0
+        for index, line in enumerate(self.text.splitlines() or [""]):
+            line_cells = cell_len(line)
+            if index == 0:
+                line_cells += cell_len(self.marker) + 1
+            visual_lines += max((line_cells + width - 1) // width, 1)
+            if visual_lines > _LIVE_TAIL_LINE_LIMIT:
+                return False
+        return True
+
+    def _emit_body_lines(self, console, lines):
+        marker_width = cell_len(self.marker) + 1
+        marker_style = console.get_style(self.marker_style)
+        for index, line in enumerate(lines):
+            glyph = self.marker if index == 0 else ""
+            if glyph:
+                yield Segment(glyph, marker_style)
+            padding = marker_width - cell_len(glyph)
+            if padding > 0:
+                yield Segment(" " * padding)
+            yield from line
+            yield Segment.line()
+
+    def __rich_console__(self, console, options):
+        marker_width = cell_len(self.marker) + 1
+        content_width = max(options.max_width - marker_width, 1)
+        char_limit = (
+            _LIVE_TAIL_LINE_LIMIT
+            * content_width
+            * _LIVE_TAIL_RENDER_CHAR_FACTOR
+        )
+
+        # Conteúdo plano que comprovadamente cabe segue pelo head original uma
+        # única vez. Markdown curto também preserva o renderable original; os
+        # demais casos usam o body uma vez, sem a antiga medição integral dupla.
+        is_markdown = isinstance(self.body, Markdown)
+        markdown_head_is_short = (
+            is_markdown
+            and len(self.text) <= options.max_width
+            and self.text.count("\n") < _LIVE_TAIL_LINE_LIMIT
+        )
+        no_prefix_hidden = not (
+            self.hidden_logical_lines or self.hidden_prefix_cells
+        )
+        if no_prefix_hidden and len(self.text) <= char_limit and (
+            markdown_head_is_short
+            or (not is_markdown and self._plain_head_fits(options.max_width))
+        ):
+            head_lines = console.render_lines(self.head, options, pad=True)
+            if len(head_lines) <= _LIVE_TAIL_LINE_LIMIT:
+                yield from self._emit_lines(head_lines)
+                return
+            # Salvaguarda para expansões próprias do Markdown (por exemplo,
+            # espaçamento de blocos): reutiliza a medição já feita, sem cair
+            # numa segunda renderização do mesmo conteúdo.
+            yield Segment(
+                f"⋮ +{len(head_lines) - _LIVE_TAIL_LINE_LIMIT} linhas anteriores",
+                console.get_style("dim"),
+            )
+            yield Segment.line()
+            yield from self._emit_lines(head_lines[-_LIVE_TAIL_LINE_LIMIT:])
+            return
+
+        window = self.text[-char_limit:]
+        window_cells = cell_len(window)
+        window_hidden_cells = max(self.text_cells - window_cells, 0)
+        if window == self.text:
+            body = self.body
+        else:
+            # Uma janela cortada pode iniciar no meio de Markdown; texto plano
+            # evita interpretar um fragmento sintaticamente incompleto.
+            body = Text(window, style=self.text_style, no_wrap=False, overflow="fold")
+        lines = console.render_lines(
+            body, options.update_width(content_width), pad=True
+        )
+
+        # O prefixo de _live_tail conta linhas lógicas completas. Overflow da
+        # cauda é contado em linhas visuais; prefixos cortados dentro de uma
+        # linha são estimados pelas células na largura atual. A janela adicional
+        # segue a mesma estimativa, sem nunca ser entregue ao renderer.
+        hidden = self.hidden_logical_lines
+        hidden += (self.hidden_prefix_cells + content_width - 1) // content_width
+        hidden += (window_hidden_cells + content_width - 1) // content_width
+        hidden += max(len(lines) - _LIVE_TAIL_LINE_LIMIT, 0)
+        if hidden:
+            yield Segment(
+                f"⋮ +{hidden} linhas anteriores",
+                console.get_style("dim"),
+            )
+            yield Segment.line()
+            lines = lines[-_LIVE_TAIL_LINE_LIMIT:]
+        yield from self._emit_body_lines(console, lines)
 
 
 def _gutter_row(
@@ -365,33 +499,64 @@ def _build_agent_live_body(
     marker_style = f"dim {style}"
     text_style = "" if answer else "italic"
     text = str(content or "").strip()
-    hidden_label = ""
-    if text and thinking:
-        text, hidden_label = _live_tail(text)
     if text:
-        # Cauda truncada não passa por markdown: o documento parcial pode
-        # começar no meio de um bloco e renderizar artefatos.
-        markdown_body = _live_markdown(text, text_style) if thinking and not hidden_label else None
+        # Documentos já truncados pelo limite lógico não habilitam Markdown:
+        # a cauda visual pode começar no meio de um bloco da sintaxe.
+        tail, hidden_label = _live_tail(text) if thinking else (text, "")
+        live_text = tail if hidden_label else text
+        hidden_match = re.search(r"\+(\d+)", hidden_label)
+        hidden_logical_lines = int(hidden_match.group(1)) if hidden_match else 0
+        hidden_prefix_cells = 0
+        if hidden_label and hidden_match is None:
+            # _live_tail cortou dentro de uma única linha lógica. O custo
+            # desse prefixo é pago uma vez ao receber o chunk, não a cada paint.
+            hidden_prefix_cells = max(cell_len(text) - cell_len(live_text), 1)
+        elif hidden_label and len(live_text) == _LIVE_TAIL_MAX_CHARS:
+            end = len(text) - int(text.endswith("\n"))
+            start = end - len(live_text)
+            if (
+                start > 0
+                and text.endswith(live_text, 0, end)
+                and text[start - 1] != "\n"
+            ):
+                # Linhas completas já estão no rótulo; um prefixo parcial
+                # adicional é contado como uma linha lógica oculta.
+                hidden_logical_lines += 1
+        markdown_body = (
+            _live_markdown(live_text, text_style)
+            if thinking and not hidden_label
+            else None
+        )
+        live_body: Any
         if markdown_body is not None:
             # Gutter interno sem continuação: a guia contínua das linhas de
             # continuação vem do gutter externo, na coluna da guia do bloco.
             head = _gutter_row(_thinking_pulse_marker(), f"bold {style}", markdown_body)
+            live_body = markdown_body
         else:
             head = Text(no_wrap=False, overflow="fold")
             if thinking:
                 head.append(f"{_thinking_pulse_marker()} ", style=f"bold {style}")
-                head.append(text, style=text_style)
+                head.append(live_text, style=text_style)
+                live_body = Text(
+                    live_text,
+                    style=text_style,
+                    no_wrap=False,
+                    overflow="fold",
+                )
             else:
                 head.append("· ", style="dim")
                 head.append(text, style="dim")
-        if hidden_label:
-            parts.append(
-                _gutter_row(
-                    marker,
-                    marker_style,
-                    Text(hidden_label, style="dim"),
-                    continuation=marker,
-                )
+        if thinking:
+            head = _LiveTailRenderable(
+                live_text,
+                text_style,
+                head,
+                live_body,
+                _thinking_pulse_marker(),
+                f"bold {style}",
+                hidden_logical_lines,
+                hidden_prefix_cells,
             )
         parts.append(_gutter_row(marker, marker_style, head, continuation=marker))
     tools_renderable = _build_tools_renderable(tools, style, guide=guide)
@@ -482,6 +647,21 @@ def _build_agent_activity_renderable(payload, agent: str | None = None):
     return _gutter_row(icon, icon_style, line)
 
 
+def _tool_outcome_parts(total: int, ok_count: int, err_count: int) -> list[tuple[str, str]]:
+    """Contagens de desfecho exibidas após "N ferramentas", com o estilo de cada uma.
+
+    "N falhas" só aparece com falha. "N concluídas" só informa algo quando há
+    tools sem desfecho (nem ok nem falha); com tudo contabilizado, repetiria o
+    total ou o total menos falhas.
+    """
+    parts: list[tuple[str, str]] = []
+    if err_count:
+        parts.append((f"{err_count} falha{'s' if err_count != 1 else ''}", "yellow"))
+    if ok_count and ok_count + err_count != total:
+        parts.append((f"{ok_count} concluída{'s' if ok_count != 1 else ''}", "green"))
+    return parts
+
+
 def _build_turn_summary_renderable(payload, agent: str | None = None):
     """Monta resumo contextualizado das ferramentas usadas no turno."""
     if not isinstance(payload, dict):
@@ -496,15 +676,15 @@ def _build_turn_summary_renderable(payload, agent: str | None = None):
 
     line = Text(no_wrap=False, overflow="fold")
     line.append(f"{total} {noun}", style="dim")
-    line.append(f" · {ok_count} concluída{'s' if ok_count != 1 else ''}", style="green")
-    if err_count:
-        line.append(f" · {err_count} falha{'s' if err_count != 1 else ''}", style="yellow")
+    for part, style in _tool_outcome_parts(total, ok_count, err_count):
+        line.append(f" · {part}", style=style)
     category_labels = (
         ("inspection", "inspeção", "inspeções"),
         ("modification", "alteração", "alterações"),
         ("validation", "validação", "validações"),
         ("version_control", "versionamento", "versionamentos"),
         ("research", "pesquisa", "pesquisas"),
+        ("delegation", "delegação", "delegações"),
         ("execution", "execução", "execuções"),
     )
     for category, singular, plural in category_labels:
@@ -932,13 +1112,10 @@ def _render_event(event: TextualUiEvent):
             if tool_total:
                 noun = "ferramenta" if tool_total == 1 else "ferramentas"
                 summary = f"{tool_total} {noun}"
-                if tool_ok_count:
-                    summary += f" · {tool_ok_count} concluída{'s' if tool_ok_count != 1 else ''}"
-                if tool_err_count:
-                    summary += f" · {tool_err_count} falha{'s' if tool_err_count != 1 else ''}"
+                for part, _style in _tool_outcome_parts(tool_total, tool_ok_count, tool_err_count):
+                    summary += f" · {part}"
                 if duration_ms:
-                    duration = f"{duration_ms}ms" if duration_ms < 1000 else f"{duration_ms / 1000:.1f}s"
-                    summary += f" · {duration}"
+                    summary += f" · {format_duration(duration_ms)}"
             return _build_stream_renderable(
                 theme_name,
                 label,

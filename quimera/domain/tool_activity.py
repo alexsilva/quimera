@@ -14,6 +14,7 @@ class ToolActivityCategory(str, Enum):
     VALIDATION = "validation"
     VERSION_CONTROL = "version_control"
     RESEARCH = "research"
+    DELEGATION = "delegation"
     EXECUTION = "execution"
 
 
@@ -29,6 +30,11 @@ VERSION_CONTROL_TOOLS = frozenset({
 RESEARCH_TOOLS = frozenset({
     "web_search", "web_fetch", "browser_start", "browser_open",
     "browser_click", "browser_screenshot",
+})
+# Tools que põem trabalho em movimento em outros agentes. workflows_create fica
+# de fora: só publica a definição, sem disparar execução.
+DELEGATION_TOOLS = frozenset({
+    "tasks_delegate", "tasks_create", "workflows_start", "workflows_replan",
 })
 COMMAND_TOOLS = frozenset({"exec_command", "run_shell", "exec_session", "run_command", "shell"})
 VALIDATION_EXECUTABLES = frozenset({
@@ -134,6 +140,8 @@ def classify_tool_activity(
         return ToolActivityCategory.VERSION_CONTROL
     if normalized in RESEARCH_TOOLS:
         return ToolActivityCategory.RESEARCH
+    if normalized in DELEGATION_TOOLS:
+        return ToolActivityCategory.DELEGATION
     if normalized in COMMAND_TOOLS:
         command = input_payload.get("cmd") if isinstance(input_payload, Mapping) else None
         return classify_command_activity(command)

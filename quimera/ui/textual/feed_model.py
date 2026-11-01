@@ -9,17 +9,19 @@ from __future__ import annotations
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from enum import Enum
+from itertools import count
 from typing import Any, Callable, ClassVar
 
 from quimera.app.submission_tracker import TERMINAL_SUBMISSION_STATUSES
 from quimera.ui.commands import USER_ROLE
-from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
+from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE, format_duration
 from quimera.ui.text import strip_ansi
 from quimera.ui.textual.events import TextualUiEvent
 
 _logger = logging.getLogger(__name__)
+_feed_item_sequences = count(1)
 
 
 class AgentLifecycleStatus(str, Enum):
@@ -85,6 +87,7 @@ class TextualFeedItem:
 
     event: TextualUiEvent
     transient: bool = False
+    seq: int = dataclass_field(default_factory=_feed_item_sequences.__next__)
 
 
 @dataclass(frozen=True)
@@ -1091,7 +1094,8 @@ class TextualFeedModel:
         ]
         if not matched:
             return None, False
-        totals = {"total": 0, "ok_count": 0, "err_count": 0, "duration_ms": 0}
+        totals = {"total": 0, "ok_count": 0, "err_count": 0}
+        windows: list[tuple[int, int]] = []
         has_stats = False
         for key in matched:
             stats = self._mcp_http_tool_stats_by_agent.get(key)
@@ -1100,6 +1104,15 @@ class TextualFeedModel:
             has_stats = True
             for field in totals:
                 totals[field] += int(stats.get(field) or 0)
+            if "started_ms" in stats and "finished_ms" in stats:
+                windows.append((stats["started_ms"], stats["finished_ms"]))
+        # Bursts do mesmo agente rodam em paralelo: a duração é a janela que
+        # cobre todos, não a soma das janelas.
+        totals["duration_ms"] = (
+            max(end for _, end in windows) - min(start for start, _ in windows)
+            if windows
+            else 0
+        )
         removable = [key for key in matched if key != exclude_key]
         removed = self._remove_transient_keys(removable) if removable else False
         if exclude_key in matched:
@@ -1123,12 +1136,7 @@ class TextualFeedModel:
         if not burst_stats or not int(burst_stats.get("total") or 0):
             return None
         duration_ms = int(burst_stats.get("duration_ms") or 0)
-        if duration_ms <= 0:
-            duration = ""
-        elif duration_ms < 1000:
-            duration = f"{duration_ms}ms"
-        else:
-            duration = f"{duration_ms / 1000:.1f}s"
+        duration = format_duration(duration_ms) if duration_ms > 0 else ""
         return {
             "total": int(burst_stats.get("total") or 0),
             "ok_count": int(burst_stats.get("ok_count") or 0),
@@ -1314,9 +1322,21 @@ class TextualFeedModel:
             stats["ok_count"] += 1
         else:
             stats["err_count"] += 1
+        # Duração do burst é wall-clock (primeiro início → última conclusão),
+        # não a soma: delegações bloqueantes sobrepostas somadas inflavam o
+        # rodapé. O início da tool é o mais cedo entre a preview vista e
+        # conclusão − duration_ms do servidor, pois a preview pode chegar
+        # atrasada ou nem existir.
+        finished_ms = round(now * 1000)
         duration_ms = payload.get("duration_ms")
-        if isinstance(duration_ms, int) and duration_ms >= 0:
-            stats["duration_ms"] += duration_ms
+        tool_ms = duration_ms if isinstance(duration_ms, int) and duration_ms >= 0 else 0
+        started_ms = finished_ms - tool_ms
+        seen_at = self._tool_request_seen_at_by_agent.get(agent, {}).get(request_id) if request_id else None
+        if seen_at is not None:
+            started_ms = min(started_ms, round(seen_at * 1000))
+        stats["started_ms"] = min(stats.get("started_ms", started_ms), started_ms)
+        stats["finished_ms"] = max(stats.get("finished_ms", finished_ms), finished_ms)
+        stats["duration_ms"] = stats["finished_ms"] - stats["started_ms"]
 
         transient_index = self._transient_index_by_agent.get(agent)
         if transient_index is not None and 0 <= transient_index < len(self._items):

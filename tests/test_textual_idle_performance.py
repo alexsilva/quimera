@@ -252,8 +252,8 @@ def test_pulse_keeps_running_for_active_submission_and_rerenders_its_slot(termin
     # A esfera e o elapsed vêm da re-renderização do próprio slot a cada pulso.
     index, item = app._feed_model.active_submission_items()[0]
     assert widgets["#feed"].update_entry.call_count == 2
-    assert widgets["#feed"].update_entry.call_args.args[:2] == (index, id(item.event))
-    assert app._feed_renderable_cache[id(item.event)] is widgets["#feed"].update_entry.call_args.args[2]
+    assert widgets["#feed"].update_entry.call_args.args[:2] == (index, item.seq)
+    assert app._feed_renderable_cache[item.seq] is widgets["#feed"].update_entry.call_args.args[2]
 
     bridge.emit(
         TextualUiEvent(

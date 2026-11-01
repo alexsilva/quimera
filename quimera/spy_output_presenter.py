@@ -45,7 +45,10 @@ class SpyOutputPresenter:
         self._tool_seq = 0
         self.turn_id = f"turn_{self._turn_seq:04d}"
         self.turn_runtime = ""
-        self.turn_started_at = 0.0
+        # O client chama reset() ao iniciar cada execução, então este é o
+        # início do turno. Monotônico: o rodapé mede wall-clock, imune a
+        # ajuste de relógio e a tools sobrepostas.
+        self.turn_started_at = time.monotonic()
         self.turn_tools = []
         self._active_tool_calls = {}
 
@@ -389,6 +392,7 @@ class SpyOutputPresenter:
             "trace_id": self._trace_id(),
             "runtime": self.turn_runtime,
             "tools": tools,
+            "elapsed_ms": int(max(time.monotonic() - self.turn_started_at, 0) * 1000),
         }
 
     def _trace_id(self) -> str:

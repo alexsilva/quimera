@@ -69,12 +69,36 @@ def format_error_message(
 
 
 def format_duration(duration_ms: int | None) -> str:
-    """Formata duração em ms para exibição compacta (``850ms`` / ``2.3s``)."""
+    """Formata duração em ms para exibição compacta (``850ms``/``2.3s``/``2m51s``/``1h05m``)."""
     if not isinstance(duration_ms, int) or duration_ms < 0:
         return "n/a"
     if duration_ms < 1000:
         return f"{duration_ms}ms"
-    return f"{duration_ms / 1000:.1f}s"
+    # A faixa é decidida pelo valor já arredondado: 59.950s viraria "60.0s"
+    # e 3599.5s viraria "60m00s" se a escolha olhasse o valor bruto.
+    # Arredondamento meio-para-cima em inteiros (``round`` é bancário).
+    tenths = (duration_ms + 50) // 100
+    if tenths < 600:
+        return f"{tenths / 10:.1f}s"
+    total_seconds = (duration_ms + 500) // 1000
+    if total_seconds < 3600:
+        minutes, seconds = divmod(total_seconds, 60)
+        return f"{minutes}m{seconds:02d}s"
+    hours, remainder = divmod(total_seconds, 3600)
+    return f"{hours}h{remainder // 60:02d}m"
+
+
+def resolve_turn_duration_ms(detail: object, summed_ms: int) -> int:
+    """Duração do turno: o wall-clock do presenter vence a soma por tool.
+
+    A soma de ``duration_ms`` conta duas vezes tools sobrepostas (delegações
+    bloqueantes em paralelo), então só serve quando o turno não trouxe
+    ``elapsed_ms``.
+    """
+    elapsed_ms = detail.get("elapsed_ms") if isinstance(detail, dict) else None
+    if isinstance(elapsed_ms, int) and elapsed_ms > 0:
+        return elapsed_ms
+    return summed_ms
 
 
 def format_turn_summary_lines(detail: dict) -> list[str]:
@@ -97,5 +121,5 @@ def format_turn_summary_lines(detail: dict) -> list[str]:
         duration_ms = tool.get("duration_ms")
         if isinstance(duration_ms, int) and duration_ms >= 0:
             total_ms += duration_ms
-    total_duration = format_duration(total_ms)
+    total_duration = format_duration(resolve_turn_duration_ms(detail, total_ms))
     return [f"TOOLS: {total} chamadas · {ok_count} ok · {err_count} erro · {total_duration}"]

@@ -31,6 +31,7 @@ from quimera.ui.textual.terminal_modes import _external_textual_window
 from quimera.domain.agent_run_scope import current_agent_run_scope
 from quimera.domain.execution import ExecutionControlEvent
 from quimera.domain.tool_activity import count_tool_activities
+from quimera.ui.messages import format_duration, resolve_turn_duration_ms
 
 _logger = logging.getLogger(__name__)
 
@@ -664,17 +665,16 @@ class TextualRenderer(RendererBase):
                 total_ms += duration_ms
         if total <= 0:
             return
-        duration = f"{total_ms}ms" if total_ms < 1000 else f"{total_ms / 1000:.1f}s"
-        payload = self._agent_event_payload(
-            agent,
-            {
-                "total": total,
-                "ok_count": ok_count,
-                "err_count": err_count,
-                "duration": duration,
-                "activity_counts": count_tool_activities(tools),
-            },
-        )
+        duration_ms = resolve_turn_duration_ms(detail, total_ms)
+        summary: dict[str, Any] = {
+            "total": total,
+            "ok_count": ok_count,
+            "err_count": err_count,
+            "duration": format_duration(duration_ms),
+            "duration_ms": duration_ms,
+            "activity_counts": count_tool_activities(tools),
+        }
+        payload = self._agent_event_payload(agent, summary)
         self._bridge.emit(TextualUiEvent("turn_summary", payload, agent=agent))
 
     def show_delegation(self, from_agent, to_agent, task=None, *, delegation_id=None, chain=None) -> None:

@@ -1576,13 +1576,17 @@ def test_textual_feed_http_mcp_tracks_and_projects_live_summary():
     assert payload["tool_total"] == 2
     assert payload["tool_ok_count"] == 1
     assert payload["tool_err_count"] == 1
-    assert payload["tool_duration_ms"] == 50
+    # Wall-clock do burst: as duas concluem em t=10.0 e a mais longa começou
+    # 30ms antes; a soma (50ms) contaria a sobreposição duas vezes.
+    assert payload["tool_duration_ms"] == 30
     agent_key = next(iter(model._mcp_http_tool_stats_by_agent))
     assert model._mcp_http_tool_stats_by_agent[agent_key] == {
         "total": 2,
         "ok_count": 1,
         "err_count": 1,
-        "duration_ms": 50,
+        "started_ms": 9970,
+        "finished_ms": 10000,
+        "duration_ms": 30,
     }
 
     assert not model.apply(TextualUiEvent(
@@ -1779,7 +1783,8 @@ def test_textual_render_event_groups_mcp_http_identity_tools_and_summary():
 
     assert "☁ 🤖  mcp-http" in output
     assert "git_status" in output
-    assert "3 ferramentas · 3 concluídas · 1.2s" in output
+    assert "3 ferramentas · 1.2s" in output
+    assert "concluída" not in output
 
 
 def test_textual_render_event_agent_message_includes_turn_summary_footer():
@@ -1805,7 +1810,8 @@ def test_textual_render_event_agent_message_includes_turn_summary_footer():
     output = console.export_text()
 
     assert "Resposta final." in output
-    assert "5 ferramentas · 4 concluídas · 1 falha · 12.3s" in output
+    assert "5 ferramentas · 1 falha · 12.3s" in output
+    assert "concluída" not in output
 
 
 def _find_markdown(node):
@@ -1816,6 +1822,8 @@ def _find_markdown(node):
         return node
     if isinstance(node, renderables._GutterRow):
         return _find_markdown(node.content)
+    if isinstance(node, renderables._LiveTailRenderable):
+        return _find_markdown(node.head)
     if isinstance(node, Table):
         for column in node.columns:
             for cell in column._cells:
@@ -3185,7 +3193,8 @@ def test_textual_render_event_contextualizes_agent_activity_and_tools():
     output = console.export_text()
 
     assert "OpenCode · sem resposta · tentativa 1/2" in output
-    assert "3 ferramentas · 2 concluídas · 1 falha" in output
+    assert "3 ferramentas · 1 falha · 1 inspeção" in output
+    assert "concluída" not in output
     assert "1 inspeção · 1 alteração · 1 validação · 1.2s" in output
     assert "OpenCode · 3 ferramentas" not in output
     assert "TOOLS:" not in output
@@ -6597,7 +6606,7 @@ def test_textual_unified_feed_keeps_boot_slots_mounted_when_chat_is_cleared():
 
     def entries():
         return [
-            (id(item.event), item.transient, _render_event(item.event), bool(item.event.compact))
+            (item.seq, item.transient, _render_event(item.event), bool(item.event.compact))
             for item in model.items
         ]
 
@@ -6616,7 +6625,7 @@ def test_textual_unified_feed_keeps_boot_slots_mounted_when_chat_is_cleared():
 
             assert list(feed.children) == boot_slots
             assert all(slot.is_attached for slot in boot_slots)
-            assert feed._entry_tokens == [id(item.event) for item in model.items]
+            assert feed._entry_tokens == [item.seq for item in model.items]
 
             model.apply(TextualUiEvent("user_message", {"content": "de novo"}))
             feed.sync_entries(entries())
@@ -6763,7 +6772,7 @@ def test_textual_unified_feed_slots_follow_the_model_when_a_late_boot_line_enter
 
     def entries():
         return [
-            (id(item.event), item.transient, _render_event(item.event), bool(item.event.compact))
+            (item.seq, item.transient, _render_event(item.event), bool(item.event.compact))
             for item in model.items
         ]
 
@@ -6786,7 +6795,7 @@ def test_textual_unified_feed_slots_follow_the_model_when_a_late_boot_line_enter
                 "user_message", "agent_message",
             ]
             assert len(feed.children) == 8
-            assert feed._entry_tokens == [id(item.event) for item in model.items]
+            assert feed._entry_tokens == [item.seq for item in model.items]
             assert [slot.has_class("-compact") for slot in feed.children] == [
                 True, True, True, True, True, True, False, False,
             ]
@@ -6829,7 +6838,7 @@ def _textual_app_with_mock_widgets(bridge: TextualUiBridge):
 
 def _synced_kinds(app, feed) -> list[str]:
     tokens = [entry[0] for entry in feed.sync_entries.call_args.args[0]]
-    by_token = {id(item.event): item.event.kind for item in app._feed_model.items}
+    by_token = {item.seq: item.event.kind for item in app._feed_model.items}
     return [by_token[token] for token in tokens]
 
 
@@ -6849,7 +6858,7 @@ def test_textual_app_clear_event_keeps_boot_header_and_clears_chat():
     assert len(_synced_kinds(app, feed)) > 5
     assert app._active_tool_previews
     cached_boot_renderables = [
-        app._feed_renderable_cache[id(item.event)] for item in app._feed_model.boot_items()
+        app._feed_renderable_cache[item.seq] for item in app._feed_model.boot_items()
     ]
 
     bridge.emit(TextualUiEvent("clear"))
@@ -6862,9 +6871,9 @@ def test_textual_app_clear_event_keeps_boot_header_and_clears_chat():
     assert app.active_agent is None
     # O cabeçalho não é re-renderizado: os renderables em cache continuam os mesmos.
     assert [
-        app._feed_renderable_cache[id(item.event)] for item in app._feed_model.boot_items()
+        app._feed_renderable_cache[item.seq] for item in app._feed_model.boot_items()
     ] == cached_boot_renderables
-    assert set(app._feed_renderable_cache) == {id(item.event) for item in app._feed_model.items}
+    assert set(app._feed_renderable_cache) == {item.seq for item in app._feed_model.items}
     app.refresh.assert_called_with(layout=True)
 
     # O bloco MCP segue atualizável no lugar e o chat novo entra abaixo do cabeçalho.

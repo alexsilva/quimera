@@ -797,7 +797,7 @@ class QuimeraTextualApp(App):
         entries: list[tuple[int, bool, VisualType, bool]] = []
         active_tokens: set[int] = set()
         for item in self._feed_model.items:
-            token = id(item.event)
+            token = item.seq
             active_tokens.add(token)
             renderable = self._feed_renderable_cache.get(token)
             if force or item.transient or renderable is None:
@@ -834,7 +834,7 @@ class QuimeraTextualApp(App):
         """Atualiza somente slots transitórios quando apenas o pulso mudou."""
         feed = self.query_one("#feed", _UnifiedFeed)
         for index, item in self._feed_model.transient_items():
-            token = id(item.event)
+            token = item.seq
             renderable = _render_event(item.event)
             if renderable is None or not feed.update_entry(index, token, renderable):
                 self._sync_feed()
@@ -845,7 +845,7 @@ class QuimeraTextualApp(App):
         """Re-renderiza turnos humanos com submissão ativa para a esfera pulsar."""
         feed = self.query_one("#feed", _UnifiedFeed)
         for index, item in slots:
-            token = id(item.event)
+            token = item.seq
             renderable = _render_event(item.event)
             if renderable is None or not feed.update_entry(index, token, renderable):
                 self._sync_feed()
