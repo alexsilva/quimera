@@ -526,10 +526,9 @@ class _ToolLineRenderable:
         return prefix
 
     def _body_parts(self) -> list[tuple[str, str]]:
+        # O corpo é sempre o que foi executado; o ``title`` (``description``
+        # do Bash) é complemento e só aparece, esmaecido, no modo expandido.
         entry = self.entry
-        title = str(entry.get("title") or "")
-        if title:
-            return [(title, "")]
         verb = str(entry.get("verb") or "")
         subject = str(entry.get("subject") or "")
         if verb and subject:
@@ -590,16 +589,14 @@ class _ToolLineRenderable:
         line.truncate(width, overflow="ellipsis")
         return line
 
-    def _expanded_lines(self) -> tuple[Text, list[Text]]:
+    def _expanded_lines(self) -> tuple[Text, Text | None, list[Text]]:
         entry = self.entry
         head = Text(no_wrap=False, overflow="fold")
         for text, part_style in self._body_parts():
             head.append(text, style=part_style)
         extras: list[Text] = []
-        title = str(entry.get("title") or "")
-        subject = str(entry.get("subject") or "")
-        if title and subject:
-            extras.append(Text(subject, style="dim"))
+        title_text = str(entry.get("title") or "")
+        title = Text(title_text, style="dim italic") if title_text else None
         tail = str(entry.get("tail") or "")
         if tail:
             extras.append(Text(tail, style=self._tail_style()))
@@ -617,7 +614,7 @@ class _ToolLineRenderable:
         omitted = len(preview) - _TOOL_PREVIEW_LINE_LIMIT
         if omitted > 0:
             extras.append(Text(f"⋮ +{omitted} linhas", style=f"dim {self.style}"))
-        return head, extras
+        return head, title, extras
 
     def __rich_console__(self, console, options):
         width = max(options.max_width, 1)
@@ -627,14 +624,11 @@ class _ToolLineRenderable:
         prefix = self._prefix()
         indent = min(prefix.cell_len, max(width - 1, 0))
         inner = options.update_width(max(width - indent, 1))
-        head, extras = self._expanded_lines()
+        head, title, extras = self._expanded_lines()
         inner_width = inner.max_width
-        # Título é prosa e quebra por palavra; verbo + assunto é caminho ou
-        # comando e dobra por célula, sem deixar o verbo sozinho na linha.
-        if self.entry.get("title"):
-            head_lines = list(head.wrap(console, inner_width))
-        else:
-            head_lines = _fold_cells(head, inner_width)
+        # Verbo + assunto é caminho ou comando e dobra por célula, sem deixar
+        # o verbo sozinho na linha.
+        head_lines = _fold_cells(head, inner_width)
         # A duração é um token só: vai inteira ao fim da última linha ou,
         # se não couber, sozinha na linha seguinte.
         duration = self._duration_suffix()
@@ -653,11 +647,14 @@ class _ToolLineRenderable:
             # sozinho o descartaria.
             yield from Text().join([line]).render(console)
             yield Segment.line()
+        # A descrição é prosa e quebra por palavra; o resto dobra por célula.
+        rows = list(title.wrap(console, inner_width)) if title is not None else []
         for extra in extras:
-            for line in _fold_cells(extra, inner_width):
-                yield Segment(" " * indent)
-                yield from Text().join([line]).render(console)
-                yield Segment.line()
+            rows.extend(_fold_cells(extra, inner_width))
+        for line in rows:
+            yield Segment(" " * indent)
+            yield from Text().join([line]).render(console)
+            yield Segment.line()
 
 
 def _legacy_tool_rows(text: str, marker: str, marker_style: str, style: str, *, expanded: bool) -> list:

@@ -38,7 +38,7 @@ from quimera.ui.textual.cell_widths import EMOJI_NARROW_VERSION
     ("line", "expected"),
     [
         (build_tool_line("Bash", {"command": "grep -n tool x.py", "description": "Locate tool code"}),
-         "⌕ Locate tool code"),
+         "⌕ grep -n tool x.py"),
         (build_tool_line("Bash", {"command": "/bin/bash -lc 'pytest tests/x.py'"},
                          status="error", exit_code=1, duration_ms=12400),
          "✗ ⚙ pytest tests/x.py · 12.4s · exit 1"),

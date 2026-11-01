@@ -105,7 +105,7 @@ class ToolLine:
         if mark:
             parts.append(mark)
         parts.append(CATEGORY_GLYPHS.get(self.category, CATEGORY_GLYPHS[ToolActivityCategory.EXECUTION.value]))
-        body = self.title or f"{self.verb} {self.subject}".strip() or self.tool
+        body = f"{self.verb} {self.subject}".strip() or self.tool
         if body:
             parts.append(body)
         text = " ".join(parts)
@@ -206,8 +206,9 @@ def build_tool_line(
     tool = normalize_tool_name(tool_name)
     category = classify_tool_activity(tool_name, args, explicit=explicit_category)
     verb, subject = _verb_and_subject(tool, args)
-    # O Bash do Claude Code manda a intenção em ``description``; nas demais
-    # famílias ``description`` é o próprio assunto (ex.: Task) e não vira título.
+    # O Bash do Claude Code manda a intenção em ``description``: vira ``title``,
+    # complemento do comando (que segue sendo o corpo). Nas demais famílias
+    # ``description`` é o próprio assunto (ex.: Task) e não vira título.
     if description is None and tool in COMMAND_TOOLS:
         description = args.get("description")
     return ToolLine(

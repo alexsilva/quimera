@@ -382,7 +382,7 @@ def test_status_and_category_glyph_styles():
     assert styles(running) == [("◇ ", "dim"), ("· ", "dim"), ("⌕ ", "bold blue")]
 
 
-def test_expanded_line_shows_title_subject_tail_and_colored_diff_with_hanging_indent():
+def test_expanded_line_shows_command_title_tail_and_colored_diff_with_hanging_indent():
     entry = _payload(
         "Bash",
         {"command": "grep -n tool quimera/ui/textual/renderables.py | head -80 && wc -l x.py",
@@ -394,10 +394,12 @@ def test_expanded_line_shows_title_subject_tail_and_colored_diff_with_hanging_in
 
     lines = _render(renderable, 40)
 
-    assert lines[0] == "✗ ⌕ Locate the tool rendering code in"
+    # O comando é o corpo; a descrição é complemento abaixo, quebrada por palavra.
+    assert lines[0] == "✗ ⌕ grep -n tool quimera/ui/textual/rend"
     # Continuação dobrada na coluna do corpo, nunca na do glifo.
-    assert lines[1] == "    the feed renderables module · 300ms"
-    assert lines[2].startswith("    grep -n tool quimera/ui/")
+    assert lines[1] == "    erables.py | head -80 && wc -l x.py"
+    assert lines[2] == "    · 300ms"
+    assert lines[3:5] == ["    Locate the tool rendering code in", "    the feed renderables module"]
     assert "    grep: x.py: No such file" in lines
     assert lines[-4:] == ["    @@ -1 +1 @@", "    -velho", "    +novo", "     contexto"]
 
@@ -467,9 +469,9 @@ def test_final_expanded_renders_full_entries_and_collapsed_hides_them():
         _render_event(TextualUiEvent("agent_message", {**payload, "tools_expanded": True}, agent="claude")), 60
     ))
 
-    assert "Roda os testes" not in collapsed
-    assert "✓ ⚙ Roda os testes · 300ms" in expanded
-    assert "    pytest -q" in expanded
+    assert "pytest -q" not in collapsed
+    assert "✓ ⚙ pytest -q · 300ms" in expanded
+    assert "    Roda os testes" in expanded
 
 
 # --- evidência visual (Pilot, 80x24) ---------------------------------------------
@@ -534,7 +536,8 @@ def test_tool_lines_visual_evidence_80x24():
     (out_dir / "tool_lines_after_live.txt").write_text(live + "\n", encoding="utf-8")
     (out_dir / "tool_lines_after_final.txt").write_text(final + "\n", encoding="utf-8")
 
-    assert "✓ ⌕ Locate tool rendering code · 300ms" in live
+    assert "✓ ⌕ grep -n tool quimera/ui/textual/renderables.py | head -80 · 300ms" in live
+    assert "Locate tool rendering code" not in live
     assert "✗ ⚙ pytest -q tests/test_textual_ui.py · 12.4s · 2 failed" in live
     assert "renderables_module.py" in live and "…" in live
     assert "· ⇄ delegar codex · Revise o módulo de renderables" in live

@@ -44,7 +44,7 @@ def test_claude_tool_use_carries_id_description_and_line():
         _tool_use("Bash", {"command": "git status", "description": "Mostra o estado"}, "toolu_1")
     )
 
-    assert event.text == "⌕ Mostra o estado"
+    assert event.text == "⌕ git status"
     assert event.data["tool_call_id"] == "toolu_1"
     assert event.data["operation"] == "start"
     assert event.data["line"]["title"] == "Mostra o estado"
@@ -118,7 +118,7 @@ def test_claude_native_tool_end_activity_resolves_tool_and_text_from_the_start(i
     start, end = activities
     assert (start["tool"], end["tool"]) == ("Bash", "Bash")
     mark = "✗" if is_error else "✓"
-    assert end["text"] == f"{mark} ⚙ Rodar testes · 128 passed"
+    assert end["text"] == f"{mark} ⚙ pytest -q · 128 passed"
     assert end["tool_call_id"] == "toolu_1"
     run = registry.get("r1")
     assert run is not None and run.last_activity == end["text"]
