@@ -115,6 +115,17 @@ class TextualFeedModel:
     _MAX_TOOL_PREVIEW_LINES = 20
     # Mesma ordem de grandeza da memória de runs encerradas do renderer.
     _MAX_FINALIZED_AGENTS = 1024
+    # Campos do payload que compõem a chave do cartão (``_agent_key``).
+    _CARD_IDENTITY_KEYS = (
+        "run_id",
+        "delegation_id",
+        "delegation_occurrence",
+        "transport",
+        "client_name",
+        "client_version",
+    )
+    # Execuções encerradas cujas linhas de tools aguardam a resposta final.
+    _MAX_FINISHED_TOOL_RUNS = 64
 
     _IGNORED_KINDS: ClassVar[set[str]] = {
         "prompt",
@@ -164,6 +175,10 @@ class TextualFeedModel:
         # uma delas não reabre cartão. Limitado como LRU porque cada run
         # deixa uma chave nova durante a sessão inteira.
         self._finalized_agents: OrderedDict[str, None] = OrderedDict()
+        # Linhas de tools de execuções cujo lifecycle terminal chegou antes da
+        # resposta final (ordem normal do runner): a final as arquiva para o
+        # toggle. Limitado porque uma execução sem final deixaria a chave.
+        self._finished_tools_by_agent: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
 
     @property
     def items(self) -> list[TextualFeedItem]:
@@ -237,6 +252,7 @@ class TextualFeedModel:
         self._completed_tool_requests_by_agent.clear()
         self._mcp_http_tool_stats_by_agent.clear()
         self._pending_turn_summary_by_agent.clear()
+        self._finished_tools_by_agent.clear()
         self._delegation_slots.clear()
         self._delegation_child_slot.clear()
 
@@ -355,6 +371,7 @@ class TextualFeedModel:
             # oculta, tentativa descartada) não pode virar rodapé do próximo
             # turno do mesmo agente.
             self._pop_pending_turn_summary(event)
+            self._discard_finished_tool_lines(event)
         if event.kind == "tool_preview":
             return self._apply_tool_preview(event)
         if event.kind == "tool_state":
@@ -372,6 +389,8 @@ class TextualFeedModel:
                 else:
                     return False
             if self._is_run_boundary_lifecycle(event):
+                if self._is_final_lifecycle(event):
+                    self._keep_finished_tool_lines(agent)
                 self._drop_tool_lines(agent)
                 self._kept_answer_by_agent.pop(agent, None)
                 if self._is_final_lifecycle(event):
@@ -869,15 +888,28 @@ class TextualFeedModel:
         self,
         key: str,
         *,
+        base: str,
         absorbed: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Linhas de tools da execução guardadas na resposta final, com teto.
 
         ``absorbed`` são as linhas dos bursts MCP HTTP que a final absorveu;
         entram antes das próprias. O excedente vira a primeira linha, como no
-        bloco vivo: "anteriores" fica acima das que sobraram.
+        bloco vivo: "anteriores" fica acima das que sobraram. Linhas guardadas
+        sem execução (chave ``base``) são de quem chegar primeiro, como o
+        resumo pendente do turno.
         """
-        lines = [dict(entry) for entry in (*(absorbed or ()), *(self._transient_tools_by_agent.get(key) or ()))]
+        finished = self._finished_tools_by_agent.pop(key, None)
+        if finished is None and key != base:
+            finished = self._finished_tools_by_agent.pop(base, None)
+        lines = [
+            dict(entry)
+            for entry in (
+                *(absorbed or ()),
+                *(finished or ()),
+                *(self._transient_tools_by_agent.get(key) or ()),
+            )
+        ]
         limit = self._MAX_FINAL_TOOL_LINES
         if len(lines) <= limit:
             return lines
@@ -894,7 +926,7 @@ class TextualFeedModel:
         """Troca o transitório da execução ``agent`` pela resposta final."""
         # As linhas de tools são capturadas antes do descarte: a resposta
         # final as guarda para o toggle de detalhes do turno.
-        tool_lines = self._final_tool_lines(agent, absorbed=absorbed_tools)
+        tool_lines = self._final_tool_lines(agent, base=self._agent_base(event), absorbed=absorbed_tools)
         self._kept_answer_by_agent.pop(agent, None)
         self._drop_tool_lines(agent)
         self._mark_finalized(agent)
@@ -974,6 +1006,31 @@ class TextualFeedModel:
 
     def _unmark_finalized(self, agent: str) -> None:
         self._finalized_agents.pop(agent, None)
+
+    def _keep_finished_tool_lines(self, agent: str) -> None:
+        """Guarda as tools da execução encerrada até a resposta final chegar.
+
+        O runner sinaliza o fim (lifecycle terminal) antes de publicar a
+        resposta final; sem isso a final ficaria sem linhas para o toggle.
+        """
+        lines = self._transient_tools_by_agent.get(agent)
+        if not lines:
+            return
+        finished = self._finished_tools_by_agent
+        finished[agent] = [*finished.pop(agent, ()), *lines]
+        while len(finished) > self._MAX_FINISHED_TOOL_RUNS:
+            finished.popitem(last=False)
+
+    def _discard_finished_tool_lines(self, event: TextualUiEvent) -> None:
+        """Descarta as tools guardadas cuja resposta final não veio.
+
+        Só sem run_id o sinal indica outra execução na mesma chave; com
+        run_id a chave é da própria execução, e um evento tardio dela (um
+        ``agent_update`` entre o status terminal e a final) não apaga nada.
+        """
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if not str(payload.get("run_id") or "").strip():
+            self._finished_tools_by_agent.pop(self._agent_key(event), None)
 
     def _drop_tool_lines(self, agent: str) -> None:
         """Descarta as previews de tools da execução e o mapa por tool_call_id."""
@@ -1136,6 +1193,7 @@ class TextualFeedModel:
         self._transient_index_by_agent.clear()
         self._kept_answer_by_agent.clear()
         self._transient_tools_by_agent.clear()
+        self._finished_tools_by_agent.clear()
         self._tool_call_line_by_agent.clear()
         self._tool_request_lines_by_agent.clear()
         self._tool_request_seen_at_by_agent.clear()
@@ -1668,7 +1726,15 @@ class TextualFeedModel:
             return True
         current_event = self._items[index].event
         if self._is_lifecycle_placeholder_event(current_event):
-            current_event = TextualUiEvent("agent_update", {"content": ""}, agent=event.agent)
+            # A identidade do cartão fica no payload: sem ela a reindexação
+            # o devolve à chave base e o fim da execução não o encontra.
+            placeholder = current_event.payload if isinstance(current_event.payload, dict) else {}
+            identity = {
+                key: placeholder[key]
+                for key in self._CARD_IDENTITY_KEYS
+                if key in placeholder
+            }
+            current_event = TextualUiEvent("agent_update", {**identity, "content": ""}, agent=event.agent)
         self._items[index] = TextualFeedItem(self._with_transient_tools(current_event), transient=True)
         return True
 

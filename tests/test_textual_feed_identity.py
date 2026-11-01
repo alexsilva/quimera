@@ -162,6 +162,100 @@ def test_latest_toggleable_seq_is_the_most_recent_final_with_tools():
     assert tool_texts(model.items[1].event.payload["tool_lines"]) == ["⌕ ler r2.py"]
 
 
+def test_final_after_completed_lifecycle_keeps_the_run_tool_lines():
+    # Ordem real do runner: o status "concluído" sai antes da resposta final.
+    model = TextualFeedModel()
+    model.apply(_lifecycle("claude", "running", "iniciando execução", run_id="r1"))
+    model.apply(_tool("claude", "read_file", {"path": "a.py"}, run_id="r1"))
+    model.apply(_update("claude", "texto parcial", answer=True, run_id="r1"))
+    model.apply(_lifecycle("claude", "completed", "concluído", run_id="r1"))
+    model.apply(_final("claude", "pronto", run_id="r1"))
+
+    (item,) = model.items
+    assert tool_texts(item.event.payload["tool_lines"]) == ["⌕ ler a.py"]
+    assert model.latest_toggleable_seq() == item.seq
+    assert not model._finished_tools_by_agent
+
+
+def test_tool_lines_of_a_run_without_final_do_not_leak_into_the_next_run():
+    model = TextualFeedModel()
+    model.apply(_update("claude", "trabalhando"))
+    model.apply(_tool("claude", "read_file", {"path": "velho.py"}))
+    model.apply(_lifecycle("claude", "completed", "concluído"))
+    # A resposta final da 1ª execução nunca chega; a 2ª começa.
+    model.apply(_update("claude", "trabalhando de novo"))
+    model.apply(_tool("claude", "read_file", {"path": "novo.py"}))
+    model.apply(_final("claude", "pronto"))
+
+    payload = model.items[-1].event.payload
+    assert tool_texts(payload["tool_lines"]) == ["⌕ ler novo.py"]
+
+
+def test_late_update_between_completed_and_final_keeps_the_tool_lines():
+    model = TextualFeedModel()
+    model.apply(_lifecycle("claude", "running", "iniciando execução", run_id="r1"))
+    model.apply(_tool("claude", "read_file", {"path": "a.py"}, run_id="r1"))
+    model.apply(_lifecycle("claude", "completed", "concluído", run_id="r1"))
+    model.apply(_update("claude", "atrasado", run_id="r1"))
+    model.apply(_final("claude", "pronto", run_id="r1"))
+
+    assert tool_texts(model.items[-1].event.payload["tool_lines"]) == ["⌕ ler a.py"]
+
+
+def test_simultaneous_runs_keep_their_own_tool_lines_after_completed():
+    model = TextualFeedModel()
+    for run_id, path in (("r1", "a.py"), ("r2", "b.py")):
+        model.apply(_lifecycle("claude", "running", "iniciando execução", run_id=run_id))
+        model.apply(_tool("claude", "read_file", {"path": path}, run_id=run_id))
+    for run_id in ("r1", "r2"):
+        model.apply(_lifecycle("claude", "completed", "concluído", run_id=run_id))
+        model.apply(_final("claude", f"pronto {run_id}", run_id=run_id))
+
+    assert [tool_texts(item.event.payload["tool_lines"]) for item in model.items] == [
+        ["⌕ ler a.py"],
+        ["⌕ ler b.py"],
+    ]
+    # O cartão da r2 manteve o run_id ao virar bloco de tools: nenhum fica órfão.
+    assert not model.has_transients
+
+
+def test_retry_discards_the_attempt_and_completed_keeps_the_retried_tools():
+    model = TextualFeedModel()
+    model.apply(_lifecycle("claude", "running", "iniciando execução", run_id="r1"))
+    model.apply(_tool("claude", "read_file", {"path": "tentativa.py"}, run_id="r1"))
+    model.apply(_lifecycle("claude", "retrying", "nova tentativa", run_id="r1"))
+    model.apply(_tool("claude", "read_file", {"path": "final.py"}, run_id="r1"))
+    model.apply(_lifecycle("claude", "completed", "concluído", run_id="r1"))
+    model.apply(_final("claude", "pronto", run_id="r1"))
+
+    assert tool_texts(model.items[-1].event.payload["tool_lines"]) == ["⌕ ler final.py"]
+
+
+def test_unowned_finished_tool_lines_go_to_the_first_final():
+    # Status terminal sem run_id e final com run_id: mesma regra do resumo pendente.
+    model = TextualFeedModel()
+    model.apply(_update("claude", "trabalhando"))
+    model.apply(_tool("claude", "read_file", {"path": "a.py"}))
+    model.apply(_lifecycle("claude", "completed", "concluído"))
+    model.apply(_final("claude", "pronto", run_id="r1"))
+
+    assert tool_texts(model.items[-1].event.payload["tool_lines"]) == ["⌕ ler a.py"]
+    assert not model._finished_tools_by_agent
+
+
+def test_finished_tool_lines_without_final_are_capped():
+    model = TextualFeedModel()
+    limit = TextualFeedModel._MAX_FINISHED_TOOL_RUNS
+    for index in range(limit + 3):
+        run_id = f"r{index}"
+        model.apply(_lifecycle("claude", "running", "iniciando execução", run_id=run_id))
+        model.apply(_tool("claude", "read_file", {"path": f"{run_id}.py"}, run_id=run_id))
+        model.apply(_lifecycle("claude", "completed", "concluído", run_id=run_id))
+
+    assert len(model._finished_tools_by_agent) == limit
+    assert "claude#run:r0" not in model._finished_tools_by_agent
+
+
 def test_restored_history_has_nothing_to_toggle():
     model = TextualFeedModel()
     model.hydrate_from_history([{"role": "human", "content": "oi"}, {"role": "claude", "content": "olá"}])
