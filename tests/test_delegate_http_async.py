@@ -13,6 +13,7 @@ Execute com:
 from __future__ import annotations
 
 import json
+import re
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -46,6 +47,8 @@ def _make_call(
         metadata=metadata or {},
     )
 
+
+_DELEGATE_BG_THREAD = re.compile(r"delegate-\d+")
 
 STEPS = [
     {"target_agent": "codex", "request": "faz algo", "context": "", "fallback_agents": []},
@@ -85,6 +88,30 @@ class TestGetTransport:
         """trusted_context vazio → fallback para native_tool_call."""
         call = _make_call(metadata={"trusted_context": {}})
         assert DelegateTools._get_transport(call) == "native_tool_call"
+
+
+@pytest.fixture(autouse=True)
+def wait_delegate_threads():
+    """Devolve `wait()`, que junta as threads `delegate-<task_id>` criadas pelo teste.
+
+    Só as threads de background do non-SSE path (`delegate-<task_id>`) entram:
+    `delegate-parallel-*` e `delegate-request-cancel` têm ciclo de vida próprio
+    nos testes que as exercitam.
+
+    O teardown roda depois que os decoradores `@patch` já saíram, por isso cada
+    teste deve chamar `wait()` dentro do escopo dos patches; o join do teardown
+    é só rede de segurança contra vazamento para o teste seguinte.
+    """
+    before = set(threading.enumerate())
+
+    def wait(timeout: float = 30.0) -> None:
+        for t in threading.enumerate():
+            if t not in before and _DELEGATE_BG_THREAD.match(t.name):
+                t.join(timeout)
+                assert not t.is_alive(), f"{t.name} não terminou em {timeout}s"
+
+    yield wait
+    wait()
 
 
 # ── SSE path ────────────────────────────────────────────────
@@ -133,20 +160,22 @@ class TestSSEPath:
         assert result.ok is False
         assert "falha no dispatch" in (result.error or "")
 
-    def test_sse_path_com_chamada_sem_sse_queue(self, delegation_tools, dispatch_fn, tmp_path):
+    def test_sse_path_com_chamada_sem_sse_queue(self, delegation_tools, dispatch_fn, tmp_path, wait_delegate_threads):
         """sse_queue=None + db_path configurado → cai no non-SSE path (background thread)."""
         delegation_tools.set_delegate_fn(dispatch_fn)
         call = _make_call(metadata={
             "_mcp_state": {"sse_queue": None},
         })
         result = delegation_tools._delegate_http_async(call, STEPS)
+        wait_delegate_threads()
         assert result.ok is True
 
-    def test_sse_path_com_metadata_vazio(self, delegation_tools, dispatch_fn, tmp_path):
+    def test_sse_path_com_metadata_vazio(self, delegation_tools, dispatch_fn, tmp_path, wait_delegate_threads):
         """Metadata sem _mcp_state + db_path configurado → cai no non-SSE path."""
         delegation_tools.set_delegate_fn(dispatch_fn)
         call = _make_call()
         result = delegation_tools._delegate_http_async(call, STEPS)
+        wait_delegate_threads()
         assert result.ok is True
 
     def test_sse_path_usa_background_delegate_fn_quando_disponivel(self, delegation_tools):
@@ -224,6 +253,7 @@ class TestNonSSEPath:
     @patch("quimera.runtime.tools.delegate.create_task", return_value=99)
     def test_non_sse_path_retorna_job_id_task_id(
         self, mock_create, mock_add, mock_update_job, mock_get_job, delegation_tools, dispatch_fn, tmp_path,
+        wait_delegate_threads,
     ):
         """Retorna status/timestamp inicial sem depender de polling posterior."""
         delegation_tools.set_delegate_fn(dispatch_fn)
@@ -231,6 +261,7 @@ class TestNonSSEPath:
             "_mcp_state": {"sse_queue": None},
         })
         result = delegation_tools._delegate_http_async(call, STEPS)
+        wait_delegate_threads()
         assert result.ok is True
         data = json.loads(result.content)
         assert data["job_id"] == 42
@@ -281,20 +312,21 @@ class TestNonSSEPath:
     @patch("quimera.runtime.tools.delegate.create_task", return_value=99)
     def test_non_sse_path_step_one_info_usado_no_job_desc(
         self, mock_create, mock_add, delegation_tools, dispatch_fn, tmp_path,
+        wait_delegate_threads,
     ):
         """A descrição do job contém agent_name e task do primeiro step."""
         delegation_tools.set_delegate_fn(dispatch_fn)
         call = _make_call()
         delegation_tools._delegate_http_async(call, STEPS)
+        wait_delegate_threads()
         desc = mock_add.call_args[0][0] if mock_add.call_args else ""
         assert "codex" in desc
         assert "faz algo" in desc
 
-    def test_non_sse_background_thread_completa_task(self, delegation_tools, tmp_path):
+    def test_non_sse_background_thread_completa_task(self, delegation_tools, tmp_path, wait_delegate_threads):
         """Background thread completa com sucesso: complete_task e update_job_status chamados."""
         db_path = delegation_tools.workspace.tasks_db
         from quimera.tasks import api as task_mod
-        import time
         task_mod.init_db(str(db_path))
         job_id = task_mod.add_job("test job", db_path=str(db_path))
         task_id = task_mod.create_task(
@@ -318,7 +350,7 @@ class TestNonSSEPath:
         ):
             result = delegation_tools._delegate_http_async(call, STEPS)
             assert result.ok is True
-            time.sleep(0.3)
+            wait_delegate_threads()
             mock_complete.assert_called_once()
             mock_fail.assert_not_called()
             assert mock_update_job.call_args_list[0].args == (job_id, "active")
@@ -326,11 +358,10 @@ class TestNonSSEPath:
             assert mock_update_job.call_args_list[1].args == (job_id, "completed")
             assert mock_update_job.call_args_list[1].kwargs == {"db_path": str(db_path)}
 
-    def test_non_sse_background_thread_falha_task(self, delegation_tools, tmp_path):
+    def test_non_sse_background_thread_falha_task(self, delegation_tools, tmp_path, wait_delegate_threads):
         """Dispatch retorna None (falha silenciosa) → transition_task(failed) e update_job_status(failed) chamados."""
         db_path = delegation_tools.workspace.tasks_db
         from quimera.tasks import api as task_mod
-        import time
         task_mod.init_db(str(db_path))
         job_id = task_mod.add_job("test job", db_path=str(db_path))
         task_id = task_mod.create_task(
@@ -354,7 +385,7 @@ class TestNonSSEPath:
         ):
             result = delegation_tools._delegate_http_async(call, STEPS)
             assert result.ok is True
-            time.sleep(0.3)
+            wait_delegate_threads()
             mock_complete.assert_not_called()
             mock_fail.assert_called_once()
             assert mock_update_job.call_args_list[0].args == (job_id, "active")
@@ -369,7 +400,7 @@ class TestNonSSEPath:
     @patch("quimera.runtime.tools.delegate.update_job_status")
     def test_non_sse_usa_background_delegate_fn_quando_disponivel(
         self, mock_update, mock_fail, mock_complete, mock_create, mock_add,
-        delegation_tools, tmp_path,
+        delegation_tools, tmp_path, wait_delegate_threads,
     ):
         """Non-SSE background thread usa background_delegate_fn em vez de delegate_fn.
 
@@ -377,8 +408,6 @@ class TestNonSSEPath:
         (background_delegate_fn), de modo que o cancel_checker do fluxo
         principal não interrompe a thread de background.
         """
-        import time
-
         main_fn = MagicMock(return_value="resposta do main")
         bg_fn = MagicMock(return_value="resposta do background")
 
@@ -395,7 +424,7 @@ class TestNonSSEPath:
         assert result.ok is True
 
         # Aguarda a thread de background concluir
-        time.sleep(0.4)
+        wait_delegate_threads()
 
         # background_delegate_fn foi chamada (não main_fn)
         bg_fn.assert_called_once()
@@ -412,7 +441,7 @@ class TestNonSSEPath:
     @patch("quimera.runtime.tools.delegate.update_job_status")
     def test_non_sse_cancel_checker_nao_interrompe_background_thread(
         self, mock_update, mock_fail, mock_complete, mock_create, mock_add,
-        delegation_tools, tmp_path,
+        delegation_tools, tmp_path, wait_delegate_threads,
     ):
         """Cancel do chat principal (cancel_checker=True) não para thread de background.
 
@@ -420,8 +449,6 @@ class TestNonSSEPath:
         no fluxo principal, pois cancel_checker não é passado para _execute_steps_inner
         no path assíncrono.
         """
-        import time
-
         # cancel_checker já retorna True desde o início — simula Ctrl+C
         delegation_tools.set_cancel_checker(lambda: True)
         delegation_tools.set_delegate_fn(MagicMock(return_value="resultado"))
@@ -435,15 +462,14 @@ class TestNonSSEPath:
         assert data["job_id"] == 42
 
         # aguarda background completar
-        time.sleep(0.4)
+        wait_delegate_threads()
 
         # background completou apesar do cancel_checker ativo no fluxo principal
         mock_complete.assert_called_once()
         mock_fail.assert_not_called()
 
-    def test_non_sse_background_thread_exception_nao_propaga(self, delegation_tools, tmp_path):
+    def test_non_sse_background_thread_exception_nao_propaga(self, delegation_tools, tmp_path, wait_delegate_threads):
         """Exceção no complete_task (pós-agente) não quebra o retorno inicial."""
-        import time
         dispatch = MagicMock(return_value="ok")
         delegation_tools.set_delegate_fn(dispatch)
         call = _make_call(metadata={
@@ -459,7 +485,7 @@ class TestNonSSEPath:
         ):
             result = delegation_tools._delegate_http_async(call, STEPS)
             assert result.ok is True
-            time.sleep(0.3)
+            wait_delegate_threads()
 
 
 # ── get_db_path ────────────────────────────────────────────

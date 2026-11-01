@@ -2052,18 +2052,24 @@ _OAUTH_SERVER = (
 )
 
 
-def _oauth_server_session(mode: str) -> MCPClientSession:
+def _oauth_server_session(
+    mode: str, *, handshake_timeout: float = 0.5, pause: float = 1.5
+) -> MCPClientSession:
     transport = StdioMCPTransport(
-        [sys.executable, "-c", _OAUTH_SERVER, mode, "1.5"], name="jira"
+        [sys.executable, "-c", _OAUTH_SERVER, mode, str(pause)], name="jira"
     )
-    transport.handshake_timeout = 0.5
+    transport.handshake_timeout = handshake_timeout
     return MCPClientSession(transport, name="jira")
 
 
 def test_handshake_espera_a_autorizacao_oauth_alem_do_prazo():
     """Caso do Jira: o prazo do handshake matava o ``mcp-remote`` enquanto o
     usuário autorizava no navegador, e a autorização se perdia."""
-    session = _oauth_server_session("oauth")
+    # O prompt precisa chegar dentro do handshake_timeout (a extensão do prazo só
+    # começa depois que ele é lido), e o filho sobe sob throttling do host: o
+    # prazo é folgado (3 s) e a pausa pós-prompt segue maior que ele (6 s), então
+    # a resposta só chega além do prazo original.
+    session = _oauth_server_session("oauth", handshake_timeout=3.0, pause=6.0)
     try:
         session.connect()
 

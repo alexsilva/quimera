@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import SupportsFloat, SupportsIndex, cast
 
 from quimera import process_factory as subprocess
 from quimera.environment import RuntimeSecrets, build_env_vars
@@ -522,12 +523,14 @@ class ShellTool(ToolBase):
             finally:
                 self._cleanup_session(session_id)
 
-        payload = {
+        payload_stdout = stdout[: self.config.max_output_chars]
+        payload_stderr = stderr[: self.config.max_output_chars]
+        payload: dict[str, object] = {
             "session_id": session_id,
             "command": session.command,
             "cwd": str(session.cwd),
-            "stdout": stdout[: self.config.max_output_chars],
-            "stderr": stderr[: self.config.max_output_chars],
+            "stdout": payload_stdout,
+            "stderr": payload_stderr,
             "status": "closed",
             "diff": self._build_output_diff(
                 stdout[: self.config.max_output_chars],
@@ -539,8 +542,8 @@ class ShellTool(ToolBase):
             ok=True,
             tool_name=call.name,
             content=self._format_shell_content(
-                stdout=payload["stdout"],
-                stderr=payload["stderr"],
+                stdout=payload_stdout,
+                stderr=payload_stderr,
                 session_id=session_id,
                 status="closed",
             ),
@@ -561,7 +564,10 @@ class ShellTool(ToolBase):
         if raw_timeout is None:
             return min(default, maximum)
         try:
-            value = float(raw_timeout)
+            # O except abaixo cobre tipos inválidos; o cast não esconde nada.
+            value = float(
+                cast(str | SupportsFloat | SupportsIndex, raw_timeout)
+            )
         except (TypeError, ValueError) as exc:
             raise ToolPolicyError("timeout deve ser número positivo (segundos)") from exc
         if value <= 0:
@@ -940,12 +946,15 @@ class ShellTool(ToolBase):
             # "completed"; sem isso ele pode perder stdout/stderr.
             self._join_reader_threads(session, timeout=0.5)
         full_stdout, full_stderr = self._snapshot_session_output(session)
-        payload = {
+        payload_stdout = (full_stdout if completed else stdout)[: self.config.max_output_chars]
+        payload_stderr = (full_stderr if completed else stderr)[: self.config.max_output_chars]
+        payload_status = "completed" if completed else "running"
+        payload: dict[str, object] = {
             "command": session.command,
             "cwd": str(session.cwd),
-            "stdout": (full_stdout if completed else stdout)[: self.config.max_output_chars],
-            "stderr": (full_stderr if completed else stderr)[: self.config.max_output_chars],
-            "status": "completed" if completed else "running",
+            "stdout": payload_stdout,
+            "stderr": payload_stderr,
+            "status": payload_status,
             "closed": bool(completed),
             "diff": self._build_output_diff(
                 stdout[: self.config.max_output_chars],
@@ -972,10 +981,10 @@ class ShellTool(ToolBase):
             ok=(returncode == 0) if completed else True,
             tool_name=tool_name,
             content=self._format_shell_content(
-                stdout=payload["stdout"],
-                stderr=payload["stderr"],
+                stdout=payload_stdout,
+                stderr=payload_stderr,
                 session_id=session.session_id if include_session_id else None,
-                status=payload["status"],
+                status=payload_status,
             ),
             exit_code=returncode,
             duration_ms=duration_ms,

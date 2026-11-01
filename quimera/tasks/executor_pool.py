@@ -175,7 +175,7 @@ class TaskExecutorPool:
         retry_backoff_seconds: int = 1,
         get_rate_limit_backoff_seconds: Callable[[], int] | None = None,
         get_workspace_policy: Callable[[], Any] | None = None,
-        parse_response: Callable[[Any], tuple[Any, Any, Any, Any, Any]] | None = None,
+        parse_response: Callable[[Any], tuple[Any, Any, Any, Any]] | None = None,
         classify_task_execution_result: Callable[[str | None], tuple[bool, str]] | None = None,
         classify_task_review_result: Callable[[str | None], tuple[bool, str, str]] | None = None,
         delegate: Callable[..., Any] | None = None,

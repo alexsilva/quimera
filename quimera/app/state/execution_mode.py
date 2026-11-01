@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from ...modes import ExecutionMode
 
 _logger = logging.getLogger(__name__)
 
 
-_Listener = Callable[[object | None, object | None], None]
+_Listener = Callable[["ExecutionMode | None", "ExecutionMode | None"], None]
 
 
 class ExecutionModeState:
@@ -19,16 +22,16 @@ class ExecutionModeState:
     ``_set_execution_mode``.
     """
 
-    def __init__(self, initial: object | None = None) -> None:
-        self._mode: object | None = initial
+    def __init__(self, initial: ExecutionMode | None = None) -> None:
+        self._mode: ExecutionMode | None = initial
         self._lock = threading.RLock()
         self._listeners: list[_Listener] = []
 
-    def get(self) -> object | None:
+    def get(self) -> ExecutionMode | None:
         with self._lock:
             return self._mode
 
-    def set(self, mode: object | None) -> None:
+    def set(self, mode: ExecutionMode | None) -> None:
         # Notifica incondicionalmente: setar o mesmo modo (inclusive None)
         # deve reaplicar efeitos derivados (ex.: policy.blocked_tools), como
         # fazia a propagação manual de _set_execution_mode.
@@ -51,7 +54,7 @@ class ExecutionModeState:
 
         return _unregister
 
-    def _notify(self, old: object | None, new: object | None) -> None:
+    def _notify(self, old: ExecutionMode | None, new: ExecutionMode | None) -> None:
         for listener in list(self._listeners):
             try:
                 listener(old, new)

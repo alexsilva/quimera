@@ -8,6 +8,8 @@ comandos, os helpers de toolbar/execução usados pelo wiring e o ciclo de vida
 import logging
 import os
 from pathlib import Path
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from .agent_gateway import cleanup_agent_transient_if_unowned
 from .agent_pool import AgentPoolView
@@ -57,6 +59,18 @@ from ..sandbox.bwrap import SandboxUnavailableError, bwrap_self_test
 from ..sandbox.state import is_sandbox_enabled
 from ..tasks.classifiers import classify_task_execution_result, parse_task_command
 
+if TYPE_CHECKING:
+    from .agent_pool import AgentPool
+    from .bug_services import BugServices
+    from .chat_lifecycle import ChatLifecycle
+    from .command_router import CommandRouter
+    from .dispatch import AppDispatchServices
+    from .interfaces import ProfileResolverAdapter
+    from .system_layer import AppSystemLayer
+    from .ui_event_handler import UiEventHandler
+    from ..modes import ExecutionMode
+    from ..ui.base import RendererBase
+
 _logger = logging.getLogger(__name__)
 
 
@@ -68,6 +82,23 @@ def _core_sys():
 class CoreFacadeMixin:
     """Métodos de fachada herdados por `QuimeraApp`."""
     _SESSION_LOG_DISPLAY_MAX_CHARS = 96
+
+    # Atributos que `AppAssembler` atribui na instância de `QuimeraApp`
+    # (bootstrap/wiring.py). Só anotação: nada é criado em runtime aqui.
+    agent_pool: "AgentPool"
+    config: ConfigManager
+    renderer: "RendererBase"
+    user_name: str
+    _profile_resolver: "ProfileResolverAdapter"
+    system_layer: "AppSystemLayer"
+    debug_prompt_metrics: bool
+    # O wiring grava None como marcador só durante a montagem (antes de
+    # `_apply_tasks`); depois dela o atributo é sempre o serviço real.
+    dispatch_services: "AppDispatchServices"
+    _ui_event_handler: "UiEventHandler"
+    chat_lifecycle: "ChatLifecycle"
+    bug_services: "BugServices"
+    command_router: "CommandRouter"
 
     # ── bound-method helpers used by wiring (replace lambdas) ──────────
 
@@ -191,7 +222,7 @@ class CoreFacadeMixin:
 
     def _command_argument_resolver(
         self, command: str, partial: str
-    ) -> list[str | Completion]:
+    ) -> Sequence[str | Completion]:
         """Resolve sugestões de argumentos para comandos com autocomplete contextual."""
         if command == CMD_CONTEXT:
             if partial.startswith("resumer "):
@@ -616,11 +647,11 @@ class CoreFacadeMixin:
         return visibility.value
 
     @property
-    def execution_mode(self) -> object | None:
+    def execution_mode(self) -> "ExecutionMode | None":
         return self.execution_mode_state.get()
 
     @execution_mode.setter
-    def execution_mode(self, mode: object | None) -> None:
+    def execution_mode(self, mode: "ExecutionMode | None") -> None:
         self.execution_mode_state.set(mode)
 
     @property
@@ -641,7 +672,9 @@ class CoreFacadeMixin:
         state.on_change(self._on_execution_mode_changed)
         return state
 
-    def _on_execution_mode_changed(self, old: object | None, new: object | None) -> None:
+    def _on_execution_mode_changed(
+        self, old: "ExecutionMode | None", new: "ExecutionMode | None"
+    ) -> None:
         _ = old  # unused but part of listener protocol
         agent_client = self.__dict__.get("agent_client")
         if agent_client is not None:
@@ -649,10 +682,11 @@ class CoreFacadeMixin:
         tool_executor = self.__dict__.get("tool_executor")
         if tool_executor is not None and new is not None:
             tool_executor.policy.blocked_tools = list(new.blocked_tools)
+            allowed_tools = getattr(new, "allowed_tools", None)
             tool_executor.policy.allowed_tools = (
                 None
-                if getattr(new, "allowed_tools", None) is None
-                else list(new.allowed_tools)
+                if allowed_tools is None
+                else list(allowed_tools)
             )
         elif tool_executor is not None:
             tool_executor.policy.blocked_tools = []

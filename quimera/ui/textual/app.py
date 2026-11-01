@@ -8,7 +8,7 @@ import sys
 import threading
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from quimera.clipboard_support import ClipboardManager
 
@@ -80,6 +80,8 @@ from quimera.ui.textual.widgets import (
 
 if TYPE_CHECKING:
     from textual.visual import VisualType
+    from textual.notifications import SeverityLevel
+    from textual.timer import Timer
 
 
 def _resolve_textual_feed_limit(quimera_app) -> int | None:
@@ -169,10 +171,10 @@ class QuimeraTextualApp(App):
         self._commands: list[str] = []
         self._summarizing = False
         self._spinner_index = 0
-        self._spinner_timer = None
-        self._bridge_drain_timer = None
-        self._active_agent_timer = None
-        self._thinking_pulse_timer = None
+        self._spinner_timer: Timer | None = None
+        self._bridge_drain_timer: Timer | None = None
+        self._active_agent_timer: Timer | None = None
+        self._thinking_pulse_timer: Timer | None = None
         self._thinking_pulse_paused = False
         self._handling_bridge_batch = False
         self._bridge_batch_feed_dirty = False
@@ -218,7 +220,7 @@ class QuimeraTextualApp(App):
         self._restore_tui_theme()
         self._bridge.attach_textual_app(self)
         self._bridge.set_input_value("")
-        gate = getattr(self._quimera_app, "input_gate", None)
+        gate: object = getattr(self._quimera_app, "input_gate", None)
         if hasattr(gate, "set_textual_mounted"):
             gate.set_textual_mounted(True)
         self._drain_bridge_events(max_events=None)
@@ -312,7 +314,7 @@ class QuimeraTextualApp(App):
         )
 
     def on_unmount(self) -> None:
-        gate = getattr(self._quimera_app, "input_gate", None)
+        gate: object = getattr(self._quimera_app, "input_gate", None)
         if hasattr(gate, "set_textual_mounted"):
             gate.set_textual_mounted(False)
         if self._bridge_drain_timer is not None:
@@ -959,9 +961,11 @@ class QuimeraTextualApp(App):
             payload = event.payload or {}
             message = str(payload.get("message") or "").strip()
             if message:
+                # O payload é um dict sem tipo; o renderer só repassa os
+                # níveis do Textual, e o str() continua como sempre esteve.
                 self.notify(
                     message,
-                    severity=str(payload.get("severity") or "information"),
+                    severity=cast("SeverityLevel", str(payload.get("severity") or "information")),
                     timeout=payload.get("timeout"),
                     markup=False,
                 )

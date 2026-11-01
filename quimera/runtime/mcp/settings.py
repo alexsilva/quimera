@@ -35,6 +35,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from quimera.config import ConfigManager
 from quimera.config_store import read_json_object, update_json_object
@@ -265,7 +266,7 @@ class MCPConnectionStore:
 
     def set_active(
         self, name: str, active: bool, scope: str = SCOPE_LOCAL
-    ) -> MCPConnectionEntry:
+    ) -> MCPConnectionEntry | None:
         """Liga ou desliga uma conexão e devolve a entrada resolvida.
 
         Em escopo local grava uma exceção deste workspace, que o padrão global
@@ -354,7 +355,7 @@ class MCPConnectionStore:
         env_spec: str | None = None,
         scope: str = SCOPE_LOCAL,
         replaces: str | None = None,
-    ) -> MCPConnectionEntry:
+    ) -> MCPConnectionEntry | None:
         """Grava a configuração da conexão no escopo pedido e devolve a entrada resolvida.
 
         Salvar é só configuração: a decisão de ativação deste workspace não
@@ -411,11 +412,13 @@ class MCPConnectionStore:
             self._keep_activation(name, was_active)
             return self.entry(name)
 
+        previous_name = previous.name if previous is not None else ""
+        previous_default_active = previous.default_active if previous is not None else False
         renaming_global = previous is not None and previous.is_global and scope == SCOPE_GLOBAL
         if scope == SCOPE_GLOBAL:
             identical = False
             default_after = (
-                previous.default_active
+                previous_default_active
                 if renaming_global
                 else (current.default_active if current is not None else False)
             )
@@ -456,12 +459,12 @@ class MCPConnectionStore:
             published = True
             if renaming_global:
                 self._best_effort(
-                    lambda: self._rename_in_overlays(previous.name, name),
-                    f"migrar os outros workspaces de '{previous.name}' para '{name}'",
+                    lambda: self._rename_in_overlays(previous_name, name),
+                    f"migrar os outros workspaces de '{previous_name}' para '{name}'",
                 )
                 self._best_effort(
-                    lambda: self._decide_here(previous.name, None, drop_local=True),
-                    f"apagar as referências a '{previous.name}'",
+                    lambda: self._decide_here(previous_name, None, drop_local=True),
+                    f"apagar as referências a '{previous_name}'",
                 )
             # O override local do nome salvo sai, senão esconderia a edição; mas
             # só o que estava aqui quando lemos: um override que outro processo
@@ -480,8 +483,8 @@ class MCPConnectionStore:
                     name,
                     spec,
                     env_spec,
-                    default_active=renaming_global and previous.default_active,
-                    drop=previous.name if renaming_global else None,
+                    default_active=renaming_global and previous_default_active,
+                    drop=previous_name if renaming_global else None,
                     must_not_exist=current is None,
                     before_write=prepare,
                     after_write=finish,
@@ -582,7 +585,14 @@ class MCPConnectionStore:
         """
         env_by_name = _by_name(env_specs)
         for spec in specs or []:
-            entry = self.upsert(spec, env_spec=env_by_name.get(_spec_name(spec)), scope=SCOPE_LOCAL)
+            entry = cast(
+                MCPConnectionEntry,
+                self.upsert(
+                    spec,
+                    env_spec=env_by_name.get(_spec_name(spec)),
+                    scope=SCOPE_LOCAL,
+                ),
+            )
             if not entry.active:
                 self._decide_here(entry.name, True, catalog=entry.is_global)
 

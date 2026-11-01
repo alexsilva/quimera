@@ -124,6 +124,19 @@ class ToolExecutor:
         "execute_command": "exec_command",
     }
 
+    # Atribuídos só por ``_register_builtin_tools``, que o ``__init__`` chama
+    # antes de devolver a instância (forks incluídos): nunca são None em uso.
+    _shell_tools: shell_tools.ShellTool
+    _browser_tools: browser_tools.BrowserTool
+    _task_tools: tasks_tools.TaskTools
+    _workflow_tools: workflows_tools.WorkflowTools
+    _delegate_tools: delegate_module.DelegateTools
+    _interaction_tools: interaction_tools.InteractionTools
+    _state_tools: state_tools.StateTools
+    _host_tools: host_tools.HostTools
+    _tui_tools: tui_tools.TuiTools
+    _search_tools: search_tools.ToolSearchTools
+
     def __init__(
             self,
             config: ToolRuntimeConfig,
@@ -145,16 +158,6 @@ class ToolExecutor:
         self._wiring = ToolExecutorWiring()
         self._tool_preview_callback = None
         self._tool_progress_callback = None
-        self._delegate_tools = None
-        self._interaction_tools = None
-        self._state_tools = None
-        self._task_tools = None
-        self._workflow_tools = None
-        self._browser_tools = None
-        self._host_tools = None
-        self._tui_tools = None
-        self._search_tools = None
-        self._shell_tools = None
         self._register_builtin_tools()
 
     @staticmethod

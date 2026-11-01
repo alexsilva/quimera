@@ -28,7 +28,7 @@ import time
 import uuid
 from collections.abc import Iterable
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, Protocol
 
 from quimera.domain.agent_run_events import AgentRunEvent, coerce_agent_run_sink
 from quimera.domain.agent_run_scope import AgentRunScope, bind_agent_run_scope
@@ -53,6 +53,14 @@ from quimera.workspace import Workspace
 from quimera.session_paths import SessionPaths
 
 _logger = logging.getLogger(__name__)
+
+
+class _WritableOutput(Protocol):
+    """Saída textual mínima usada pelo transporte MCP."""
+
+    def write(self, data: str) -> int: ...
+
+    def flush(self) -> None: ...
 
 
 def _openai_schema_to_mcp(schema: dict) -> dict:
@@ -264,12 +272,12 @@ class MCPServer:
         return AgentRunScope(agent=agent_name, run_id=run_id)
 
     @staticmethod
-    def _visual_transport(context: TrustedToolExecutionContext) -> str:
+    def _visual_transport(context: TrustedToolExecutionContext | None) -> str:
         transport = str(getattr(context, "transport", "") or "").strip()
         return "mcp_http" if transport == "http_mcp" else (transport or "mcp_stdio")
 
     @staticmethod
-    def _visual_agent(context: TrustedToolExecutionContext) -> str:
+    def _visual_agent(context: TrustedToolExecutionContext | None) -> str:
         agent = str(getattr(context, "agent_name", "") or "").strip()
         if agent:
             return agent
@@ -278,7 +286,7 @@ class MCPServer:
     def _emit_tool_run_event(
         self,
         kind: str,
-        context: TrustedToolExecutionContext,
+        context: TrustedToolExecutionContext | None,
         tool_name: str,
         *,
         msg_id: Any = None,
@@ -406,7 +414,7 @@ class MCPServer:
     # I/O
     # ------------------------------------------------------------------
 
-    def _write(self, obj: dict | list, out: IO) -> None:
+    def _write(self, obj: dict | list, out: _WritableOutput) -> None:
         line = json.dumps(obj, ensure_ascii=False) + "\n"
         with self._write_lock:
             out.write(line)
@@ -419,9 +427,9 @@ class MCPServer:
     def _handle(
         self,
         msg: dict,
-        out: IO,
+        out: _WritableOutput,
         blocking: bool = False,
-        used_ids: dict | None = None,
+        used_ids: collections.OrderedDict[Any, None] | None = None,
         state: dict | None = None,
         batch_token: object | None = None,
     ) -> dict | None:
@@ -579,7 +587,7 @@ class MCPServer:
                 return {"__error__": "Invalid cursor"}
         start = page * page_size
         end = start + page_size
-        result = {key: items[start:end]}
+        result: dict[str, object] = {key: items[start:end]}
         if end < len(items):
             result["nextCursor"] = base64.urlsafe_b64encode(f"page:{page + 1}".encode()).decode()
         return result
@@ -617,6 +625,7 @@ class MCPServer:
         return None
 
     def _handle_resources_read(self, msg_id: Any, params: dict) -> dict:
+        text: str | None
         uri = str(params.get("uri") or "")
         if not uri:
             return self._err(msg_id, -32602, "resources/read: 'uri' is required")
@@ -708,11 +717,15 @@ class MCPServer:
         return self._ok(msg_id, {"completion": {"values": values, "total": len(values), "hasMore": False}})
 
     @staticmethod
-    def _request_key(out: IO, msg_id: Any) -> tuple[int, Any]:
+    def _request_key(out: _WritableOutput, msg_id: Any) -> tuple[int, Any]:
         """Identifica request JSON-RPC dentro da conexão que originou o ID."""
         return id(out), msg_id
 
-    def _handle_cancelled(self, params: dict, out: IO | None = None) -> None:
+    def _handle_cancelled(
+        self,
+        params: dict,
+        out: _WritableOutput | None = None,
+    ) -> None:
         cancel_id = params.get("requestId")
         if cancel_id is None:
             return
@@ -742,6 +755,7 @@ class MCPServer:
         value = state.get("quimera_disabled_tools")
         if value is None:
             return frozenset()
+        names: Iterable[object]
         if isinstance(value, str):
             names = value.split(",")
         elif isinstance(value, Iterable):
@@ -765,7 +779,7 @@ class MCPServer:
         config = getattr(self._executor, "config", None)
         return is_mcp_tool_deferral_enabled(config, state)
 
-    def _notify_tools_list_changed(self, out: IO) -> None:
+    def _notify_tools_list_changed(self, out: _WritableOutput) -> None:
         """Avisa o cliente que o tools/list mudou após um tool_search."""
         try:
             self._write(
@@ -812,7 +826,7 @@ class MCPServer:
         self,
         msg_id: Any,
         params: dict,
-        out: IO,
+        out: _WritableOutput,
         blocking: bool = False,
         batch_token: object | None = None,
     ) -> dict | None:
@@ -1206,7 +1220,7 @@ class MCPServer:
             "structuredContent": structured,
         })
 
-    def _flush_pending(self, out: IO) -> None:
+    def _flush_pending(self, out: _WritableOutput) -> None:
         with self._pending_lock:
             owned = [
                 c
@@ -1231,6 +1245,7 @@ class MCPServer:
                 if call.get("_resolving"):
                     continue
                 call["_resolving"] = True
+            response: dict | None
             if expired:
                 response = self._expire_pending_call(call)
             else:
@@ -1290,7 +1305,7 @@ class MCPServer:
         """Para a thread de flush periódico em background."""
         self._bg_flush_active = False
 
-    def _drain_all_pending(self, out: IO) -> None:
+    def _drain_all_pending(self, out: _WritableOutput) -> None:
         """Entrega ou expira todas as pendências de ``out`` antes do shutdown.
 
         O laço termina quando nada mais está pendente; ``_flush_pending`` já
@@ -1309,7 +1324,7 @@ class MCPServer:
                 break
             time.sleep(0.05)
 
-    def _cancel_pending_for_output(self, out: IO) -> None:
+    def _cancel_pending_for_output(self, out: _WritableOutput) -> None:
         """Cancela tools da conexão encerrada sem aguardar o timeout global."""
         with self._pending_lock:
             owned = [call for call in self._pending_calls if call["out"] is out]
@@ -1324,7 +1339,7 @@ class MCPServer:
                 self._cancel_events.pop(request_key, None)
             self._discard_pending_call(call)
 
-    def _close_command_sessions_for_output(self, out: IO) -> None:
+    def _close_command_sessions_for_output(self, out: _WritableOutput) -> None:
         """Encerra comandos persistentes pertencentes à conexão abortada."""
         state = getattr(out, "_mcp_state", {}) or {}
         run_id = str(state.get("trusted_run_id") or "").strip()
@@ -1350,7 +1365,11 @@ class MCPServer:
                 exc_info=True,
             )
 
-    def _force_expire_pending(self, calls: list[dict], out: IO) -> None:
+    def _force_expire_pending(
+        self,
+        calls: list[dict],
+        out: _WritableOutput,
+    ) -> None:
         """Expira pendências travadas no shutdown, sem duplicar respostas."""
         for call in calls:
             with self._pending_lock:
@@ -1548,8 +1567,8 @@ class MCPServer:
     def _process_message(
         self,
         msg: Any,
-        out: IO,
-        used_ids: dict | None = None,
+        out: _WritableOutput,
+        used_ids: collections.OrderedDict[Any, None] | None = None,
         transport: str | None = None,
         asynchronous_batches: bool = False,
     ) -> threading.Thread | None:
@@ -1571,7 +1590,7 @@ class MCPServer:
         if isinstance(msg, list):
             if not msg:
                 self._write(self._err(None, -32600, "Invalid Request: empty batch"), out)
-                return
+                return None
             return self._process_batch(
                 msg,
                 out,
@@ -1582,7 +1601,7 @@ class MCPServer:
 
         if not isinstance(msg, dict):
             self._write(self._err(None, -32600, "Invalid Request"), out)
-            return
+            return None
 
         try:
             response = self._handle(msg, out=out, used_ids=used_ids, state=state)
@@ -1598,8 +1617,8 @@ class MCPServer:
     def _process_batch(
         self,
         msg: list,
-        out: IO,
-        used_ids: dict | None = None,
+        out: _WritableOutput,
+        used_ids: collections.OrderedDict[Any, None] | None = None,
         state: dict | None = None,
         asynchronous: bool = False,
     ) -> threading.Thread | None:
@@ -1666,7 +1685,7 @@ class MCPServer:
 
     def _finish_batch(
         self,
-        out: IO,
+        out: _WritableOutput,
         responses: list[dict | None],
         pending_ids: dict[Any, int],
         batch_token: object,
@@ -1689,7 +1708,7 @@ class MCPServer:
 
     def _resolve_batch_calls(
         self,
-        out: IO,
+        out: _WritableOutput,
         responses: list,
         pending_ids: dict,
         *,
@@ -1766,7 +1785,7 @@ class MCPServer:
         flush_thread = threading.Thread(target=_periodic_flush, daemon=True)
         flush_thread.start()
 
-        used_ids: dict[Any, None] = collections.OrderedDict()
+        used_ids: collections.OrderedDict[Any, None] = collections.OrderedDict()
         batch_workers: list[threading.Thread] = []
 
         for raw_line in inp:

@@ -78,6 +78,8 @@ class ConnectedMCPClient:
 class _QuietThreadingHTTPServer(ThreadingHTTPServer):
     """Threading HTTP server that treats client disconnects as normal."""
 
+    mcp_http_server: MCP_HTTPServer
+
     def handle_error(self, request: Any, client_address: Any) -> None:
         exc = sys.exc_info()[1]
         if isinstance(exc, (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)):
@@ -178,6 +180,8 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
 
     Expects ``self.server.mcp_http_server`` to point to the ``MCP_HTTPServer``.
     """
+
+    server: _QuietThreadingHTTPServer
 
     def log_message(self, fmt: str, *args: Any) -> None:
         _logger.debug("MCP HTTP: %s", fmt % args)
@@ -754,6 +758,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             return
         mcp_server: MCP_HTTPServer = self.server.mcp_http_server
         session_id = self.headers.get("MCP-Session-Id")
+        state: dict[str, object] | None
         if is_initialize:
             if session_id:
                 self._send_error_response(400, -32602, "MCP-Session-Id must not be sent during initialize")
@@ -984,7 +989,7 @@ class MCP_HTTPServer:
         self._sse_clients: dict[str, queue.Queue] = {}
         self._http_sessions: dict[str, dict] = {}
         self._sse_lock = threading.Lock()
-        self._httpd: ThreadingHTTPServer | None = None
+        self._httpd: _QuietThreadingHTTPServer | None = None
         self._ready_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._startup_error: Exception | None = None
@@ -1210,7 +1215,7 @@ class MCP_HTTPServer:
         return self._port
 
     @property
-    def httpd(self) -> ThreadingHTTPServer | None:
+    def httpd(self) -> _QuietThreadingHTTPServer | None:
         return self._httpd
 
     def serve_forever(self) -> None:

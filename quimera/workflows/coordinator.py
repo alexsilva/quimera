@@ -46,7 +46,7 @@ class WorkflowCoordinator:
         *,
         get_active_agents: Callable[[], list[str]],
         get_job_id: Callable[[], int | None],
-        interrupt_tasks: Callable[[Iterable[int]], None] = lambda _ids: None,
+        interrupt_tasks: Callable[[Iterable[int]], list[int] | None] = lambda _ids: None,
         live_task_ids: Callable[[], set[int]] | None = None,
         wake: Callable[[], None] = lambda: None,
         notify: Callable[[str], None] = lambda _message: None,

@@ -7,7 +7,10 @@ import inspect
 import threading
 import time
 import uuid
-from typing import Protocol, Callable
+from typing import TYPE_CHECKING, Callable, Protocol, cast
+
+if TYPE_CHECKING:
+    from typing_extensions import NotRequired, TypedDict
 
 from ..config import (
     DEFAULT_DELEGATE_MAX_CONTEXT_CHARS,
@@ -242,6 +245,23 @@ class _DelegateFnProto(Protocol):
         progress_callback: Callable[[str], None] | None = None,
         cancel_handle: _DelegateStepCancelHandle | None = None,
     ) -> str | None: ...
+
+
+if TYPE_CHECKING:
+    class _DelegateOptions(TypedDict):
+        delegation: dict[str, object] | None
+        delegation_only: bool
+        protocol_mode: str
+        prompt_kind: PromptKind | str
+        primary: bool
+        silent: bool
+        show_output: bool
+        persist_history: bool
+        history_snapshot: list[object] | None
+        max_retries: int
+        from_agent: str | None
+        progress_callback: Callable[[str], None] | None
+        cancel_handle: NotRequired[_DelegateStepCancelHandle]
 
 
 class DelegateTools(ToolBase):
@@ -515,7 +535,7 @@ class DelegateTools(ToolBase):
         job_id: int,
         task_id: int,
         result: ToolResult,
-        db_path: str,
+        db_path: str | None,
         cancel_entry: ActiveDelegationEntry | None = None,
     ) -> None:
         """Grava o desfecho da delegação na task/job de acompanhamento.
@@ -629,7 +649,7 @@ class DelegateTools(ToolBase):
         self,
         task_id: int,
         status: str,
-        db_path: str,
+        db_path: str | None,
         write: Callable[[], bool],
     ) -> None:
         """Grava o status terminal mesmo se outro escritor resetou a task.
@@ -695,7 +715,11 @@ class DelegateTools(ToolBase):
         except Exception as exc:
             return ToolResult(ok=False, tool_name=call.name, error=f"Failed to create task: {exc}")
 
-        _fn = self._background_delegate_fn or self._delegate_fn
+        # Só chamado por tasks_delegate, após o gate de is_delegate_available.
+        _fn = cast(
+            _DelegateFnProto,
+            self._background_delegate_fn or self._delegate_fn,
+        )
         _progress_cb = self._progress_callback_for(call)
         _resolve_active = self._resolve_active_agents
         _normalize = self._normalize_agent_identity
@@ -792,7 +816,11 @@ class DelegateTools(ToolBase):
         sse_available = meta_state.get("sse_queue") is not None
 
         if sse_available:
-            _bg_fn = self._background_delegate_fn or self._delegate_fn
+            # Só chamado por tasks_delegate, após o gate de is_delegate_available.
+            _bg_fn = cast(
+                _DelegateFnProto,
+                self._background_delegate_fn or self._delegate_fn,
+            )
             return self._execute_tracked_sync(
                 call,
                 steps,
@@ -910,7 +938,7 @@ class DelegateTools(ToolBase):
             if access_list:
                 delegation["access_list"] = list(access_list)
             try:
-                delegate_options = {
+                delegate_options: _DelegateOptions = {
                     "delegation": delegation,
                     "delegation_only": True,
                     "protocol_mode": "delegation",
@@ -1492,6 +1520,9 @@ class DelegateTools(ToolBase):
                 tool_name=call.name,
                 error="Agent dispatch not available in this context",
             )
+        # A checagem acima estabelece o invariante; o callback principal só é
+        # instalado por set_delegate_fn, que não aceita None.
+        delegate_fn = cast(_DelegateFnProto, self._delegate_fn)
         arguments = call.arguments if isinstance(call.arguments, dict) else {}
         target_agent_raw = arguments.get("target_agent")
         request_raw = arguments.get("request")
@@ -1799,7 +1830,7 @@ class DelegateTools(ToolBase):
                 call,
                 steps,
                 parallel,
-                self._delegate_fn,
+                delegate_fn,
                 cancel_checker=request_cancelled,
                 request_cancel_event=request_cancel_event,
             ),

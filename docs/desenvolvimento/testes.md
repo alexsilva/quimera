@@ -59,7 +59,7 @@ echo "/help" | python -m quimera --test --agents fake-openai --visibility full 2
 `scripts/check.sh` roda os dois gates que todo commit precisa passar:
 
 - **Ruff** (`ruff check quimera tests`): regras `E4`, `E7`, `E9` e `F` (sintaxe, semântica e pyflakes), configuradas em `pyproject.toml`. Zero erro.
-- **mypy** (`mypy`, com `files = ["quimera"]`): zero erro nos módulos protegidos. Os módulos que já tinham erros quando o gate nasceu estão listados em `[[tool.mypy.overrides]]` com `ignore_errors = true`, como baseline de dívida. Essa lista só encolhe: ao corrigir um módulo, remova-o dela; nunca adicione um módulo novo.
+- **mypy** (`mypy`, com `files = ["quimera"]`): zero erro em todos os módulos de `quimera/`. Não existe baseline de dívida: `[[tool.mypy.overrides]]` com `ignore_errors` é proibido.
 
 O hook `scripts/git-hooks/pre-commit` executa o script a cada commit sobre uma exportação do índice (`git checkout-index` em `.git/quimera-index-check/`), nunca sobre a árvore de trabalho: uma correção não staged ou um `ruff.toml`/`mypy.ini` não rastreado não mascaram nem relaxam a verificação do que vai ser commitado. Instalação, uma vez por clone:
 
@@ -69,8 +69,6 @@ git config core.hooksPath scripts/git-hooks
 ```
 
 A primeira execução do mypy leva cerca de dois minutos neste host; com o cache (`.mypy_cache/` na árvore, `.git/quimera-index-check-cache/` no hook) as seguintes levam menos de vinte segundos na árvore e cerca de meio minuto no hook, que reexporta o índice a cada commit. `scripts/check.sh --lint` e `--types` rodam um gate só. O hook procura as ferramentas em `<raiz>/.venv/bin` e depois no `PATH`: num worktree ligado (`git worktree add`) não há `.venv`, então ponha a venv do clone principal no `PATH` antes de commitar, senão o commit é bloqueado com código 127.
-
-`scripts/check.sh --baseline` (lento: roda o mypy sem a baseline) lista os módulos da lista que já não têm erro, candidatos a sair dela, e os que têm erro sem estar nela, o que o gate normal já bloqueia.
 
 ## Boas práticas de contribuição
 

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from ...domain.agent_run_scope import run_in_current_context
 from ...evidence import Evidence, EvidenceStore
@@ -311,6 +311,10 @@ _BACKEND_SEMAPHORES: dict[tuple[str, str], "_BackendSemaphore"] = {}
 
 class _BackendSemaphore(threading.Semaphore):
     """Semáforo compartilhado por backend que só aceita limites mais restritivos."""
+
+    # Condição interna do ``threading.Semaphore`` do CPython, que o typeshed
+    # não declara; ``tighten_limit``/``release`` sincronizam por ela.
+    _cond: threading.Condition
 
     def __init__(self, max_connections: int) -> None:
         normalized = _normalize_max_connections(max_connections)
@@ -894,6 +898,10 @@ class ToolCallingDriver:
     múltiplos agentes compartilham provider.
     """
 
+    # Transporte implementado pela subclasse concreta (OpenAICompatDriver,
+    # CloudDriver); a classe base só o declara.
+    _chat_streaming: Callable[..., tuple[str, list[dict]]]
+
     def __init__(
         self,
         model: str,
@@ -925,10 +933,13 @@ class ToolCallingDriver:
         self._closed = False
         self.tool_use_reliability = str(tool_use_reliability or "medium").lower()
         default_request_budget = get_max_model_requests(self.tool_use_reliability)
-        try:
-            normalized_request_budget = int(max_model_requests)
-        except (TypeError, ValueError):
+        if max_model_requests is None:
             normalized_request_budget = default_request_budget
+        else:
+            try:
+                normalized_request_budget = int(max_model_requests)
+            except (TypeError, ValueError):
+                normalized_request_budget = default_request_budget
         self.max_model_requests = (
             normalized_request_budget
             if normalized_request_budget > 0
@@ -1080,15 +1091,16 @@ class ToolCallingDriver:
         cancel_binder = getattr(tool_executor, "bind_approval_cancel_event", None)
         previous_scope = None
         previous_cancel_event = None
-        scope_bound = False
-        cancel_bound = False
+        # Binder já chamado, a restaurar no finally; None quando não houve bind.
+        bound_scope_binder: Callable[[str | None], object] | None = None
+        bound_cancel_binder: Callable[[object], object] | None = None
         try:
             if bind_worker_context and callable(scope_binder):
                 previous_scope = scope_binder(approval_scope)
-                scope_bound = True
+                bound_scope_binder = scope_binder
             if bind_worker_context and callable(cancel_binder):
                 previous_cancel_event = cancel_binder(approval_cancel_event)
-                cancel_bound = True
+                bound_cancel_binder = cancel_binder
             return self._execute_tool(
                 tc,
                 tool_executor,
@@ -1099,10 +1111,10 @@ class ToolCallingDriver:
                 cancel_event=cancel_event,
             )
         finally:
-            if cancel_bound:
-                cancel_binder(previous_cancel_event)
-            if scope_bound:
-                scope_binder(previous_scope)
+            if bound_cancel_binder is not None:
+                bound_cancel_binder(previous_cancel_event)
+            if bound_scope_binder is not None:
+                bound_scope_binder(previous_scope)
             if end_tool_execution is not None:
                 end_tool_execution()
 
@@ -1643,6 +1655,110 @@ class ToolCallingDriver:
         finally:
             self._semaphore.release()
 
+    def _execute_tool(
+        self,
+        tc: dict,
+        tool_executor,
+        agent_name: str | None = None,
+        parent_agent: str | None = None,
+        run_id: str | None = None,
+        progress_callback=None,
+        cancel_event=None,
+    ) -> ToolResult:
+        """Executa um tool call via ToolExecutor."""
+        metadata: dict = {}
+        if agent_name:
+            metadata["calling_agent"] = agent_name
+        trusted_context = TrustedToolExecutionContext(
+            agent_name=agent_name,
+            parent_agent=parent_agent,
+            run_id=run_id,
+            transport=self._transport_name,
+            server_origin=self._server_origin,
+        )
+        metadata["trusted_context"] = trusted_context
+        if cancel_event is not None:
+            metadata["_mcp_cancel_event"] = cancel_event
+        tool_call = ToolCall(
+            name=tc["name"],
+            arguments=tc["arguments"],
+            call_id=tc["id"],
+            metadata=metadata,
+        )
+        try:
+            result = tool_executor.execute(
+                tool_call,
+                progress_callback=progress_callback,
+            )
+            if isinstance(result, ToolResult):
+                result.data.setdefault("tool_call_id", tc["id"])
+            return result
+        except Exception as exc:
+            _logger.error("OpenAICompatDriver: tool execution failed for '%s': %s", tc["name"], exc)
+            return ToolResult(
+                ok=False,
+                tool_name=tc["name"],
+                error=str(exc),
+                data={"tool_call_id": tc["id"]},
+            )
+
+
+class OpenAICompatDriver(ToolCallingDriver):
+    """Transporte OpenAI Chat Completions sobre o harness comum de tools."""
+
+    def __init__(
+        self,
+        model: str,
+        base_url: str,
+        api_key: str = "ollama",
+        timeout: Optional[float] = None,
+        tool_use_reliability: str = "medium",
+        extra_body: Optional[dict] = None,
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        max_model_requests: int | None = None,
+        loop_budget: ToolLoopBudget | None = None,
+        context_window: int | None = None,
+        context_reserve_tokens: int | None = None,
+    ) -> None:
+        super().__init__(
+            model=model,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            tool_use_reliability=tool_use_reliability,
+            extra_body=extra_body,
+            max_connections=max_connections,
+            max_model_requests=max_model_requests,
+            loop_budget=loop_budget,
+            context_window=context_window,
+            context_reserve_tokens=context_reserve_tokens,
+        )
+        if OpenAI is None:
+            raise ImportError(
+                "O pacote 'openai' é dependência obrigatória da instalação. "
+                "Reinstale o projeto com: pip install -e ."
+            )
+        self._client = OpenAI(
+            base_url=base_url,
+            api_key=self._api_key.get_secret_value(),
+            timeout=float(timeout) if timeout else 300.0,
+        )
+
+    def _chat_streaming(
+        self,
+        messages: list[dict],
+        *,
+        tools: list[dict] | None = None,
+        cancel_event=None,
+        on_text_chunk=None,
+    ) -> tuple[str, list[dict]]:
+        return self._openai_chat_streaming(
+            messages,
+            tools=tools,
+            cancel_event=cancel_event,
+            on_text_chunk=on_text_chunk,
+        )
+
     def _openai_chat_streaming(
         self,
         messages: list[dict],
@@ -1766,107 +1882,3 @@ class ToolCallingDriver:
             })
 
         return text.strip(), tool_calls
-
-    def _execute_tool(
-        self,
-        tc: dict,
-        tool_executor,
-        agent_name: str | None = None,
-        parent_agent: str | None = None,
-        run_id: str | None = None,
-        progress_callback=None,
-        cancel_event=None,
-    ) -> ToolResult:
-        """Executa um tool call via ToolExecutor."""
-        metadata: dict = {}
-        if agent_name:
-            metadata["calling_agent"] = agent_name
-        trusted_context = TrustedToolExecutionContext(
-            agent_name=agent_name,
-            parent_agent=parent_agent,
-            run_id=run_id,
-            transport=self._transport_name,
-            server_origin=self._server_origin,
-        )
-        metadata["trusted_context"] = trusted_context
-        if cancel_event is not None:
-            metadata["_mcp_cancel_event"] = cancel_event
-        tool_call = ToolCall(
-            name=tc["name"],
-            arguments=tc["arguments"],
-            call_id=tc["id"],
-            metadata=metadata,
-        )
-        try:
-            result = tool_executor.execute(
-                tool_call,
-                progress_callback=progress_callback,
-            )
-            if isinstance(result, ToolResult):
-                result.data.setdefault("tool_call_id", tc["id"])
-            return result
-        except Exception as exc:
-            _logger.error("OpenAICompatDriver: tool execution failed for '%s': %s", tc["name"], exc)
-            return ToolResult(
-                ok=False,
-                tool_name=tc["name"],
-                error=str(exc),
-                data={"tool_call_id": tc["id"]},
-            )
-
-
-class OpenAICompatDriver(ToolCallingDriver):
-    """Transporte OpenAI Chat Completions sobre o harness comum de tools."""
-
-    def __init__(
-        self,
-        model: str,
-        base_url: str,
-        api_key: str = "ollama",
-        timeout: Optional[float] = None,
-        tool_use_reliability: str = "medium",
-        extra_body: Optional[dict] = None,
-        max_connections: int = DEFAULT_MAX_CONNECTIONS,
-        max_model_requests: int | None = None,
-        loop_budget: ToolLoopBudget | None = None,
-        context_window: int | None = None,
-        context_reserve_tokens: int | None = None,
-    ) -> None:
-        super().__init__(
-            model=model,
-            base_url=base_url,
-            api_key=api_key,
-            timeout=timeout,
-            tool_use_reliability=tool_use_reliability,
-            extra_body=extra_body,
-            max_connections=max_connections,
-            max_model_requests=max_model_requests,
-            loop_budget=loop_budget,
-            context_window=context_window,
-            context_reserve_tokens=context_reserve_tokens,
-        )
-        if OpenAI is None:
-            raise ImportError(
-                "O pacote 'openai' é dependência obrigatória da instalação. "
-                "Reinstale o projeto com: pip install -e ."
-            )
-        self._client = OpenAI(
-            base_url=base_url,
-            api_key=self._api_key.get_secret_value(),
-            timeout=float(timeout) if timeout else 300.0,
-        )
-
-    def _chat_streaming(
-        self,
-        messages: list[dict],
-        *,
-        tools: list[dict] | None = None,
-        cancel_event=None,
-        on_text_chunk=None,
-    ) -> tuple[str, list[dict]]:
-        return self._openai_chat_streaming(
-            messages,
-            tools=tools,
-            cancel_event=cancel_event,
-            on_text_chunk=on_text_chunk,
-        )

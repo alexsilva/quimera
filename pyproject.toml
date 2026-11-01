@@ -72,21 +72,4 @@ disable_error_code = ["annotation-unchecked"]
 module = ["cryptography.*", "playwright.*"]
 ignore_missing_imports = true
 
-# Baseline de dívida: módulos que já tinham erros quando o gate nasceu
-# (281 erros em 70 módulos, 2026-10-18). O gate protege os demais módulos
-# e todo módulo novo. Ao corrigir um módulo, remova-o desta lista: ele passa a
-# ser protegido. Não adicione módulos aqui.
-[[tool.mypy.overrides]]
-module = [
-    "quimera.app.core_facade",
-    "quimera.runtime.drivers.openai_compat",
-    "quimera.runtime.executor",
-    "quimera.runtime.mcp.http_server",
-    "quimera.runtime.mcp.server",
-    "quimera.runtime.mcp.settings",
-    "quimera.runtime.tools.delegate",
-    "quimera.runtime.tools.shell",
-    "quimera.tasks.services",
-    "quimera.ui.textual.app",
-]
-ignore_errors = true
+# Sem baseline de dívida desde 2026-10-31: todo módulo de quimera/ passa no gate. Não adicione overrides com ignore_errors.

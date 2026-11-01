@@ -5,7 +5,7 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from quimera.runtime.mcp.client import (
     MCPClientBridge,
@@ -212,7 +212,7 @@ class MCPConnectionManager:
         sessão e esquece o estado. Conexões locais só aceitam o escopo local
         (``ValueError`` no global: não têm padrão global).
         """
-        entry = self.store.set_active(name, active, scope)
+        entry = cast(MCPConnectionEntry, self.store.set_active(name, active, scope))
         if active:
             self.bridge.mark_pending(name, spec_transport_type(entry.spec))
             self._start_connection_thread(entry.spec, thread_factory=thread_factory)
@@ -296,7 +296,15 @@ class MCPConnectionManager:
             workspace=self.workspace,
         )
         before = self.store.entry(name)
-        entry = self.store.upsert(spec, env_spec=env_spec, scope=scope, replaces=previous_name)
+        entry = cast(
+            MCPConnectionEntry,
+            self.store.upsert(
+                spec,
+                env_spec=env_spec,
+                scope=scope,
+                replaces=previous_name,
+            ),
+        )
         if previous_name and previous_name != entry.name:
             self.bridge.disconnect_connection(previous_name, forget=True)
         changed = before is None or (before.spec, before.env_spec) != (entry.spec, entry.env_spec)
