@@ -533,3 +533,15 @@ def threading_result(fn):
     thread.start()
     thread.join(_WAIT)
     return box["value"]
+
+
+def test_silent_run_nested_same_id_keeps_outer_mark_until_outer_exits():
+    from quimera.domain.agent_run_scope import is_silent_run, silent_run
+
+    with silent_run("visible-nested"):
+        with silent_run("visible-nested"):
+            assert is_silent_run("visible-nested") is True
+        assert is_silent_run("visible-nested") is True
+    assert is_silent_run("visible-nested") is False
+    with silent_run(""):
+        assert is_silent_run("") is False

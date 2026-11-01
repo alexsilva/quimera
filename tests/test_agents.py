@@ -2170,6 +2170,165 @@ def test_agent_client_api_profiles_non_quiet_close_the_executor_line_in_the_feed
     assert record["status"] == ("ok" if ok else "error")
 
 
+def _openai_profile_for_call():
+    """Profile resolvido por ``call`` (via ``profiles.get``) até o driver de API."""
+    connection = OpenAIConnection(
+        model="test-model", base_url="http://localhost/v1", api_key_env=None, provider="openai",
+    )
+    return SimpleNamespace(
+        effective_connection=lambda: connection,
+        supports_tools=True,
+        tool_use_reliability="medium",
+        cmd=None,
+    )
+
+
+@pytest.mark.parametrize("visibility", [Visibility.SUMMARY, Visibility.QUIET])
+def test_agent_client_api_silent_run_keeps_the_executor_preview_out_of_the_feed(visibility):
+    """Run silenciosa: nem início (executor) nem fim (presenter) chegam ao feed; a telemetria fica."""
+    renderer = MagicMock()
+    renderer.supports_agent_feed = True
+    client = AgentClient(renderer, idle_timeout=60, visibility=visibility)
+    client.tool_executor = MagicMock()
+    profile = _openai_profile_for_call()
+    mock_driver = MagicMock()
+
+    def run_with_tool(**kwargs):
+        kwargs["on_tool_call"]("read_file", {"path": "README.md"}, tool_call_id="call_1")
+        preview = client.tool_executor.set_tool_preview_callback.call_args.args[0]
+        preview(
+            "read_file",
+            {"path": "README.md"},
+            {
+                "tool_call_id": "call_1",
+                "trusted_context": SimpleNamespace(
+                    transport="native_openai",
+                    agent_name="test-agent",
+                    run_id=kwargs["run_id"],
+                ),
+            },
+        )
+        kwargs["on_tool_result"](SimpleNamespace(
+            ok=True, tool_name="read_file", error=None, data={"tool_call_id": "call_1"},
+        ))
+        return "api response"
+
+    mock_driver.run.side_effect = run_with_tool
+    client._api_drivers["test-agent"] = mock_driver
+
+    with patch("quimera.profiles.get", return_value=profile):
+        result = client.call("test-agent", "prompt", silent=True, show_status=False)
+
+    assert result == "api response"
+    renderer.show_tool_preview.assert_not_called()
+    renderer.show_feed.assert_not_called()
+    (record,) = client.last_spy_turn_detail["tools"]
+    assert record["status"] == "ok"
+    assert client._run_activity_run_id is None
+
+
+def test_agent_client_silent_run_suppresses_preview_only_for_its_own_run_id():
+    """Executor compartilhado: só a run silenciosa é suprimida; a visível, concorrente, aparece."""
+    renderer = MagicMock()
+    renderer.supports_agent_feed = True
+    client = AgentClient(renderer, idle_timeout=60, visibility=Visibility.SUMMARY)
+    client.tool_executor = MagicMock()
+    client.bind_tool_preview_callback(client.tool_executor)
+    preview = client.tool_executor.set_tool_preview_callback.call_args.args[0]
+    seen = {}
+
+    def silent_run_body(**kwargs):
+        seen["silent_id"] = kwargs["run_id"]
+        for run_id, call_id in ((kwargs["run_id"], "call_s"), ("visible-run", "call_v")):
+            preview(
+                "read_file",
+                {"path": "README.md"},
+                {
+                    "tool_call_id": call_id,
+                    "trusted_context": SimpleNamespace(transport="native_openai", agent_name="a", run_id=run_id),
+                },
+            )
+        return "ok"
+
+    mock_driver = MagicMock()
+    mock_driver.run.side_effect = silent_run_body
+    client._api_drivers["test-agent"] = mock_driver
+    with patch("quimera.profiles.get", return_value=_openai_profile_for_call()):
+        client.call("test-agent", "prompt", silent=True, show_status=False)
+
+    ids = [c.args[0]["tool_line"]["tool_call_id"] for c in renderer.show_tool_preview.call_args_list]
+    assert ids == ["call_v"]
+    assert seen["silent_id"].startswith("silent:")
+    # Tool tardia da thread de um driver abandonado (timeout/cancelamento):
+    # o id gerado continua silencioso e não deixa linha órfã no feed.
+    preview(
+        "read_file", {"path": "x"},
+        {"tool_call_id": "late", "trusted_context": SimpleNamespace(run_id=seen["silent_id"])},
+    )
+    assert renderer.show_tool_preview.call_count == 1
+
+
+def test_agent_client_silent_cli_run_registers_the_mcp_run_id_and_silences_its_preview():
+    """CLI silencioso: o id vai no prelude MCP e a preview do executor dessa run é suprimida."""
+    from quimera.domain.agent_run_scope import is_silent_run
+
+    renderer = MagicMock()
+    renderer.supports_agent_feed = True
+    client = AgentClient(renderer, idle_timeout=60, visibility=Visibility.SUMMARY)
+    client.tool_executor = MagicMock()
+    client.bind_tool_preview_callback(client.tool_executor)
+    preview = client.tool_executor.set_tool_preview_callback.call_args.args[0]
+    captured = {}
+
+    def fake_run(cmd, input_text=None, **kwargs):
+        captured["env_run_id"] = (kwargs.get("extra_env") or {}).get("QUIMERA_MCP_RUN_ID")
+        preview(
+            "read_file",
+            {"path": "README.md"},
+            {"tool_call_id": "c1", "_mcp_state": {"agent_name": "cli-agent", "trusted_run_id": captured["env_run_id"]}},
+        )
+        captured["silent_during"] = is_silent_run(captured["env_run_id"])
+        return "cli out"
+
+    profile = SimpleNamespace(
+        effective_connection=lambda: None, supports_tools=True, cmd=["fake-cli"],
+        prompt_as_arg=True, output_format="text", _mcp_socket_path="/tmp/fake.sock",
+    )
+    with patch("quimera.profiles.get", return_value=profile), patch.object(client, "run", fake_run), patch.object(
+        client, "_resolve_profile_cli_attrs", return_value=(["fake-cli"], True, "text")
+    ):
+        client.call("cli-agent", "prompt", silent=True, show_status=False)
+
+    assert captured["env_run_id"].startswith("silent:")
+    assert captured["silent_during"] is True
+    renderer.show_tool_preview.assert_not_called()
+    assert client._run_activity_run_id is None
+
+
+def test_agent_client_silent_identity_restores_state_when_the_call_raises():
+    """Exceção dentro da run silenciosa: id anterior restaurado e marca do id reaproveitado desfeita."""
+    from quimera.domain.agent_run_scope import is_silent_run
+
+    client = AgentClient(MagicMock(), idle_timeout=60, visibility=Visibility.SUMMARY)
+    client._run_activity_run_id = "visible-run"
+    with pytest.raises(RuntimeError):
+        with client._silent_run_identity(True):
+            assert is_silent_run("visible-run") is True
+            raise RuntimeError("boom")
+    assert client._run_activity_run_id == "visible-run"
+    assert is_silent_run("visible-run") is False
+
+    client._run_activity_run_id = None
+    with pytest.raises(RuntimeError):
+        with client._silent_run_identity(True):
+            generated = client._run_activity_run_id
+            raise RuntimeError("boom")
+    assert client._run_activity_run_id is None
+    assert generated.startswith("silent:")
+    # Id gerado nunca é de execução visível: segue silencioso após o bloco.
+    assert is_silent_run(generated) is True
+
+
 def test_agent_client_api_quiet_silent_records_tools_without_rendering(renderer):
     """Silent continua soberano mesmo quando a política quiet preserva tools."""
     client = AgentClient(renderer, idle_timeout=60, visibility=Visibility.QUIET)

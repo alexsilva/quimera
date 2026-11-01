@@ -14,6 +14,7 @@ outra thread deve usar :func:`run_in_current_context`.
 from __future__ import annotations
 
 import contextvars
+import threading
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -114,3 +115,48 @@ def run_in_current_context(fn: Callable[..., _T]) -> Callable[..., _T]:
         return context.run(fn, *args, **kwargs)
 
     return _runner
+
+
+# Prefixo dos ids gerados para execuções silenciosas sem identidade própria.
+# Esses ids nunca são reaproveitados por execução visível, então seguem
+# reconhecidos como silenciosos mesmo depois do bloco: a thread de um driver
+# abandonado por timeout/cancelamento ainda pode iniciar tools com eles.
+SILENT_RUN_ID_PREFIX = "silent:"
+
+# Execuções silenciosas em andamento, por ``run_id``. O executor de tools e o
+# servidor MCP são compartilhados entre clients e threads; só a identidade da
+# execução (nunca o nome do agente) distingue a silenciosa da visível. Conta
+# entradas: um bloco aninhado com o mesmo id não desfaz a marca do externo.
+_SILENT_RUN_IDS: dict[str, int] = {}
+_SILENT_RUN_IDS_LOCK = threading.Lock()
+
+
+@contextmanager
+def silent_run(run_id: str | None) -> Iterator[None]:
+    """Marca ``run_id`` como execução silenciosa enquanto o bloco roda."""
+    key = str(run_id or "").strip()
+    if not key:
+        yield
+        return
+    with _SILENT_RUN_IDS_LOCK:
+        _SILENT_RUN_IDS[key] = _SILENT_RUN_IDS.get(key, 0) + 1
+    try:
+        yield
+    finally:
+        with _SILENT_RUN_IDS_LOCK:
+            remaining = _SILENT_RUN_IDS.get(key, 0) - 1
+            if remaining > 0:
+                _SILENT_RUN_IDS[key] = remaining
+            else:
+                _SILENT_RUN_IDS.pop(key, None)
+
+
+def is_silent_run(run_id: Any) -> bool:
+    """Indica se ``run_id`` pertence a uma execução silenciosa em andamento."""
+    key = str(run_id or "").strip()
+    if not key:
+        return False
+    if key.startswith(SILENT_RUN_ID_PREFIX):
+        return True
+    with _SILENT_RUN_IDS_LOCK:
+        return key in _SILENT_RUN_IDS

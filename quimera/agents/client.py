@@ -11,14 +11,19 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import quimera.profiles as profiles
 from quimera.constants import MAX_STDERR_LINES
-from quimera.domain.agent_run_scope import run_in_current_context
+from quimera.domain.agent_run_scope import (
+    SILENT_RUN_ID_PREFIX,
+    is_silent_run,
+    run_in_current_context,
+    silent_run,
+)
 from quimera.domain.task_states import Visibility
 from quimera.profiles.base import (
     CliConnection,
@@ -496,6 +501,10 @@ class AgentClient:
         set_tool_preview = getattr(tool_executor, "set_tool_preview_callback", None)
         if callable(set_tool_preview):
             def _preview(name, args, metadata=None) -> None:
+                if is_silent_run(self._tool_run_id(metadata)):
+                    # O fim de uma tool de execução silenciosa não vai ao feed;
+                    # mostrar só o início deixaria uma linha órfã.
+                    return
                 context = self._tool_preview_context(metadata)
                 line = build_tool_line(
                     name,
@@ -510,6 +519,17 @@ class AgentClient:
                 )
 
             set_tool_preview(_preview)
+
+    @staticmethod
+    def _tool_run_id(metadata) -> str:
+        """Id da execução dona da chamada, vindo de metadata confiável."""
+        if not isinstance(metadata, dict):
+            return ""
+        run_id = getattr(metadata.get("trusted_context"), "run_id", None)
+        if not run_id:
+            state = metadata.get("_mcp_state")
+            run_id = state.get("trusted_run_id") if isinstance(state, dict) else None
+        return str(run_id or "")
 
     @staticmethod
     def _agent_from_tool_metadata(metadata) -> str | None:
@@ -1698,17 +1718,38 @@ class AgentClient:
                 self._user_cancelled = True
                 self._show_cancelled_once()
                 return None
-            return self._call_impl(
-                agent,
-                prompt,
-                silent=silent,
-                show_status=show_status,
-                quiet=quiet,
-                on_text_chunk=on_text_chunk,
-                allow_tools=allow_tools,
-                progress_callback=progress_callback,
-                from_agent=from_agent,
-            )
+            with self._silent_run_identity(silent):
+                return self._call_impl(
+                    agent,
+                    prompt,
+                    silent=silent,
+                    show_status=show_status,
+                    quiet=quiet,
+                    on_text_chunk=on_text_chunk,
+                    allow_tools=allow_tools,
+                    progress_callback=progress_callback,
+                    from_agent=from_agent,
+                )
+
+    @contextmanager
+    def _silent_run_identity(self, silent):
+        """Dá identidade à execução silenciosa e a registra enquanto ela roda.
+
+        O id viaja no ``trusted_context`` (API) ou no prelude do proxy MCP (CLI)
+        e deixa o callback de preview do executor compartilhado reconhecer a
+        execução e não exibir só o início de uma tool cujo fim nunca chega ao feed.
+        """
+        if not silent:
+            yield
+            return
+        previous_run_id = self._run_activity_run_id
+        run_id = previous_run_id or f"{SILENT_RUN_ID_PREFIX}{uuid.uuid4()}"
+        self._run_activity_run_id = run_id
+        try:
+            with silent_run(run_id):
+                yield
+        finally:
+            self._run_activity_run_id = previous_run_id
 
     def call_with_run_activity(
         self,
