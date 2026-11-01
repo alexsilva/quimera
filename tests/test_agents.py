@@ -21,6 +21,7 @@ from quimera.agents.text_filters import (
 from quimera.agents.client import _extract_cli_text_chunks
 from quimera.agents.process_runner import ProcessRunner
 from quimera.domain.task_states import Visibility
+from quimera.domain.tool_line import build_tool_line
 from quimera.paths import TMP_BASE_DIR
 from quimera.profiles import get as get_profile
 from quimera.prompt_templates import PromptText
@@ -42,6 +43,32 @@ from quimera.runtime.approval import AutoApprovalHandler
 from quimera.runtime.config import MCP_PROXY_ENV_VARS, ToolRuntimeConfig
 from quimera.workspace import Workspace
 from quimera.runtime.executor import ToolExecutor
+
+
+def _tl(tool, args=None, **kwargs):
+    """Texto canônico da linha de tool, como o feed em modo plain o recebe."""
+    return build_tool_line(tool, args, **kwargs).to_text()
+
+
+class _Starts(str):
+    """Igual a qualquer texto que comece por ele: o fim da tool leva a duração medida."""
+
+    suffix = ""
+
+    def __eq__(self, other):
+        return isinstance(other, str) and other.startswith(str(self)) and other.endswith(self.suffix)
+
+    __hash__ = str.__hash__
+
+
+def _ended(text, suffix=""):
+    matcher = _Starts(text)
+    matcher.suffix = suffix
+    return matcher
+
+
+def _cmd(command, **kwargs):
+    return _tl("exec_command", {"cmd": command}, **kwargs)
 
 
 def _build_tool_executor(workspace_root):
@@ -1282,8 +1309,10 @@ def test_agent_client_run_quiet_shows_codex_tools_without_narrative(renderer):
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
-    renderer.show_plain.assert_any_call("$ git status", agent="codex", muted=True)
-    renderer.show_plain.assert_any_call("✓ git status", agent="codex", muted=True)
+    renderer.show_plain.assert_any_call(_tl("exec_command", {"cmd": "git status"}), agent="codex", muted=True)
+    renderer.show_plain.assert_any_call(
+        _ended(_tl("exec_command", {"cmd": "git status"}, status="ok")), agent="codex", muted=True
+    )
     rendered = [str(call.args[0]) for call in renderer.show_plain.call_args_list if call.args]
     assert "Vou checar o repositório" not in rendered
     assert "Estado verificado." not in rendered
@@ -1299,17 +1328,17 @@ def test_agent_client_run_quiet_shows_codex_tools_without_narrative(renderer):
         (
             "codex",
             '{"type":"item.started","item":{"type":"command_execution","command":"pwd"}}',
-            "$ pwd",
+            _tl("exec_command", {"cmd": "pwd"}),
         ),
         (
             "claude",
             '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"README.md"}}]}}',
-            "README.md",
+            _tl("Read", {"file_path": "README.md"}),
         ),
         (
             "opencode",
             '{"type":"tool_call","part":{"type":"tool","tool":"grep","input":{"pattern":"quiet","path":"quimera"}}}',
-            'buscar "quiet" em quimera',
+            _tl("grep", {"pattern": "quiet", "path": "quimera"}),
         ),
     ],
 )
@@ -1344,7 +1373,7 @@ def test_agent_client_run_summary_flushes_compacted_responses_before_context(ren
 
     renderer.update_agent_transient.assert_any_call("codex", "linha 1")
     renderer.update_agent_transient.assert_any_call("codex", "linha 2")
-    renderer.update_agent_transient.assert_any_call("codex", "$ git status")
+    renderer.update_agent_transient.assert_any_call("codex", _cmd("git status"))
 
 
 def test_agent_client_run_summary_keeps_completed_tool_line_transient(renderer):
@@ -1364,8 +1393,8 @@ def test_agent_client_run_summary_keeps_completed_tool_line_transient(renderer):
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=True)
 
-    renderer.update_agent_transient.assert_any_call("codex", "$ git diff -- quimera/agents.py")
-    renderer.update_agent_transient.assert_any_call("codex", "✓ git diff -- quimera/agents.py")
+    renderer.update_agent_transient.assert_any_call("codex", _cmd("git diff -- quimera/agents.py"))
+    renderer.update_agent_transient.assert_any_call("codex", _ended(_cmd("git diff -- quimera/agents.py", status="ok")))
 
 
 def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_clean(renderer):
@@ -1388,8 +1417,8 @@ def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_cle
 
     client.flush_pending_summary()
 
-    renderer.update_agent_transient.assert_any_call("codex", "$ git status --short")
-    renderer.update_agent_transient.assert_any_call("codex", "✓ git diff -- quimera/agents.py")
+    renderer.update_agent_transient.assert_any_call("codex", _cmd("git status --short"))
+    renderer.update_agent_transient.assert_any_call("codex", _ended(_cmd("git diff -- quimera/agents.py", status="ok")))
     renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex", muted=True)
     renderer.show_plain.assert_any_call("+nova linha", agent="codex", muted=True)
     assert client.last_spy_turn_detail is not None
@@ -1458,22 +1487,41 @@ def test_spy_output_presenter_collects_structured_turn_detail(renderer):
 
 def test_spy_output_presenter_normalizes_tool_activity(renderer):
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+    command = {"cmd": "rg -n last_thinking quimera"}
 
-    start = presenter.tool_activity(SpyEvent(kind="tool", text="$ rg -n last_thinking quimera"))
-    end = presenter.tool_activity(SpyEvent(kind="tool", text="✓ rg -n last_thinking quimera"))
+    start = presenter.tool_activity(SpyEvent(
+        kind="tool",
+        text=_tl("exec_command", command),
+        data={"tool": "exec_command", "operation": "start", "status": "running", "input": command},
+    ))
+    end = presenter.tool_activity(SpyEvent(
+        kind="tool",
+        text=_tl("exec_command", command, status="ok"),
+        data={"tool": "exec_command", "operation": "end", "status": "ok", "input": command},
+    ))
 
     assert start == {
-        "text": "$ rg -n last_thinking quimera",
+        "text": _tl("exec_command", command),
         "tool": "exec_command",
         "operation": "start",
         "status": "running",
     }
     assert end == {
-        "text": "✓ rg -n last_thinking quimera",
+        "text": _tl("exec_command", command, status="ok"),
         "tool": "exec_command",
         "operation": "end",
         "status": "ok",
     }
+
+
+def test_spy_output_presenter_ignores_tool_events_without_data(renderer):
+    """Sem ``data`` não há telemetria: o texto não é interpretado."""
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    assert presenter.tool_activity(SpyEvent(kind="tool", text="$ ls")) is None
+    assert presenter.tool_activity(SpyEvent(kind="tool", text="✓ editar a.py")) is None
+    presenter.emit("codex", SpyEvent(kind="tool", text="$ ls"))
+    assert presenter.turn_tools == []
 
 
 def test_cli_run_activity_parser_failure_is_best_effort(renderer):
@@ -1692,21 +1740,25 @@ def test_agent_client_run_summary_does_not_persist_started_tool_without_status(r
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
-    renderer.update_agent_transient.assert_any_call("codex", "$ git diff -- quimera/agents.py")
-    renderer.update_agent_transient.assert_any_call("codex", "✓ git diff -- quimera/agents.py")
+    renderer.update_agent_transient.assert_any_call("codex", _cmd("git diff -- quimera/agents.py"))
+    renderer.update_agent_transient.assert_any_call("codex", _ended(_cmd("git diff -- quimera/agents.py", status="ok")))
 
 
 def test_spy_output_presenter_summary_keeps_tool_progress_transient(renderer):
     """Verifica que spy output presenter summary mantém tool progress transient."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
-    presenter.emit("codex", SpyEvent(kind="tool", text="usando apply_patch"))
-    presenter.emit("codex", SpyEvent(kind="tool", text="✓ editar quimera/agents.py"))
+    path = {"path": "quimera/agents.py"}
+    start = {"tool": "apply_patch", "tool_call_id": "p1", "input": path, "operation": "start", "status": "running"}
+    end = {**start, "operation": "end", "status": "ok"}
+    presenter.emit("codex", SpyEvent(kind="tool", text="", data=start))
+    assert presenter.current_status_label == _tl("apply_patch", path, tool_call_id="p1")
+    presenter.emit("codex", SpyEvent(kind="tool", text="", data=end))
 
     assert presenter.current_status_label == ""
     renderer.update_agent_transient.assert_has_calls([
-        call("codex", "usando apply_patch"),
-        call("codex", "✓ editar quimera/agents.py"),
+        call("codex", _tl("apply_patch", path)),
+        call("codex", _ended(_tl("apply_patch", path, status="ok"))),
     ])
 
 
@@ -1714,13 +1766,23 @@ def test_spy_output_presenter_summary_keeps_tool_failure_persistent(renderer):
     """Verifica que spy output presenter summary mantém tool failure transient."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
-    presenter.emit("codex", SpyEvent(kind="tool", text="$ pytest -q"))
-    presenter.emit("codex", SpyEvent(kind="tool", text="✗ pytest -q (exit 1)"))
+    command = {"cmd": "pytest -q"}
+    start = {"tool": "exec_command", "input": command, "operation": "start", "status": "running"}
+    end = {
+        **start,
+        "operation": "end",
+        "status": "error",
+        "output_meta": {"exit_code": 1},
+        "error": {"type": "CommandExitCode", "message": "exit 1"},
+    }
+    presenter.emit("codex", SpyEvent(kind="tool", text="", data=start))
+    presenter.emit("codex", SpyEvent(kind="tool", text="", data=end))
 
     renderer.update_agent_transient.assert_has_calls([
-        call("codex", "$ pytest -q"),
-        call("codex", "✗ pytest -q (exit 1)"),
+        call("codex", _cmd("pytest -q")),
+        call("codex", _ended(_cmd("pytest -q", status="error"), suffix="· exit 1")),
     ])
+    assert _cmd("pytest -q", status="error", exit_code=1).endswith("· exit 1")
     assert presenter.current_status_label == ""
 
 
@@ -1754,7 +1816,7 @@ def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
 
     assert result == '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"},{"type":"text","text":"Vou inspecionar o arquivo antes de sugerir a mudança."}]}}\n{"type":"result","result":"ok","is_error":false}'
     renderer.update_agent_transient.assert_any_call("claude", "iniciando execução")
-    renderer.update_agent_transient.assert_any_call("claude", "usando Read")
+    renderer.update_agent_transient.assert_any_call("claude", _tl("Read"))
     renderer.update_agent_transient.assert_any_call("claude", "Vou inspecionar o arquivo antes de sugerir a mudança.")
     renderer.update_agent_transient.assert_any_call("claude", "execução concluída")
     renderer.clear_agent_transient.assert_any_call("claude")
@@ -2036,12 +2098,76 @@ def test_agent_client_api_profiles_quiet_show_tool_calls_and_results_once(
 
     assert result == "api response"
     rendered = [call.args[0] for call in renderer.show_plain.call_args_list if call.args]
-    assert rendered.count("⚒ read_file README.md") == 1
-    assert rendered.count("✓ read_file") == 1
+    assert rendered.count(_tl("read_file", {"path": "README.md"})) == 1
+    assert sum(1 for text in rendered if text.startswith(_tl("read_file", {"path": "README.md"}, status="ok"))) == 1
     renderer.show_turn_summary.assert_not_called()
     assert client.last_spy_turn_detail is not None
     assert client.last_spy_turn_detail["runtime"] == "openai"
     assert client.last_spy_turn_detail["tools"][0]["status"] == "ok"
+
+
+@pytest.mark.parametrize("visibility", [Visibility.SUMMARY, Visibility.FULL])
+@pytest.mark.parametrize("ok", [True, False])
+@pytest.mark.parametrize(
+    ("agent", "provider", "transport"),
+    [
+        ("openai-compatible", "openai_compat", "openai_compat"),
+        ("codexcloud-gpt", "codexcloud", "cloud"),
+        ("claudecloud-sonnet", "claudecloud", "cloud"),
+    ],
+)
+def test_agent_client_api_profiles_non_quiet_close_the_executor_line_in_the_feed(
+    agent, provider, transport, ok, visibility,
+):
+    """Fora de quiet o início vem do executor e o fim do presenter, com o mesmo id."""
+    renderer = MagicMock()
+    renderer.supports_agent_feed = True
+    connection = OpenAIConnection(
+        model="test-model",
+        base_url="http://localhost/v1",
+        api_key_env=None,
+        provider=provider,
+    )
+    profile = SimpleNamespace(
+        effective_connection=lambda: connection,
+        supports_tools=True,
+        tool_use_reliability="medium",
+        cmd=None,
+    )
+    client = AgentClient(renderer, idle_timeout=60, visibility=visibility)
+    client.tool_executor = MagicMock()
+    mock_driver = MagicMock()
+
+    def run_with_tool(**kwargs):
+        kwargs["on_tool_call"]("read_file", {"path": "README.md"}, tool_call_id="call_1")
+        preview = client.tool_executor.set_tool_preview_callback.call_args.args[0]
+        preview(
+            "read_file",
+            {"path": "README.md"},
+            {"tool_call_id": "call_1", "trusted_context": SimpleNamespace(transport=transport, agent_name=agent)},
+        )
+        kwargs["on_tool_result"](SimpleNamespace(
+            ok=ok, tool_name="read_file", error=None if ok else "sem acesso", data={"tool_call_id": "call_1"},
+        ))
+        return "api response"
+
+    mock_driver.run.side_effect = run_with_tool
+    client._api_drivers[agent] = mock_driver
+
+    with patch("quimera.profiles.get", return_value=profile):
+        result = client.call(agent, "prompt", show_status=False)
+
+    assert result == "api response"
+    lines = [call.args[0]["tool_line"] for call in renderer.show_tool_preview.call_args_list]
+    assert [(line["status"], line["tool_call_id"]) for line in lines] == [
+        ("running", "call_1"),
+        ("ok" if ok else "error", "call_1"),
+    ]
+    assert [call.kwargs["agent"] for call in renderer.show_tool_preview.call_args_list] == [agent, agent]
+    assert lines[1]["subject"] == "README.md"
+    assert isinstance(lines[1]["duration_ms"], int)
+    (record,) = client.last_spy_turn_detail["tools"]
+    assert record["status"] == ("ok" if ok else "error")
 
 
 def test_agent_client_api_quiet_silent_records_tools_without_rendering(renderer):
@@ -2084,13 +2210,13 @@ def test_agent_client_api_quiet_silent_records_tools_without_rendering(renderer)
     assert client.last_spy_turn_detail["tools"][0]["status"] == "ok"
     assert activity == [
         {
-            "text": "⚒ read_file README.md",
+            "text": _tl("read_file", {"path": "README.md"}),
             "tool": "read_file",
             "operation": "start",
             "status": "running",
         },
         {
-            "text": "✓ read_file",
+            "text": _tl("read_file", status="ok"),
             "tool": "read_file",
             "operation": "end",
             "status": "ok",
@@ -2260,8 +2386,8 @@ def test_format_codex_spy_event_command():
     started = _format_codex_spy_event('{"type":"item.started","item":{"type":"command_execution","command":"ls"}}')
     completed = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0}}')
-    assert started == [SpyEvent(kind="tool", text="$ ls")]
-    assert completed == [SpyEvent(kind="tool", text="✓ ls")]
+    assert started == [SpyEvent(kind="tool", text=_cmd("ls"))]
+    assert completed == [SpyEvent(kind="tool", text=_cmd("ls", status="ok"))]
 
 
 def test_format_codex_spy_event_reasoning_and_message():
@@ -2315,7 +2441,7 @@ def test_format_codex_spy_event_reports_failed_test_command():
     completed = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"command_execution","command":"pytest -q tests/test_agents.py","exit_code":1}}'
     )
-    assert completed == [SpyEvent(kind="tool", text="✗ pytest -q tests/test_agents.py (exit 1)")]
+    assert completed == [SpyEvent(kind="tool", text=_cmd("pytest -q tests/test_agents.py", status="error", exit_code=1))]
 
 
 def test_format_codex_spy_event_hides_successful_command_completion():
@@ -2326,8 +2452,8 @@ def test_format_codex_spy_event_hides_successful_command_completion():
     completed = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"command_execution","command":"git status --short","exit_code":0}}'
     )
-    assert started == [SpyEvent(kind="tool", text="$ git status --short")]
-    assert completed == [SpyEvent(kind="tool", text="✓ git status --short")]
+    assert started == [SpyEvent(kind="tool", text=_cmd("git status --short"))]
+    assert completed == [SpyEvent(kind="tool", text=_cmd("git status --short", status="ok"))]
 
 
 def test_format_codex_spy_event_includes_diff_output_from_aggregated_output():
@@ -2336,7 +2462,7 @@ def test_format_codex_spy_event_includes_diff_output_from_aggregated_output():
         '{"type":"item.completed","item":{"type":"command_execution","command":"git diff -- quimera/agents.py","exit_code":0,"aggregated_output":"diff --git a/quimera/agents.py b/quimera/agents.py\\n+nova linha"}}'
     )
     assert completed == [
-        SpyEvent(kind="tool", text="✓ git diff -- quimera/agents.py"),
+        SpyEvent(kind="tool", text=_cmd("git diff -- quimera/agents.py", status="ok")),
         SpyEvent(kind="diff", text="diff --git a/quimera/agents.py b/quimera/agents.py", final=True),
         SpyEvent(kind="diff", text="+nova linha", final=True),
     ]
@@ -2350,8 +2476,8 @@ def test_format_codex_spy_event_reports_file_change_start_and_completion():
     completed = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"file_change","path":"quimera/agents.py"}}'
     )
-    assert started == [SpyEvent(kind="tool", text="editar quimera/agents.py")]
-    assert completed == [SpyEvent(kind="tool", text="✓ editar quimera/agents.py")]
+    assert started == [SpyEvent(kind="tool", text=_tl("apply_patch", {"path": "quimera/agents.py"}))]
+    assert completed == [SpyEvent(kind="tool", text=_tl("apply_patch", {"path": "quimera/agents.py"}, status="ok"))]
 
 
 def test_format_codex_spy_event_reports_tool_calls_as_tool_messages():
@@ -2359,7 +2485,7 @@ def test_format_codex_spy_event_reports_tool_calls_as_tool_messages():
     message = _format_codex_spy_event(
         '{"type":"item.started","item":{"type":"tool_call","name":"apply_patch"}}'
     )
-    assert message == [SpyEvent(kind="tool", text="usando apply_patch")]
+    assert message == [SpyEvent(kind="tool", text=_tl("apply_patch"))]
 
 
 def test_codex_profile_exposes_spy_stdout_formatter():
@@ -2658,7 +2784,7 @@ def test_format_claude_spy_event_summarizes_assistant_and_result():
     assert assistant == [
         SpyEvent(
             kind="tool",
-            text="usando Bash",
+            text=_tl("Bash"),
             transient=True,
             data={
                 "tool": "Bash",
@@ -2698,7 +2824,7 @@ def test_format_opencode_spy_event_reports_tool_calls_as_tool_messages():
     assert tool == [
         SpyEvent(
             kind="tool",
-            text="usando run_shell",
+            text=_tl("run_shell"),
             transient=True,
             data={
                 "tool": "run_shell",
@@ -2722,13 +2848,13 @@ def test_claude_and_opencode_tool_events_feed_structured_run_activity(renderer):
     )[0]
 
     assert presenter.tool_activity(claude) == {
-        "text": "README.md",
+        "text": _tl("Read", {"path": "README.md"}),
         "tool": "Read",
         "operation": "start",
         "status": "running",
     }
     assert presenter.tool_activity(opencode) == {
-        "text": 'buscar "last_activity"',
+        "text": _tl("grep", {"pattern": "last_activity"}),
         "tool": "grep",
         "operation": "start",
         "status": "running",
@@ -3133,8 +3259,7 @@ def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
     assert result == "ok"
     renderer.show_system_neutral.assert_called()
     message = renderer.show_system_neutral.call_args[0][0]
-    assert "⚒ read_file" in message
-    assert "read_file" in message
+    assert message == _tl("read_file", {"path": "README.md"})
     assert "README.md" in message
 
 
@@ -3153,7 +3278,7 @@ def test_agent_client_bind_tool_preview_callback_uses_shared_preview(renderer):
 
     muted_reporter.assert_called_once()
     message = muted_reporter.call_args[0][0]
-    assert "⚒ read_file" in message
+    assert message == _tl("read_file", {"path": "README.md"})
     assert "README.md" in message
 
 
@@ -3175,7 +3300,7 @@ def test_agent_client_quiet_keeps_internal_mcp_tool_preview(renderer):
         )},
     )
 
-    renderer.show_system_neutral.assert_called_once_with("⚒ read_file README.md")
+    renderer.show_system_neutral.assert_called_once_with(_tl("read_file", {"path": "README.md"}))
 
 
 def test_agent_client_tool_preview_uses_agent_feed_when_supported():
@@ -3201,7 +3326,7 @@ def test_agent_client_tool_preview_uses_agent_feed_when_supported():
 
     renderer.show_feed.assert_called_once()
     message = renderer.show_feed.call_args.args[0]
-    assert "⚒ read_file" in message
+    assert message == _tl("read_file", {"path": "README.md"})
     assert "README.md" in message
     assert renderer.show_feed.call_args.kwargs == {"agent": "codex", "muted": True}
     renderer.show_system_neutral.assert_not_called()
@@ -3231,7 +3356,7 @@ def test_agent_client_tool_preview_uses_mcp_http_feed_for_http_without_agent_met
 
     renderer.show_feed.assert_called_once()
     message = renderer.show_feed.call_args.args[0]
-    assert "⚒ read_file" in message
+    assert message == _tl("read_file", {"path": "README.md"}, transport="mcp_http")
     assert "README.md" in message
     assert renderer.show_feed.call_args.kwargs == {"agent": "mcp-http", "muted": True}
     muted_reporter.assert_not_called()
@@ -3299,8 +3424,7 @@ def test_call_api_routes_openai_preview_through_muted_reporter(renderer):
     assert result == "ok"
     muted_reporter.assert_called_once()
     message = muted_reporter.call_args[0][0]
-    assert "⚒ read_file" in message
-    assert "read_file" in message
+    assert message == _tl("read_file", {"path": "README.md"})
     assert "README.md" in message
     renderer.show_system_neutral.assert_not_called()
 
@@ -3382,11 +3506,10 @@ def test_call_api_masks_sensitive_fields_in_openai_preview(renderer):
 
     assert result == "ok"
     message = muted_reporter.call_args[0][0]
-    assert "⚒ custom_tool" in message
+    assert message.startswith("$ README.md")
     assert "README.md" in message
     assert "1234567890" not in message
     assert "super-secret-token" not in message
-    assert "12****90" in message
 
 
 def test_call_api_propagates_task_approval_scope_to_driver_thread(renderer):
@@ -4619,7 +4742,11 @@ def test_tool_preview_ignores_internal_mcp_run_id(renderer):
         },
     )
 
-    assert renderer.show_tool_preview.call_args.args[0] == "⚒ read_file README.md"
+    payload = renderer.show_tool_preview.call_args.args[0]
+    assert payload["content"] == _tl("read_file", {"path": "README.md"})
+    assert payload["tool_line"]["tool"] == "read_file"
+    assert payload["tool_line"]["transport"] == ""
+    assert "run_id" not in payload
     assert renderer.show_tool_preview.call_args.kwargs["agent"] == "opencode"
 
 
@@ -4648,7 +4775,9 @@ def test_tool_preview_preserves_http_mcp_run_id(renderer):
     )
 
     payload = renderer.show_tool_preview.call_args.args[0]
-    assert payload["content"] == "⚒ read_file README.md"
+    assert payload["content"] == _tl("read_file", {"path": "README.md"}, transport="mcp_http")
+    assert payload["tool_line"]["transport"] == "mcp_http"
+    assert payload["tool_line"]["subject"] == "README.md"
     assert payload["run_id"] == "http:run-1"
     assert payload["transport"] == "mcp_http"
     assert renderer.show_tool_preview.call_args.kwargs["agent"] == "mcp-http"

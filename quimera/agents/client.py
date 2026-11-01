@@ -36,7 +36,14 @@ from quimera.sandbox.bwrap import (
 )
 from quimera.sandbox.state import agent_runtime_rw_paths, is_sandbox_enabled
 from quimera.spy_output_presenter import SpyOutputPresenter
-from quimera.runtime.tool_preview import ToolPreview
+from quimera.domain.tool_line import (
+    CATEGORY_GLYPHS,
+    MCP_HTTP_MARKER,
+    STATUS_MARKS,
+    TRANSPORT_MCP_HTTP,
+    ToolLine,
+    build_tool_line,
+)
 from quimera.prompt_templates import PromptText
 
 from quimera.agents.cancel_signal import ForkCancelEvent
@@ -459,7 +466,7 @@ class AgentClient:
             activity = self._spy_output_presenter.tool_activity(event)
             self._notify_run_activity(callback, activity)
 
-    def _show_tool_preview(self, message: str, *, agent: str | None = None, metadata=None) -> None:
+    def _show_tool_preview(self, line: ToolLine | str, *, agent: str | None = None, metadata=None) -> None:
         """Exibe preview operacional de tool no feed quando possível."""
         trusted_context = metadata.get("trusted_context") if isinstance(metadata, dict) else None
         transport = str(getattr(trusted_context, "transport", "") or "").strip().lower()
@@ -469,7 +476,12 @@ class AgentClient:
             # MCP interno/HTTP continua usando este canal normalmente.
             return
         context = self._tool_preview_context(metadata)
-        payload = {"content": message, **context} if context else message
+        message = line.to_text() if isinstance(line, ToolLine) else line
+        payload: dict[str, Any] | str = message
+        if isinstance(line, ToolLine):
+            payload = {"content": message, "tool_line": line.to_payload(), **context}
+        elif context:
+            payload = {"content": message, **context}
         if self.renderer.supports_agent_feed is True:
             show_tool_preview = getattr(self.renderer, "show_tool_preview", None)
             if callable(show_tool_preview):
@@ -483,13 +495,21 @@ class AgentClient:
         """Registra o preview operacional compartilhado para tools sem approval."""
         set_tool_preview = getattr(tool_executor, "set_tool_preview_callback", None)
         if callable(set_tool_preview):
-            set_tool_preview(
-                lambda name, args, metadata=None: self._show_tool_preview(
-                    ToolPreview.build(name, args),
+            def _preview(name, args, metadata=None) -> None:
+                context = self._tool_preview_context(metadata)
+                line = build_tool_line(
+                    name,
+                    args,
+                    tool_call_id=context.get("tool_call_id"),
+                    transport=TRANSPORT_MCP_HTTP if context.get("transport") == TRANSPORT_MCP_HTTP else "",
+                )
+                self._show_tool_preview(
+                    line,
                     agent=self._agent_from_tool_metadata(metadata) or agent,
                     metadata=metadata,
                 )
-            )
+
+            set_tool_preview(_preview)
 
     @staticmethod
     def _agent_from_tool_metadata(metadata) -> str | None:
@@ -566,15 +586,16 @@ class AgentClient:
             payload["mcp_msg_id"] = str(metadata["mcp_msg_id"])
         return {key: value for key, value in payload.items() if value}
 
-    @staticmethod
-    def _is_tool_call_text(text: str) -> bool:
-        cleaned = text.strip()
-        return (
-            cleaned.startswith("tool:")
-            or cleaned.startswith("$ ")
-            or cleaned.startswith("✓ ")
-            or cleaned.startswith("✗ ")
-        )
+    # Prefixos canônicos de ``ToolLine.to_text``: marcador MCP HTTP, status e
+    # glifo de categoria (``$`` é o de execução), além do ``tool:`` dos CLIs.
+    _TOOL_CALL_TEXT_PREFIXES = (
+        "tool:",
+        *(f"{mark} " for mark in (MCP_HTTP_MARKER, *STATUS_MARKS.values(), *CATEGORY_GLYPHS.values())),
+    )
+
+    @classmethod
+    def _is_tool_call_text(cls, text: str) -> bool:
+        return text.strip().startswith(cls._TOOL_CALL_TEXT_PREFIXES)
 
     def reset_cancel_notices(self) -> None:
         """Permite exibir novamente avisos de cancelamento em um novo ciclo."""
@@ -2089,10 +2110,15 @@ class AgentClient:
             )
 
     def _record_api_tool_result(self, run, tool_result) -> None:
-        """Registra (ou emite, em quiet) o resultado de uma tool executada pelo driver."""
+        """Registra e, fora do modo silencioso, emite o resultado de uma tool do driver.
+
+        O início chega ao feed pela preview do executor (fora de quiet) com o
+        mesmo ``tool_call_id``; o fim só chega por aqui, em toda visibilidade.
+        O ``emit`` registra a telemetria uma vez e aplica a política visual.
+        """
         activity = self._spy_output_presenter.tool_result_activity(tool_result)
         self._notify_run_activity(run.run_activity_callback, activity)
-        if not run.silent and self.visibility == Visibility.QUIET:
+        if not run.silent:
             self._spy_output_presenter.emit_tool_result(run.agent, tool_result)
         else:
             self._spy_output_presenter.record_tool_result(tool_result)

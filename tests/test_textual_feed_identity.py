@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.feed_model import TextualFeedModel
+from tests.textual_tool_helpers import tool_msg, tool_texts
 
 
 def _update(agent: str, content: str, **payload: object) -> TextualUiEvent:
@@ -17,6 +18,13 @@ def _update(agent: str, content: str, **payload: object) -> TextualUiEvent:
 
 def _preview(agent: str, content: str, **payload: object) -> TextualUiEvent:
     return TextualUiEvent("tool_preview", {"content": content, **payload}, agent=agent)
+
+
+def _tool(agent: str, tool: str, args: dict[str, object] | None = None, **payload: object) -> TextualUiEvent:
+    """Preview estruturada; ``tool_call_id`` no payload vai também para a linha."""
+    tool_call_id = payload.get("tool_call_id")
+    message = tool_msg(tool, args, tool_call_id=str(tool_call_id) if tool_call_id else None)
+    return TextualUiEvent("tool_preview", {**message, **payload}, agent=agent)
 
 
 def _final(agent: str, content: str, **payload: object) -> TextualUiEvent:
@@ -63,7 +71,7 @@ def test_final_keeps_every_tool_line_of_the_run_beyond_the_visible_window():
     model = TextualFeedModel()
     model.apply(_update("claude", "trabalhando", run_id="r1"))
     for index in range(7):
-        model.apply(_preview("claude", f"⚒ read_file f{index}.py", run_id="r1"))
+        model.apply(_tool("claude", "read_file", {"path": f"f{index}.py"}, run_id="r1"))
     # O bloco vivo mostra só as últimas 5 mais a linha de excedente.
     assert len(model.items[0].event.payload["tools"]) == 6
 
@@ -71,7 +79,7 @@ def test_final_keeps_every_tool_line_of_the_run_beyond_the_visible_window():
 
     (item,) = model.items
     payload = item.event.payload
-    assert payload["tool_lines"] == [f"⚒ read_file f{index}.py" for index in range(7)]
+    assert tool_texts(payload["tool_lines"]) == [f"⌕ ler f{index}.py" for index in range(7)]
     assert payload["feed_seq"] == item.seq
     assert payload["tools_expanded"] is False
     assert "tools" not in payload
@@ -83,16 +91,16 @@ def test_final_tool_lines_are_capped_with_overflow_line_first():
     model = TextualFeedModel()
     model.apply(_update("claude", "trabalhando", run_id="r1"))
     for index in range(250):
-        model.apply(_preview("claude", f"⚒ read_file f{index}.py", run_id="r1"))
+        model.apply(_tool("claude", "read_file", {"path": f"f{index}.py"}, run_id="r1"))
 
     model.apply(_final("claude", "pronto", run_id="r1"))
 
     lines = model.items[0].event.payload["tool_lines"]
     assert len(lines) == 200
     # Mesma posição do bloco vivo: "anteriores" fica acima das que sobraram.
-    assert lines[0] == "⋮ +51 ferramentas anteriores"
-    assert lines[1] == "⚒ read_file f51.py"
-    assert lines[-1] == "⚒ read_file f249.py"
+    assert lines[0] == {"marker": True, "text": "⋮ +51 ferramentas anteriores"}
+    assert lines[1]["text"] == "⌕ ler f51.py"
+    assert lines[-1]["text"] == "⌕ ler f249.py"
 
 
 def test_final_without_tools_keeps_original_event_and_is_not_toggleable():
@@ -111,7 +119,7 @@ def test_toggle_turn_tools_preserves_seq_and_flips_expansion():
     model = TextualFeedModel()
     model.apply(TextualUiEvent("user_message", {"content": "revise"}))
     model.apply(_update("claude", "trabalhando", run_id="r1"))
-    model.apply(_preview("claude", "⚒ read_file a.py", run_id="r1"))
+    model.apply(_tool("claude", "read_file", {"path": "a.py"}, run_id="r1"))
     model.apply(_final("claude", "pronto", run_id="r1"))
     before = model.items[1]
     seq = before.seq
@@ -123,7 +131,7 @@ def test_toggle_turn_tools_preserves_seq_and_flips_expansion():
     assert after.seq == seq
     assert after.transient is False
     assert after.event.payload["tools_expanded"] is True
-    assert after.event.payload["tool_lines"] == ["⚒ read_file a.py"]
+    assert tool_texts(after.event.payload["tool_lines"]) == ["⌕ ler a.py"]
     assert before.event.payload["tools_expanded"] is False
 
     assert model.toggle_turn_tools(seq) == 1
@@ -144,14 +152,14 @@ def test_latest_toggleable_seq_is_the_most_recent_final_with_tools():
     assert model.latest_toggleable_seq() is None
     for run_id in ("r1", "r2"):
         model.apply(_update("claude", "trabalhando", run_id=run_id))
-        model.apply(_preview("claude", f"⚒ read_file {run_id}.py", run_id=run_id))
+        model.apply(_tool("claude", "read_file", {"path": f"{run_id}.py"}, run_id=run_id))
         model.apply(_final("claude", f"pronto {run_id}", run_id=run_id))
     # Final sem tools depois não rouba o atalho.
     model.apply(_update("claude", "pensando", run_id="r3"))
     model.apply(_final("claude", "sem tools", run_id="r3"))
 
     assert model.latest_toggleable_seq() == model.items[1].seq
-    assert model.items[1].event.payload["tool_lines"] == ["⚒ read_file r2.py"]
+    assert tool_texts(model.items[1].event.payload["tool_lines"]) == ["⌕ ler r2.py"]
 
 
 def test_restored_history_has_nothing_to_toggle():
@@ -165,14 +173,14 @@ def test_restored_history_has_nothing_to_toggle():
 def test_final_absorbing_mcp_http_burst_keeps_the_burst_tool_lines():
     model = TextualFeedModel()
     mcp = {"transport": "mcp_http", "client_name": "claude-code", "client_version": "2.0"}
-    model.apply(_preview("claude", "⚒ read_file a.py", mcp_msg_id="1", **mcp))
-    model.apply(_preview("claude", "⚒ grep_search x", mcp_msg_id="2", **mcp))
+    model.apply(_tool("claude", "read_file", {"path": "a.py"}, mcp_msg_id="1", **mcp))
+    model.apply(_tool("claude", "grep_search", {"pattern": "x"}, mcp_msg_id="2", **mcp))
 
     model.apply(_final("claude", "pronto"))
 
     (item,) = model.items
     assert item.event.kind == "agent_message"
-    assert item.event.payload["tool_lines"] == ["◇ ⚒ read_file a.py", "◇ ⚒ grep_search x"]
+    assert tool_texts(item.event.payload["tool_lines"]) == ["◇ ⌕ ler a.py", '◇ ⌕ buscar "x"']
 
 
 def test_final_with_run_id_absorbing_mcp_http_burst_keeps_the_burst_tool_lines():
@@ -182,13 +190,13 @@ def test_final_with_run_id_absorbing_mcp_http_burst_keeps_the_burst_tool_lines()
     model = TextualFeedModel()
     mcp = {"transport": "mcp_http", "client_name": "claude-code", "client_version": "2.0", "run_id": "r1"}
     model.apply(_update("claude", "pensando", run_id="r1"))
-    model.apply(_preview("claude", "⚒ read_file a.py", mcp_msg_id="1", **mcp))
-    model.apply(_preview("claude", "⚒ grep_search x", mcp_msg_id="2", **mcp))
+    model.apply(_tool("claude", "read_file", {"path": "a.py"}, mcp_msg_id="1", **mcp))
+    model.apply(_tool("claude", "grep_search", {"pattern": "x"}, mcp_msg_id="2", **mcp))
     for msg_id, tool in (("1", "read_file"), ("2", "grep_search")):
         model.apply(
             TextualUiEvent(
                 "tool_state",
-                {**mcp, "msg_id": msg_id, "tool_name": tool, "status": "finished"},
+                {**mcp, "msg_id": msg_id, "tool_name": tool, "status": "finished", "duration_ms": 4},
                 agent="claude",
             )
         )
@@ -199,7 +207,7 @@ def test_final_with_run_id_absorbing_mcp_http_burst_keeps_the_burst_tool_lines()
     (item,) = model.items
     payload = item.event.payload
     assert payload["turn_summary"]["total"] == 2
-    assert payload["tool_lines"] == ["◇ ✓ read_file a.py", "◇ ✓ grep_search x"]
+    assert tool_texts(payload["tool_lines"]) == ["◇ ✓ ⌕ ler a.py · 4ms", '◇ ✓ ⌕ buscar "x" · 4ms']
     assert model.latest_toggleable_seq() == item.seq
     assert not model._transient_tools_by_agent
 
@@ -212,13 +220,13 @@ def test_event_without_run_id_joins_the_single_live_run():
     model.apply(_update("claude", "gerando", run_id="r1"))
 
     model.apply(_update("claude", "sem id"))
-    model.apply(_preview("claude", "⚒ read_file a.py"))
+    model.apply(_tool("claude", "read_file", {"path": "a.py"}))
 
     (item,) = model.items
     assert item.transient is True
     assert item.event.payload["content"] == "sem id"
     assert item.event.payload["run_id"] == "r1"
-    assert item.event.payload["tools"] == ["⚒ read_file a.py"]
+    assert tool_texts(item.event.payload["tools"]) == ["⌕ ler a.py"]
 
 
 def test_run_without_id_and_run_with_id_never_share_a_card():
@@ -242,7 +250,7 @@ def test_update_without_run_id_with_two_live_runs_is_discarded():
     model.apply(_update("claude", "r2", run_id="r2"))
 
     assert model.apply(_update("claude", "de quem?")) is False
-    assert model.apply(_preview("claude", "⚒ read_file a.py")) is False
+    assert model.apply(_tool("claude", "read_file", {"path": "a.py"})) is False
     assert model.apply(_lifecycle("claude", "completed", "fim")) is False
 
     assert _contents(model) == [("agent_update", True, "r1"), ("agent_update", True, "r2")]
@@ -287,7 +295,7 @@ def test_visual_reset_without_run_keeps_the_runs_listed_in_keep_run_ids():
 def test_retrying_lifecycle_clears_tools_without_closing_the_run():
     model = TextualFeedModel()
     model.apply(_update("claude", "trabalhando", run_id="r1"))
-    model.apply(_preview("claude", "⚒ read_file a.py", run_id="r1"))
+    model.apply(_tool("claude", "read_file", {"path": "a.py"}, run_id="r1"))
 
     model.apply(_lifecycle("claude", "retrying", "nova tentativa", run_id="r1"))
 
@@ -366,7 +374,7 @@ def test_lifecycle_failure_by_delegation_id_without_run_id_closes_card_and_paire
 
     assert model.items == []
     # A execução que caiu fica finalizada: uma preview atrasada não reabre nada.
-    assert model.apply(_preview("codex", "⚒ read_file tarde.py", delegation_id="dlg-2", run_id="b1")) is False
+    assert model.apply(_tool("codex", "read_file", {"path": "tarde.py"}, delegation_id="dlg-2", run_id="b1")) is False
     assert model.items == []
 
 
@@ -411,10 +419,10 @@ def test_delegation_shown_again_before_its_execution_does_not_duplicate_the_card
 
 
 def _two_orchestrators_delegating_same_task(model: TextualFeedModel) -> None:
-    line = "⚒ tasks_delegate codex revisar patch"
+    delegate = {"target_agent": "codex", "request": "revisar patch"}
     for agent, call_id in (("alpha", "call-a"), ("beta", "call-b")):
         model.apply(_update(agent, f"{agent} delegando", run_id=f"{agent}-run"))
-        model.apply(_preview(agent, line, run_id=f"{agent}-run", tool_call_id=call_id))
+        model.apply(_tool(agent, "tasks_delegate", delegate, run_id=f"{agent}-run", tool_call_id=call_id))
 
 
 def test_delegation_consumes_only_the_preview_of_its_own_tool_call():
@@ -424,7 +432,7 @@ def test_delegation_consumes_only_the_preview_of_its_own_tool_call():
     model.apply(_delegation("dlg-b", tool_call_id="call-b", from_agent="beta"))
 
     alpha, beta = model.items[0].event.payload, model.items[1].event.payload
-    assert alpha["tools"] == ["⚒ tasks_delegate codex revisar patch"]
+    assert tool_texts(alpha["tools"]) == ["⇄ delegar codex · revisar patch"]
     assert "tools" not in beta
     assert model.items[2].event.kind == "delegation"
     assert "call-b" not in model._tool_call_line_by_agent.get("beta#run:beta-run", {})
@@ -435,7 +443,7 @@ def test_delegation_consumes_the_preview_even_when_the_orchestrator_name_differs
     # com o nome do perfil como está.
     model = TextualFeedModel()
     model.apply(_update("Claude", "delegando", run_id="r1"))
-    model.apply(_preview("Claude", "⚒ tasks_delegate codex revisar", run_id="r1", tool_call_id="call-1"))
+    model.apply(_tool("Claude", "tasks_delegate", {"target_agent": "codex", "request": "revisar"}, run_id="r1", tool_call_id="call-1"))
 
     model.apply(_delegation("dlg-1", tool_call_id="call-1", from_agent="claude"))
 
@@ -448,7 +456,7 @@ def test_anonymous_http_orchestrator_consumes_its_preview_by_tool_call_id_alone(
     # "mcp-http". Sem execução do "agente" no feed, vale o tool_call_id.
     model = TextualFeedModel()
     model.apply(_update("mcp-http", "delegando", run_id="h1"))
-    model.apply(_preview("mcp-http", "⚒ tasks_delegate codex revisar", run_id="h1", tool_call_id="call-h"))
+    model.apply(_tool("mcp-http", "tasks_delegate", {"target_agent": "codex", "request": "revisar"}, run_id="h1", tool_call_id="call-h"))
 
     model.apply(_delegation("dlg-h", tool_call_id="call-h", from_agent="agente"))
 
@@ -460,11 +468,11 @@ def test_anonymous_orchestrator_fallback_only_consumes_a_tasks_delegate_line():
     # qualquer de outro agente: ids sequenciais de dois perfis podem bater.
     model = TextualFeedModel()
     model.apply(_update("gemini", "lendo", run_id="g1"))
-    model.apply(_preview("gemini", "⚒ read_file a.py", run_id="g1", tool_call_id="call_0"))
+    model.apply(_tool("gemini", "read_file", {"path": "a.py"}, run_id="g1", tool_call_id="call_0"))
 
     model.apply(_delegation("dlg-0", tool_call_id="call_0", from_agent="agente"))
 
-    assert model.items[0].event.payload["tools"] == ["⚒ read_file a.py"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["⌕ ler a.py"]
 
 
 def test_orchestrator_with_live_runs_never_consumes_another_orchestrator_preview():
@@ -475,23 +483,23 @@ def test_orchestrator_with_live_runs_never_consumes_another_orchestrator_preview
     model.apply(_delegation("dlg-x", tool_call_id="call-a", from_agent="beta"))
 
     alpha, beta = model.items[0].event.payload, model.items[1].event.payload
-    assert alpha["tools"] == ["⚒ tasks_delegate codex revisar patch"]
-    assert beta["tools"] == ["⚒ tasks_delegate codex revisar patch"]
+    assert tool_texts(alpha["tools"]) == ["⇄ delegar codex · revisar patch"]
+    assert tool_texts(beta["tools"]) == ["⇄ delegar codex · revisar patch"]
 
 
 def test_delegation_with_source_run_id_consumes_the_preview_of_that_run_only():
     model = TextualFeedModel()
-    line = "⚒ tasks_delegate codex revisar"
+    delegate = {"target_agent": "codex", "request": "revisar"}
     for run in ("r1", "r2"):
         model.apply(_update("claude", f"execução {run}", run_id=run))
-        model.apply(_preview("claude", line, run_id=run, tool_call_id="call-same"))
+        model.apply(_tool("claude", "tasks_delegate", delegate, run_id=run, tool_call_id="call-same"))
 
     event = _delegation("dlg-2", tool_call_id="call-same", from_agent="claude")
     event.payload["source_run_id"] = "r2"
     model.apply(event)
 
     first, second = model.items[0].event.payload, model.items[1].event.payload
-    assert first["tools"] == [line]
+    assert tool_texts(first["tools"]) == ["⇄ delegar codex · revisar"]
     assert "tools" not in second
 
 
@@ -501,33 +509,35 @@ def test_delegation_without_tool_call_id_consumes_nothing():
 
     model.apply(_delegation("dlg-x", tool_call_id="", from_agent="beta"))
 
-    assert model.items[0].event.payload["tools"] == ["⚒ tasks_delegate codex revisar patch"]
-    assert model.items[1].event.payload["tools"] == ["⚒ tasks_delegate codex revisar patch"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["⇄ delegar codex · revisar patch"]
+    assert tool_texts(model.items[1].event.payload["tools"]) == ["⇄ delegar codex · revisar patch"]
 
 
 def test_delegation_steps_with_same_tool_call_id_consume_the_preview_once():
     model = TextualFeedModel()
     model.apply(_update("alpha", "delegando", run_id="r1"))
-    model.apply(_preview("alpha", "⚒ read_file a.py", run_id="r1", tool_call_id="call-r"))
-    model.apply(_preview("alpha", "⚒ tasks_delegate codex passo", run_id="r1", tool_call_id="call-d"))
+    model.apply(_tool("alpha", "read_file", {"path": "a.py"}, run_id="r1", tool_call_id="call-r"))
+    model.apply(_tool("alpha", "tasks_delegate", {"target_agent": "codex", "request": "passo"}, run_id="r1", tool_call_id="call-d"))
 
     model.apply(_delegation("dlg-1", tool_call_id="call-d", from_agent="alpha"))
     model.apply(_delegation("dlg-2", tool_call_id="call-d", from_agent="alpha"))
 
-    assert model.items[0].event.payload["tools"] == ["⚒ read_file a.py"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["⌕ ler a.py"]
 
 
 def test_tool_call_map_is_dropped_with_the_run():
     model = TextualFeedModel()
     model.apply(_update("alpha", "trabalhando", run_id="r1"))
-    model.apply(_preview("alpha", "⚒ read_file a.py", run_id="r1", tool_call_id="call-1"))
-    assert model._tool_call_line_by_agent == {"alpha#run:r1": {"call-1": "⚒ read_file a.py"}}
+    model.apply(_tool("alpha", "read_file", {"path": "a.py"}, run_id="r1", tool_call_id="call-1"))
+    entry = model._tool_call_line_by_agent["alpha#run:r1"]["call-1"]
+    assert list(model._tool_call_line_by_agent) == ["alpha#run:r1"]
+    assert entry is model._transient_tools_by_agent["alpha#run:r1"][0]
 
     model.apply(_final("alpha", "pronto", run_id="r1"))
     assert not model._tool_call_line_by_agent
 
     model.apply(_update("beta", "trabalhando", run_id="r2"))
-    model.apply(_preview("beta", "⚒ read_file b.py", run_id="r2", tool_call_id="call-2"))
+    model.apply(_tool("beta", "read_file", {"path": "b.py"}, run_id="r2", tool_call_id="call-2"))
     model.clear_chat()
     assert not model._tool_call_line_by_agent
 
@@ -555,6 +565,6 @@ def test_late_event_of_a_finalized_run_is_ignored():
     model.apply(_update("claude", "trabalhando", run_id="r1"))
     model.apply(_final("claude", "pronto", run_id="r1"))
 
-    assert model.apply(_preview("claude", "⚒ read_file tarde.py", run_id="r1")) is False
+    assert model.apply(_tool("claude", "read_file", {"path": "tarde.py"}, run_id="r1")) is False
     assert model.apply(_lifecycle("claude", "completed", "fim", run_id="r1")) is False
     assert [item.event.kind for item in model.items] == ["agent_message"]

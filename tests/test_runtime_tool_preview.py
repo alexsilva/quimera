@@ -113,13 +113,27 @@ class TestApprovalPreview(unittest.TestCase):
 
 
 class TestExecutionPreview(unittest.TestCase):
+    """O contexto execution é a forma canônica de ``build_tool_line``."""
+
     def test_execution_read_file(self):
         result = ToolPreview.build("read_file", {"path": "README.md"})
-        self.assertEqual("⚒ read_file README.md", result)
+        self.assertEqual("⌕ ler README.md", result)
 
     def test_execution_exec_command(self):
         result = ToolPreview.build("exec_command", {"cmd": "ls", "tty": True})
-        self.assertEqual("⚒ $ ls", result)
+        self.assertEqual("⌕ ls", result)
+
+    def test_execution_exec_command_runs_without_double_dollar(self):
+        result = ToolPreview.build("exec_command", {"cmd": "python3 script.py"})
+        self.assertEqual("$ python3 script.py", result)
+
+    def test_execution_write_stdin(self):
+        result = ToolPreview.build("write_stdin", {"session_id": "abc", "chars": "hi\n", "close_stdin": True})
+        self.assertEqual("$ session=abc 'hi\\n' [close]", result)
+
+    def test_execution_close_command_session(self):
+        result = ToolPreview.build("close_command_session", {"session_id": "s1", "terminate": True})
+        self.assertEqual("$ session=s1 [terminate]", result)
 
     def test_execution_masks_sensitive_fields(self):
         result = ToolPreview.build(
@@ -129,6 +143,14 @@ class TestExecutionPreview(unittest.TestCase):
         self.assertNotIn("1234567890", result)
         self.assertNotIn("secret-token", result)
         self.assertIn("12****90", result)
+
+    def test_execution_unknown_truncates_pathological_values(self):
+        result = ToolPreview.build("weird_tool", {"payload": "x" * 1000})
+        self.assertTrue(result.endswith("…"))
+        self.assertEqual(len("$ ") + 400 + 1, len(result))
+
+    def test_execution_unknown_without_arguments_shows_tool(self):
+        self.assertEqual("$ weird_tool", ToolPreview.build("weird_tool", {}))
 
 
 class TestHelpers(unittest.TestCase):

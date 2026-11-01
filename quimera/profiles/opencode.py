@@ -6,7 +6,8 @@ from typing import Any
 from quimera.agent_events import SpyEvent
 from quimera.paths import TMP_BASE_DIR
 from quimera.profiles.base import ExecutionProfile, register
-from quimera.profiles.spy_utils import describe_tool_input, format_agent_message_lines
+from quimera.domain.tool_line import build_tool_line
+from quimera.profiles.spy_utils import format_agent_message_lines
 from quimera.runtime.config import DEFAULT_MCP_CLIENT_TOOL_TIMEOUT_SECONDS
 
 
@@ -43,8 +44,6 @@ def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
     marker = " ".join(filter(None, [str(etype or ""), str(ptype or "")])).lower()
     if tool_name and any(token in marker for token in {"tool", "call"}):
         inp = part.get("input") or part.get("args") or event.get("input") or event.get("args") or {}
-        detail = describe_tool_input(tool_name, inp)
-        text = detail if detail else f"usando {tool_name}"
         raw_status = str(part.get("status") or event.get("status") or "").strip().lower()
         is_end = (
             any(token in marker for token in {"result", "finish", "completed", "complete", "end"})
@@ -56,16 +55,28 @@ def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
             status = "ok"
         else:
             status = "running"
+        tool_call_id = part.get("callID") or part.get("call_id") or part.get("id")
+        state = part.get("state")
+        output = state.get("output") if isinstance(state, dict) else None
+        tool_line = build_tool_line(
+            tool_name,
+            inp if isinstance(inp, dict) else None,
+            status=status,
+            tool_call_id=tool_call_id,
+            tail=output if is_end and isinstance(output, str) else None,
+        )
         return [
             SpyEvent(
                 kind="tool",
-                text=text,
+                text=tool_line.to_text(),
                 transient=True,
                 data={
                     "tool": tool_name,
                     "operation": "end" if is_end else "start",
                     "status": status,
                     "input": inp,
+                    "tool_call_id": tool_call_id,
+                    "line": tool_line.to_payload(),
                 },
             )
         ]

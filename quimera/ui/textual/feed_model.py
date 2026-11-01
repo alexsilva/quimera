@@ -7,15 +7,25 @@ substituir estados transitórios e limpar previews.
 from __future__ import annotations
 
 import logging
-import re
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass, field as dataclass_field, replace
 from enum import Enum
 from itertools import count
 from typing import Any, Callable, ClassVar
 
 from quimera.app.submission_tracker import TERMINAL_SUBMISSION_STATUSES
+from quimera.domain.tool_activity import normalize_tool_name
+from quimera.domain.tool_line import (
+    STATUS_ERROR,
+    STATUS_OK,
+    STATUS_RUNNING,
+    TRANSPORT_MCP_HTTP,
+    ToolLine,
+    build_tool_line,
+    coerce_duration_ms,
+    tool_call_namespace,
+)
 from quimera.ui.commands import USER_ROLE
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE, format_duration
 from quimera.ui.text import strip_ansi
@@ -95,13 +105,14 @@ class TextualFeedModel:
     """Modelo testável do feed: transitórios por agente são substituíveis."""
 
     _TRANSIENT_KINDS: ClassVar[set[str]] = {"agent_update", "agent_lifecycle", "pending_input"}
-    _MCP_HTTP_TOOL_MARKER = "◇"
     # Máximo de linhas de tools visíveis no bloco transitório; o excedente
     # colapsa na linha "⋮ +N ferramentas anteriores".
     _MAX_VISIBLE_TOOL_LINES = 5
     # Teto das linhas de tools guardadas na resposta final para o toggle; o
     # excedente vira a última linha "⋮ +N ferramentas anteriores".
     _MAX_FINAL_TOOL_LINES = 200
+    # Teto das linhas de preview (diff) guardadas por entrada de tool.
+    _MAX_TOOL_PREVIEW_LINES = 20
     # Mesma ordem de grandeza da memória de runs encerradas do renderer.
     _MAX_FINALIZED_AGENTS = 1024
 
@@ -130,11 +141,14 @@ class TextualFeedModel:
         # itens fixados): a próxima atualização é cumulativa e só o trecho novo
         # continua no transitório.
         self._kept_answer_by_agent: dict[str, tuple[str, list[TextualFeedItem]]] = {}
-        self._transient_tools_by_agent: dict[str, list[str]] = {}
-        # Linha de preview de cada chamada de tool (por ``tool_call_id``): o
-        # cartão da delegação remove exatamente a preview da própria chamada.
-        self._tool_call_line_by_agent: dict[str, dict[str, str]] = {}
-        self._tool_request_lines_by_agent: dict[str, dict[str, str]] = {}
+        # Entradas de tool por execução: o dict de ``ToolLine.to_payload()``,
+        # atualizado no lugar, mais ``seen_at`` (relógio do modelo).
+        self._transient_tools_by_agent: dict[str, list[dict[str, Any]]] = {}
+        # Entrada de cada chamada de tool (por ``tool_call_id``): o fim casa
+        # com o início, e o cartão da delegação remove exatamente a própria
+        # chamada. Uma entrada pode ter vários ids (CLI + executor).
+        self._tool_call_line_by_agent: dict[str, dict[str, dict[str, Any]]] = {}
+        self._tool_request_lines_by_agent: dict[str, dict[str, dict[str, Any]]] = {}
         self._tool_request_seen_at_by_agent: dict[str, dict[str, float]] = {}
         self._tool_request_expiry_by_agent: dict[str, dict[str, float]] = {}
         self._completed_tool_requests_by_agent: dict[str, set[str]] = {}
@@ -851,26 +865,31 @@ class TextualFeedModel:
             position += 1
         return position if position < len(self._items) else None
 
-    def _final_tool_lines(self, key: str, *, absorbed: list[str] | None = None) -> list[str]:
+    def _final_tool_lines(
+        self,
+        key: str,
+        *,
+        absorbed: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
         """Linhas de tools da execução guardadas na resposta final, com teto.
 
         ``absorbed`` são as linhas dos bursts MCP HTTP que a final absorveu;
         entram antes das próprias. O excedente vira a primeira linha, como no
         bloco vivo: "anteriores" fica acima das que sobraram.
         """
-        lines = [*(absorbed or ()), *(self._transient_tools_by_agent.get(key) or ())]
+        lines = [dict(entry) for entry in (*(absorbed or ()), *(self._transient_tools_by_agent.get(key) or ()))]
         limit = self._MAX_FINAL_TOOL_LINES
         if len(lines) <= limit:
             return lines
         hidden = len(lines) - (limit - 1)
-        return [f"⋮ +{hidden} ferramentas anteriores", *lines[-(limit - 1):]]
+        return [self._overflow_marker(hidden), *lines[-(limit - 1):]]
 
     def _replace_transient_with_final(
         self,
         event: TextualUiEvent,
         agent: str,
         *,
-        absorbed_tools: list[str] | None = None,
+        absorbed_tools: list[dict[str, Any]] | None = None,
     ) -> bool:
         """Troca o transitório da execução ``agent`` pela resposta final."""
         # As linhas de tools são capturadas antes do descarte: a resposta
@@ -1178,80 +1197,172 @@ class TextualFeedModel:
                 self._track_submission_item(index, item)
 
     @staticmethod
-    def _tool_preview_subject(content: str) -> str:
-        """Deriva a identidade de uma tool a partir da linha de preview.
-
-        Remove o marcador de status inicial ("$", "✓", "✗", "⌘") e a anotação
-        final "(exit N)" para que as linhas de início e conclusão de um mesmo
-        comando/ferramenta compartilhem o mesmo identificador.
-        """
-        text = str(content or "").strip()
-        if not text:
-            return ""
-        markers = ("◇ ", "$ ", "✓ ", "✗ ", "⌘ ", "⚒ ")
-        changed = True
-        while changed:
-            changed = False
-            for marker in markers:
-                if text.startswith(marker):
-                    text = text[len(marker):].strip()
-                    changed = True
-                    break
-        text = re.sub(r"\s*\(exit\s+-?\d+\)\s*$", "", text).strip()
-        return text
-
-    @classmethod
-    def _tool_preview_content(cls, event: TextualUiEvent) -> str:
-        payload = event.payload if isinstance(event.payload, dict) else {}
-        content_source = payload.get("content") if payload else event.payload
-        content = strip_ansi(str(content_source or "")).strip()
-        transport = str(payload.get("transport") or "").strip()
-        if content and transport == "mcp_http":
-            marker = f"{cls._MCP_HTTP_TOOL_MARKER} "
-            if not content.startswith(marker):
-                content = f"{marker}{content}"
-        return content
+    def _overflow_marker(hidden: int) -> dict[str, Any]:
+        return {"marker": True, "text": f"⋮ +{hidden} ferramentas anteriores"}
 
     @staticmethod
-    def _tool_preview_tool_name(subject: str) -> str:
-        """Extrai o nome canônico da tool de uma linha de preview.
+    def _contains_entry(entries: list[dict[str, Any]] | None, entry: dict[str, Any]) -> bool:
+        """Pertinência por identidade: duas chamadas iguais são entradas distintas."""
+        return any(candidate is entry for candidate in entries or ())
 
-        Normaliza o prefixo genérico "usando " e o namespace MCP ("quimera_")
-        para que a linha genérica emitida pelo CLI e a linha rica emitida pelo
-        executor de tools refiram-se à mesma identidade.
+    @staticmethod
+    def _is_generic_entry(entry: dict[str, Any]) -> bool:
+        """Linha só com o nome da tool (ex.: "usando X" do CLI), sem assunto."""
+        return bool(entry.get("tool")) and not entry.get("subject") and not entry.get("title")
+
+    def _tool_entry_from_payload(self, payload: dict[str, Any], content: str) -> dict[str, Any] | None:
+        """Entrada estruturada do evento; sem ``tool_line``, entrada legada.
+
+        O texto legado entra cru, sem interpretar glifos ou prefixos, e por
+        não ter ``tool`` nunca casa com outra entrada.
         """
-        text = str(subject or "").strip()
-        if text.startswith("usando "):
-            text = text[7:].strip()
-        token = text.split(" ", 1)[0].strip().strip(":")
-        for prefix in ("mcp__quimera__", "quimera_"):
-            if token.startswith(prefix):
-                token = token[len(prefix):]
-                break
-        return token
+        line = ToolLine.from_payload(payload.get("tool_line")) if isinstance(payload.get("tool_line"), dict) else None
+        legacy = line is None
+        if line is None:
+            line = ToolLine.from_payload({"text": content})
+        if line is None:
+            return None
+        changes: dict[str, Any] = {}
+        if not legacy and not line.tool_call_id:
+            changes["tool_call_id"] = str(payload.get("tool_call_id") or "").strip()
+        if self._is_mcp_http_payload(payload) and not line.transport:
+            changes["transport"] = TRANSPORT_MCP_HTTP
+        if changes:
+            line = replace(line, **changes)
+        entry = line.to_payload()
+        if legacy:
+            entry["text"] = content
+        entry["seen_at"] = self._clock()
+        return entry
 
-    def _merge_generic_tool_line(self, lines: list[str], content: str, subject: str) -> bool:
-        """Funde a linha genérica "usando X" com a linha rica da mesma tool.
+    @staticmethod
+    def _refresh_entry_text(entry: dict[str, Any]) -> None:
+        if not entry.get("tool"):
+            return
+        line = ToolLine.from_payload(entry)
+        if line is not None:
+            entry["text"] = line.to_text()
 
-        A mesma chamada chega por dois canais (stdout do CLI e preview do
-        executor); manter as duas duplica o feed. Retorna True quando a linha
-        nova foi absorvida por uma existente (descartada ou substituindo-a).
+    def _update_tool_entry(self, entry: dict[str, Any], new: dict[str, Any], *, fused: bool = False) -> bool:
+        """Aplica ``new`` (início repetido ou fim) à entrada casada, no lugar.
+
+        Só uma entrada ainda ``running`` muda: um segundo fim, ou um início
+        tardio depois do fim, é ignorado. Título, assunto e verbo já
+        conhecidos ficam; o fim só preenche o que faltava. Na fusão de dois
+        canais da mesma chamada, o assunto mais completo vence (o executor
+        traz os argumentos com defaults; o CLI, o título).
         """
-        tool_name = self._tool_preview_tool_name(subject)
-        if not tool_name:
+        if entry.get("status") != STATUS_RUNNING:
             return False
-        new_is_generic = str(content).strip().startswith("usando ")
-        for idx in range(len(lines) - 1, -1, -1):
-            existing_subject = self._tool_preview_subject(lines[idx])
-            if self._tool_preview_tool_name(existing_subject) != tool_name:
+        was_generic = self._is_generic_entry(entry)
+        if fused and len(str(new.get("subject") or "")) > len(str(entry.get("subject") or "")):
+            entry["verb"] = new.get("verb") or entry.get("verb") or ""
+            entry["subject"] = new["subject"]
+        for field in ("verb", "subject", "title", "transport"):
+            if not entry.get(field) and new.get(field):
+                entry[field] = new[field]
+        if was_generic and not self._is_generic_entry(new) and new.get("category"):
+            entry["category"] = new["category"]
+        if new.get("preview_lines"):
+            entry["preview_lines"] = list(new["preview_lines"])[-self._MAX_TOOL_PREVIEW_LINES:]
+        status = new.get("status") or STATUS_RUNNING
+        if status != STATUS_RUNNING:
+            entry["status"] = status
+            duration_ms = new.get("duration_ms")
+            if duration_ms is None:
+                duration_ms = max(round((self._clock() - float(entry.get("seen_at") or 0.0)) * 1000), 0)
+            entry["duration_ms"] = duration_ms
+            if new.get("tail"):
+                entry["tail"] = new["tail"]
+        self._refresh_entry_text(entry)
+        return True
+
+    def _match_tool_entry(
+        self,
+        agent: str,
+        lines: list[dict[str, Any]],
+        new: dict[str, Any],
+        request_id: str,
+    ) -> tuple[dict[str, Any] | None, bool]:
+        """Entrada existente da mesma chamada e se o casamento foi uma fusão.
+
+        Ordem: ``tool_call_id`` → ``request_id`` MCP HTTP → id de outro
+        namespace (CLI e executor) → (sem id) mesma tool e assunto ainda
+        rodando → fusão da linha genérica com a rica da mesma tool. Entrada
+        legada (sem ``tool``) nunca casa.
+        """
+        if not new.get("tool"):
+            return None, False
+        tool_call_id = str(new.get("tool_call_id") or "")
+        by_id = self._tool_call_line_by_agent.get(agent, {})
+        if tool_call_id:
+            entry = by_id.get(tool_call_id)
+            if entry is not None and entry.get("tool") and self._contains_entry(lines, entry):
+                return entry, False
+        if request_id:
+            entry = self._tool_request_lines_by_agent.get(agent, {}).get(request_id)
+            if entry is not None and self._contains_entry(lines, entry):
+                return entry, False
+            # Requests distintas com a mesma tool/argumentos ocupam linhas
+            # independentes: MCP HTTP casa só pelo request_id.
+            return None, False
+        if tool_call_id:
+            entry = self._cross_namespace_entry(by_id, lines, new, tool_call_id)
+            if entry is not None:
+                return entry, True
+        if not tool_call_id:
+            for entry in reversed(lines):
+                if (
+                    entry.get("status") == STATUS_RUNNING
+                    and entry.get("tool") == new["tool"]
+                    and entry.get("subject") == new.get("subject")
+                ):
+                    return entry, False
+        new_is_generic = self._is_generic_entry(new)
+        for entry in reversed(lines):
+            if entry.get("tool") != new["tool"] or entry.get("fused"):
                 continue
-            if new_is_generic:
-                return True
-            if existing_subject.startswith("usando "):
-                lines[idx] = content
-                return True
-            return False
-        return False
+            # Exatamente uma das duas é genérica: duas genéricas com ids
+            # distintos são chamadas distintas.
+            if new_is_generic == self._is_generic_entry(entry):
+                continue
+            # A rica só sobe uma genérica ainda rodando: depois do fim, a
+            # genérica é de outra chamada e a rica não pode sumir nela.
+            if not new_is_generic and entry.get("status") != STATUS_RUNNING:
+                continue
+            return entry, True
+        return None, False
+
+    @staticmethod
+    def _cross_namespace_entry(
+        by_id: dict[str, dict[str, Any]],
+        lines: list[dict[str, Any]],
+        new: dict[str, Any],
+        tool_call_id: str,
+    ) -> dict[str, Any] | None:
+        """Mesma chamada física vista por outro canal (CLI ``toolu_…`` e executor ``mcp:…``).
+
+        Candidata: entrada ``running`` da mesma tool cujos ids são todos de
+        outro namespace. Prefere o mesmo assunto; sem ele, funde só quando há
+        uma única candidata. Ids do mesmo namespace nunca se fundem: duas
+        chamadas paralelas do CLI à mesma tool são linhas distintas.
+        """
+        namespace = tool_call_namespace(tool_call_id)
+        if not namespace:
+            return None
+        candidates: list[dict[str, Any]] = []
+        for entry in reversed(lines):
+            if entry.get("status") != STATUS_RUNNING or entry.get("tool") != new["tool"]:
+                continue
+            ids = {key for key, value in by_id.items() if value is entry}
+            ids.add(str(entry.get("tool_call_id") or ""))
+            namespaces = {tool_call_namespace(value) for value in ids if value}
+            if not namespaces or "" in namespaces or namespace in namespaces:
+                continue
+            if entry.get("subject") == new.get("subject"):
+                return entry
+            candidates.append(entry)
+        return candidates[0] if len(candidates) == 1 else None
 
     def _consume_delegate_tool_preview(self, event: TextualUiEvent) -> bool:
         """Remove a preview da chamada de delegação quando o cartão rico chega.
@@ -1276,10 +1387,9 @@ class TextualFeedModel:
         if match is None:
             # Passos seguintes da mesma chamada já encontram a preview consumida.
             return False
-        agent, line = match
-        self._tool_call_line_by_agent[agent].pop(tool_call_id, None)
+        agent, entry = match
+        self._forget_tool_entry(agent, entry)
         lines = self._transient_tools_by_agent[agent]
-        lines.remove(line)
         if not lines:
             self._transient_tools_by_agent.pop(agent, None)
         item_index = self._transient_index_by_agent.get(agent, -1)
@@ -1308,8 +1418,8 @@ class TextualFeedModel:
         *,
         from_agent: str,
         source_run_id: str = "",
-    ) -> tuple[str, str] | None:
-        """Execução e linha visível da preview da chamada ``tool_call_id``.
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Execução e entrada visível da chamada ``tool_call_id``.
 
         Procura na execução exata (``from_agent#run:source_run_id``) e depois
         nas demais execuções do mesmo agente, sem distinguir caixa: o cartão
@@ -1338,13 +1448,21 @@ class TextualFeedModel:
         # outro agente.
         guard_tool_name = not candidates
         for agent in candidates or others:
-            line = self._tool_call_line_by_agent[agent].get(tool_call_id)
-            if line is None or line not in self._transient_tools_by_agent.get(agent, ()):
+            entry = self._tool_call_line_by_agent[agent].get(tool_call_id)
+            if entry is None or not self._contains_entry(self._transient_tools_by_agent.get(agent), entry):
                 continue
-            if guard_tool_name and self._tool_preview_tool_name(self._tool_preview_subject(line)) != "tasks_delegate":
+            if guard_tool_name and entry.get("tool") != "tasks_delegate":
                 continue
-            return agent, line
+            return agent, entry
         return None
+
+    def _forget_tool_entry(self, agent: str, entry: dict[str, Any]) -> None:
+        """Tira a entrada do bloco e todos os ids que apontam para ela."""
+        lines = self._transient_tools_by_agent.get(agent, [])
+        lines[:] = [candidate for candidate in lines if candidate is not entry]
+        by_id = self._tool_call_line_by_agent.get(agent, {})
+        for tool_call_id in [key for key, value in by_id.items() if value is entry]:
+            del by_id[tool_call_id]
 
     def _with_transient_tools(self, event: TextualUiEvent) -> TextualUiEvent:
         """Anexa previews de tools ao estado transitório do agente."""
@@ -1377,12 +1495,10 @@ class TextualFeedModel:
                 )
         visible_tools = tool_lines[-self._MAX_VISIBLE_TOOL_LINES:]
         hidden_count = len(tool_lines) - len(visible_tools)
+        tools = [dict(entry) for entry in visible_tools]
         if hidden_count > 0:
-            visible_tools = [
-                f"⋮ +{hidden_count} ferramentas anteriores",
-                *visible_tools,
-            ]
-        merged["tools"] = visible_tools
+            tools.insert(0, self._overflow_marker(hidden_count))
+        merged["tools"] = tools
         return TextualUiEvent(event.kind, merged, agent=event.agent)
 
     def _consume_mcp_tool_bursts(
@@ -1390,7 +1506,7 @@ class TextualFeedModel:
         event: TextualUiEvent,
         *,
         exclude_key: str,
-    ) -> tuple[dict[str, int] | None, bool, list[str]]:
+    ) -> tuple[dict[str, int] | None, bool, list[dict[str, Any]]]:
         """Absorve os bursts MCP HTTP do agente na resposta final.
 
         O burst tem identidade própria (``#mcp-client:``), então a resposta
@@ -1482,60 +1598,72 @@ class TextualFeedModel:
         return payload.get("message") == AGENT_EXECUTION_STARTED_MESSAGE
 
     def _apply_tool_preview(self, event: TextualUiEvent) -> bool:
-        """Atualiza previews de tools dentro do bloco transitório do agente."""
+        """Atualiza as entradas de tools dentro do bloco transitório do agente.
+
+        O casamento é por identidade (``tool_call_id``/``request_id``), nunca
+        pelo texto: dois comandos idênticos com ids distintos são duas linhas.
+        """
         agent = self._agent_key(event)
         if self._is_finalized_agent(agent):
             return False
         payload = event.payload if isinstance(event.payload, dict) else {}
-        content = self._tool_preview_content(event)
-        if not content:
-            return False
+        content_source = payload.get("content") if payload else event.payload
+        content = strip_ansi(str(content_source or "")).strip()
         lines = self._transient_tools_by_agent.setdefault(agent, [])
+        preview_for = str(payload.get("preview_for") or "").strip()
+        if preview_for and not isinstance(payload.get("tool_line"), dict):
+            target = self._tool_call_line_by_agent.get(agent, {}).get(preview_for)
+            if target is not None and self._contains_entry(lines, target):
+                if not content:
+                    return False
+                preview = [*target.get("preview_lines", ()), *content.splitlines()]
+                target["preview_lines"] = preview[: self._MAX_TOOL_PREVIEW_LINES]
+                return self._refresh_tool_block(agent, event, payload)
+        new = self._tool_entry_from_payload(payload, content)
+        if new is None or not (content or new.get("tool")):
+            if not lines:
+                self._transient_tools_by_agent.pop(agent, None)
+            return False
         is_mcp_http = self._is_mcp_http_payload(payload)
         request_id = self._tool_request_id(payload) if is_mcp_http else ""
+        entry, fused = self._match_tool_entry(agent, lines, new, request_id)
+        if entry is None:
+            entry = new
+            lines.append(entry)
+        else:
+            if fused:
+                entry["fused"] = True
+            self._update_tool_entry(entry, new, fused=fused)
+        tool_call_ids = {
+            str(new.get("tool_call_id") or ""),
+            str(payload.get("tool_call_id") or "").strip(),
+        } - {""}
+        if tool_call_ids:
+            by_id = self._tool_call_line_by_agent.setdefault(agent, {})
+            for tool_call_id in tool_call_ids:
+                by_id[tool_call_id] = entry
+            if not entry.get("tool_call_id"):
+                entry["tool_call_id"] = min(tool_call_ids)
         if request_id:
-            # MCP HTTP fornece identidade explícita por chamada. Duas requests
-            # distintas podem executar exatamente a mesma tool/argumentos e
-            # ainda assim precisam ocupar linhas independentes no burst.
-            # Portanto só substituímos uma linha quando o request_id é o mesmo;
-            # deduplicação textual fica restrita ao caminho CLI sem request_id.
-            request_lines = self._tool_request_lines_by_agent.setdefault(agent, {})
-            previous_line = request_lines.get(request_id)
-            if previous_line and previous_line in lines:
-                lines[lines.index(previous_line)] = content
-            else:
-                lines.append(content)
-            request_lines[request_id] = content
+            self._tool_request_lines_by_agent.setdefault(agent, {})[request_id] = entry
             self._tool_request_seen_at_by_agent.setdefault(agent, {}).setdefault(
                 request_id,
                 self._clock(),
             )
-        else:
-            # Uma mesma tool CLI costuma emitir uma linha de início ("$ cmd") e
-            # outra de conclusão ("✓ cmd"/"✗ cmd (exit N)"). Em vez de acumular
-            # as duas, atualizamos a linha existente do mesmo comando no lugar.
-            subject = self._tool_preview_subject(content)
-            replaced_line = False
-            if subject:
-                for idx in range(len(lines) - 1, -1, -1):
-                    if self._tool_preview_subject(lines[idx]) == subject:
-                        lines[idx] = content
-                        replaced_line = True
-                        break
-            if not replaced_line and subject:
-                replaced_line = self._merge_generic_tool_line(lines, content, subject)
-            if not replaced_line:
-                lines.append(content)
-        tool_call_id = str(payload.get("tool_call_id") or "").strip()
-        if tool_call_id:
-            self._tool_call_line_by_agent.setdefault(agent, {})[tool_call_id] = content
         if is_mcp_http:
             self._extend_tool_preview_expiries(agent)
+        return self._refresh_tool_block(agent, event, payload)
+
+    def _refresh_tool_block(self, agent: str, event: TextualUiEvent, payload: dict[str, Any]) -> bool:
+        """Re-renderiza o transitório da execução com as entradas atuais."""
         index = self._transient_index_by_agent.get(agent)
         if index is None or not (0 <= index < len(self._items)):
-            transient_payload = dict(payload)
+            transient_payload = {
+                key: value
+                for key, value in payload.items()
+                if key not in {"tool_line", "preview_for", "tool_call_id"}
+            }
             transient_payload["content"] = ""
-            transient_payload["tools"] = list(lines)
             self._upsert_transient(TextualUiEvent("agent_update", transient_payload, agent=event.agent))
             return True
         current_event = self._items[index].event
@@ -1558,17 +1686,6 @@ class TextualFeedModel:
         """Retorna se o payload pertence ao transporte MCP HTTP."""
         transport = str(payload.get("transport") or "").strip()
         return transport == "mcp_http"
-
-    @classmethod
-    def _terminal_tool_line(cls, preview_line: str, status: str) -> str:
-        """Converte a linha running em resultado terminal sem perder argumentos."""
-        subject = cls._tool_preview_subject(preview_line)
-        marker = "✓" if status == "finished" else "✗"
-        has_remote_prefix = str(preview_line).strip().startswith(
-            f"{cls._MCP_HTTP_TOOL_MARKER} "
-        )
-        remote_prefix = f"{cls._MCP_HTTP_TOOL_MARKER} " if has_remote_prefix else ""
-        return f"{remote_prefix}{marker} {subject}".strip()
 
     def _extend_tool_preview_expiries(self, agent: str, *, now: float | None = None) -> None:
         """Mantém o burst MCP HTTP visível enquanto o mesmo cliente segue ativo.
@@ -1602,34 +1719,35 @@ class TextualFeedModel:
             if request_id in completed:
                 return False
             completed.add(request_id)
-        lines = self._transient_tools_by_agent.get(agent, [])
-        request_lines = self._tool_request_lines_by_agent.get(agent, {})
-        preview_line = request_lines.get(request_id) if request_id else None
-        tool_name = str(payload.get("tool_name") or "").strip()
-        if preview_line and preview_line in lines:
-            terminal_line = self._terminal_tool_line(preview_line, status)
-            lines[lines.index(preview_line)] = terminal_line
-            request_lines[request_id] = terminal_line
-        elif lines:
-            for index in range(len(lines) - 1, -1, -1):
-                subject = self._tool_preview_subject(lines[index])
-                if self._tool_preview_tool_name(subject) == tool_name:
-                    preview_line = lines[index]
-                    terminal_line = self._terminal_tool_line(preview_line, status)
-                    lines[index] = terminal_line
-                    if request_id:
-                        request_lines[request_id] = terminal_line
-                    break
-        if not preview_line:
-            preview_line = self._terminal_tool_line(
-                f"{self._MCP_HTTP_TOOL_MARKER} ⚒ {tool_name or 'tool'}",
-                status,
+        lines = self._transient_tools_by_agent.setdefault(agent, [])
+        request_lines = self._tool_request_lines_by_agent.setdefault(agent, {})
+        tool_name = normalize_tool_name(payload.get("tool_name"))
+        entry = request_lines.get(request_id) if request_id else None
+        if entry is None or not self._contains_entry(lines, entry):
+            entry = next(
+                (
+                    candidate
+                    for candidate in reversed(lines)
+                    if candidate.get("tool") == tool_name and candidate.get("status") == STATUS_RUNNING
+                ),
+                None,
             )
-            lines = self._transient_tools_by_agent.setdefault(agent, [])
-            lines.append(preview_line)
-            if request_id:
-                request_lines = self._tool_request_lines_by_agent.setdefault(agent, {})
-                request_lines[request_id] = preview_line
+        raw_duration = payload.get("duration_ms")
+        outcome_ms = coerce_duration_ms(raw_duration)
+        outcome = STATUS_OK if status == "finished" else STATUS_ERROR
+        if entry is None:
+            entry = build_tool_line(
+                tool_name or "tool",
+                status=outcome,
+                duration_ms=outcome_ms,
+                transport=TRANSPORT_MCP_HTTP,
+            ).to_payload()
+            entry["seen_at"] = self._clock()
+            lines.append(entry)
+        else:
+            self._update_tool_entry(entry, {"status": outcome, "duration_ms": outcome_ms})
+        if request_id:
+            request_lines[request_id] = entry
 
         now = self._clock()
         expiry_id = request_id or f"terminal:{tool_name or 'tool'}"
@@ -1654,7 +1772,7 @@ class TextualFeedModel:
         # atrasada ou nem existir.
         finished_ms = round(now * 1000)
         duration_ms = payload.get("duration_ms")
-        tool_ms = duration_ms if isinstance(duration_ms, int) and duration_ms >= 0 else 0
+        tool_ms = coerce_duration_ms(duration_ms) or 0
         started_ms = finished_ms - tool_ms
         seen_at = self._tool_request_seen_at_by_agent.get(agent, {}).get(request_id) if request_id else None
         if seen_at is not None:

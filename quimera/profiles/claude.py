@@ -4,7 +4,8 @@ from pathlib import Path
 
 from quimera.agent_events import SpyEvent
 from quimera.profiles.base import CliConnection, ExecutionProfile, register
-from quimera.profiles.spy_utils import describe_tool_input, format_agent_message_lines, truncate_spy_text
+from quimera.domain.tool_line import build_tool_line
+from quimera.profiles.spy_utils import format_agent_message_lines, truncate_spy_text
 
 
 def _claude_runtime_rw_paths() -> list[str]:
@@ -36,6 +37,9 @@ def _format_claude_spy_event(line: str) -> list[SpyEvent]:
             return [SpyEvent(kind="context", text=f"execução falhou: {detail}", transient=True)]
         return [SpyEvent(kind="context", text="execução concluída", transient=True)]
 
+    if etype == "user":
+        return _format_claude_tool_results(event)
+
     if etype != "assistant":
         return []
 
@@ -50,21 +54,68 @@ def _format_claude_spy_event(line: str) -> list[SpyEvent]:
         elif btype == "tool_use":
             tool_name = block.get("name") or "ferramenta"
             inp = block.get("input") or {}
-            detail = describe_tool_input(tool_name, inp)
-            text = detail if detail else f"usando {tool_name}"
+            tool_call_id = block.get("id")
+            tool_line = build_tool_line(tool_name, inp, tool_call_id=tool_call_id)
             messages.append(
                 SpyEvent(
                     kind="tool",
-                    text=text,
+                    text=tool_line.to_text(),
                     transient=True,
                     data={
                         "tool": tool_name,
                         "operation": "start",
                         "status": "running",
                         "input": inp,
+                        "tool_call_id": tool_call_id,
+                        "line": tool_line.to_payload(),
                     },
                 )
             )
+    return messages
+
+
+def _tool_result_text(content) -> str:
+    """Texto de um bloco ``tool_result``: string ou lista de blocos de texto."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
+def _format_claude_tool_results(event: dict) -> list[SpyEvent]:
+    """Fecha as tools nativas: o Claude devolve o resultado em mensagens ``user``."""
+    content = (event.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        return []
+    messages: list[SpyEvent] = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_result":
+            continue
+        tool_call_id = block.get("tool_use_id")
+        if not tool_call_id:
+            continue
+        failed = bool(block.get("is_error"))
+        lines = [ln for ln in _tool_result_text(block.get("content")).splitlines() if ln.strip()]
+        tail = _truncate_text(lines[-1]) if lines else ""
+        messages.append(
+            SpyEvent(
+                kind="tool",
+                text="✗" if failed else "✓",
+                transient=True,
+                data={
+                    "tool": "",
+                    "operation": "end",
+                    "status": "error" if failed else "ok",
+                    "tool_call_id": tool_call_id,
+                    "tail": tail,
+                },
+            )
+        )
     return messages
 
 

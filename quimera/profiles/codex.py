@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from quimera.agent_events import SpyEvent
+from quimera.domain.tool_line import STATUS_ERROR, STATUS_OK, build_tool_line, normalize_status
 from quimera.profiles.base import ExecutionProfile, CliConnection, register
 from quimera.profiles.spy_utils import (
     format_agent_message_lines,
@@ -34,55 +35,108 @@ def _tool_call_id(item: dict) -> str | None:
 def _describe_command(command: str, phase: str, exit_code: int | None = None, item: dict | None = None) -> SpyEvent:
     command = (command or "").strip()
     item = item or {}
+    tool_call_id = _tool_call_id(item)
     data_base = {
         "tool": "exec_command",
-        "tool_call_id": _tool_call_id(item),
+        "tool_call_id": tool_call_id,
         "input": {"cmd": command},
     }
     if not command:
         return SpyEvent(kind="context", text=f"comando {phase}", transient=True, data=data_base)
 
-    summary = _truncate_text(command)
     if phase == "concluído":
-        if exit_code == 0 or exit_code is None:
-            return SpyEvent(
-                kind="tool",
-                text=f"✓ {summary}",
-                data={**data_base, "operation": "end", "status": "ok", "output_meta": {"exit_code": exit_code}},
-            )
-        return SpyEvent(
-            kind="tool",
-            text=f"✗ {summary} (exit {exit_code})",
-            data={
-                **data_base,
-                "operation": "end",
-                "status": "error",
-                "output_meta": {"exit_code": exit_code},
-                "error": {"type": "CommandExitCode", "message": f"exit {exit_code}"},
-            },
+        failed = exit_code is not None and exit_code != 0
+        line = build_tool_line(
+            "exec_command",
+            {"cmd": command},
+            status=STATUS_ERROR if failed else STATUS_OK,
+            tool_call_id=tool_call_id,
+            exit_code=exit_code,
+            tail=item.get("aggregated_output"),
         )
-    return SpyEvent(kind="tool", text=f"$ {summary}", data={**data_base, "operation": "start", "status": "running"})
+        data = {
+            **data_base,
+            "operation": "end",
+            "status": line.status,
+            "output_meta": {"exit_code": exit_code},
+            "line": line.to_payload(),
+        }
+        if failed:
+            data["error"] = {"type": "CommandExitCode", "message": f"exit {exit_code}"}
+        return SpyEvent(kind="tool", text=line.to_text(), data=data)
+    line = build_tool_line("exec_command", {"cmd": command}, tool_call_id=tool_call_id)
+    return SpyEvent(
+        kind="tool",
+        text=line.to_text(),
+        data={**data_base, "operation": "start", "status": "running", "line": line.to_payload()},
+    )
 
 
 def _describe_file_change(item: dict, phase: str) -> SpyEvent:
     target = item.get("path") or item.get("file_path") or item.get("target") or ""
-    subject = target or "arquivo"
+    tool_call_id = _tool_call_id(item)
     data_base = {
         "tool": "apply_patch",
-        "tool_call_id": _tool_call_id(item),
+        "tool_call_id": tool_call_id,
         "input": {"path": target},
     }
-    if phase == "concluído":
-        return SpyEvent(
-            kind="tool",
-            text=f"✓ editar {subject}",
-            data={**data_base, "operation": "end", "status": "ok"},
-        )
+    done = phase == "concluído"
+    line = build_tool_line(
+        "apply_patch",
+        {"path": target},
+        status=STATUS_OK if done else "running",
+        tool_call_id=tool_call_id,
+    )
     return SpyEvent(
         kind="tool",
-        text=f"editar {subject}",
-        data={**data_base, "operation": "start", "status": "running"},
+        text=line.to_text(),
+        data={
+            **data_base,
+            "operation": "end" if done else "start",
+            "status": line.status,
+            "line": line.to_payload(),
+        },
     )
+
+
+def _tool_arguments(item: dict) -> dict:
+    """Argumentos da tool como dict; aceita string JSON."""
+    raw = item.get("arguments")
+    if raw is None:
+        raw = item.get("input") if item.get("input") is not None else item.get("args")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _describe_tool_call(item: dict, phase: str) -> SpyEvent:
+    """Chamada de tool genérica (``tool_call``/``function_call``/``mcp_tool_call``)."""
+    name = item.get("name") or item.get("tool_name") or item.get("tool") or "ferramenta"
+    server = str(item.get("server") or "")
+    if item.get("type") == "mcp_tool_call" and server and server != "quimera":
+        name = f"{server}__{name}"
+    arguments = _tool_arguments(item)
+    tool_call_id = _tool_call_id(item)
+    data_base = {"tool": name, "tool_call_id": tool_call_id, "input": arguments}
+    if phase != "concluído":
+        line = build_tool_line(name, arguments, tool_call_id=tool_call_id)
+        return SpyEvent(
+            kind="tool",
+            text=line.to_text(),
+            data={**data_base, "operation": "start", "status": "running", "line": line.to_payload()},
+        )
+    error = item.get("error")
+    raw_status = normalize_status(item.get("status"))
+    status = STATUS_ERROR if error or raw_status == STATUS_ERROR else STATUS_OK
+    line = build_tool_line(name, arguments, status=status, tool_call_id=tool_call_id, error=error)
+    data = {**data_base, "operation": "end", "status": status, "line": line.to_payload()}
+    if error:
+        message = error.get("message") if isinstance(error, dict) else error
+        data["error"] = {"type": "ToolError", "message": str(message)}
+    return SpyEvent(kind="tool", text=line.to_text(), data=data)
 
 
 def _format_codex_spy_event(line: str) -> list[SpyEvent]:
@@ -136,20 +190,8 @@ def _format_codex_spy_event(line: str) -> list[SpyEvent]:
     if itype in {"file_change", "patch_application"}:
         return [_describe_file_change(item, phase)]
 
-    if itype in {"tool_call", "function_call"}:
-        name = item.get("name") or item.get("tool_name") or "ferramenta"
-        return [
-            SpyEvent(
-                kind="tool",
-                text=f"usando {name}",
-                data={
-                    "tool": name,
-                    "tool_call_id": _tool_call_id(item),
-                    "operation": "start",
-                    "status": "running",
-                },
-            )
-        ]
+    if itype in {"tool_call", "function_call", "mcp_tool_call"}:
+        return [_describe_tool_call(item, phase)]
 
     return [SpyEvent(kind="context", text=f"{itype} {phase}", transient=True)]
 

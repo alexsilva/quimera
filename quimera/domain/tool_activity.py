@@ -18,25 +18,48 @@ class ToolActivityCategory(str, Enum):
     EXECUTION = "execution"
 
 
+# Os conjuntos cobrem as tools do runtime e os nomes nativos dos CLIs (Claude
+# Code, Codex, OpenCode, compat), sempre comparados após normalize_tool_name.
 INSPECTION_TOOLS = frozenset({
     "read_file", "list_files", "grep_search", "git_status", "git_diff",
     "git_log", "git_branch", "browser_status", "browser_network",
     "tui_screenshot",
+    "read", "view", "cat", "readfile", "glob", "find_files", "ls", "grep",
+    "search", "search_files", "find_in_files", "rg", "inspect_symbols",
+    "host_processes", "host_memory", "host_process_inspect", "host_process_sample",
+    "tasks_list", "jobs_list", "jobs_get", "todo_list", "memory_retrieve",
+    "memory_list_namespaces", "browser_snapshot", "browser_console", "tool_search",
 })
-MODIFICATION_TOOLS = frozenset({"apply_patch", "write_file", "remove_file"})
+MODIFICATION_TOOLS = frozenset({
+    "apply_patch", "write_file", "remove_file",
+    "write", "edit", "edit_file", "multiedit", "str_replace_editor",
+    "str_replace_based_edit_tool", "create", "create_file", "overwrite",
+    "writefile", "editfile", "notebookedit", "replace_text", "todo_write",
+    "memory_save", "memory_delete", "update_shared_state",
+})
 VERSION_CONTROL_TOOLS = frozenset({
     "git_add", "git_commit", "git_checkout", "git_push", "git_fetch",
 })
 RESEARCH_TOOLS = frozenset({
     "web_search", "web_fetch", "browser_start", "browser_open",
     "browser_click", "browser_screenshot",
+    "websearch", "search_web", "brave_search", "google", "webfetch", "fetch",
+    "http_get", "curl", "http_request", "browser_navigate", "browser_type",
+    "browser_press", "browser_mouse", "browser_evaluate", "browser_wait",
 })
 # Tools que põem trabalho em movimento em outros agentes. workflows_create fica
 # de fora: só publica a definição, sem disparar execução.
 DELEGATION_TOOLS = frozenset({
     "tasks_delegate", "tasks_create", "workflows_start", "workflows_replan",
+    "task", "agent", "delegate",
 })
-COMMAND_TOOLS = frozenset({"exec_command", "run_shell", "exec_session", "run_command", "shell"})
+COMMAND_TOOLS = frozenset({
+    "exec_command", "run_shell", "exec_session", "run_command", "shell",
+    "bash", "run", "execute", "exec", "computer",
+})
+# Chaves em que os CLIs mandam o comando de shell, em ordem de preferência.
+COMMAND_KEYS = ("cmd", "command", "input")
+SHELL_WRAPPERS = frozenset({"/bin/bash", "bash", "/bin/sh", "sh", "/bin/zsh", "zsh"})
 VALIDATION_EXECUTABLES = frozenset({
     "pytest", "ruff", "mypy", "pyright", "eslint", "tsc", "tox", "nox",
     "jest", "vitest", "unittest",
@@ -77,8 +100,41 @@ def _basename(token: str) -> str:
     return Path(token).name.lower()
 
 
+def unwrap_shell_command(command: object) -> str:
+    """Remove o invólucro ``bash -lc '<script>'`` que o Codex põe nos comandos.
+
+    Só desembrulha a forma exata ``[shell, -<flags com c>, script]``; qualquer
+    outra (inclusive shlex inválido) volta como veio.
+    """
+    raw = str(command or "")
+    try:
+        tokens = shlex.split(raw, posix=True)
+    except ValueError:
+        return raw
+    if (
+        len(tokens) == 3
+        and tokens[0] in SHELL_WRAPPERS
+        and tokens[1].startswith("-")
+        and not tokens[1].startswith("--")
+        and "c" in tokens[1]
+    ):
+        return tokens[2]
+    return raw
+
+
+def command_from_payload(input_payload: Mapping[str, object] | None) -> str:
+    """Comando de shell do payload, lido de ``cmd``, ``command`` ou ``input``."""
+    if not isinstance(input_payload, Mapping):
+        return ""
+    for key in COMMAND_KEYS:
+        value = input_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
 def classify_command_activity(command: object) -> ToolActivityCategory:
-    tokens = _tokens(command)
+    tokens = _tokens(unwrap_shell_command(command))
     if not tokens:
         return ToolActivityCategory.EXECUTION
 
@@ -143,8 +199,7 @@ def classify_tool_activity(
     if normalized in DELEGATION_TOOLS:
         return ToolActivityCategory.DELEGATION
     if normalized in COMMAND_TOOLS:
-        command = input_payload.get("cmd") if isinstance(input_payload, Mapping) else None
-        return classify_command_activity(command)
+        return classify_command_activity(command_from_payload(input_payload))
     return ToolActivityCategory.EXECUTION
 
 

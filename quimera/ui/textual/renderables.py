@@ -27,6 +27,15 @@ from quimera.ui.textual.constants import (
     APPROVAL_TITLE as _APPROVAL_TITLE,
 )
 from quimera.app.submission_tracker import TERMINAL_SUBMISSION_STATUSES
+from quimera.domain.tool_line import (
+    CATEGORY_GLYPHS,
+    MCP_HTTP_MARKER,
+    STATUS_ERROR,
+    STATUS_OK,
+    STATUS_RUNNING,
+    TRANSPORT_MCP_HTTP,
+    coerce_duration_ms,
+)
 from quimera.ui.boot_status import (
     BOOT_STATUS_GLYPHS,
     BOOT_STATUS_INFO,
@@ -228,17 +237,22 @@ class _GutterRow:
         content,
         continuation: str = "",
         continuation_style: str = "",
+        hanging: int = 0,
     ):
         self.marker = str(marker or "")
         self.marker_style = str(marker_style or "")
         self.content = content
         self.continuation = str(continuation or "")
         self.continuation_style = str(continuation_style or "") or self.marker_style
+        # Recuo pendente: as linhas dobradas do conteúdo começam ``hanging``
+        # células à direita da primeira, para não parecerem uma linha nova.
+        self.hanging = max(int(hanging or 0), 0)
 
     def __rich_console__(self, console, options):
         content_width = max(options.max_width - _GUTTER_WIDTH, 1)
+        hanging = min(self.hanging, content_width - 1)
         lines = console.render_lines(
-            self.content, options.update_width(content_width), pad=True
+            self.content, options.update_width(content_width - hanging), pad=True
         )
         if not lines:
             lines = [[]]
@@ -251,7 +265,11 @@ class _GutterRow:
             padding = _GUTTER_WIDTH - cell_len(glyph)
             if padding > 0:
                 yield Segment(" " * padding)
+            if index and hanging:
+                yield Segment(" " * hanging)
             yield from line
+            if hanging and not index:
+                yield Segment(" " * hanging)
             yield Segment.line()
 
 
@@ -390,9 +408,10 @@ def _gutter_row(
     *,
     continuation: str = "",
     continuation_style: str = "",
+    hanging: int = 0,
 ):
     """Linha do feed com gutter fixo; ver :class:`_GutterRow`."""
-    return _GutterRow(marker, marker_style, content, continuation, continuation_style)
+    return _GutterRow(marker, marker_style, content, continuation, continuation_style, hanging)
 
 
 def _approval_options() -> list[str]:
@@ -405,75 +424,295 @@ def _strip_rich_markup_tags(value: str) -> str:
     return _RICH_MARKUP_TAG_RE.sub("", str(value or ""))
 
 
-def _styled_tool_line(line: str, style: str) -> Text:
-    """Estiliza uma linha de tool com ícone de status, sem cortar conteúdo."""
-    stripped = str(line or "").strip()
-    rendered = Text(no_wrap=False, overflow="fold")
-    if stripped.startswith("◇ "):
-        stripped = stripped[2:].strip()
-    if stripped.startswith("⋮ +"):
-        rendered.append(stripped, style=f"dim {style}")
-        return rendered
-    if stripped.startswith("✓ "):
-        rendered.append("✓ ", style="bold green")
-        rendered.append(stripped[2:], style="dim")
-        return rendered
-    if stripped.startswith("✗ "):
-        rendered.append("✗ ", style="bold red")
-        rendered.append(stripped[2:], style="red")
-        return rendered
-    if stripped.startswith(("⚒ ", "⌘ ")):
-        stripped = stripped[2:].strip()
-    if stripped.startswith("$ "):
-        rendered.append("$ ", style=f"bold {style}")
-        rendered.append(stripped[2:])
-        return rendered
-    if stripped.startswith("usando "):
-        rendered.append("· ", style="dim")
-        rendered.append(stripped, style="dim")
-        return rendered
-    name, _, args = stripped.partition(" ")
-    rendered.append("⚒ ", style=f"bold {style}")
-    rendered.append(name, style=f"bold {style}")
-    if args:
-        rendered.append(f" {args}", style="dim")
-    return rendered
+def _cells_head(text: str, cells: int) -> str:
+    """Maior prefixo de ``text`` que cabe em ``cells`` células."""
+    used = 0
+    for index, char in enumerate(text):
+        used += cell_len(char)
+        if used > cells:
+            return text[:index]
+    return text
 
 
-def _build_tools_renderable(tools, style: str, *, guide: bool = True):
-    """Monta o bloco visual de tools do turno com linhas estilizadas por status.
+def _cells_tail(text: str, cells: int) -> str:
+    """Maior sufixo de ``text`` que cabe em ``cells`` células."""
+    used = 0
+    for index in range(len(text) - 1, -1, -1):
+        used += cell_len(text[index])
+        if used > cells:
+            return text[index + 1:]
+    return text
 
-    Cada entrada pode ser multi-linha (previews de diff/saída); a primeira linha
-    recebe o tratamento de status e as demais aparecem indentadas, limitadas por
-    quantidade de linhas — nunca por corte de caracteres. Cada linha passa pelo
-    gutter fixo, com a guia vertical ``│`` ligando o bloco ao header do agente.
+
+def _ellipsize_middle(text: str, cells: int) -> str:
+    """Encurta com ``…`` no meio: o fim (basename, alvo) continua visível."""
+    if cell_len(text) <= cells:
+        return text
+    if cells <= 1:
+        return "…"[:cells]
+    keep = cells - 1
+    tail = keep - keep // 2
+    # Caminho: o basename (com a barra) fica inteiro sempre que couber com
+    # um mínimo do começo, para a linha ainda dizer qual arquivo é.
+    basename_cells = cell_len(text.rsplit("/", 1)[-1]) + 1 if "/" in text else 0
+    if tail < basename_cells <= keep - 4:
+        tail = basename_cells
+    return _cells_head(text, keep - tail) + "…" + _cells_tail(text, tail)
+
+
+def _fold_cells(text: Text, width: int) -> list[Text]:
+    """Dobra por célula, sem procurar espaço: caminho e comando não pulam de linha."""
+    offsets: list[int] = []
+    used = 0
+    for index, char in enumerate(text.plain):
+        size = cell_len(char)
+        if used + size > width and used:
+            offsets.append(index)
+            used = 0
+        used += size
+    return list(text.divide(offsets)) if offsets else [text]
+
+
+def _ellipsize_end(text: str, cells: int) -> str:
+    if cell_len(text) <= cells:
+        return text
+    if cells <= 1:
+        return "…"[:cells]
+    return _cells_head(text, cells - 1) + "…"
+
+
+# Corpo mínimo preservado antes de cortar a cauda do sufixo no compacto.
+_TOOL_BODY_MIN_CELLS = 12
+
+
+def _tool_entry(entry) -> dict[str, Any] | None:
+    """Normaliza a entrada: string solta vira entrada legada (texto cru)."""
+    if isinstance(entry, dict):
+        if entry.get("marker") or entry.get("tool") or str(entry.get("text") or "").strip():
+            return entry
+        return None
+    text = str(entry or "").strip()
+    return {"tool": "", "text": text} if text else None
+
+
+class _ToolLineRenderable:
+    """Uma entrada de tool montada a partir dos dados, na largura real.
+
+    Compacto (bloco vivo): uma linha visual; o corpo encurta com ``…`` no
+    meio, preservando duração e cauda. Expandido (detalhes do turno): sem
+    cortes, com recuo pendente na coluna do corpo e, abaixo, o assunto
+    completo, a cauda e o diff colorido.
+    """
+
+    def __init__(self, entry: dict[str, Any], style: str, *, compact: bool) -> None:
+        self.entry = entry
+        self.style = style
+        self.compact = compact
+
+    def _prefix(self) -> Text:
+        entry = self.entry
+        prefix = Text()
+        if entry.get("transport") == TRANSPORT_MCP_HTTP:
+            prefix.append(f"{MCP_HTTP_MARKER} ", style="dim")
+        status = entry.get("status")
+        if status == STATUS_OK:
+            prefix.append("✓ ", style="bold green")
+        elif status == STATUS_ERROR:
+            prefix.append("✗ ", style="bold red")
+        else:
+            prefix.append("· ", style="dim")
+        glyph = CATEGORY_GLYPHS.get(str(entry.get("category") or ""), CATEGORY_GLYPHS["execution"])
+        prefix.append(f"{glyph} ", style=f"bold {self.style}")
+        return prefix
+
+    def _body_parts(self) -> list[tuple[str, str]]:
+        entry = self.entry
+        title = str(entry.get("title") or "")
+        if title:
+            return [(title, "")]
+        verb = str(entry.get("verb") or "")
+        subject = str(entry.get("subject") or "")
+        if verb and subject:
+            return [(verb, self.style), (f" {subject}", "")]
+        if verb or subject:
+            return [(verb, self.style)] if verb else [(subject, "")]
+        return [(str(entry.get("tool") or ""), self.style)]
+
+    def _show_tail(self) -> bool:
+        entry = self.entry
+        return bool(entry.get("tail")) and (
+            entry.get("status") == STATUS_ERROR or entry.get("category") == "validation"
+        )
+
+    def _duration_suffix(self) -> str:
+        entry = self.entry
+        duration_ms = coerce_duration_ms(entry.get("duration_ms"))
+        if entry.get("status") == STATUS_RUNNING or duration_ms is None:
+            return ""
+        return f" · {format_duration(duration_ms)}"
+
+    def _tail_style(self) -> str:
+        return "red" if self.entry.get("status") == STATUS_ERROR else "dim"
+
+    def _compact_line(self, width: int) -> Text:
+        prefix = self._prefix()
+        parts = self._body_parts()
+        duration = self._duration_suffix()
+        tail = str(self.entry.get("tail") or "") if self._show_tail() else ""
+        body = "".join(text for text, _ in parts)
+        fixed = prefix.cell_len + cell_len(duration)
+        tail_cells = cell_len(f" · {tail}") if tail else 0
+        room = width - fixed - tail_cells
+        if cell_len(body) > room and tail:
+            # O corpo encolhe até o mínimo; só então a cauda é cortada pelo fim.
+            body_floor = min(cell_len(body), _TOOL_BODY_MIN_CELLS)
+            if room < body_floor:
+                tail_room = width - fixed - body_floor - cell_len(" · ")
+                tail = _ellipsize_end(tail, tail_room) if tail_room >= 2 else ""
+                tail_cells = cell_len(f" · {tail}") if tail else 0
+                room = width - fixed - tail_cells
+        line = Text(no_wrap=True, overflow="ellipsis")
+        line.append_text(prefix)
+        if cell_len(body) <= room:
+            for text, part_style in parts:
+                line.append(text, style=part_style)
+        elif len(parts) == 2 and room - cell_len(parts[0][0]) > 4:
+            verb, verb_style = parts[0]
+            line.append(verb, style=verb_style)
+            line.append(_ellipsize_middle(parts[1][0], room - cell_len(verb)))
+        else:
+            line.append(_ellipsize_middle(body, max(room, 1)), style=parts[0][1] if len(parts) == 1 else "")
+        if duration:
+            line.append(duration, style="dim")
+        if tail:
+            line.append(" · ", style="dim")
+            line.append(tail, style=self._tail_style())
+        line.truncate(width, overflow="ellipsis")
+        return line
+
+    def _expanded_lines(self) -> tuple[Text, list[Text]]:
+        entry = self.entry
+        head = Text(no_wrap=False, overflow="fold")
+        for text, part_style in self._body_parts():
+            head.append(text, style=part_style)
+        extras: list[Text] = []
+        title = str(entry.get("title") or "")
+        subject = str(entry.get("subject") or "")
+        if title and subject:
+            extras.append(Text(subject, style="dim"))
+        tail = str(entry.get("tail") or "")
+        if tail:
+            extras.append(Text(tail, style=self._tail_style()))
+        preview = [str(line) for line in entry.get("preview_lines") or ()]
+        for line in preview[:_TOOL_PREVIEW_LINE_LIMIT]:
+            if line.startswith("@@"):
+                line_style = "cyan"
+            elif line.startswith("+") and not line.startswith("+++"):
+                line_style = "green"
+            elif line.startswith("-") and not line.startswith("---"):
+                line_style = "red"
+            else:
+                line_style = "dim"
+            extras.append(Text(line, style=line_style))
+        omitted = len(preview) - _TOOL_PREVIEW_LINE_LIMIT
+        if omitted > 0:
+            extras.append(Text(f"⋮ +{omitted} linhas", style=f"dim {self.style}"))
+        return head, extras
+
+    def __rich_console__(self, console, options):
+        width = max(options.max_width, 1)
+        if self.compact:
+            yield self._compact_line(width)
+            return
+        prefix = self._prefix()
+        indent = min(prefix.cell_len, max(width - 1, 0))
+        inner = options.update_width(max(width - indent, 1))
+        head, extras = self._expanded_lines()
+        inner_width = inner.max_width
+        # Título é prosa e quebra por palavra; verbo + assunto é caminho ou
+        # comando e dobra por célula, sem deixar o verbo sozinho na linha.
+        if self.entry.get("title"):
+            head_lines = list(head.wrap(console, inner_width))
+        else:
+            head_lines = _fold_cells(head, inner_width)
+        # A duração é um token só: vai inteira ao fim da última linha ou,
+        # se não couber, sozinha na linha seguinte.
+        duration = self._duration_suffix()
+        if duration:
+            last = head_lines[-1] if head_lines else Text()
+            if not head_lines or last.cell_len + cell_len(duration) > inner_width:
+                head_lines.append(Text(duration.lstrip(), style="dim"))
+            else:
+                last.append(duration, style="dim")
+        for index, line in enumerate(head_lines):
+            if index == 0:
+                yield from prefix.render(console)
+            else:
+                yield Segment(" " * indent)
+            # ``join`` leva o estilo base da linha para os spans; ``render``
+            # sozinho o descartaria.
+            yield from Text().join([line]).render(console)
+            yield Segment.line()
+        for extra in extras:
+            for line in _fold_cells(extra, inner_width):
+                yield Segment(" " * indent)
+                yield from Text().join([line]).render(console)
+                yield Segment.line()
+
+
+def _legacy_tool_rows(text: str, marker: str, marker_style: str, style: str, *, expanded: bool) -> list:
+    """Texto cru de produtor antigo: dim, sem glifos e sem interpretação."""
+    lines = text.strip().splitlines() or [""]
+    head, extra = lines[0], lines[1:]
+    rows = [
+        _gutter_row(
+            marker,
+            marker_style,
+            Text(head, style="dim", no_wrap=False, overflow="fold"),
+            continuation=marker,
+            hanging=2 if expanded else 0,
+        )
+    ]
+    for continuation in extra[:_TOOL_PREVIEW_LINE_LIMIT]:
+        body = Padding(Text(continuation, style="dim", no_wrap=False, overflow="fold"), pad=(0, 0, 0, 2))
+        rows.append(_gutter_row(marker, marker_style, body, continuation=marker))
+    omitted = len(extra) - _TOOL_PREVIEW_LINE_LIMIT
+    if omitted > 0:
+        hint = Padding(Text(f"⋮ +{omitted} linhas", style=f"dim {style}"), pad=(0, 0, 0, 2))
+        rows.append(_gutter_row(marker, marker_style, hint, continuation=marker))
+    return rows
+
+
+def _build_tools_renderable(tools, style: str, *, guide: bool = True, expanded: bool = False):
+    """Monta o bloco visual de tools do turno a partir das entradas estruturadas.
+
+    Cada entrada vira um :class:`_ToolLineRenderable` — compacto no bloco
+    vivo, expandido nos detalhes do turno. Cada linha passa pelo gutter fixo,
+    com a guia vertical ``│`` ligando o bloco ao header do agente.
     """
     if not isinstance(tools, list):
         return None
-    entries = [str(tool) for tool in tools if str(tool).strip()]
+    entries = [entry for entry in (_tool_entry(tool) for tool in tools) if entry is not None]
     if not entries:
         return None
     marker = _GUTTER_GUIDE if guide else ""
     marker_style = f"dim {style}"
-    parts = []
+    parts: list[Any] = []
     for entry in entries:
-        lines = entry.strip().splitlines()
-        head, extra = lines[0], lines[1:]
-        parts.append(
-            _gutter_row(
-                marker,
-                marker_style,
-                _styled_tool_line(head, style),
-                continuation=marker,
-            )
-        )
-        omitted = len(extra) - _TOOL_PREVIEW_LINE_LIMIT
-        for continuation in extra[:_TOOL_PREVIEW_LINE_LIMIT]:
-            body = Padding(Text(continuation, style="dim", no_wrap=False, overflow="fold"), pad=(0, 0, 0, 2))
-            parts.append(_gutter_row(marker, marker_style, body, continuation=marker))
-        if omitted > 0:
-            hint = Padding(Text(f"⋮ +{omitted} linhas", style=f"dim {style}"), pad=(0, 0, 0, 2))
+        if entry.get("marker"):
+            hint = Text(str(entry.get("text") or ""), style=f"dim {style}", no_wrap=True, overflow="ellipsis")
             parts.append(_gutter_row(marker, marker_style, hint, continuation=marker))
+        elif not entry.get("tool"):
+            parts.extend(_legacy_tool_rows(str(entry.get("text") or ""), marker, marker_style, style, expanded=expanded))
+        else:
+            parts.append(
+                _gutter_row(
+                    marker,
+                    marker_style,
+                    _ToolLineRenderable(entry, style, compact=not expanded),
+                    continuation=marker,
+                )
+            )
     return Group(*parts)
 
 
@@ -1019,7 +1258,7 @@ def _render_event(event: TextualUiEvent):
         # Colapsado (padrão) não monta as linhas: o custo só existe expandido.
         if payload.get("tools_expanded"):
             # Sem guia │: o └ do rodapé já fechou o bloco do agente.
-            tools = _build_tools_renderable(tool_lines, style, guide=False)
+            tools = _build_tools_renderable(tool_lines, style, guide=False, expanded=True)
             if tools is not None:
                 return Group(block, footer, tools)
         return Group(block, footer)

@@ -11,7 +11,7 @@ from quimera.agent_events import SpyEvent
 from quimera.domain.task_states import Visibility
 from quimera.evidence import Evidence, EvidenceStore, PatternRegistry
 from quimera.domain.tool_activity import classify_tool_activity
-from quimera.runtime.tool_preview import ToolPreview
+from quimera.domain.tool_line import STATUS_RUNNING, ToolLine, build_tool_line
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
 
 _logger = logging.getLogger(__name__)
@@ -94,36 +94,46 @@ class SpyOutputPresenter:
                 return record
         return None
 
-    def _normalize_tool_data(self, event: SpyEvent) -> dict | None:
+    @staticmethod
+    def _normalize_tool_data(event: SpyEvent) -> dict | None:
+        """Dados estruturados do evento; sem ``data`` não há telemetria."""
         if event.data and isinstance(event.data, dict):
             return dict(event.data)
-
-        text = (event.text or "").strip()
-        if not text:
-            return None
-
-        if text.startswith("$ "):
-            command = text[2:].strip()
-            return {"tool": "exec_command", "operation": "start", "status": "running", "input": {"cmd": command}}
-        if text.startswith("✓ "):
-            payload = text[2:].strip()
-            if payload.startswith("editar "):
-                return {"tool": "apply_patch", "operation": "end", "status": "ok", "input": {"path": payload[7:]}}
-            return {"tool": "exec_command", "operation": "end", "status": "ok", "input": {"cmd": payload}}
-        if text.startswith("✗ "):
-            payload = text[2:].strip()
-            return {
-                "tool": "exec_command",
-                "operation": "end",
-                "status": "error",
-                "input": {"cmd": payload},
-                "error": {"type": "ToolError", "message": payload},
-            }
-        if text.startswith("editar "):
-            return {"tool": "apply_patch", "operation": "start", "status": "running", "input": {"path": text[7:]}}
-        if text.startswith("usando "):
-            return {"tool": text[7:].strip() or "ferramenta", "operation": "start", "status": "running"}
         return None
+
+    @staticmethod
+    def _line_from_data(data: dict) -> ToolLine:
+        """Linha da tool a partir do ``data`` do evento, sem consultar o record."""
+        payload = data.get("line")
+        line = ToolLine.from_payload(payload) if isinstance(payload, dict) and "tool" in payload else None
+        if line is not None:
+            return line
+        error = data.get("error")
+        output_meta = data.get("output_meta")
+        exit_code = output_meta.get("exit_code") if isinstance(output_meta, dict) else None
+        input_payload = data.get("input")
+        return build_tool_line(
+            data.get("tool"),
+            input_payload if isinstance(input_payload, dict) else None,
+            status=str(data.get("status") or STATUS_RUNNING),
+            tool_call_id=data.get("tool_call_id"),
+            description=data.get("description"),
+            exit_code=exit_code if isinstance(exit_code, int) else None,
+            error=error,
+            tail=data.get("tail"),
+        )
+
+    def _line_at_end(self, data: dict, record: dict | None) -> ToolLine:
+        """Linha de fim: herda tool/verbo/assunto do início guardado no record."""
+        started = ToolLine.from_payload(record.get("line")) if record else None
+        if started is None:
+            return self._line_from_data(data)
+        end = self._line_from_data(data)
+        return started.with_outcome(
+            status=str(data.get("status") or end.status),
+            duration_ms=record.get("duration_ms") if record else None,
+            tail=end.tail or None,
+        )
 
     def tool_activity(self, event: SpyEvent) -> dict | None:
         """Resume um SpyEvent de tool para observabilidade do run."""
@@ -135,9 +145,18 @@ class SpyOutputPresenter:
         operation = str(data.get("operation") or "")
         if operation not in {"start", "end"}:
             return None
+        text = str(event.text or "").strip()
+        tool = str(data.get("tool") or "")
+        if operation == "end":
+            # O fim de tool nativa do Claude só traz o id: nome e texto vêm do
+            # início guardado, como na linha que o ``emit`` exibe.
+            record = self._find_record_by_id(data.get("tool_call_id"))
+            if record is not None:
+                text = self._line_at_end(data, record).to_text()
+                tool = tool or str(record.get("tool") or "")
         activity = {
-            "text": str(event.text or "").strip(),
-            "tool": str(data.get("tool") or ""),
+            "text": text,
+            "tool": tool,
             "operation": operation,
             "status": str(data.get("status") or ""),
         }
@@ -160,26 +179,27 @@ class SpyOutputPresenter:
         """Normaliza atividade de conclusão para drivers sem stdout estruturado."""
         return self.tool_activity(self._tool_result_event(result))
 
-    def _record_tool_event(self, event: SpyEvent) -> None:
+    def _record_tool_event(self, event: SpyEvent) -> ToolLine | None:
+        """Atualiza a telemetria do turno e devolve a linha da tool, se houver."""
         if event.kind not in {"tool", "diff"}:
-            return
+            return None
 
         data = self._normalize_tool_data(event)
         if event.kind == "diff":
             if not data:
-                return
+                return None
             key = data.get("tool_call_id") or self._find_open_tool(data.get("tool"))
             if not key:
-                return
+                return None
             record = self._active_tool_calls.get(key)
             if not record:
-                return
+                return None
             output_meta = record.setdefault("output_meta", {})
             output_meta["diff_lines"] = int(output_meta.get("diff_lines", 0)) + 1
-            return
+            return None
 
         if not data:
-            return
+            return None
 
         tool = data.get("tool")
         operation = data.get("operation")
@@ -195,6 +215,7 @@ class SpyOutputPresenter:
                 input_payload if isinstance(input_payload, dict) else None,
                 explicit=data.get("activity"),
             )
+            line = self._line_from_data(data)
             record = {
                 "tool_call_id": key,
                 "tool": tool,
@@ -204,13 +225,14 @@ class SpyOutputPresenter:
                 "ended_at": None,
                 "duration_ms": None,
                 "input": input_payload,
+                "line": line.to_payload(),
             }
             self.turn_tools.append(record)
             self._active_tool_calls[key] = record
-            return
+            return line
 
         if operation != "end":
-            return
+            return None
 
         key = tool_call_id or self._find_open_tool(tool)
         record = self._active_tool_calls.get(key) if key else None
@@ -220,7 +242,7 @@ class SpyOutputPresenter:
             record = self._find_record_by_id(tool_call_id)
             if record is not None:
                 if record.get("ended_at") is not None:
-                    return
+                    return self._line_at_end(data, record)
                 self._active_tool_calls[tool_call_id] = record
 
         if record is None:
@@ -240,6 +262,7 @@ class SpyOutputPresenter:
                 "ended_at": None,
                 "duration_ms": None,
                 "input": input_payload,
+                "line": self._line_from_data(data).to_payload(),
             }
             self.turn_tools.append(record)
             self._active_tool_calls[key] = record
@@ -261,6 +284,7 @@ class SpyOutputPresenter:
             record["error"] = data.get("error")
         if key:
             self._active_tool_calls.pop(key, None)
+        return self._line_at_end(data, record)
 
     @staticmethod
     def _tool_call_event(
@@ -272,9 +296,10 @@ class SpyOutputPresenter:
         """Normaliza uma chamada de tool vinda de drivers sem stdout próprio."""
         tool_name = str(tool or "ferramenta")
         input_payload = dict(arguments) if isinstance(arguments, dict) else None
+        line = build_tool_line(tool_name, input_payload, tool_call_id=tool_call_id)
         return SpyEvent(
             kind="tool",
-            text=ToolPreview.build(tool_name, input_payload or {}),
+            text=line.to_text(),
             transient=True,
             data={
                 "tool": tool_name,
@@ -282,6 +307,7 @@ class SpyOutputPresenter:
                 "status": "running",
                 "input": input_payload,
                 "tool_call_id": tool_call_id,
+                "line": line.to_payload(),
             },
         )
 
@@ -301,12 +327,15 @@ class SpyOutputPresenter:
             data["tool_call_id"] = str(result_data["tool_call_id"])
         if error:
             data["error"] = {"type": "ToolError", "message": error}
-        return SpyEvent(
-            kind="tool",
-            text=f"{'✓' if ok else '✗'} {tool}",
-            transient=True,
-            data=data,
+        line = build_tool_line(
+            tool,
+            None,
+            status=data["status"],
+            tool_call_id=data.get("tool_call_id"),
+            error=error or None,
         )
+        data["line"] = line.to_payload()
+        return SpyEvent(kind="tool", text=line.to_text(), transient=True, data=data)
 
     def record_tool_call(
         self,
@@ -594,7 +623,17 @@ class SpyOutputPresenter:
         """Renderiza um evento conforme a visibilidade configurada."""
         self._audit_spy_event(agent, event)
         timeline = self._timeline_text(event) if self.visibility == Visibility.FULL else None
-        self._record_tool_event(event)
+        line = self._record_tool_event(event)
+        if event.kind == "tool" and line is not None and event.data:
+            # A linha resolvida (com o fim herdando o início) substitui o texto
+            # provisório do produtor em todos os caminhos de renderização.
+            event = SpyEvent(
+                kind="tool",
+                text=line.to_text(),
+                transient=event.transient,
+                final=event.final,
+                data={**event.data, "line": line.to_payload()},
+            )
 
         if self.visibility == Visibility.QUIET:
             # Quiet reduz narrativa e previews de conteúdo, mas não pode
@@ -616,7 +655,7 @@ class SpyOutputPresenter:
 
         if self.visibility != Visibility.SUMMARY:
             if timeline and event.kind == "tool":
-                self._show(agent, SpyEvent(kind="tool", text=timeline, transient=True, data=event.data))
+                self._show(agent, SpyEvent(kind="tool", text=timeline, transient=True))
             self._show(agent, event)
             return
 
@@ -626,19 +665,11 @@ class SpyOutputPresenter:
 
         if event.kind == "tool":
             payload = event.text.strip()
-            if payload.startswith("✗ "):
-                self.flush(agent)
-                self._show(agent, SpyEvent(kind="tool", text=payload, transient=True, data=event.data))
-                self.current_status_label = ""
-                return
-            if payload.startswith("✓ "):
-                self.flush(agent)
-                self._show(agent, SpyEvent(kind="tool", text=payload, transient=True, data=event.data))
-                self.current_status_label = ""
-                return
             self.flush(agent)
             self._show(agent, SpyEvent(kind="tool", text=payload, transient=True, data=event.data))
-            self.current_status_label = payload
+            tool_line = self._event_tool_line(event)
+            running = tool_line is None or tool_line.status == STATUS_RUNNING
+            self.current_status_label = payload if running else ""
             return
 
         if event.kind == "context":
@@ -696,7 +727,8 @@ class SpyOutputPresenter:
 
     def _show(self, agent: str | None, event: SpyEvent) -> None:
         """Renderiza um evento já processado, evitando duplicatas consecutivas."""
-        rendered = event.text
+        tool_line = self._event_tool_line(event)
+        rendered = tool_line.to_text() if tool_line is not None else event.text
         from quimera.agents.text_filters import _is_interrupt_echo as _check_interrupt
         if _check_interrupt(rendered):
             return
@@ -705,8 +737,33 @@ class SpyOutputPresenter:
                 self.renderer.clear_agent_transient(agent)
             self.last_message = "clear:"
             return
+        if event.kind == "diff":
+            data = event.data or {}
+            tool_call_id = str(data.get("tool_call_id") or "")
+            if tool_call_id and agent and self._feed_has_tool_preview():
+                dedupe_key = f"diff:{tool_call_id}:{data.get('line_index', rendered)}:{rendered}"
+                if dedupe_key == self.last_message:
+                    return
+                self.renderer.show_tool_preview(
+                    {"content": rendered, "preview_for": tool_call_id}, agent=agent
+                )
+                self.last_message = dedupe_key
+                return
         dedupe_key = f"{event.kind}:{rendered}"
+        if tool_line is not None and tool_line.tool_call_id:
+            # Dois comandos de texto igual com ids distintos são chamadas distintas.
+            dedupe_key = f"tool:{tool_line.tool_call_id}:{tool_line.status}"
         if event.kind != "clear" and dedupe_key == self.last_message:
+            return
+        if tool_line is not None and agent and self._feed_has_tool_preview():
+            if event.transient and self._is_lifecycle_context(self._transient_content):
+                self._transient_content = ""
+                self.renderer.update_agent_transient(agent, "")
+            message: dict[str, Any] = {"content": rendered, "tool_line": tool_line.to_payload()}
+            if tool_line.tool_call_id:
+                message["tool_call_id"] = tool_line.tool_call_id
+            self.renderer.show_tool_preview(message, agent=agent)
+            self.last_message = dedupe_key
             return
         if event.transient and agent:
             if event.kind == "tool" and self.renderer.supports_agent_feed is True:
@@ -733,6 +790,21 @@ class SpyOutputPresenter:
             else:
                 self._show_persistent_line(rendered, agent=agent)
         self.last_message = dedupe_key
+
+    @staticmethod
+    def _event_tool_line(event: SpyEvent) -> ToolLine | None:
+        """Linha estruturada anexada pelo ``emit``; ``None`` para texto puro."""
+        if event.kind != "tool" or not isinstance(event.data, dict):
+            return None
+        payload = event.data.get("line")
+        if not isinstance(payload, dict) or "tool" not in payload:
+            return None
+        return ToolLine.from_payload(payload)
+
+    def _feed_has_tool_preview(self) -> bool:
+        return self.renderer.supports_agent_feed is True and callable(
+            getattr(self.renderer, "show_tool_preview", None)
+        )
 
     def _show_persistent_line(self, message: str, *, agent: str | None, muted: bool = False) -> None:
         """Escreve no feed persistente sem derrubar o overlay quando suportado."""

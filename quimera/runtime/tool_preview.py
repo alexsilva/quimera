@@ -1,27 +1,24 @@
-"""Formatador central de preview operacional e de aprovação para tools."""
+"""Formatador central de preview operacional e de aprovação para tools.
+
+O contexto ``execution`` é a forma canônica de ``quimera.domain.tool_line``.
+"""
 
 from __future__ import annotations
 
 from typing import Any, ClassVar
 
+from quimera.domain.tool_line import SENSITIVE_KEYS, build_tool_line, redact
+
 
 class ToolPreview:
     """Constrói previews de tools com variação apenas de contexto visual."""
 
-    _SENSITIVE_KEYS: ClassVar[set[str]] = {
-        "token", "api_key", "password", "secret",
-        "authorization", "cookie", "headers",
-    }
+    _SENSITIVE_KEYS: ClassVar[frozenset[str]] = SENSITIVE_KEYS
     _PREVIEW_MAX_LINES = 6
     _PREVIEW_MAX_CHARS = 500
     # Limites de approval (caixa compacta de confirmação).
     _MAX_VALUE_LEN = 80
     _MAX_ITEMS = 4
-    # Limites de execução (feed operacional): folgados para não cortar os dados
-    # do agente; a UI dobra a linha em vez de truncar. O teto alto existe só
-    # como proteção contra payloads patológicos (ex.: conteúdo de write_file).
-    _EXEC_MAX_VALUE_LEN = 400
-    _EXEC_MAX_ITEMS = 8
 
     @classmethod
     def build(
@@ -36,14 +33,7 @@ class ToolPreview:
         omitted = {str(item).strip().lower() for item in (omit_fields or set()) if str(item).strip()}
         if context_name == "approval":
             return cls._build_approval(tool_name, arguments, omitted)
-        return cls._build_execution(tool_name, arguments)
-
-    @classmethod
-    def _build_execution(cls, tool_name: str, arguments: dict[str, Any]) -> str:
-        handler = getattr(cls, f"_format_execution_{tool_name}", None)
-        if callable(handler):
-            return handler(arguments)
-        return cls._format_execution_unknown(tool_name, arguments)
+        return build_tool_line(tool_name, arguments).to_text()
 
     @classmethod
     def _build_approval(
@@ -56,71 +46,6 @@ class ToolPreview:
         if callable(handler):
             return handler(arguments, omitted)
         return cls._format_approval_unknown(tool_name, arguments)
-
-    @classmethod
-    def _format_execution_read_file(cls, args: dict[str, Any]) -> str:
-        path = args.get("path", "?")
-        return f"⚒ read_file {cls._truncate(str(path), cls._EXEC_MAX_VALUE_LEN)}"
-
-    @classmethod
-    def _format_execution_list_files(cls, args: dict[str, Any]) -> str:
-        path = args.get("path") or args.get("directory") or "?"
-        return f"⚒ list_files {cls._truncate(str(path), cls._EXEC_MAX_VALUE_LEN)}"
-
-    @classmethod
-    def _format_execution_grep_search(cls, args: dict[str, Any]) -> str:
-        pattern = args.get("pattern", "?")
-        path = args.get("path") or args.get("root") or "."
-        return f"⚒ grep {pattern!r} {cls._truncate(str(path), cls._EXEC_MAX_VALUE_LEN)}"
-
-    @classmethod
-    def _format_execution_web_search(cls, args: dict[str, Any]) -> str:
-        query = args.get("query") or args.get("q") or "?"
-        return f"⚒ web_search {query!r}"
-
-    @classmethod
-    def _format_execution_web_fetch(cls, args: dict[str, Any]) -> str:
-        url = args.get("url", "?")
-        return f"⚒ web_fetch {cls._truncate(str(url), cls._EXEC_MAX_VALUE_LEN)}"
-
-    @classmethod
-    def _format_execution_run_shell(cls, args: dict[str, Any]) -> str:
-        cmd = args.get("command") or args.get("cmd") or "?"
-        return f"⚒ $ {cls._truncate(str(cmd), cls._EXEC_MAX_VALUE_LEN)}"
-
-    @classmethod
-    def _format_execution_exec_command(cls, args: dict[str, Any]) -> str:
-        cmd = args.get("cmd", "?")
-        return f"⚒ $ {cls._truncate(str(cmd), cls._EXEC_MAX_VALUE_LEN)}"
-
-    @classmethod
-    def _format_execution_write_stdin(cls, args: dict[str, Any]) -> str:
-        sid = args.get("session_id", "?")
-        chars = str(args.get("chars", ""))
-        line = f"⚒ write_stdin session={sid}"
-        if chars:
-            line += f" {cls._truncate(chars, 200)!r}"
-        if args.get("close_stdin"):
-            line += " [close]"
-        return line
-
-    @classmethod
-    def _format_execution_close_command_session(cls, args: dict[str, Any]) -> str:
-        sid = args.get("session_id", "?")
-        terminate = args.get("terminate", False)
-        extra = " [terminate]" if terminate else ""
-        return f"⚒ close_session {sid}{extra}"
-
-    @classmethod
-    def _format_execution_unknown(cls, tool_name: str, args: dict[str, Any]) -> str:
-        parts = []
-        for index, (key, value) in enumerate(args.items()):
-            if index >= cls._EXEC_MAX_ITEMS:
-                parts.append(f"+{len(args) - cls._EXEC_MAX_ITEMS} args")
-                break
-            parts.append(f"{cls._sanitize_value(key, value)}")
-        suffix = f" {' '.join(parts)}" if parts else ""
-        return f"⚒ {tool_name}{suffix}"
 
     @classmethod
     def _format_approval_write_file(cls, args: dict[str, Any], _omitted: set[str]) -> str:
@@ -249,26 +174,6 @@ class ToolPreview:
         return [cls._truncate(line, cls._PREVIEW_MAX_CHARS) for line in lines]
 
     @classmethod
-    def _sanitize_value(cls, key: str, value: Any) -> str:
-        lowered = str(key).lower()
-        if lowered in cls._SENSITIVE_KEYS:
-            return cls._redact(value)
-        if isinstance(value, dict):
-            inner = []
-            for index, (inner_key, inner_value) in enumerate(value.items()):
-                if index >= cls._EXEC_MAX_ITEMS:
-                    inner.append(f"+{len(value) - cls._EXEC_MAX_ITEMS} itens")
-                    break
-                inner.append(f"{inner_key}={cls._sanitize_value(inner_key, inner_value)}")
-            return cls._truncate("{" + ", ".join(inner) + "}", cls._EXEC_MAX_VALUE_LEN)
-        if isinstance(value, (list, tuple, set)):
-            items = [cls._sanitize_value(key, item) for item in list(value)[: cls._EXEC_MAX_ITEMS]]
-            if len(value) > cls._EXEC_MAX_ITEMS:
-                items.append(f"+{len(value) - cls._EXEC_MAX_ITEMS} itens")
-            return cls._truncate("[" + ", ".join(items) + "]", cls._EXEC_MAX_VALUE_LEN)
-        return cls._truncate(str(value), cls._EXEC_MAX_VALUE_LEN)
-
-    @classmethod
     def _format_paths(cls, value: Any) -> str:
         if isinstance(value, (list, tuple, set)):
             items = [cls._truncate(str(item), cls._MAX_VALUE_LEN) for item in list(value)[: cls._MAX_ITEMS]]
@@ -283,14 +188,7 @@ class ToolPreview:
             return value
         return value[:max_len] + "…"
 
-    @staticmethod
-    def _redact(value: Any) -> str:
-        text = str(value)
-        if not text:
-            return "***"
-        if len(text) <= 4:
-            return "****"
-        return text[:2] + "****" + text[-2:]
+    _redact = staticmethod(redact)
 
 
 class ToolPreviewSummary(ToolPreview):

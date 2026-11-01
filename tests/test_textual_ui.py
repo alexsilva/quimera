@@ -12,6 +12,7 @@ from rich.console import Console, Group
 from rich.padding import Padding
 
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
+from tests.textual_tool_helpers import tool_msg, tool_texts
 from quimera.ui.textual.app import run_textual_quimera_app
 from quimera.ui.textual.bridge import TextualUiBridge
 from quimera.ui.textual.events import TextualUiEvent
@@ -954,43 +955,59 @@ def test_textual_feed_attaches_tool_preview_to_agent_transient():
     assert model.items[0].transient is True
     assert model.items[0].event.kind == "agent_update"
     assert model.items[0].event.payload["content"] == "[thinking] analisando"
-    assert model.items[0].event.payload["tools"] == ["⌘ read_file a.py"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["⌘ read_file a.py"]
 
     model.apply(TextualUiEvent("agent_update", "[thinking] analisando mais", agent="openai"))
 
     assert len(model.items) == 1
     assert model.items[0].event.payload["content"] == "[thinking] analisando mais"
-    assert model.items[0].event.payload["tools"] == ["⌘ read_file a.py"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["⌘ read_file a.py"]
 
 
 def test_textual_feed_collapses_command_start_into_completion():
-    model = TextualFeedModel()
+    now = [10.0]
+    model = TextualFeedModel(clock=lambda: now[0])
 
     model.apply(TextualUiEvent("agent_update", "[thinking] rodando", agent="codex"))
-    model.apply(TextualUiEvent("tool_preview", "$ /bin/bash -lc 'pytest'", agent="codex"))
-    model.apply(TextualUiEvent("tool_preview", "✓ /bin/bash -lc 'pytest'", agent="codex"))
+    command = {"cmd": "/bin/bash -lc 'pytest'"}
+    model.apply(TextualUiEvent("tool_preview", tool_msg("exec_command", command, tool_call_id="c1"), agent="codex"))
+    now[0] = 10.3
+    # O fim sem duration_ms tem a duração medida pelo relógio do modelo.
+    model.apply(TextualUiEvent("tool_preview", tool_msg("exec_command", command, status="ok", tool_call_id="c1"), agent="codex"))
 
-    assert model.items[0].event.payload["tools"] == ["✓ /bin/bash -lc 'pytest'"]
+    [entry] = model.items[0].event.payload["tools"]
+    assert entry["status"] == "ok"
+    assert entry["duration_ms"] == 300
+    assert entry["text"] == "✓ ⚙ pytest · 300ms"
 
 
 def test_textual_feed_collapses_command_start_into_error_completion():
     model = TextualFeedModel()
 
     model.apply(TextualUiEvent("agent_update", "[thinking] rodando", agent="codex"))
-    model.apply(TextualUiEvent("tool_preview", "$ /bin/bash -lc 'pytest'", agent="codex"))
-    model.apply(TextualUiEvent("tool_preview", "✗ /bin/bash -lc 'pytest' (exit 1)", agent="codex"))
+    command = {"cmd": "/bin/bash -lc 'pytest'"}
+    model.apply(TextualUiEvent("tool_preview", tool_msg("exec_command", command, tool_call_id="c1"), agent="codex"))
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        tool_msg("exec_command", command, status="error", tool_call_id="c1", duration_ms=1200, exit_code=1),
+        agent="codex",
+    ))
 
-    assert model.items[0].event.payload["tools"] == ["✗ /bin/bash -lc 'pytest' (exit 1)"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["✗ ⚙ pytest · 1.2s · exit 1"]
 
 
 def test_textual_feed_collapses_file_edit_start_into_completion():
     model = TextualFeedModel()
 
     model.apply(TextualUiEvent("agent_update", "[thinking] editando", agent="codex"))
-    model.apply(TextualUiEvent("tool_preview", "editar app.py", agent="codex"))
-    model.apply(TextualUiEvent("tool_preview", "✓ editar app.py", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", tool_msg("Edit", {"file_path": "app.py"}, tool_call_id="e1"), agent="codex"))
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        tool_msg("Edit", {"file_path": "app.py"}, status="ok", tool_call_id="e1", duration_ms=40),
+        agent="codex",
+    ))
 
-    assert model.items[0].event.payload["tools"] == ["✓ editar app.py"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["✓ ✎ editar app.py · 40ms"]
 
 
 def test_textual_feed_keeps_distinct_commands_as_separate_lines():
@@ -1000,7 +1017,7 @@ def test_textual_feed_keeps_distinct_commands_as_separate_lines():
     model.apply(TextualUiEvent("tool_preview", "$ ls", agent="codex"))
     model.apply(TextualUiEvent("tool_preview", "$ pwd", agent="codex"))
 
-    assert model.items[0].event.payload["tools"] == ["$ ls", "$ pwd"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["$ ls", "$ pwd"]
 
 
 def test_textual_feed_keeps_thinking_content_while_tools_stream():
@@ -1013,7 +1030,7 @@ def test_textual_feed_keeps_thinking_content_while_tools_stream():
     assert len(model.items) == 1
     payload = model.items[0].event.payload
     assert payload["content"] == "[thinking] planejando refactor"
-    assert payload["tools"] == ["$ ls", "⌘ read_file app.py"]
+    assert tool_texts(payload["tools"]) == ["$ ls", "⌘ read_file app.py"]
 
 
 def test_textual_feed_preserves_tool_history_and_marks_hidden_entries():
@@ -1021,18 +1038,26 @@ def test_textual_feed_preserves_tool_history_and_marks_hidden_entries():
     model.apply(TextualUiEvent("agent_update", {"content": "pensando"}, agent="codex"))
 
     for index in range(14):
-        model.apply(TextualUiEvent("tool_preview", f"$ tool-{index}", agent="codex"))
+        model.apply(TextualUiEvent(
+            "tool_preview",
+            tool_msg("exec_command", {"cmd": f"tool-{index}"}, tool_call_id=f"c{index}"),
+            agent="codex",
+        ))
 
     payload = model.items[0].event.payload
-    assert payload["tools"][0] == "⋮ +9 ferramentas anteriores"
-    assert payload["tools"][1:] == [f"$ tool-{index}" for index in range(9, 14)]
-    assert model._transient_tools_by_agent["codex"] == [
+    assert payload["tools"][0] == {"marker": True, "text": "⋮ +9 ferramentas anteriores"}
+    assert tool_texts(payload["tools"][1:]) == [f"$ tool-{index}" for index in range(9, 14)]
+    assert tool_texts(model._transient_tools_by_agent["codex"]) == [
         f"$ tool-{index}" for index in range(14)
     ]
 
-    model.apply(TextualUiEvent("tool_preview", "✓ tool-0", agent="codex"))
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        tool_msg("exec_command", {"cmd": "tool-0"}, status="ok", tool_call_id="c0", duration_ms=5),
+        agent="codex",
+    ))
 
-    assert model._transient_tools_by_agent["codex"][0] == "✓ tool-0"
+    assert model._transient_tools_by_agent["codex"][0]["text"] == "✓ $ tool-0 · 5ms"
     assert len(model._transient_tools_by_agent["codex"]) == 14
 
 
@@ -1073,7 +1098,7 @@ def test_textual_feed_drops_lifecycle_placeholder_when_tools_start():
     payload = model.items[0].event.payload
     assert model.items[0].event.kind == "agent_update"
     assert payload["content"] == ""
-    assert payload["tools"] == ["usando grep"]
+    assert tool_texts(payload["tools"]) == ["usando grep"]
 
 
 def test_textual_feed_does_not_treat_arbitrary_text_as_lifecycle_placeholder():
@@ -1176,7 +1201,7 @@ def test_textual_feed_lifecycle_boundary_uses_status_not_message_text():
     )
 
     assert model.items[0].event.payload["status"] == "running"
-    assert model.items[0].event.payload["tools"] == ["⌘ read_file a.py"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["⌘ read_file a.py"]
 
 
 
@@ -1326,7 +1351,7 @@ def test_textual_feed_tool_preview_preserves_run_metadata():
         TextualUiEvent(
             "tool_preview",
             {
-                "content": "⌘ read_file foo.py",
+                **tool_msg("read_file", {"path": "foo.py"}),
                 "label": "MCP HTTP",
                 "run_id": "http:run-1",
                 "transport": "mcp_http",
@@ -1339,10 +1364,14 @@ def test_textual_feed_tool_preview_preserves_run_metadata():
     payload = model.items[0].event.payload
     assert payload["run_id"] == "http:run-1"
     assert payload["transport"] == "mcp_http"
-    assert payload["tools"] == ["◇ ⌘ read_file foo.py"]
+    assert "tool_line" not in payload
+    [entry] = payload["tools"]
+    # O transporte do topo vira o da entrada: o ◇ sai dos dados, não do texto.
+    assert entry["transport"] == "mcp_http"
+    assert entry["text"] == "◇ ⌕ ler foo.py"
 
 
-def test_textual_feed_cli_tool_preview_with_run_id_keeps_legacy_deduplication():
+def test_textual_feed_cli_tool_preview_with_run_id_matches_by_tool_call_id():
     model = TextualFeedModel()
     payload = {
         "label": "Codex",
@@ -1352,16 +1381,28 @@ def test_textual_feed_cli_tool_preview_with_run_id_keeps_legacy_deduplication():
 
     model.apply(TextualUiEvent(
         "tool_preview",
-        {**payload, "content": "⚒ read_file foo.py"},
+        {**payload, **tool_msg("read_file", {"path": "foo.py"}, tool_call_id="r1")},
         agent="codex",
     ))
     model.apply(TextualUiEvent(
         "tool_preview",
-        {**payload, "content": "✓ read_file foo.py"},
+        {**payload, **tool_msg("read_file", {"path": "foo.py"}, status="ok", tool_call_id="r1", duration_ms=8)},
         agent="codex",
     ))
 
-    assert model.items[0].event.payload["tools"] == ["✓ read_file foo.py"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["✓ ⌕ ler foo.py · 8ms"]
+
+
+def test_textual_feed_legacy_tool_lines_never_match_each_other():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("tool_preview", "⚒ read_file foo.py", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", "✓ read_file foo.py", agent="codex"))
+
+    tools = model.items[0].event.payload["tools"]
+    # Texto legado entra cru: nenhum glifo ou prefixo é interpretado.
+    assert tool_texts(tools) == ["⚒ read_file foo.py", "✓ read_file foo.py"]
+    assert all(entry["tool"] == "" and entry["status"] == "running" for entry in tools)
 
 
 def test_textual_feed_keeps_cli_and_http_mcp_tool_state_isolated():
@@ -1382,20 +1423,21 @@ def test_textual_feed_keeps_cli_and_http_mcp_tool_state_isolated():
         "client_name": "chatgpt",
         "mcp_msg_id": "1",
     }
+    read = {"path": "foo.py"}
 
     model.apply(TextualUiEvent(
         "tool_preview",
-        {**cli_payload, "content": "⚒ read_file foo.py"},
+        {**cli_payload, **tool_msg("read_file", read, tool_call_id="r1")},
         agent="codex",
     ))
     model.apply(TextualUiEvent(
         "tool_preview",
-        {**http_payload, "content": "⚒ read_file foo.py"},
+        {**http_payload, **tool_msg("read_file", read)},
         agent="mcp-http",
     ))
     model.apply(TextualUiEvent(
         "tool_preview",
-        {**cli_payload, "content": "✓ read_file foo.py"},
+        {**cli_payload, **tool_msg("read_file", read, status="ok", tool_call_id="r1", duration_ms=3)},
         agent="codex",
     ))
     model.apply(TextualUiEvent(
@@ -1405,6 +1447,7 @@ def test_textual_feed_keeps_cli_and_http_mcp_tool_state_isolated():
             "msg_id": "1",
             "tool_name": "read_file",
             "status": "finished",
+            "duration_ms": 7,
         },
         agent="mcp-http",
     ))
@@ -1412,8 +1455,8 @@ def test_textual_feed_keeps_cli_and_http_mcp_tool_state_isolated():
     assert len(model.items) == 2
     cli_item = next(item for item in model.items if item.event.agent == "codex")
     http_item = next(item for item in model.items if item.event.agent == "mcp-http")
-    assert cli_item.event.payload["tools"] == ["✓ read_file foo.py"]
-    assert http_item.event.payload["tools"] == ["◇ ✓ read_file foo.py"]
+    assert tool_texts(cli_item.event.payload["tools"]) == ["✓ ⌕ ler foo.py · 3ms"]
+    assert tool_texts(http_item.event.payload["tools"]) == ["◇ ✓ ⌕ ler foo.py · 7ms"]
 
     now[0] = 10.5
     assert model.expire_tool_previews()
@@ -1424,29 +1467,29 @@ def test_textual_feed_keeps_cli_and_http_mcp_tool_state_isolated():
 def test_textual_feed_http_mcp_tool_preview_uses_remote_icon_and_merges_status():
     model = TextualFeedModel()
     payload = {
-        "content": "⚒ read_file foo.py",
         "label": "MCP HTTP",
         "run_id": "http:run-1",
         "transport": "mcp_http",
+        "mcp_msg_id": "4",
     }
 
-    model.apply(TextualUiEvent("tool_preview", payload, agent="mcp-http"))
+    model.apply(TextualUiEvent("tool_preview", {**payload, **tool_msg("read_file", {"path": "foo.py"})}, agent="mcp-http"))
     model.apply(
         TextualUiEvent(
             "tool_preview",
-            {**payload, "content": "✓ read_file foo.py"},
+            {**payload, **tool_msg("read_file", {"path": "foo.py"}, status="ok", duration_ms=2)},
             agent="mcp-http",
         )
     )
 
-    assert model.items[0].event.payload["tools"] == ["◇ ✓ read_file foo.py"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["◇ ✓ ⌕ ler foo.py · 2ms"]
 
 
 def test_textual_feed_groups_http_mcp_tools_by_client_across_sessions_and_runs():
     model = TextualFeedModel()
 
     first = {
-        "content": "⚒ grep_search MCP",
+        **tool_msg("grep_search", {"pattern": "MCP"}),
         "label": "🤖  mcp-http",
         "run_id": "http:run-1",
         "session_id": "session-1",
@@ -1456,7 +1499,7 @@ def test_textual_feed_groups_http_mcp_tools_by_client_across_sessions_and_runs()
         "mcp_msg_id": "1",
     }
     second = {
-        "content": "⚒ git_status",
+        **tool_msg("git_status"),
         "label": "🤖  mcp-http",
         "run_id": "http:run-2",
         "session_id": "session-2",
@@ -1470,16 +1513,16 @@ def test_textual_feed_groups_http_mcp_tools_by_client_across_sessions_and_runs()
     model.apply(TextualUiEvent("tool_preview", second, agent="mcp-http"))
 
     assert len(model.items) == 1
-    assert model.items[0].event.payload["tools"] == [
-        "◇ ⚒ grep_search MCP",
-        "◇ ⚒ git_status",
+    assert tool_texts(model.items[0].event.payload["tools"]) == [
+        '◇ ⌕ buscar "MCP"',
+        "◇ ⌕ git status",
     ]
 
 
 def test_textual_feed_http_mcp_keeps_identical_calls_as_distinct_requests():
     model = TextualFeedModel()
     common = {
-        "content": "⚒ read_file README.md",
+        **tool_msg("read_file", {"path": "README.md"}),
         "label": "🤖  mcp-http",
         "client_name": "chatgpt",
         "transport": "mcp_http",
@@ -1497,9 +1540,9 @@ def test_textual_feed_http_mcp_keeps_identical_calls_as_distinct_requests():
     ))
 
     assert len(model.items) == 1
-    assert model.items[0].event.payload["tools"] == [
-        "◇ ⚒ read_file README.md",
-        "◇ ⚒ read_file README.md",
+    assert tool_texts(model.items[0].event.payload["tools"]) == [
+        "◇ ⌕ ler README.md",
+        "◇ ⌕ ler README.md",
     ]
 
 
@@ -1548,12 +1591,12 @@ def test_textual_feed_http_mcp_tracks_and_projects_live_summary():
 
     model.apply(TextualUiEvent(
         "tool_preview",
-        {**common, "content": "⚒ grep_search MCP", "run_id": "http:1", "mcp_msg_id": "1"},
+        {**common, **tool_msg("grep_search", {"pattern": "MCP"}), "run_id": "http:1", "mcp_msg_id": "1"},
         agent="mcp-http",
     ))
     model.apply(TextualUiEvent(
         "tool_preview",
-        {**common, "content": "⚒ git_status", "run_id": "http:2", "mcp_msg_id": "2"},
+        {**common, **tool_msg("git_status"), "run_id": "http:2", "mcp_msg_id": "2"},
         agent="mcp-http",
     ))
 
@@ -1570,7 +1613,7 @@ def test_textual_feed_http_mcp_tracks_and_projects_live_summary():
         agent="mcp-http",
     ))
     payload = model.items[0].event.payload
-    assert payload["tools"] == ["◇ ✓ grep_search MCP", "◇ ⚒ git_status"]
+    assert tool_texts(payload["tools"]) == ['◇ ✓ ⌕ buscar "MCP" · 30ms', "◇ ⌕ git status"]
     assert payload["tool_total"] == 1
     assert payload["tool_ok_count"] == 1
     assert payload["tool_err_count"] == 0
@@ -1589,7 +1632,7 @@ def test_textual_feed_http_mcp_tracks_and_projects_live_summary():
         agent="mcp-http",
     ))
     payload = model.items[0].event.payload
-    assert payload["tools"] == ["◇ ✓ grep_search MCP", "◇ ✗ git_status"]
+    assert tool_texts(payload["tools"]) == ['◇ ✓ ⌕ buscar "MCP" · 30ms', "◇ ✗ ⌕ git status · 20ms"]
     assert payload["tool_total"] == 2
     assert payload["tool_ok_count"] == 1
     assert payload["tool_err_count"] == 1
@@ -1650,7 +1693,7 @@ def test_textual_feed_http_mcp_terminal_state_without_preview_expires():
         agent="mcp-http",
     ))
 
-    assert model.items[0].event.payload["tools"] == ["◇ ✓ read_file"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["◇ ✓ ⌕ read_file · 20ms"]
     assert model.items[0].event.payload["tool_total"] == 1
     now[0] = 10.5
     assert model.expire_tool_previews()
@@ -1671,7 +1714,7 @@ def test_textual_feed_http_mcp_new_tool_extends_completed_burst_visibility():
 
     model.apply(TextualUiEvent(
         "tool_preview",
-        {**common, "content": "⚒ grep_search MCP", "run_id": "http:1", "mcp_msg_id": "1"},
+        {**common, **tool_msg("grep_search", {"pattern": "MCP"}), "run_id": "http:1", "mcp_msg_id": "1"},
         agent="mcp-http",
     ))
     model.apply(TextualUiEvent(
@@ -1689,15 +1732,15 @@ def test_textual_feed_http_mcp_new_tool_extends_completed_burst_visibility():
     now[0] = 10.4
     model.apply(TextualUiEvent(
         "tool_preview",
-        {**common, "content": "⚒ read_file README.md", "run_id": "http:2", "mcp_msg_id": "2"},
+        {**common, **tool_msg("read_file", {"path": "README.md"}), "run_id": "http:2", "mcp_msg_id": "2"},
         agent="mcp-http",
     ))
 
     now[0] = 10.5
     assert not model.expire_tool_previews()
-    assert model.items[0].event.payload["tools"] == [
-        "◇ ✓ grep_search MCP",
-        "◇ ⚒ read_file README.md",
+    assert tool_texts(model.items[0].event.payload["tools"]) == [
+        '◇ ✓ ⌕ buscar "MCP" · 0ms',
+        "◇ ⌕ ler README.md",
     ]
 
     model.apply(TextualUiEvent(
@@ -1732,7 +1775,7 @@ def test_textual_feed_http_mcp_idle_does_not_close_block_while_tool_is_running()
 
     model.apply(TextualUiEvent(
         "tool_preview",
-        {**common, "content": "⚒ grep_search MCP", "run_id": "http:1", "mcp_msg_id": "1"},
+        {**common, **tool_msg("grep_search", {"pattern": "MCP"}), "run_id": "http:1", "mcp_msg_id": "1"},
         agent="mcp-http",
     ))
     model.apply(TextualUiEvent(
@@ -1748,16 +1791,16 @@ def test_textual_feed_http_mcp_idle_does_not_close_block_while_tool_is_running()
     ))
     model.apply(TextualUiEvent(
         "tool_preview",
-        {**common, "content": "⚒ read_file README.md", "run_id": "http:2", "mcp_msg_id": "2"},
+        {**common, **tool_msg("read_file", {"path": "README.md"}), "run_id": "http:2", "mcp_msg_id": "2"},
         agent="mcp-http",
     ))
 
     now[0] = 11.0
     assert not model.expire_tool_previews()
     assert len(model.items) == 1
-    assert model.items[0].event.payload["tools"] == [
-        "◇ ✓ grep_search MCP",
-        "◇ ⚒ read_file README.md",
+    assert tool_texts(model.items[0].event.payload["tools"]) == [
+        '◇ ✓ ⌕ buscar "MCP" · 0ms',
+        "◇ ⌕ ler README.md",
     ]
 
     model.apply(TextualUiEvent(
@@ -2005,7 +2048,7 @@ def test_textual_feed_structured_tool_preview_stays_in_same_run():
 
     assert len(model.items) == 1
     assert model.items[0].event.payload["run_id"] == "agentrun:opencode"
-    assert model.items[0].event.payload["tools"] == ["⚒ read_file README.md"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["⚒ read_file README.md"]
 
 
 def test_textual_feed_final_without_run_id_replaces_single_active_run():
@@ -3386,16 +3429,18 @@ def test_textual_render_event_limits_multiline_tool_results_by_line_count():
 
 
 def test_textual_render_event_highlights_thinking_and_styles_tools():
+    tools = [
+        tool_msg("git_add", {"paths": ["quimera/agents/client.py", "quimera/app/agent_pool.py"]})["tool_line"],
+        tool_msg("exec_command", {"cmd": "pytest"}, status="ok", duration_ms=300)["tool_line"],
+        tool_msg("exec_command", {"cmd": "ruff check"}, status="error", exit_code=1)["tool_line"],
+        tool_msg("git_status")["tool_line"],
+        {"tool": "", "text": "usando quimera_git_status"},
+    ]
     event = TextualUiEvent(
         "agent_update",
         {
             "content": "analisando o código do projeto",
-            "tools": [
-                "⚒ git_add [\"quimera/agents/client.py\", \"quimera/app/agent_pool.py\"]",
-                "✓ $ pytest",
-                "✗ $ ruff check (exit 1)",
-                "usando quimera_git_status",
-            ],
+            "tools": tools,
             "label": "Codex",
             "style": "blue",
             "theme": "chat",
@@ -3408,10 +3453,12 @@ def test_textual_render_event_highlights_thinking_and_styles_tools():
     output = console.export_text()
 
     assert "✻ analisando o código do projeto" in output
-    assert '⚒ git_add ["quimera/agents/client.py", "quimera/app/agent_pool.py"]' in output
-    assert "✓ $ pytest" in output
-    assert "✗ $ ruff check (exit 1)" in output
-    assert "· usando quimera_git_status" in output
+    assert "· ⎇ git add quimera/agents/client.py quimera/app/agent_pool.py" in output
+    assert "✓ ⚙ pytest · 300ms" in output
+    assert "✗ ⚙ ruff check · exit 1" in output
+    assert "· ⌕ git status" in output
+    # Entrada legada sai crua, sem glifo de status nem de categoria.
+    assert "│  usando quimera_git_status" in output
 
 
 def test_textual_thinking_marker_pulses_and_resets_to_base_frame():
@@ -3569,31 +3616,62 @@ def test_textual_render_event_folds_long_tool_lines_without_ellipsis():
 def test_textual_feed_merges_generic_tool_line_into_rich_preview():
     model = TextualFeedModel()
 
-    model.apply(TextualUiEvent("agent_update", "[thinking] commitando", agent="opencode"))
-    model.apply(TextualUiEvent("tool_preview", '⚒ git_add ["a.py", "b.py"]', agent="opencode"))
-    model.apply(TextualUiEvent("tool_preview", "usando quimera_git_add", agent="opencode"))
+    model.apply(TextualUiEvent("agent_update", "[thinking] lendo", agent="opencode"))
+    rich = tool_msg("read_file", {"path": "a.py"}, tool_call_id="exec-1")
+    model.apply(TextualUiEvent("tool_preview", rich, agent="opencode"))
+    model.apply(TextualUiEvent("tool_preview", tool_msg("quimera_read_file", tool_call_id="toolu_1"), agent="opencode"))
 
-    assert model.items[0].event.payload["tools"] == ['⚒ git_add ["a.py", "b.py"]']
+    [entry] = model.items[0].event.payload["tools"]
+    assert entry["text"] == "⌕ ler a.py"
+    by_id = model._tool_call_line_by_agent["opencode"]
+    assert by_id["exec-1"] is by_id["toolu_1"]
+
+    # O fim pelo id do CLI conclui a mesma linha.
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        tool_msg("quimera_read_file", status="ok", tool_call_id="toolu_1", duration_ms=12),
+        agent="opencode",
+    ))
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["✓ ⌕ ler a.py · 12ms"]
 
 
 def test_textual_feed_upgrades_generic_tool_line_with_rich_preview():
     model = TextualFeedModel()
 
-    model.apply(TextualUiEvent("agent_update", "[thinking] commitando", agent="opencode"))
-    model.apply(TextualUiEvent("tool_preview", "usando quimera_git_add", agent="opencode"))
-    model.apply(TextualUiEvent("tool_preview", '⚒ git_add ["a.py", "b.py"]', agent="opencode"))
+    model.apply(TextualUiEvent("agent_update", "[thinking] lendo", agent="opencode"))
+    model.apply(TextualUiEvent("tool_preview", tool_msg("quimera_read_file", tool_call_id="toolu_1"), agent="opencode"))
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        tool_msg("read_file", {"path": "a.py"}, tool_call_id="exec-1"),
+        agent="opencode",
+    ))
 
-    assert model.items[0].event.payload["tools"] == ['⚒ git_add ["a.py", "b.py"]']
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["⌕ ler a.py"]
+    by_id = model._tool_call_line_by_agent["opencode"]
+    assert by_id["exec-1"] is by_id["toolu_1"]
+
+    # Segundo fim da mesma chamada (pelo outro id) é ignorado.
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        tool_msg("read_file", {"path": "a.py"}, status="ok", tool_call_id="exec-1", duration_ms=5),
+        agent="opencode",
+    ))
+    model.apply(TextualUiEvent(
+        "tool_preview",
+        tool_msg("quimera_read_file", status="error", tool_call_id="toolu_1", duration_ms=9, tail="boom"),
+        agent="opencode",
+    ))
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["✓ ⌕ ler a.py · 5ms"]
 
 
 def test_textual_feed_keeps_distinct_rich_calls_of_same_tool():
     model = TextualFeedModel()
 
     model.apply(TextualUiEvent("agent_update", "[thinking] lendo", agent="codex"))
-    model.apply(TextualUiEvent("tool_preview", "⚒ read_file a.py", agent="codex"))
-    model.apply(TextualUiEvent("tool_preview", "⚒ read_file b.py", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", tool_msg("read_file", {"path": "a.py"}, tool_call_id="r1"), agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", tool_msg("read_file", {"path": "b.py"}, tool_call_id="r2"), agent="codex"))
 
-    assert model.items[0].event.payload["tools"] == ["⚒ read_file a.py", "⚒ read_file b.py"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["⌕ ler a.py", "⌕ ler b.py"]
 
 
 def test_textual_feed_replaces_delegate_preview_with_delegation_card():

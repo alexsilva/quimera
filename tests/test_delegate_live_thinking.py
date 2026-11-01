@@ -17,6 +17,7 @@ from quimera.domain.agent_run_events import (
 )
 from quimera.agents import AgentClient
 from quimera.domain.task_states import Visibility
+from quimera.domain.tool_line import build_tool_line
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.workspace import Workspace
 from quimera.runtime.models import ToolCall
@@ -788,7 +789,9 @@ def test_silent_cli_delegate_tracks_tool_activity_before_process_finishes():
         assert live is not None
         assert live["status"] == "running"
         assert live["last_thinking"] == "Vou revisar o fluxo"
-        assert live["last_activity"] == "$ rg -n last_thinking quimera"
+        assert live["last_activity"] == build_tool_line(
+            "exec_command", {"cmd": "rg -n last_thinking quimera"}
+        ).to_text()
         assert live["updated_seconds_ago"] < 1
 
         release_final.set()

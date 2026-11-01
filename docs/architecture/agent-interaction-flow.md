@@ -111,6 +111,7 @@ Agente/Executor produz saída
 - `TextualFeedModel._TRANSIENT_KINDS` (`agent_update`, `agent_lifecycle`, `pending_input`): itens substituíveis que desaparecem quando o final chega.
 - Quando o agente pede input (`pending_input`), a resposta parcial que estava no transitório (`agent_update` com `answer`) vira mensagem fixa antes do cartão da pergunta; as atualizações seguintes, cumulativas, mostram só o trecho novo.
 - Itens muted (tool preview) são permanentes: uma vez emitidos, ficam no feed.
+- Linhas de tool (`tool_preview`) são dados, não texto: o produtor (perfil do CLI, presenter, driver de API, executor MCP) manda `tool_line` (`quimera/domain/tool_line.py`: tool, categoria, status, verbo, assunto, título, `tool_call_id`, duração, cauda) e o renderable monta a linha na largura real (compacta no bloco vivo, dobrada nos detalhes do turno). Início e fim casam por identidade (`tool_call_id`, `request_id` MCP HTTP), nunca pelo texto. A mesma chamada vista por dois canais — CLI (`toolu_…`, `call_…`) e executor MCP (`mcp:<run>:<msg>`) — é fundida numa linha quando os ids são de namespaces distintos; ids do mesmo namespace são sempre chamadas distintas. Drivers de API (OpenAI-compat, codexcloud, claudecloud) mostram o início pela preview do executor e o fim pelo presenter, com o mesmo id, em toda visibilidade.
 - `visual_reset` no sync: remove todos os transientes do agente atual.
 
 **Separação importante:**
