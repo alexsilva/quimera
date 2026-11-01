@@ -201,6 +201,19 @@ class _UnifiedFeed(VerticalScroll, can_focus=True):
         self._entry_widgets[index].update(renderable)
         return True
 
+    def scroll_to_token(self, token: int) -> bool:
+        """Rola até o slot com a identidade ``token``, alinhando o topo dele.
+
+        Solta a âncora como qualquer rolagem do usuário: quem pediu para ver
+        um turno está lendo, não acompanhando o fim.
+        """
+        try:
+            index = self._entry_tokens.index(token)
+        except ValueError:
+            return False
+        self.scroll_to_widget(self._entry_widgets[index], animate=False, top=True, immediate=True)
+        return True
+
 
 class _PrefixDimHighlighter(Highlighter):
     """Aplica estilo dim ao prefixo fixo do input."""

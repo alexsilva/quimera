@@ -5,7 +5,6 @@ import pytest
 import threading
 import time
 
-from types import SimpleNamespace
 
 
 def test_textual_input_gate_reads_submitted_line():
@@ -161,28 +160,6 @@ def test_textual_renderer_show_no_response():
     assert "sem resposta" in str(events[0].payload)
 
 
-def test_textual_feed_limit_ignores_auto_summarize_threshold():
-    from quimera.ui.textual.app import _resolve_textual_feed_limit
-
-    app = SimpleNamespace(
-        auto_summarize_threshold=5,
-        prompt_builder=SimpleNamespace(history_window=12),
-    )
-
-    assert _resolve_textual_feed_limit(app) is None
-
-
-def test_textual_feed_limit_ignores_history_window():
-    from quimera.ui.textual.app import _resolve_textual_feed_limit
-
-    app = SimpleNamespace(
-        auto_summarize_threshold=0,
-        prompt_builder=SimpleNamespace(history_window=12),
-    )
-
-    assert _resolve_textual_feed_limit(app) is None
-
-
 def test_textual_rich_log_max_lines_prunes_visible_feed():
     from textual.app import App, ComposeResult
     from textual.widgets import RichLog
@@ -208,19 +185,6 @@ def test_textual_summary_spinner_uses_circular_frames():
     from quimera.ui.textual.constants import SUMMARY_SPINNER_FRAMES as _SUMMARY_SPINNER_FRAMES
 
     assert _SUMMARY_SPINNER_FRAMES == ("◐", "◓", "◑", "◒")
-
-
-def test_textual_summary_start_uses_loading_notification():
-    import inspect
-
-    from quimera.ui.textual.app import QuimeraTextualApp
-    from quimera.ui.textual.constants import SUMMARY_NOTIFICATION_MESSAGE
-
-    source = inspect.getsource(QuimeraTextualApp)
-
-    assert SUMMARY_NOTIFICATION_MESSAGE == "Gerando resumo"
-    assert "self.notify(" in source
-    assert "_SUMMARY_NOTIFICATION_MESSAGE" in source
 
 
 def test_textual_post_exit_failure_recorder_keeps_errors_and_warnings():

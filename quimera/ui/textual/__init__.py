@@ -6,7 +6,6 @@ from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.app import run_textual_quimera_app
 from quimera.ui.textual.feed_model import (
     AgentLifecycleStatus,
-    TextualFeedChange,
     TextualFeedItem,
     TextualFeedModel,
     _agent_lifecycle_payload,
@@ -22,7 +21,6 @@ from quimera.ui.textual.styles import TEXTUAL_APP_CSS
 
 __all__ = [
     "AgentLifecycleStatus",
-    "TextualFeedChange",
     "TextualFeedItem",
     "TextualFeedModel",
     "TextualInputGate",

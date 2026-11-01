@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -62,30 +63,6 @@ class _TextualStatus:
             self._renderer.update_status(self._agent, "concluído", status=AgentLifecycleStatus.COMPLETED)
         else:
             self._renderer.update_status(self._agent, "falhou", status=AgentLifecycleStatus.FAILED)
-
-
-def _resolve_textual_feed_limit(quimera_app) -> int | None:
-    """Retorna o limite visual do feed Textual.
-
-    O feed é scrollback visual, não janela de contexto. Configurações como
-    history_window e auto_summarize_threshold limitam memória/prompt, mas não
-    podem truncar a saída rolável dos agentes.
-    """
-    return None
-
-
-def _append_post_exit_failure_message(
-    messages: list[tuple[str, str]],
-    event: "TextualUiEvent",
-) -> bool:
-    """Guarda falhas exibidas no alt-screen para reimpressão após a saída."""
-    if event.kind not in {"error", "warning"}:
-        return False
-    content = str(event.payload or "").strip()
-    if not content:
-        return False
-    messages.append((event.kind, content))
-    return True
 
 
 class TextualRenderer(RendererBase):
@@ -677,7 +654,17 @@ class TextualRenderer(RendererBase):
         payload = self._agent_event_payload(agent, summary)
         self._bridge.emit(TextualUiEvent("turn_summary", payload, agent=agent))
 
-    def show_delegation(self, from_agent, to_agent, task=None, *, delegation_id=None, chain=None) -> None:
+    def show_delegation(
+        self,
+        from_agent,
+        to_agent,
+        task=None,
+        *,
+        delegation_id=None,
+        chain=None,
+        tool_call_id: str | None = None,
+        source_run_id: str | None = None,
+    ) -> None:
         """Exibe delegação entre agentes."""
         from_style, from_label = self._resolve_agent_style(str(from_agent))
         to_style, to_label = self._resolve_agent_style(str(to_agent))
@@ -686,13 +673,17 @@ class TextualRenderer(RendererBase):
             TextualUiEvent(
                 "delegation",
                 {
+                    "from_agent": str(from_agent),
                     "from_label": from_label,
                     "from_style": from_style,
+                    "to_agent": str(to_agent),
                     "to_label": to_label,
                     "to_style": to_style,
                     "task": str(task or "").strip(),
                     "delegation_id": str(delegation_id or "").strip(),
                     "chain": delegation_chain,
+                    "tool_call_id": str(tool_call_id or "").strip(),
+                    "source_run_id": str(source_run_id or "").strip(),
                 },
             )
         )
@@ -713,7 +704,11 @@ class TextualRenderer(RendererBase):
         clean_content = strip_ansi(_extract_text_from_renderable(content))
         payload = self._agent_event_payload(
             agent,
-            {"content": clean_content, "render_mode": render_mode},
+            {
+                "content": clean_content,
+                "render_mode": render_mode,
+                "completed_at": time.time(),
+            },
         )
         agent_key = str(agent)
         self._bridge.clear_agent_active(agent_key)

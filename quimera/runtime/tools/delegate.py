@@ -923,6 +923,9 @@ class DelegateTools(ToolBase):
                 "context": step["context"],
                 "delegation_id": delegation_id,
                 "chain": DelegateTools._delegation_chain(source_agent, normalized_target_agent or target_agent),
+                "tool_call_id": str(step.get("tool_call_id") or ""),
+                "source_run_id": str(step.get("source_run_id") or ""),
+                "step_index": step.get("step_index", 0),
             }
             parent_run_id = str(step.get("parent_run_id") or "").strip()
             if parent_run_id:
@@ -1534,6 +1537,9 @@ class DelegateTools(ToolBase):
 
         calling_agent = self._get_calling_agent(call)
         caller_run_id = TrustedToolExecutionContext.from_trusted_metadata(call.metadata).run_id
+        # Id da chamada de tool que originou a delegação: o feed usa para ligar
+        # o evento ao preview da própria chamada em vez de adivinhar por agente.
+        caller_tool_call_id = str(call.call_id or call.metadata.get("tool_call_id") or "")
         workflow_parent_run_id = caller_run_id if is_workflow_task_run(caller_run_id) else ""
 
         orchestrator = (
@@ -1645,6 +1651,9 @@ class DelegateTools(ToolBase):
                 "source_agent": calling_agent or "",
                 "delegation_id": self._new_delegation_id(),
                 "parent_run_id": workflow_parent_run_id,
+                "tool_call_id": caller_tool_call_id,
+                "source_run_id": caller_run_id or "",
+                "step_index": 0,
             }
         ]
 
@@ -1765,6 +1774,9 @@ class DelegateTools(ToolBase):
                         "source_agent": calling_agent or "",
                         "delegation_id": self._new_delegation_id(),
                         "parent_run_id": workflow_parent_run_id,
+                        "tool_call_id": caller_tool_call_id,
+                        "source_run_id": caller_run_id or "",
+                        "step_index": len(steps),
                     }
                 )
 

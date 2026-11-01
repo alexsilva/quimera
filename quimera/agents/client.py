@@ -516,6 +516,9 @@ class AgentClient:
         """Extrai metadados visuais confiáveis de uma chamada de tool."""
         if not isinstance(metadata, dict):
             return {}
+        # O id da chamada vale em todos os transportes: o feed pareia preview,
+        # resultado e delegação por ele, não só para MCP HTTP.
+        tool_call_id = str(metadata.get("tool_call_id") or "").strip()
         context = metadata.get("trusted_context")
         state = metadata.get("_mcp_state")
         server_origin = str(getattr(context, "server_origin", "") or "").strip()
@@ -527,8 +530,10 @@ class AgentClient:
             or state_transport == "http_mcp"
         )
         if not is_http_mcp:
-            return {}
+            return {"tool_call_id": tool_call_id} if tool_call_id else {}
         payload: dict[str, str] = {}
+        if tool_call_id:
+            payload["tool_call_id"] = tool_call_id
         for attr, key in (
             ("run_id", "run_id"),
             ("parent_run_id", "parent_run_id"),

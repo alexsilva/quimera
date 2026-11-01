@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Callable, ClassVar
 
 from .approval import ApprovalHandler, ApprovalManager
+from .approval_broker import TrustedToolExecutionContext
 from .config import ToolRuntimeConfig
 from .models import ToolCall, ToolResult
 from .policy import ToolPolicy, ToolPolicyError
@@ -457,7 +458,7 @@ class ToolExecutor:
         Se aprovação for necessária, bloqueia no approval_handler
         até obter decisão do humano (ApprovalManager).
         """
-        normalized_call = self._normalize_call(call)
+        normalized_call = self._with_tool_call_id(self._normalize_call(call))
         try:
             # O callback por chamada viaja na metadata até a tool. Não grave o
             # valor nos helpers compartilhados: tools/call MCP e lotes nativos
@@ -537,6 +538,30 @@ class ToolExecutor:
             arguments=arguments,
             call_id=call.call_id,
             metadata=call.metadata,
+        )
+
+    @staticmethod
+    def _with_tool_call_id(call: ToolCall) -> ToolCall:
+        """Garante ``metadata["tool_call_id"]`` para preview, feed e tools.
+
+        Drivers de API trazem ``call_id`` do provedor. CLIs e MCPs externos
+        chegam pelo servidor MCP sem ``call_id``, só com ``mcp_msg_id``, que é
+        único apenas por conexão: o prefixo run/sessão evita colisão entre
+        agentes. Sem nenhum dos dois o id fica vazio e o feed cai no fallback.
+        """
+        tool_call_id = call.call_id or ""
+        mcp_msg_id = call.metadata.get("mcp_msg_id")
+        if not tool_call_id and mcp_msg_id is not None:
+            context = TrustedToolExecutionContext.from_trusted_metadata(call.metadata)
+            scope = context.run_id or context.session_id or ""
+            tool_call_id = f"mcp:{scope}:{mcp_msg_id}"
+        if not tool_call_id:
+            return call
+        return ToolCall(
+            name=call.name,
+            arguments=call.arguments,
+            call_id=call.call_id,
+            metadata={**call.metadata, "tool_call_id": tool_call_id},
         )
 
     def _approval_scope_from_metadata(self, call: ToolCall):

@@ -215,6 +215,8 @@ class UiEventHandler:
                         task=meta.get("task"),
                         delegation_id=meta.get("delegation_id"),
                         chain=meta.get("chain"),
+                        tool_call_id=meta.get("tool_call_id"),
+                        source_run_id=meta.get("source_run_id"),
                     )
                     self._redisplay_after_render()
                 elif event_type == RenderEvent.AGENT_ACTIVITY:

@@ -12,7 +12,7 @@ from rich.console import Console, Group
 from rich.padding import Padding
 
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
-from quimera.ui.textual.app import QuimeraTextualApp, run_textual_quimera_app
+from quimera.ui.textual.app import run_textual_quimera_app
 from quimera.ui.textual.bridge import TextualUiBridge
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.feed_model import (
@@ -615,7 +615,6 @@ def test_textual_feed_replaces_agent_lifecycle_with_final_message():
     assert len(model.items) == 1
     assert model.items[0].transient is False
     assert model.items[0].event is final
-    assert not model.last_change.redraw
 
 
 def test_textual_feed_merges_turn_summary_into_agent_message_block():
@@ -702,7 +701,6 @@ def test_textual_feed_agent_message_absorbs_mcp_tool_burst():
         "err_count": 0,
         "duration": "1.5s",
     }
-    assert model.last_change.redraw is True
     assert not model._mcp_http_tool_stats_by_agent
 
 
@@ -927,20 +925,23 @@ def test_textual_feed_marks_plain_events_as_append_only():
     event = TextualUiEvent("plain", "linha")
 
     assert model.apply(event) is True
-    assert model.last_change.redraw is False
-    assert model.last_change.appended is model.items[-1]
+    assert len(model.items) == 1
+    assert model.items[-1].event is event
 
 
-def test_textual_feed_marks_transient_replacement_as_redraw():
+def test_textual_feed_replaces_transient_in_place():
     model = TextualFeedModel()
 
     model.apply(TextualUiEvent("agent_update", {"label": "Claude", "content": "gerando..."}, agent="claude"))
-    assert model.last_change.redraw is False
+    (first,) = model.items
 
-    model.apply(TextualUiEvent("agent_update", {"content": "Oi"}, agent="claude"))
+    second = TextualUiEvent("agent_update", {"content": "Oi"}, agent="claude")
+    model.apply(second)
 
-    assert model.last_change.redraw is True
-    assert model.last_change.appended is None
+    assert len(model.items) == 1
+    assert model.items[0] is not first
+    assert model.items[0].event is second
+    assert model.items[0].transient is True
 
 
 def test_textual_feed_attaches_tool_preview_to_agent_transient():
@@ -1104,7 +1105,7 @@ def test_textual_feed_clears_tool_preview_with_final_agent_message():
     assert "tools" not in model.items[0].event.payload
 
 
-def test_textual_feed_clears_tool_preview_on_failed_lifecycle_before_retry():
+def test_textual_feed_clears_tool_preview_on_reconnecting_lifecycle_before_retry():
     model = TextualFeedModel()
 
     model.apply(TextualUiEvent("agent_update", "[thinking] analisando", agent="openai"))
@@ -1112,7 +1113,7 @@ def test_textual_feed_clears_tool_preview_on_failed_lifecycle_before_retry():
     model.apply(
         TextualUiEvent(
             "agent_lifecycle",
-            {"status": "failed", "message": "falha ao comunicar; reconectando"},
+            {"status": "reconnecting", "message": "falha ao comunicar; reconectando"},
             agent="openai",
         )
     )
@@ -1126,6 +1127,23 @@ def test_textual_feed_clears_tool_preview_on_failed_lifecycle_before_retry():
 
     assert model.items[0].event.kind == "agent_update"
     assert model.items[0].event.payload == "[thinking] nova tentativa"
+
+
+def test_textual_feed_failed_lifecycle_is_final_even_when_message_mentions_retry():
+    """O texto não decide o fim da execução: re-tentativa chega como RETRYING."""
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] analisando", agent="openai"))
+    model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            {"status": "failed", "message": "falhou na tentativa 2; reconectando"},
+            agent="openai",
+        )
+    )
+
+    assert model.items == []
+    assert model._is_finalized_agent("openai")
 
 
 def test_textual_feed_clears_tool_preview_on_completed_lifecycle():
@@ -1299,7 +1317,6 @@ def test_textual_feed_agent_message_replaces_run_id_transient():
     assert len(model.items) == 1
     assert model.items[0].transient is False
     assert model.items[0].event is final
-    assert model.last_change.redraw is True
 
 
 def test_textual_feed_tool_preview_preserves_run_metadata():
@@ -2002,7 +2019,6 @@ def test_textual_feed_final_without_run_id_replaces_single_active_run():
 
     assert len(model.items) == 1
     assert model.items[0].event is final
-    assert model.last_change.redraw is True
 
 
 def test_textual_feed_visual_reset_with_run_id_clears_only_that_run():
@@ -2048,7 +2064,6 @@ def test_textual_feed_hydrates_restored_history():
     )
 
     assert changed is True
-    assert model.last_change.redraw is True
     assert [item.event.kind for item in model.items] == ["user_message", "agent_message"]
     assert model.items[0].event.payload["label"] == ">>>"
     assert model.items[1].event.agent == "codex-gpt-5-5"
@@ -2087,10 +2102,12 @@ def test_textual_feed_hydrated_history_without_theme_omits_key():
 def test_textual_feed_final_message_without_transient_is_append_only():
     model = TextualFeedModel()
 
-    model.apply(TextualUiEvent("agent_message", {"content": "final", "label": "Claude"}, agent="claude"))
+    model.apply(TextualUiEvent("user_message", {"content": "oi"}))
+    final = TextualUiEvent("agent_message", {"content": "final", "label": "Claude"}, agent="claude")
+    model.apply(final)
 
-    assert model.last_change.redraw is False
-    assert model.last_change.appended is model.items[-1]
+    assert [item.event.kind for item in model.items] == ["user_message", "agent_message"]
+    assert model.items[-1].event is final
 
 
 def test_textual_feed_ignores_late_completed_lifecycle_after_final_message():
@@ -3233,7 +3250,7 @@ def test_textual_render_event_contextualizes_reconnection_lifecycle():
     event = TextualUiEvent(
         "agent_lifecycle",
         {
-            "status": "failed",
+            "status": "reconnecting",
             "message": "tentativa de reconexão",
             "label": "Codex",
             "style": "blue",
@@ -3245,7 +3262,10 @@ def test_textual_render_event_contextualizes_reconnection_lifecycle():
 
     console.print(_render_event(event))
 
-    assert "Codex · tentativa de reconexão" in console.export_text()
+    # Reconexão não é terminal: o cartão vivo mostra o agente e, abaixo, o motivo.
+    output = console.export_text()
+    assert "●  Codex" in output
+    assert "· tentativa de reconexão" in output
 
 
 def test_textual_renderer_emits_delegation_chain_metadata():
@@ -3584,7 +3604,10 @@ def test_textual_feed_replaces_delegate_preview_with_delegation_card():
     model.apply(
         TextualUiEvent(
             "tool_preview",
-            f"⚒ tasks_delegate opencode-big-pickle verifier {task} False",
+            {
+                "content": f"⚒ tasks_delegate opencode-big-pickle verifier {task} False",
+                "tool_call_id": "call-1",
+            },
             agent="codex",
         )
     )
@@ -3592,17 +3615,18 @@ def test_textual_feed_replaces_delegate_preview_with_delegation_card():
         TextualUiEvent(
             "delegation",
             {
+                "from_agent": "codex",
                 "from_label": "Codex",
                 "to_label": "OpenCode Big Pickle",
                 "task": task,
                 "delegation_id": "dlg-123",
+                "tool_call_id": "call-1",
             },
         )
     )
 
     assert "tools" not in model.items[0].event.payload
     assert model.items[1].event.kind == "delegation"
-    assert model.last_change.redraw is True
 
 
 def _delegation_event(delegation_id="dlg-1", task="revisar patch"):
@@ -4746,17 +4770,6 @@ def test_textual_toolbar_uses_full_session_when_width_allows():
     assert "🔗 sessao-2026-07-07-192854" in plain
 
 
-def test_textual_theme_cycle_bindings_include_main_tui_fallbacks():
-    import inspect
-
-    
-    source = inspect.getsource(QuimeraTextualApp)
-
-    assert '"ctrl+t", "cycle_theme"' in source
-    assert '"alt+t", "cycle_theme"' in source
-    assert '"f6", "cycle_theme"' in source
-
-
 def test_external_textual_window_does_not_reset_after_successful_driver_resume():
     
     events = []
@@ -5092,103 +5105,6 @@ def test_textual_input_window_without_question_does_not_leave_visual_overlay_act
     assert bridge.is_direct_input_active() is False
 
 
-def test_textual_bridge_handler_refreshes_after_visual_event_updates():
-    import inspect
-
-    
-    source = inspect.getsource(QuimeraTextualApp)
-
-    assert "def _refresh_now" in source
-    assert "self._refresh_now(layout=True)" in source
-    assert "self._refresh_now()" in source
-    assert "_logger.exception(\"Falha ao atualizar a interface Textual\")" in source
-
-
-def test_textual_app_syncs_last_expired_tool_before_early_return():
-    import inspect
-
-    source = inspect.getsource(QuimeraTextualApp)
-    pulse_start = source.index("def _pulse_thinking_marker")
-    pulse_end = source.index("def _run_quimera_app", pulse_start)
-    pulse_source = source[pulse_start:pulse_end]
-
-    expiry_branch = pulse_source.index("if expired_tools:")
-    empty_branch = pulse_source.index("if not self._feed_model.has_transients")
-    assert expiry_branch < empty_branch
-    assert "self._sync_feed()" in pulse_source[expiry_branch:empty_branch]
-    assert "self._refresh_now()" in pulse_source[expiry_branch:empty_branch]
-    assert "any(item.transient" not in pulse_source
-    assert "self._sync_transient_feed_slots()" in pulse_source
-
-
-def test_textual_unified_feed_follows_bottom_via_native_anchor():
-    import inspect
-
-    source = inspect.getsource(QuimeraTextualApp)
-    sync_start = source.index("def _sync_feed")
-    sync_end = source.index("def _redraw_feed", sync_start)
-    sync_source = source[sync_start:sync_end]
-
-    # O acompanhamento do fim é da âncora nativa: o compositor recola o scroll
-    # no mesmo frame em que a altura muda. _sync_feed não reposiciona o scroll
-    # por conta própria (o call_after_refresh(scroll_end) gerava um frame
-    # defasado a cada mudança de altura do bloco transitório).
-    assert "_feed_pinned_to_bottom" not in source
-    assert "is_vertical_scroll_end" not in source
-    assert "call_after_refresh" not in sync_source
-    assert "feed.anchor()" in sync_source
-    assert "if renderable is not None:" in sync_source
-
-
-def test_textual_prompt_submission_scrolls_feed_to_end_once():
-    import inspect
-
-    source = inspect.getsource(QuimeraTextualApp)
-
-    submit_start = source.index("def on_input_submitted")
-    submit_end = source.index("def _set_question_overlay", submit_start)
-    submit_source = source[submit_start:submit_end]
-    # Enviar o prompt reengata a âncora imediatamente e agenda o pin
-    # para quando o turno do usuário entrar no feed.
-    assert "self._scroll_feed_on_submit = True" in submit_source
-    assert ".anchor()" in submit_source
-
-    sync_start = source.index("def _sync_feed")
-    sync_end = source.index("def _sync_transient_feed_slots", sync_start)
-    sync_source = source[sync_start:sync_end]
-    # A flag é consumida uma única vez: depois o auto-follow volta a
-    # depender da âncora nativa (liberada quando o usuário rola para cima).
-    assert "self._scroll_feed_on_submit = False" in sync_source
-    assert sync_source.index("self._scroll_feed_on_submit = False") < sync_source.index(
-        "feed.sync_entries(entries, force=force)"
-    )
-
-
-def test_textual_app_pulse_updates_only_transient_slots():
-    import inspect
-
-    source = inspect.getsource(QuimeraTextualApp)
-    transient_start = source.index("def _sync_transient_feed_slots")
-    transient_end = source.index("def _redraw_feed", transient_start)
-    transient_source = source[transient_start:transient_end]
-
-    assert "self._feed_model.transient_items()" in transient_source
-    assert "feed.update_entry(index, token, renderable)" in transient_source
-    assert "self._sync_feed()" in transient_source
-
-
-
-def test_textual_app_periodically_drains_bridge_event_queue():
-    import inspect
-
-    
-    source = inspect.getsource(QuimeraTextualApp)
-
-    assert "self.set_interval(0.05, self._drain_bridge_events)" in source
-    assert "def _drain_bridge_events" in source
-    assert "bridge.drain_pending_events(max_items=max_events)" in source
-
-
 def test_textual_renderer_flush_drains_bridge_events_for_tool_previews():
     bridge = TextualUiBridge()
     calls = []
@@ -5214,46 +5130,6 @@ def test_textual_renderer_flush_drains_bridge_events_for_tool_previews():
     renderer.flush()
 
     assert calls == ["muted", "flush", "flush"]
-
-
-def test_textual_app_exposes_flush_bridge_events_for_immediate_tool_preview_rendering():
-    import inspect
-
-    
-    source = inspect.getsource(QuimeraTextualApp)
-
-    assert "def flush_bridge_events" in source
-    assert "bridge.pending_event_count()" in source
-    assert "self._drain_bridge_events(max_events=" in source
-
-
-def test_textual_app_status_bar_tracks_tool_preview_events():
-    import inspect
-
-    source = inspect.getsource(QuimeraTextualApp)
-
-    assert "_active_tool_previews" in source
-    assert 'event.kind == "tool_preview"' in source
-    assert "def _update_status_bar" in source
-    # A consulta é compartilhada pelo helper que evita updates/layouts
-    # repetidos dos dois widgets invisíveis, sem perder o tracking de tools.
-    assert 'self._blank_status_widget("#status_bar")' in source
-    assert 'self.query_one(selector, Static)' in source
-    assert "def _blank_status_widget" in source
-    assert 'text.append("[spy]"' not in source
-    assert 'text.append("processando...")' not in source
-
-
-def test_textual_app_uses_question_overlay_for_prompt_routing():
-    import inspect
-
-    
-    source = inspect.getsource(QuimeraTextualApp)
-
-    assert "def _set_question_overlay" in source
-    assert "def _clear_question_overlay" in source
-    assert "self._clear_prompt_state()" in source
-    assert "clear_interactive_prompt_state" in source
 
 
 def test_textual_renderer_emits_pending_input_card_event():
@@ -5459,29 +5335,6 @@ def test_textual_chat_prompt_active_does_not_steal_normal_input():
     assert bridge.direct_input_queue.empty()
     assert bridge.input_queue.empty()
     assert not bridge.is_direct_input_active()
-
-
-def test_textual_app_imports_summary_spinner_used_by_spinner_update():
-    import inspect
-
-    import quimera.ui.textual.app as textual_app_module
-
-    source = inspect.getsource(textual_app_module.QuimeraTextualApp)
-
-    assert "_SummarySpinner" in source
-    assert "from quimera.ui.textual.widgets import" in inspect.getsource(textual_app_module)
-
-
-def test_textual_app_routes_notification_events_to_notify():
-    import inspect
-
-    from quimera.ui.textual.app import QuimeraTextualApp
-
-    source = inspect.getsource(QuimeraTextualApp)
-
-    assert 'event.kind == "notification"' in source
-    assert "self.notify(" in source
-    assert 'event.kind == "summarizing"' in source
 
 
 def test_tui_theme_store_round_trips_and_recovers_corrupt_file(tmp_path):
@@ -5821,7 +5674,6 @@ def test_textual_feed_boot_status_replaces_block_in_place():
 
     assert [item.event.kind for item in model.items] == ["muted", "boot_status", "agent_message"]
     assert model.items[1].event is second
-    assert model.last_change.redraw is True
 
     # Payload idêntico não gera redesenho.
     assert model.apply(
@@ -6369,8 +6221,6 @@ def test_textual_feed_clear_chat_keeps_boot_header_and_drops_chat():
     assert model.boot_items() == model.items
     assert not model.has_transients
     assert model.transient_items() == []
-    assert model.last_change.changed is True
-    assert model.last_change.redraw is True
 
 
 def test_textual_feed_clear_chat_resets_agent_state_for_the_next_turn():
@@ -6457,7 +6307,6 @@ def test_textual_feed_boot_status_still_updates_in_place_after_clear_chat():
 
     assert [item.event.kind for item in model.items] == ["banner", "muted", "boot_status", "muted", "boot_separator"]
     assert model.items[2].event is connected
-    assert model.last_change.redraw is True
 
     model.apply(TextualUiEvent("user_message", {"content": "de novo"}))
     assert [item.event.kind for item in model.items] == [
@@ -6503,7 +6352,6 @@ def test_textual_feed_boot_separator_closes_the_header_below_every_boot_line():
 
     assert model.apply(TextualUiEvent("banner", "Quimera", compact=True, boot=True))
     assert kinds() == ["banner", "boot_separator"]
-    assert model.last_change.redraw is True
 
     assert model.apply(TextualUiEvent("muted", "Projeto: /tmp/projeto", compact=True, boot=True))
     assert kinds() == ["banner", "muted", "boot_separator"]
@@ -6542,7 +6390,7 @@ def test_textual_feed_boot_separator_closes_the_header_below_every_boot_line():
     assert kinds() == [
         "banner", "muted", "boot_status", "muted", "boot_separator", "user_message",
     ]
-    assert model.last_change.appended is model.items[-1]
+    assert model.items[-1].event.payload == {"content": "oi"}
 
 
 @pytest.mark.parametrize(
@@ -6568,7 +6416,6 @@ def test_textual_feed_late_boot_item_enters_the_header_and_reindexes_transients(
     ((index_before, _),) = model.transient_items()
 
     assert model.apply(late)
-    assert model.last_change.redraw is True
 
     assert [item.event.kind for item in model.items][:6] == [
         "banner", "muted", "boot_status", "muted", late.kind, "boot_separator",

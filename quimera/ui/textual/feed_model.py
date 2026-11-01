@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field as dataclass_field
 from enum import Enum
 from itertools import count
@@ -90,15 +91,6 @@ class TextualFeedItem:
     seq: int = dataclass_field(default_factory=_feed_item_sequences.__next__)
 
 
-@dataclass(frozen=True)
-class TextualFeedChange:
-    """Resultado da aplicação de um evento no feed Textual."""
-
-    changed: bool
-    redraw: bool = False
-    appended: TextualFeedItem | None = None
-
-
 class TextualFeedModel:
     """Modelo testável do feed: transitórios por agente são substituíveis."""
 
@@ -107,6 +99,11 @@ class TextualFeedModel:
     # Máximo de linhas de tools visíveis no bloco transitório; o excedente
     # colapsa na linha "⋮ +N ferramentas anteriores".
     _MAX_VISIBLE_TOOL_LINES = 5
+    # Teto das linhas de tools guardadas na resposta final para o toggle; o
+    # excedente vira a última linha "⋮ +N ferramentas anteriores".
+    _MAX_FINAL_TOOL_LINES = 200
+    # Mesma ordem de grandeza da memória de runs encerradas do renderer.
+    _MAX_FINALIZED_AGENTS = 1024
 
     _IGNORED_KINDS: ClassVar[set[str]] = {
         "prompt",
@@ -134,15 +131,25 @@ class TextualFeedModel:
         # continua no transitório.
         self._kept_answer_by_agent: dict[str, tuple[str, list[TextualFeedItem]]] = {}
         self._transient_tools_by_agent: dict[str, list[str]] = {}
+        # Linha de preview de cada chamada de tool (por ``tool_call_id``): o
+        # cartão da delegação remove exatamente a preview da própria chamada.
+        self._tool_call_line_by_agent: dict[str, dict[str, str]] = {}
         self._tool_request_lines_by_agent: dict[str, dict[str, str]] = {}
         self._tool_request_seen_at_by_agent: dict[str, dict[str, float]] = {}
         self._tool_request_expiry_by_agent: dict[str, dict[str, float]] = {}
         self._completed_tool_requests_by_agent: dict[str, set[str]] = {}
         self._mcp_http_tool_stats_by_agent: dict[str, dict[str, int]] = {}
         self._pending_turn_summary_by_agent: dict[str, TextualUiEvent] = {}
-        self._delegation_slots: dict[str, str] = {}
-        self._finalized_agents: set[str] = set()
-        self._last_change = TextualFeedChange(False)
+        # Cartões vivos por delegation_id, do mais antigo ao mais novo: uma
+        # re-tentativa de task reusa o mesmo id (``task-{id}``) enquanto a
+        # execução anterior ainda pode estar viva.
+        self._delegation_slots: dict[str, list[str]] = {}
+        # Execução delegada → cartão com que ela foi pareada ao aparecer.
+        self._delegation_child_slot: dict[str, str] = {}
+        # Execuções já encerradas, em ordem de encerramento: evento tardio de
+        # uma delas não reabre cartão. Limitado como LRU porque cada run
+        # deixa uma chave nova durante a sessão inteira.
+        self._finalized_agents: OrderedDict[str, None] = OrderedDict()
 
     @property
     def items(self) -> list[TextualFeedItem]:
@@ -181,11 +188,6 @@ class TextualFeedModel:
         if status and status not in TERMINAL_SUBMISSION_STATUSES:
             self._active_submissions_by_index[index] = item
 
-    @property
-    def last_change(self) -> TextualFeedChange:
-        """Última mudança aplicada ao feed."""
-        return self._last_change
-
     def boot_items(self) -> list[TextualFeedItem]:
         """Itens do cabeçalho de boot: logo, linhas, blocos de status e a régua.
 
@@ -207,7 +209,6 @@ class TextualFeedModel:
         self._items[:] = self.boot_items()
         self._reset_live_state()
         self._reindex_transients()
-        self._last_change = TextualFeedChange(True, redraw=True)
 
     def _reset_live_state(self) -> None:
         """Zera o estado por agente que só existe por causa de itens do chat."""
@@ -215,6 +216,7 @@ class TextualFeedModel:
         self._active_submissions_by_index.clear()
         self._kept_answer_by_agent.clear()
         self._transient_tools_by_agent.clear()
+        self._tool_call_line_by_agent.clear()
         self._tool_request_lines_by_agent.clear()
         self._tool_request_seen_at_by_agent.clear()
         self._tool_request_expiry_by_agent.clear()
@@ -222,6 +224,7 @@ class TextualFeedModel:
         self._mcp_http_tool_stats_by_agent.clear()
         self._pending_turn_summary_by_agent.clear()
         self._delegation_slots.clear()
+        self._delegation_child_slot.clear()
 
     def hydrate_from_history(
             self,
@@ -282,15 +285,12 @@ class TextualFeedModel:
                 )
             )
         if not hydrated:
-            self._last_change = TextualFeedChange(False)
             return False
         self._items.extend(hydrated)
-        self._last_change = TextualFeedChange(True, redraw=True)
         return True
 
     def apply(self, event: TextualUiEvent) -> bool:
         """Aplica evento e retorna se o feed visual precisa ser redesenhado."""
-        self._last_change = TextualFeedChange(False)
         if event.kind in self._IGNORED_KINDS:
             return False
         if event.kind in {"question", "question_clear"}:
@@ -307,11 +307,10 @@ class TextualFeedModel:
             delegation_id = self._event_delegation_id(event)
             if delegation_id and delegation_id in self._delegation_slots:
                 return self._finish_delegation_group(event, delegation_id)
-            kept_removed = self._drop_kept_answer_repeated_by(event)
-            summary = self._pop_pending_turn_summary(event)
-            burst_stats, bursts_removed = self._consume_mcp_tool_bursts(
-                event, exclude_key=self._final_replacement_key(event)
-            )
+            self._drop_kept_answer_repeated_by(event)
+            final_key = self._final_replacement_key(event)
+            summary = self._pop_pending_turn_summary(event, key=final_key)
+            burst_stats, _, absorbed_tools = self._consume_mcp_tool_bursts(event, exclude_key=final_key)
             footer = self._turn_summary_footer(summary, burst_stats)
             final_event = event
             if footer is not None:
@@ -322,14 +321,21 @@ class TextualFeedModel:
                 )
                 payload["turn_summary"] = footer
                 final_event = TextualUiEvent(event.kind, payload, agent=event.agent)
-            replaced, _ = self._replace_transient_with_final(final_event)
-            redraw = replaced or bursts_removed or kept_removed
-            self._last_change = TextualFeedChange(
-                True,
-                redraw=redraw,
-                appended=None if redraw else self._items[-1],
-            )
+            self._replace_transient_with_final(final_event, final_key, absorbed_tools=absorbed_tools)
             return True
+        if event.kind == "turn_summary":
+            # Os stats do turno só existem como rodapé da resposta final, que
+            # chega em seguida. A pendência é pela chave da execução: outra
+            # execução simultânea do mesmo agente tem resumo próprio. Resumo
+            # ambíguo (sem run e com várias execuções vivas) fica sem dono.
+            key = self._resolve_run_key(event) or self._agent_base(event)
+            self._pending_turn_summary_by_agent[key] = event
+            return False
+        if event.kind in self._TRANSIENT_KINDS or event.kind == "tool_preview":
+            bound = self._bind_to_run(event)
+            if bound is None:
+                return False
+            event = bound
         if self._is_new_run_signal(event):
             # Um resumo cuja resposta final nunca entrou no feed (delegação
             # oculta, tentativa descartada) não pode virar rodapé do próximo
@@ -341,53 +347,35 @@ class TextualFeedModel:
             return self._apply_tool_state(event)
         if event.kind == "delegation":
             return self._apply_delegation(event)
-        if event.kind == "turn_summary":
-            # Os stats do turno só existem como rodapé da resposta final, que
-            # chega em seguida. A pendência é pela chave da execução: outra
-            # execução simultânea do mesmo agente tem resumo próprio.
-            self._pending_turn_summary_by_agent[self._agent_key(event)] = event
-            self._last_change = TextualFeedChange(False)
-            return False
         if event.kind in self._TRANSIENT_KINDS:
             agent = self._agent_key(event)
             if self._is_finalized_agent(agent):
                 # agent_update e lifecycle RUNNING sinalizam a nova run e evitam
                 # que ela fique invisível.
                 if self._is_new_run_signal(event):
-                    self._finalized_agents.discard(agent)
-                    self._transient_tools_by_agent.pop(agent, None)
+                    self._unmark_finalized(agent)
+                    self._drop_tool_lines(agent)
                 else:
-                    self._last_change = TextualFeedChange(False)
                     return False
             if self._is_run_boundary_lifecycle(event):
-                self._transient_tools_by_agent.pop(agent, None)
+                self._drop_tool_lines(agent)
                 self._kept_answer_by_agent.pop(agent, None)
                 if self._is_final_lifecycle(event):
-                    self._finalized_agents.add(agent)
-                    removed = self._remove_transient_keys(
-                        self._delegation_group_keys(
-                            self._event_delegation_id(event),
-                            agent_keys=[agent],
-                        )
-                    )
-                    self._last_change = TextualFeedChange(removed, redraw=removed)
-                    return removed
+                    self._mark_finalized(agent)
+                    return self._close_delegation_group(event, self._event_delegation_id(event), agent)
             if event.kind == "agent_update" and self._is_answer_event(event):
                 trimmed = self._without_kept_answer(agent, event)
                 if trimmed is None:
-                    self._last_change = TextualFeedChange(False)
                     return False
                 event = trimmed
-            kept = event.kind == "pending_input" and self._keep_partial_answer(agent)
-            replaced = self._upsert_transient(event)
-            redraw = replaced or kept
-            self._last_change = TextualFeedChange(True, redraw=redraw, appended=None if redraw else self._items[-1])
+            if event.kind == "pending_input":
+                self._keep_partial_answer(agent)
+            self._upsert_transient(event)
             return True
         item = TextualFeedItem(event, transient=False)
         self._items.append(item)
         if event.kind == "user_message":
             self._track_submission_item(len(self._items) - 1, item)
-        self._last_change = TextualFeedChange(True, appended=item)
         return True
 
     @staticmethod
@@ -409,15 +397,12 @@ class TextualFeedModel:
             if self._boot_status_key(existing.event) != key:
                 continue
             if existing.event.payload == event.payload:
-                self._last_change = TextualFeedChange(False)
                 return False
             self._items[index] = item
-            self._last_change = TextualFeedChange(True, redraw=True)
             return True
         if event.boot:
             return self._append_header_item(item)
         self._items.append(item)
-        self._last_change = TextualFeedChange(True, appended=item)
         return True
 
     def _boot_separator_index(self) -> int | None:
@@ -448,7 +433,6 @@ class TextualFeedModel:
             self._reindex_transients()
         elif item.event.kind == "user_message":
             self._track_submission_item(position, item)
-        self._last_change = TextualFeedChange(True, redraw=True)
         return True
 
     def _apply_submission_status(self, event: TextualUiEvent) -> bool:
@@ -474,7 +458,6 @@ class TextualFeedModel:
                 status_payload.get("revision", current_revision + 1)
             )
             if incoming_revision <= current_revision:
-                self._last_change = TextualFeedChange(False)
                 return False
             payload["submission"] = status_payload
             replacement = TextualFeedItem(
@@ -487,9 +470,7 @@ class TextualFeedModel:
             )
             self._items[index] = replacement
             self._track_submission_item(index, replacement)
-            self._last_change = TextualFeedChange(True, redraw=True)
             return True
-        self._last_change = TextualFeedChange(False)
         return False
 
     @staticmethod
@@ -498,6 +479,27 @@ class TextualFeedModel:
         payload = event.payload if isinstance(event.payload, dict) else {}
         return str(payload.get("delegation_id") or "").strip()
 
+    @staticmethod
+    def _event_run_id(event: TextualUiEvent) -> str:
+        """Extrai o run_id declarado no payload do evento."""
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        return str(payload.get("run_id") or "").strip()
+
+    @staticmethod
+    def _delegation_occurrence(event: TextualUiEvent) -> int:
+        """Ocorrência do cartão entre os cartões vivos com o mesmo delegation_id."""
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        try:
+            return max(1, int(payload.get("delegation_occurrence") or 1))
+        except (TypeError, ValueError):
+            return 1
+
+    def _item_event_for_key(self, key: str) -> TextualUiEvent | None:
+        index = self._transient_index_by_agent.get(key)
+        if index is None or not (0 <= index < len(self._items)):
+            return None
+        return self._items[index].event
+
     def _apply_delegation(self, event: TextualUiEvent) -> bool:
         """Exibe a delegação como bloco transitório do delegate feed.
 
@@ -505,62 +507,129 @@ class TextualFeedModel:
         somente enquanto a execução correlacionada está ativa e é removida
         junto com o feed do agente delegado ao término.
         """
-        removed_preview = self._consume_delegate_tool_preview(event)
+        self._consume_delegate_tool_preview(event)
         delegation_id = self._event_delegation_id(event)
         if not delegation_id:
             # Sem correlação não há como remover o cartão ao término.
-            item = TextualFeedItem(event, transient=False)
-            self._items.append(item)
-            self._last_change = TextualFeedChange(
-                True,
-                redraw=removed_preview,
-                appended=None if removed_preview else item,
-            )
+            self._items.append(TextualFeedItem(event, transient=False))
             return True
-        self._delegation_slots[delegation_id] = self._agent_key(event)
-        replaced = self._upsert_transient(event)
-        redraw = replaced or removed_preview
-        self._last_change = TextualFeedChange(
-            True,
-            redraw=redraw,
-            appended=None if redraw else self._items[-1],
-        )
+        slots = self._delegation_slots.setdefault(delegation_id, [])
+        paired = set(self._delegation_child_slot.values())
+        unpaired = [slot for slot in slots if slot not in paired]
+        if unpaired:
+            # Cartão ainda sem execução delegada é indistinguível do novo:
+            # é a mesma delegação reexibida, não uma nova ocorrência.
+            occurrence = self._delegation_occurrence(
+                self._item_event_for_key(unpaired[-1]) or event
+            )
+        else:
+            occurrence = 1 + max(
+                (
+                    self._delegation_occurrence(slot_event)
+                    for slot in slots
+                    if (slot_event := self._item_event_for_key(slot)) is not None
+                ),
+                default=0,
+            )
+        if occurrence > 1:
+            payload = dict(event.payload) if isinstance(event.payload, dict) else {}
+            payload["delegation_occurrence"] = occurrence
+            event = TextualUiEvent(event.kind, payload, agent=event.agent)
+        slot_key = self._agent_key(event)
+        if slot_key not in slots:
+            slots.append(slot_key)
+        self._upsert_transient(event)
         return True
 
-    def _delegation_transient_keys(self, delegation_id: str) -> list[str]:
-        """Chaves transitórias correlacionadas à delegação informada."""
+    def _delegation_transient_keys(
+        self,
+        delegation_id: str,
+        *,
+        own_slots: list[str],
+        run_id: str = "",
+    ) -> list[str]:
+        """Chaves transitórias da delegação que pertencem aos cartões ``own_slots``.
+
+        Com o mesmo delegation_id vivo mais de uma vez, os outros cartões e as
+        execuções pareadas a eles ficam; uma execução com outro run_id também.
+        """
         if not delegation_id:
             return []
+        all_slots = set(self._delegation_slots.get(delegation_id, ()))
+        foreign_children = {
+            child
+            for child, slot in self._delegation_child_slot.items()
+            if slot in all_slots and slot not in own_slots
+        }
         keys: list[str] = []
         for key, index in self._transient_index_by_agent.items():
+            if key in all_slots or key in foreign_children:
+                continue
             if not (0 <= index < len(self._items)):
                 continue
-            if self._event_delegation_id(self._items[index].event) == delegation_id:
-                keys.append(key)
+            item_event = self._items[index].event
+            if self._event_delegation_id(item_event) != delegation_id:
+                continue
+            item_run_id = self._event_run_id(item_event)
+            if run_id and item_run_id and item_run_id != run_id:
+                continue
+            keys.append(key)
         return keys
+
+    def _own_delegation_slots(self, slots: list[str], keys: list[str]) -> list[str]:
+        """Cartões que morrem com ``keys``: o pareado ou o mais antigo sem execução."""
+        own = [
+            slot
+            for key in keys
+            if (slot := self._delegation_child_slot.get(key)) is not None and slot in slots
+        ]
+        own.extend(slot for slot in slots if slot in keys and slot not in own)
+        if own:
+            return own
+        # Chave de fechamento sem execução pareada (delegation_id sem run_id,
+        # como em clear_agent_transient): o cartão é o mais antigo pareado a
+        # uma execução do mesmo agente. Só então vale o mais antigo sem
+        # execução.
+        bases = {self._key_base(key) for key in keys}
+        same_agent = [
+            slot
+            for slot in slots
+            if any(
+                paired_slot == slot and self._key_base(child) in bases
+                for child, paired_slot in self._delegation_child_slot.items()
+            )
+        ]
+        if same_agent:
+            return same_agent[:1]
+        paired = set(self._delegation_child_slot.values())
+        return [slot for slot in slots if slot not in paired][:1]
 
     def _delegation_group_keys(
         self,
         delegation_id: str,
         *,
         agent_keys: list[str] | None = None,
+        run_id: str = "",
     ) -> list[str]:
         """Reúne as chaves transitórias que morrem junto com a delegação."""
         keys = list(agent_keys or [])
         identifiers = {delegation_id} if delegation_id else set()
         for key in list(keys):
-            index = self._transient_index_by_agent.get(key)
-            if index is None or not (0 <= index < len(self._items)):
+            item_event = self._item_event_for_key(key)
+            if item_event is None:
                 continue
-            item_id = self._event_delegation_id(self._items[index].event)
+            item_id = self._event_delegation_id(item_event)
             if item_id:
                 identifiers.add(item_id)
         for identifier in identifiers:
-            slot_key = self._delegation_slots.get(identifier)
-            if not slot_key:
+            slots = self._delegation_slots.get(identifier)
+            if not slots:
                 continue
-            keys.append(slot_key)
-            keys.extend(self._delegation_transient_keys(identifier))
+            own_slots = self._own_delegation_slots(slots, keys)
+            keys.extend(own_slots)
+            keys.extend(
+                self._delegation_transient_keys(identifier, own_slots=own_slots, run_id=run_id)
+            )
         ordered: list[str] = []
         for key in keys:
             if key not in ordered:
@@ -568,25 +637,49 @@ class TextualFeedModel:
         return ordered
 
     def _finish_delegation_group(self, event: TextualUiEvent, delegation_id: str) -> bool:
-        """Encerra a delegação removendo cartão e feed do agente delegado."""
+        """Encerra a delegação removendo o feed da execução delegada e o seu cartão."""
         agent_key = self._agent_key(event)
-        self._finalized_agents.add(agent_key)
+        self._mark_finalized(agent_key)
         self._kept_answer_by_agent.pop(agent_key, None)
         self._pop_pending_turn_summary(event)
-        removed = self._remove_transient_keys(
-            self._delegation_group_keys(delegation_id, agent_keys=[agent_key])
-        )
-        self._last_change = TextualFeedChange(removed, redraw=removed)
-        return removed
+        return self._close_delegation_group(event, delegation_id, agent_key)
 
-    def _pop_pending_turn_summary(self, event: TextualUiEvent) -> TextualUiEvent | None:
-        """Retira o resumo pendente da execução do evento.
+    def _close_delegation_group(self, event: TextualUiEvent, delegation_id: str, agent_key: str) -> bool:
+        """Remove cartão e execuções que morrem com a delegação encerrada por ``event``.
+
+        As execuções do mesmo agente que caem junto ficam finalizadas: o evento
+        de fechamento pode vir sem run_id (chave ``agente#delegação``) e um
+        evento atrasado da execução não pode reabrir o cartão.
+        """
+        keys = self._delegation_group_keys(
+            delegation_id,
+            agent_keys=[agent_key],
+            run_id=self._event_run_id(event),
+        )
+        base = self._agent_base(event)
+        for key in keys:
+            if key != agent_key and key in self._transient_index_by_agent and self._key_base(key) == base:
+                self._mark_finalized(key)
+        return self._remove_transient_keys(keys)
+
+    @staticmethod
+    def _key_base(key: str) -> str:
+        """Agente de uma chave transitória (``agente#run:…`` → ``agente``)."""
+        return key.split("#", 1)[0]
+
+    def _pop_pending_turn_summary(
+        self,
+        event: TextualUiEvent,
+        *,
+        key: str | None = None,
+    ) -> TextualUiEvent | None:
+        """Retira o resumo pendente da execução do evento (ou de ``key``).
 
         Resumo sem execução (chave base) é de quem chegar primeiro; resumo de
         uma execução nunca vira rodapé de outra.
         """
         pending = self._pending_turn_summary_by_agent
-        summary = pending.pop(self._agent_key(event), None)
+        summary = pending.pop(key or self._agent_key(event), None)
         unowned = pending.pop(self._agent_base(event), None)
         return summary if summary is not None else unowned
 
@@ -614,7 +707,94 @@ class TextualFeedModel:
             return base
         if run_id:
             return f"{base}#run:{run_id}"
-        return f"{base}#{delegation_id}" if delegation_id else base
+        if not delegation_id:
+            return base
+        # A ocorrência fica no payload do próprio cartão para que a chave
+        # sobreviva à reindexação dos transitórios.
+        occurrence = self._delegation_occurrence(event)
+        suffix = f"#{occurrence}" if occurrence > 1 else ""
+        return f"{base}#{delegation_id}{suffix}"
+
+    @staticmethod
+    def _has_explicit_identity(event: TextualUiEvent) -> bool:
+        """Evento que já diz a qual execução pertence (run, delegação ou cliente MCP)."""
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        return bool(
+            str(payload.get("run_id") or "").strip()
+            or str(payload.get("delegation_id") or "").strip()
+            or str(payload.get("transport") or "").strip() == "mcp_http"
+        )
+
+    def _live_run_keys(self, base: str, *, include_mcp: bool = False) -> list[str]:
+        """Execuções vivas ``base#…`` do agente, da mais antiga (menor índice) à mais nova.
+
+        Cartões de delegação não são execuções do agente. O burst MCP HTTP
+        só conta para a resposta final, que o absorve; um evento CLI não
+        tem como herdar a identidade de cliente MCP.
+        """
+        prefix = f"{base}#"
+        live: list[tuple[int, str]] = []
+        for key, index in self._transient_index_by_agent.items():
+            if not key.startswith(prefix):
+                continue
+            if not include_mcp and key.startswith(f"{prefix}mcp-client:"):
+                continue
+            if not (0 <= index < len(self._items)):
+                continue
+            if self._items[index].event.kind == "delegation":
+                continue
+            live.append((index, key))
+        return [key for _, key in sorted(live)]
+
+    def _resolve_run_key(self, event: TextualUiEvent, *, include_mcp: bool = False) -> str | None:
+        """Chave da execução a que o evento pertence; None quando é ambíguo.
+
+        Evento com run_id/delegation_id usa a própria chave. Sem id: o
+        transitório ``base`` (de uma execução sem id) é dele; senão a única
+        execução viva do agente; sem nenhuma viva, ``base``. Com duas ou
+        mais vivas não há como saber a qual se refere.
+        """
+        if self._has_explicit_identity(event):
+            return self._agent_key(event)
+        base = self._agent_base(event)
+        if base in self._transient_index_by_agent:
+            return base
+        live = self._live_run_keys(base, include_mcp=include_mcp)
+        if not live:
+            return base
+        if len(live) == 1:
+            return live[0]
+        return None
+
+    def _bind_to_run(self, event: TextualUiEvent) -> TextualUiEvent | None:
+        """Evento com a identidade da execução resolvida, ou None se descartado.
+
+        A identidade inferida é gravada no payload (run_id/delegation_id do
+        transitório vivo) porque a chave dos transitórios é recalculada a
+        partir do evento em cada reindexação.
+        """
+        key = self._resolve_run_key(event)
+        if key is None:
+            if event.kind == "pending_input":
+                # Pergunta descartada deixaria o humano sem ver o que responde;
+                # sem dono certo ela ganha cartão próprio.
+                return event
+            _logger.debug(
+                "evento sem run_id ambíguo descartado: kind=%s agent=%s vivos=%s",
+                event.kind,
+                event.agent,
+                self._live_run_keys(self._agent_base(event)),
+            )
+            return None
+        if key == self._agent_key(event):
+            return event
+        live_event = self._item_event_for_key(key)
+        live_payload = live_event.payload if live_event is not None and isinstance(live_event.payload, dict) else {}
+        payload = dict(event.payload) if isinstance(event.payload, dict) else {"content": str(event.payload or "")}
+        for field in ("run_id", "delegation_id"):
+            if live_payload.get(field):
+                payload[field] = live_payload[field]
+        return TextualUiEvent(event.kind, payload, agent=event.agent, compact=event.compact)
 
     def _upsert_transient(self, event: TextualUiEvent) -> bool:
         agent = self._agent_key(event)
@@ -623,7 +803,9 @@ class TextualFeedModel:
         if index is not None and 0 <= index < len(self._items):
             self._items[index] = item
             return True
-        position = self._delegation_insert_position(event)
+        if event.kind != "delegation":
+            self._pair_delegation_child(agent, event)
+        position = self._delegation_insert_position(agent, event)
         if position is None:
             self._transient_index_by_agent[agent] = len(self._items)
             self._items.append(item)
@@ -632,7 +814,18 @@ class TextualFeedModel:
         self._reindex_transients()
         return True
 
-    def _delegation_insert_position(self, event: TextualUiEvent) -> int | None:
+    def _pair_delegation_child(self, child_key: str, event: TextualUiEvent) -> None:
+        """Pareia a execução delegada com o cartão mais antigo ainda sem execução."""
+        delegation_id = self._event_delegation_id(event)
+        if not delegation_id or child_key in self._delegation_child_slot:
+            return
+        paired = set(self._delegation_child_slot.values())
+        for slot in self._delegation_slots.get(delegation_id, ()):
+            if slot not in paired:
+                self._delegation_child_slot[child_key] = slot
+                return
+
+    def _delegation_insert_position(self, child_key: str, event: TextualUiEvent) -> int | None:
         """Posição logo abaixo da delegação correspondente, se houver.
 
         Mantém o feed do agente delegado ancorado ao cartão da sua delegação
@@ -641,7 +834,8 @@ class TextualFeedModel:
         delegation_id = self._event_delegation_id(event)
         if not delegation_id:
             return None
-        slot_key = self._delegation_slots.get(delegation_id)
+        slots = self._delegation_slots.get(delegation_id) or []
+        slot_key = self._delegation_child_slot.get(child_key) or (slots[0] if slots else None)
         if not slot_key:
             return None
         index = self._transient_index_by_agent.get(slot_key)
@@ -657,37 +851,115 @@ class TextualFeedModel:
             position += 1
         return position if position < len(self._items) else None
 
-    def _replace_transient_with_final(self, event: TextualUiEvent) -> tuple[bool, str]:
-        agent = self._final_replacement_key(event)
+    def _final_tool_lines(self, key: str, *, absorbed: list[str] | None = None) -> list[str]:
+        """Linhas de tools da execução guardadas na resposta final, com teto.
+
+        ``absorbed`` são as linhas dos bursts MCP HTTP que a final absorveu;
+        entram antes das próprias. O excedente vira a primeira linha, como no
+        bloco vivo: "anteriores" fica acima das que sobraram.
+        """
+        lines = [*(absorbed or ()), *(self._transient_tools_by_agent.get(key) or ())]
+        limit = self._MAX_FINAL_TOOL_LINES
+        if len(lines) <= limit:
+            return lines
+        hidden = len(lines) - (limit - 1)
+        return [f"⋮ +{hidden} ferramentas anteriores", *lines[-(limit - 1):]]
+
+    def _replace_transient_with_final(
+        self,
+        event: TextualUiEvent,
+        agent: str,
+        *,
+        absorbed_tools: list[str] | None = None,
+    ) -> bool:
+        """Troca o transitório da execução ``agent`` pela resposta final."""
+        # As linhas de tools são capturadas antes do descarte: a resposta
+        # final as guarda para o toggle de detalhes do turno.
+        tool_lines = self._final_tool_lines(agent, absorbed=absorbed_tools)
         self._kept_answer_by_agent.pop(agent, None)
-        self._transient_tools_by_agent.pop(agent, None)
-        self._finalized_agents.add(agent)
+        self._drop_tool_lines(agent)
+        self._mark_finalized(agent)
         item = TextualFeedItem(event, transient=False)
+        if tool_lines:
+            # Sem tools não há o que alternar: a final fica com o evento
+            # original e sem as chaves do toggle.
+            payload = dict(event.payload) if isinstance(event.payload, dict) else {"content": str(event.payload or "")}
+            payload["tool_lines"] = tool_lines
+            payload["tools_expanded"] = False
+            payload["feed_seq"] = item.seq
+            item.event = TextualUiEvent(event.kind, payload, agent=event.agent, compact=event.compact)
         index = self._transient_index_by_agent.pop(agent, None)
         if index is not None and 0 <= index < len(self._items):
             self._items[index] = item
-            return True, agent
+            return True
         self._items.append(item)
-        return False, agent
+        return False
 
     def _final_replacement_key(self, event: TextualUiEvent) -> str:
-        preferred = self._agent_key(event)
-        if preferred in self._transient_index_by_agent:
-            return preferred
-        payload = event.payload if isinstance(event.payload, dict) else {}
-        if payload.get("run_id") or payload.get("delegation_id"):
-            return preferred
-        base = self._agent_base(event)
-        prefix = f"{base}#"
-        candidates = [
-            key
-            for key in self._transient_index_by_agent
-            if key == base or key.startswith(prefix)
-        ]
-        return candidates[0] if len(candidates) == 1 else preferred
+        """Execução que a resposta final substitui.
+
+        Sem run_id e com várias execuções vivas, a final fecha a mais antiga:
+        nunca abre um cartão extra ao lado das vivas.
+        """
+        key = self._resolve_run_key(event, include_mcp=True)
+        if key is not None:
+            return key
+        live = self._live_run_keys(self._agent_base(event), include_mcp=True)
+        _logger.debug(
+            "evento sem run_id ambíguo: resposta final de %s substitui a execução mais antiga %s (vivas=%s)",
+            event.agent,
+            live[0],
+            live,
+        )
+        return live[0]
+
+    def toggle_turn_tools(self, seq: int) -> int | None:
+        """Alterna a exibição das tools da resposta final ``seq``; devolve o índice.
+
+        O item é substituído preservando o seq, que é a identidade usada pela
+        UI para o clique. None quando o item não existe ou não tem tools.
+        """
+        for index in range(len(self._items) - 1, -1, -1):
+            item = self._items[index]
+            if item.seq != seq:
+                continue
+            payload = item.event.payload
+            if not isinstance(payload, dict) or not payload.get("tool_lines"):
+                return None
+            toggled = {**payload, "tools_expanded": not payload.get("tools_expanded")}
+            event = item.event
+            self._items[index] = TextualFeedItem(
+                TextualUiEvent(event.kind, toggled, agent=event.agent, compact=event.compact, boot=event.boot),
+                transient=False,
+                seq=seq,
+            )
+            return index
+        return None
+
+    def latest_toggleable_seq(self) -> int | None:
+        """Seq da resposta final mais recente que tem tools para alternar."""
+        for item in reversed(self._items):
+            payload = item.event.payload
+            if not item.transient and isinstance(payload, dict) and payload.get("tool_lines"):
+                return item.seq
+        return None
 
     def _is_finalized_agent(self, agent: str) -> bool:
         return agent in self._finalized_agents
+
+    def _mark_finalized(self, agent: str) -> None:
+        self._finalized_agents[agent] = None
+        self._finalized_agents.move_to_end(agent)
+        while len(self._finalized_agents) > self._MAX_FINALIZED_AGENTS:
+            self._finalized_agents.popitem(last=False)
+
+    def _unmark_finalized(self, agent: str) -> None:
+        self._finalized_agents.pop(agent, None)
+
+    def _drop_tool_lines(self, agent: str) -> None:
+        """Descarta as previews de tools da execução e o mapa por tool_call_id."""
+        self._transient_tools_by_agent.pop(agent, None)
+        self._tool_call_line_by_agent.pop(agent, None)
 
     @staticmethod
     def _is_final_lifecycle(event: TextualUiEvent) -> bool:
@@ -695,9 +967,8 @@ class TextualFeedModel:
             return False
         payload = event.payload if isinstance(event.payload, dict) else {}
         status = _coerce_lifecycle_status(payload.get("status"))
-        message = str(payload.get("message") or "").lower()
-        if status is AgentLifecycleStatus.FAILED and ("reconect" in message or "tentativa" in message):
-            return False
+        # Re-tentativa e reconexão chegam como RETRYING/RECONNECTING; o texto
+        # da mensagem não decide se a execução terminou.
         return status in {
             AgentLifecycleStatus.COMPLETED,
             AgentLifecycleStatus.FAILED,
@@ -772,7 +1043,7 @@ class TextualFeedModel:
         )
         self._items[index] = kept_item
         self._transient_index_by_agent.pop(agent, None)
-        self._transient_tools_by_agent.pop(agent, None)
+        self._drop_tool_lines(agent)
         _, kept_items = self._kept_answer_by_agent.get(agent, ("", []))
         self._kept_answer_by_agent[agent] = (full_answer, [*kept_items, kept_item])
         return True
@@ -839,27 +1110,23 @@ class TextualFeedModel:
                     agent_keys=keys,
                 )
             )
-            if not removed:
-                self._last_change = TextualFeedChange(False)
-                return False
-            self._last_change = TextualFeedChange(True, redraw=True)
-            return True
+            return removed
 
         before = len(self._items)
         self._items = [item for item in self._items if not item.transient]
         self._transient_index_by_agent.clear()
         self._kept_answer_by_agent.clear()
         self._transient_tools_by_agent.clear()
+        self._tool_call_line_by_agent.clear()
         self._tool_request_lines_by_agent.clear()
         self._tool_request_seen_at_by_agent.clear()
         self._tool_request_expiry_by_agent.clear()
         self._completed_tool_requests_by_agent.clear()
         self._mcp_http_tool_stats_by_agent.clear()
         self._delegation_slots.clear()
+        self._delegation_child_slot.clear()
         self._reindex_transients()
-        changed = len(self._items) != before
-        self._last_change = TextualFeedChange(changed, redraw=changed)
-        return changed
+        return len(self._items) != before
 
     def _remove_transient_keys(
         self,
@@ -877,10 +1144,16 @@ class TextualFeedModel:
             reverse=True,
         )
         for key in keys:
-            for delegation_id, slot_key in list(self._delegation_slots.items()):
-                if slot_key == key:
+            for delegation_id, slots in list(self._delegation_slots.items()):
+                if key in slots:
+                    slots.remove(key)
+                if not slots:
                     self._delegation_slots.pop(delegation_id, None)
-            self._transient_tools_by_agent.pop(key, None)
+            self._delegation_child_slot.pop(key, None)
+            for child, slot_key in list(self._delegation_child_slot.items()):
+                if slot_key == key:
+                    self._delegation_child_slot.pop(child, None)
+            self._drop_tool_lines(key)
             self._tool_request_lines_by_agent.pop(key, None)
             self._tool_request_seen_at_by_agent.pop(key, None)
             self._tool_request_expiry_by_agent.pop(key, None)
@@ -981,32 +1254,35 @@ class TextualFeedModel:
         return False
 
     def _consume_delegate_tool_preview(self, event: TextualUiEvent) -> bool:
-        """Remove a preview genérica quando o cartão rico da delegação chega."""
+        """Remove a preview da chamada de delegação quando o cartão rico chega.
+
+        O casamento é pelo ``tool_call_id`` exato: dois orquestradores podem
+        delegar a mesma task ao mesmo tempo, e o texto da preview não diz de
+        quem é o cartão. Delegação sem tool_call_id não consome nada.
+        """
         payload = event.payload if isinstance(event.payload, dict) else {}
-        task = str(payload.get("task") or "").strip()
-        task_prefix = task[:80]
-        candidates: list[tuple[bool, int, str, int]] = []
-        for agent, lines in self._transient_tools_by_agent.items():
-            item_index = self._transient_index_by_agent.get(agent, -1)
-            for line_index in range(len(lines) - 1, -1, -1):
-                line = lines[line_index]
-                subject = self._tool_preview_subject(line)
-                if self._tool_preview_tool_name(subject) != "tasks_delegate":
-                    continue
-                matches_task = not task_prefix or task_prefix in line
-                candidates.append((matches_task, item_index, agent, line_index))
-                break
-        if not candidates:
+        tool_call_id = str(payload.get("tool_call_id") or "").strip()
+        if not tool_call_id:
+            _logger.debug(
+                "delegação sem tool_call_id: preview de tasks_delegate mantida (delegation_id=%s)",
+                payload.get("delegation_id"),
+            )
             return False
-        matching = [candidate for candidate in candidates if candidate[0]]
-        _, item_index, agent, line_index = max(
-            matching or candidates,
-            key=lambda candidate: candidate[1],
+        match = self._find_tool_call_line(
+            tool_call_id,
+            from_agent=str(payload.get("from_agent") or "").strip(),
+            source_run_id=str(payload.get("source_run_id") or "").strip(),
         )
+        if match is None:
+            # Passos seguintes da mesma chamada já encontram a preview consumida.
+            return False
+        agent, line = match
+        self._tool_call_line_by_agent[agent].pop(tool_call_id, None)
         lines = self._transient_tools_by_agent[agent]
-        del lines[line_index]
+        lines.remove(line)
         if not lines:
             self._transient_tools_by_agent.pop(agent, None)
+        item_index = self._transient_index_by_agent.get(agent, -1)
         if 0 <= item_index < len(self._items):
             current_item = self._items[item_index]
             current_payload = current_item.event.payload
@@ -1025,6 +1301,50 @@ class TextualFeedModel:
                 transient=True,
             )
         return True
+
+    def _find_tool_call_line(
+        self,
+        tool_call_id: str,
+        *,
+        from_agent: str,
+        source_run_id: str = "",
+    ) -> tuple[str, str] | None:
+        """Execução e linha visível da preview da chamada ``tool_call_id``.
+
+        Procura na execução exata (``from_agent#run:source_run_id``) e depois
+        nas demais execuções do mesmo agente, sem distinguir caixa: o cartão
+        traz o nome normalizado pela tool e a preview o nome do perfil. Só
+        quando o orquestrador não tem execução nenhuma no feed (cliente HTTP
+        anônimo: "agente" no cartão, "mcp-http" na preview) vale qualquer
+        execução, porque o tool_call_id já é único por execução.
+        """
+        base = from_agent.casefold()
+        exact = f"{base}#run:{source_run_id}" if base and source_run_id else None
+        exact_keys: list[str] = []
+        same_agent: list[str] = []
+        others: list[str] = []
+        for agent in self._tool_call_line_by_agent:
+            folded = agent.casefold()
+            if exact is not None and folded == exact:
+                exact_keys.append(agent)
+            elif base and self._key_base(folded) == base:
+                same_agent.append(agent)
+            else:
+                others.append(agent)
+        candidates = [*exact_keys, *same_agent]
+        # Sem execução do orquestrador no feed, o id vale sozinho, mas só para
+        # uma preview de tasks_delegate: ids sequenciais de dois perfis
+        # OpenAI-compat podem coincidir e não se tira uma tool qualquer de
+        # outro agente.
+        guard_tool_name = not candidates
+        for agent in candidates or others:
+            line = self._tool_call_line_by_agent[agent].get(tool_call_id)
+            if line is None or line not in self._transient_tools_by_agent.get(agent, ()):
+                continue
+            if guard_tool_name and self._tool_preview_tool_name(self._tool_preview_subject(line)) != "tasks_delegate":
+                continue
+            return agent, line
+        return None
 
     def _with_transient_tools(self, event: TextualUiEvent) -> TextualUiEvent:
         """Anexa previews de tools ao estado transitório do agente."""
@@ -1070,13 +1390,14 @@ class TextualFeedModel:
         event: TextualUiEvent,
         *,
         exclude_key: str,
-    ) -> tuple[dict[str, int] | None, bool]:
+    ) -> tuple[dict[str, int] | None, bool, list[str]]:
         """Absorve os bursts MCP HTTP do agente na resposta final.
 
         O burst tem identidade própria (``#mcp-client:``), então a resposta
         final não o substitui; sem esta absorção ele ficaria como bloco
         separado acima da resposta até o dwell expirar, com os stats fora do
-        bloco de resultado.
+        bloco de resultado. Devolve também as linhas de tools dos bursts
+        descartados: a final tem chave própria (run) e não as acharia depois.
         """
         base = self._agent_base(event)
         prefix = f"{base}#mcp-client:"
@@ -1093,7 +1414,7 @@ class TextualFeedModel:
             )
         ]
         if not matched:
-            return None, False
+            return None, False, []
         totals = {"total": 0, "ok_count": 0, "err_count": 0}
         windows: list[tuple[int, int]] = []
         has_stats = False
@@ -1113,7 +1434,15 @@ class TextualFeedModel:
             if windows
             else 0
         )
-        removable = [key for key in matched if key != exclude_key]
+        removable = sorted(
+            (key for key in matched if key != exclude_key),
+            key=lambda key: self._transient_index_by_agent.get(key, len(self._items)),
+        )
+        absorbed = [
+            line
+            for key in removable
+            for line in self._transient_tools_by_agent.get(key) or ()
+        ]
         removed = self._remove_transient_keys(removable) if removable else False
         if exclude_key in matched:
             # O slot excluído vira a própria resposta final; só o estado MCP
@@ -1123,7 +1452,7 @@ class TextualFeedModel:
             self._tool_request_expiry_by_agent.pop(exclude_key, None)
             self._completed_tool_requests_by_agent.pop(exclude_key, None)
             self._mcp_http_tool_stats_by_agent.pop(exclude_key, None)
-        return (totals if has_stats else None), removed
+        return (totals if has_stats else None), removed, absorbed
 
     @staticmethod
     def _turn_summary_footer(
@@ -1156,12 +1485,10 @@ class TextualFeedModel:
         """Atualiza previews de tools dentro do bloco transitório do agente."""
         agent = self._agent_key(event)
         if self._is_finalized_agent(agent):
-            self._last_change = TextualFeedChange(False)
             return False
         payload = event.payload if isinstance(event.payload, dict) else {}
         content = self._tool_preview_content(event)
         if not content:
-            self._last_change = TextualFeedChange(False)
             return False
         lines = self._transient_tools_by_agent.setdefault(agent, [])
         is_mcp_http = self._is_mcp_http_payload(payload)
@@ -1199,6 +1526,9 @@ class TextualFeedModel:
                 replaced_line = self._merge_generic_tool_line(lines, content, subject)
             if not replaced_line:
                 lines.append(content)
+        tool_call_id = str(payload.get("tool_call_id") or "").strip()
+        if tool_call_id:
+            self._tool_call_line_by_agent.setdefault(agent, {})[tool_call_id] = content
         if is_mcp_http:
             self._extend_tool_preview_expiries(agent)
         index = self._transient_index_by_agent.get(agent)
@@ -1206,14 +1536,12 @@ class TextualFeedModel:
             transient_payload = dict(payload)
             transient_payload["content"] = ""
             transient_payload["tools"] = list(lines)
-            replaced = self._upsert_transient(TextualUiEvent("agent_update", transient_payload, agent=event.agent))
-            self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
+            self._upsert_transient(TextualUiEvent("agent_update", transient_payload, agent=event.agent))
             return True
         current_event = self._items[index].event
         if self._is_lifecycle_placeholder_event(current_event):
             current_event = TextualUiEvent("agent_update", {"content": ""}, agent=event.agent)
         self._items[index] = TextualFeedItem(self._with_transient_tools(current_event), transient=True)
-        self._last_change = TextualFeedChange(True, redraw=True)
         return True
 
     @staticmethod
@@ -1261,20 +1589,17 @@ class TextualFeedModel:
         """Finaliza preview MCP HTTP, acumula stats e agenda remoção visual."""
         payload = event.payload if isinstance(event.payload, dict) else {}
         if str(payload.get("transport") or "").strip() != "mcp_http":
-            self._last_change = TextualFeedChange(False)
             return False
 
         agent = self._agent_key(event)
         status = str(payload.get("status") or "").strip().lower()
         if status not in {"finished", "failed", "cancelled"}:
-            self._last_change = TextualFeedChange(False)
             return False
 
         request_id = self._tool_request_id(payload)
         if request_id:
             completed = self._completed_tool_requests_by_agent.setdefault(agent, set())
             if request_id in completed:
-                self._last_change = TextualFeedChange(False)
                 return False
             completed.add(request_id)
         lines = self._transient_tools_by_agent.get(agent, [])
@@ -1345,18 +1670,12 @@ class TextualFeedModel:
                 self._with_transient_tools(current),
                 transient=True,
             )
-            self._last_change = TextualFeedChange(True, redraw=True)
             return True
 
         transient_payload = dict(payload)
         transient_payload["content"] = ""
-        replaced = self._upsert_transient(
+        self._upsert_transient(
             TextualUiEvent("agent_update", transient_payload, agent=event.agent)
-        )
-        self._last_change = TextualFeedChange(
-            True,
-            redraw=replaced,
-            appended=None if replaced else self._items[-1],
         )
         return True
 
@@ -1385,5 +1704,4 @@ class TextualFeedModel:
                 [agent],
                 preserve_mcp_stats=True,
             ) or changed
-        self._last_change = TextualFeedChange(changed, redraw=changed)
         return changed

@@ -233,6 +233,8 @@ class AppDispatchServices:
             *,
             delegation_id: str | None = None,
             chain: list | tuple | None = None,
+            tool_call_id: str | None = None,
+            source_run_id: str | None = None,
     ) -> None:
         """Exibe delegação no renderer atual, preservando compatibilidade sem Textual."""
         metadata = {
@@ -240,6 +242,8 @@ class AppDispatchServices:
             "task": task,
             "delegation_id": delegation_id,
             "chain": list(chain or []),
+            "tool_call_id": tool_call_id,
+            "source_run_id": source_run_id,
         }
         source_agent = str(from_agent or "agente")
         if self._ui_queue is not None:
@@ -260,6 +264,8 @@ class AppDispatchServices:
                 task=task,
                 delegation_id=delegation_id,
                 chain=metadata["chain"],
+                tool_call_id=tool_call_id,
+                source_run_id=source_run_id,
             )
 
     # -------------------------------------------------------------------------
@@ -573,6 +579,8 @@ class AppDispatchServices:
                 delegation.get("task"),
                 delegation_id=delegation_id,
                 chain=delegation.get("chain") if isinstance(delegation.get("chain"), (list, tuple)) else None,
+                tool_call_id=delegation.get("tool_call_id") or None,
+                source_run_id=delegation.get("source_run_id") or None,
             )
         logger.debug(
             "[DISPATCH] sending to agent=%s, delegation_only=%s, delegation_id=%s",

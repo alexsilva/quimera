@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import datetime
 from typing import Any
 
 from rich.cells import cell_len
@@ -510,7 +511,11 @@ def _build_agent_live_body(
         if hidden_label and hidden_match is None:
             # _live_tail cortou dentro de uma única linha lógica. O custo
             # desse prefixo é pago uma vez ao receber o chunk, não a cada paint.
-            hidden_prefix_cells = max(cell_len(text) - cell_len(live_text), 1)
+            prefix_len = len(text) - len(live_text)
+            hidden_prefix_cells = max(
+                prefix_len if text.isascii() else cell_len(text[:prefix_len]),
+                1,
+            )
         elif hidden_label and len(live_text) == _LIVE_TAIL_MAX_CHARS:
             end = len(text) - int(text.endswith("\n"))
             start = end - len(live_text)
@@ -519,9 +524,13 @@ def _build_agent_live_body(
                 and text.endswith(live_text, 0, end)
                 and text[start - 1] != "\n"
             ):
-                # Linhas completas já estão no rótulo; um prefixo parcial
-                # adicional é contado como uma linha lógica oculta.
-                hidden_logical_lines += 1
+                # Linhas completas já estão no rótulo; o prefixo parcial é
+                # medido em células para virar linhas visuais na largura atual.
+                line_start = text.rfind("\n", 0, start) + 1
+                partial = text[line_start:start]
+                hidden_prefix_cells += (
+                    len(partial) if partial.isascii() else cell_len(partial)
+                )
         markdown_body = (
             _live_markdown(live_text, text_style)
             if thinking and not hidden_label
@@ -663,7 +672,12 @@ def _tool_outcome_parts(total: int, ok_count: int, err_count: int) -> list[tuple
 
 
 def _build_turn_summary_renderable(payload, agent: str | None = None):
-    """Monta resumo contextualizado das ferramentas usadas no turno."""
+    """Monta resumo contextualizado das ferramentas usadas no turno.
+
+    No rodapé de uma resposta final com ``tool_lines`` arquivadas, a contagem
+    de ferramentas vira o próprio controle de expandir/colapsar (▸/▾), em vez
+    de repetir o número ao lado de um segundo rótulo.
+    """
     if not isinstance(payload, dict):
         return _gutter_row("└", "dim", Text(str(payload), style="dim"))
 
@@ -672,10 +686,20 @@ def _build_turn_summary_renderable(payload, agent: str | None = None):
     err_count = int(payload.get("err_count") or 0)
     duration = str(payload.get("duration") or "").strip()
     activity_counts = payload.get("activity_counts") or {}
-    noun = "ferramenta" if total == 1 else "ferramentas"
+    tool_lines = payload.get("tool_lines")
+    archived = tool_lines if isinstance(tool_lines, list) else None
+    # Sem resumo do turno (total 0), a contagem vem das linhas arquivadas.
+    count = total if total > 0 or archived is None else len(archived)
+    noun = "ferramenta" if count == 1 else "ferramentas"
 
     line = Text(no_wrap=False, overflow="fold")
-    line.append(f"{total} {noun}", style="dim")
+    if archived is not None:
+        marker = "▾" if payload.get("tools_expanded") else "▸"
+        seq = payload.get("feed_seq")
+        meta = {"@click": f"app.toggle_turn_tools({seq})"} if isinstance(seq, int) else None
+        line.append(f"{marker} {count} {noun}", style=Style(dim=True, meta=meta))
+    else:
+        line.append(f"{count} {noun}", style="dim")
     for part, style in _tool_outcome_parts(total, ok_count, err_count):
         line.append(f" · {part}", style=style)
     category_labels = (
@@ -688,11 +712,18 @@ def _build_turn_summary_renderable(payload, agent: str | None = None):
         ("execution", "execução", "execuções"),
     )
     for category, singular, plural in category_labels:
-        count = int(activity_counts.get(category) or 0)
-        if count:
-            line.append(f" · {count} {singular if count == 1 else plural}", style="dim")
+        category_count = int(activity_counts.get(category) or 0)
+        if category_count:
+            line.append(
+                f" · {category_count} {singular if category_count == 1 else plural}",
+                style="dim",
+            )
     if duration:
         line.append(f" · {duration}", style="dim")
+    completed_at = payload.get("completed_at")
+    if isinstance(completed_at, (int, float)):
+        completed_time = datetime.fromtimestamp(completed_at).astimezone().strftime("%H:%M")
+        line.append(f" · {completed_time}", style="dim")
     return _gutter_row("└", "dim", line)
 
 
@@ -975,10 +1006,23 @@ def _render_event(event: TextualUiEvent):
             render_mode=str(payload.get("render_mode") or "auto"),
             is_orchestrator=is_orchestrator,
         )
-        turn_summary = payload.get("turn_summary") if isinstance(payload, dict) else None
-        if isinstance(turn_summary, dict) and int(turn_summary.get("total") or 0) > 0:
-            return Group(block, _build_turn_summary_renderable(turn_summary, event.agent))
-        return block
+        turn_summary = payload.get("turn_summary")
+        tool_lines = payload.get("tool_lines")
+        has_summary = isinstance(turn_summary, dict) and int(turn_summary.get("total") or 0) > 0
+        if not has_summary and not isinstance(tool_lines, list):
+            return block
+        footer_payload = dict(turn_summary) if isinstance(turn_summary, dict) else {}
+        for key in ("tool_lines", "feed_seq", "tools_expanded", "completed_at"):
+            if key in payload:
+                footer_payload[key] = payload[key]
+        footer = _build_turn_summary_renderable(footer_payload, event.agent)
+        # Colapsado (padrão) não monta as linhas: o custo só existe expandido.
+        if payload.get("tools_expanded"):
+            # Sem guia │: o └ do rodapé já fechou o bloco do agente.
+            tools = _build_tools_renderable(tool_lines, style, guide=False)
+            if tools is not None:
+                return Group(block, footer, tools)
+        return Group(block, footer)
     if event.kind == "pending_input":
         payload = event.payload if isinstance(event.payload, dict) else {}
         label = _resolve_transport_label(payload, event.agent)
@@ -993,8 +1037,6 @@ def _render_event(event: TextualUiEvent):
         status = str(payload.get("status", "")).lower() if isinstance(payload, dict) else ""
         _TERMINAL_STATUSES = {"completed", "failed", "error", "cancelled", "aborted"}
         if status in _TERMINAL_STATUSES:
-            if status == "failed" and ("reconect" in message.lower() or "tentativa" in message.lower()):
-                status = "reconnecting"
             activity_payload = dict(payload) if isinstance(payload, dict) else {}
             activity_payload.update({"activity": status, "message": message})
             return _build_agent_activity_renderable(activity_payload, event.agent)

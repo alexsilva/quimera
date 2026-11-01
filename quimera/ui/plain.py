@@ -119,7 +119,17 @@ class PlainTextRenderer(RendererBase):
     def show_no_response(self, agent):
         self._write(f"{self._label(agent)}: {NO_RESPONSE_MESSAGE}", kind="no_response", agent=str(agent))
 
-    def show_delegation(self, from_agent, to_agent, task=None, *, delegation_id=None, chain=None):
+    def show_delegation(
+        self,
+        from_agent,
+        to_agent,
+        task=None,
+        *,
+        delegation_id=None,
+        chain=None,
+        tool_call_id: str | None = None,
+        source_run_id: str | None = None,
+    ):
         line = f"delegação {self._label(from_agent)} → {self._label(to_agent)}"
         task_text = self._as_text(task).strip()
         if task_text:

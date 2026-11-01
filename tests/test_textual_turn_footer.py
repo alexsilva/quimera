@@ -1,4 +1,5 @@
 """Rodapé do turno: wall-clock em vez de soma, contagens sem redundância e delegações."""
+from datetime import datetime
 from unittest.mock import Mock
 
 import pytest
@@ -312,3 +313,156 @@ def test_mcp_burst_without_preview_estimates_start_from_tool_duration():
 
     (stats,) = model._mcp_http_tool_stats_by_agent.values()
     assert stats["duration_ms"] == 11_000
+
+
+def _completed_turn_event(*, expanded: bool) -> TextualUiEvent:
+    return TextualUiEvent(
+        "agent_message",
+        {
+            "content": "Resposta final.",
+            "label": "Codex",
+            "style": "cyan",
+            "turn_summary": {
+                "total": 7,
+                "ok_count": 7,
+                "err_count": 0,
+                "duration": "1.2s",
+            },
+            "tool_lines": [f"✓ ferramenta_{index}" for index in range(7)],
+            "feed_seq": 42,
+            "tools_expanded": expanded,
+            "completed_at": 1_700_000_000.0,
+        },
+        agent="codex",
+    )
+
+
+def test_completed_turn_footer_toggles_tools_and_shows_local_time():
+    event = _completed_turn_event(expanded=False)
+    renderable = _render_event(event)
+    text = _render_text(event)
+    expected_time = datetime.fromtimestamp(1_700_000_000.0).astimezone().strftime("%H:%M")
+
+    assert "▸ 7 ferramentas" in text
+    # A contagem é o próprio controle; não aparece repetida ao lado dele.
+    assert text.count("7 ferramentas") == 1
+    assert text.rstrip().endswith(expected_time)
+    assert "ferramenta_0" not in text
+
+    console = Console(width=160)
+    toggle_segments = [
+        segment
+        for segment in console.render(renderable)
+        if "▸ 7 ferramentas" in segment.text
+    ]
+    assert len(toggle_segments) == 1
+    assert toggle_segments[0].style is not None
+    assert toggle_segments[0].style.meta == {"@click": "app.toggle_turn_tools(42)"}
+
+
+def test_completed_turn_footer_expands_all_archived_tool_lines():
+    text = _render_text(_completed_turn_event(expanded=True))
+
+    assert "▾ 7 ferramentas" in text
+    for index in range(7):
+        assert f"ferramenta_{index}" in text
+
+
+def test_completed_turn_footer_exists_without_turn_summary():
+    event = TextualUiEvent(
+        "agent_message",
+        {
+            "content": "Resposta final.",
+            "tool_lines": ["✓ única"],
+            "feed_seq": 9,
+            "tools_expanded": False,
+            "completed_at": 1_700_000_000.0,
+        },
+        agent="codex",
+    )
+
+    text = _render_text(event)
+
+    assert "▸ 1 ferramenta" in text
+    assert datetime.fromtimestamp(1_700_000_000.0).astimezone().strftime("%H:%M") in text
+
+
+def test_final_with_empty_turn_summary_and_no_archived_tools_has_no_footer():
+    event = TextualUiEvent(
+        "agent_message",
+        {
+            "content": "Resposta final.",
+            "turn_summary": {"total": 0},
+            "completed_at": 1_700_000_000.0,
+        },
+        agent="codex",
+    )
+
+    assert "└" not in _render_text(event)
+
+
+def test_renderer_final_message_records_completion_epoch(monkeypatch):
+    renderer, emitted = _renderer()
+    monkeypatch.setattr("quimera.ui.textual.renderer.time.time", lambda: 1234.5)
+
+    renderer.show_message("codex", "final")
+
+    assert emitted[-1].payload["completed_at"] == 1234.5
+
+
+def test_renderer_delegation_emits_frozen_correlation_fields():
+    renderer, emitted = _renderer()
+
+    renderer.show_delegation(
+        "claude",
+        "codex",
+        "implementar",
+        delegation_id="dlg-1",
+        chain=["claude", "codex"],
+        tool_call_id="call-1",
+        source_run_id="run-1",
+    )
+
+    payload = emitted[-1].payload
+    assert payload["from_agent"] == "claude"
+    assert payload["to_agent"] == "codex"
+    assert payload["tool_call_id"] == "call-1"
+    assert payload["source_run_id"] == "run-1"
+    assert "run_id" not in payload
+
+
+def test_clear_scoped_agent_transient_does_not_send_keep_run_ids():
+    renderer, emitted = _renderer()
+    renderer.begin_agent_run("codex", run_id="run-1")
+    renderer.begin_agent_run("codex", run_id="run-2")
+
+    renderer.clear_agent_transient("codex", run_id="run-1")
+
+    assert emitted[-1].kind == "visual_reset"
+    assert emitted[-1].payload["run_id"] == "run-1"
+    assert "keep_run_ids" not in emitted[-1].payload
+
+
+def test_clear_unscoped_agent_transient_keeps_parallel_run_ids():
+    renderer, emitted = _renderer()
+    renderer.begin_agent_run("codex", run_id="run-1")
+    renderer.begin_agent_run("codex", run_id="run-2")
+
+    renderer.clear_agent_transient("codex")
+
+    assert emitted[-1].kind == "visual_reset"
+    assert emitted[-1].payload["keep_run_ids"] == ["run-1", "run-2"]
+
+
+def test_failed_lifecycle_mentioning_retry_still_renders_as_failure():
+    """O status decide o ícone; "tentativa"/"reconect" no texto não viram retry."""
+    event = TextualUiEvent(
+        "agent_lifecycle",
+        {"status": "failed", "message": "falhou após reconectar (tentativa 3/3)"},
+        agent="codex",
+    )
+
+    text = _render_text(event)
+
+    assert "!" in text
+    assert "↻" not in text

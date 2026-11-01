@@ -1118,9 +1118,10 @@ class TestCancelamentoCorridasEAutorizacao:
 
         assert task_tools.tasks_cancel(self._cancel_call(task_id, "claude")).ok is True
         release.set()
-        _wait_task_status(db_path, task_id, "cancelled")
-        job = task_api.list_jobs(db_path=db_path)[-1]
-        assert job["status"] == "cancelled"
+        row = _wait_task_status(db_path, task_id, "cancelled")
+        # A task vira cancelled antes do job, em escritas separadas: esperar
+        # pelo job evita ler a linha no intervalo entre as duas.
+        job = _wait_job_status(db_path, row["job_id"], "cancelled")
         assert job["completed_at"] is not None
 
     def test_http_sse_propaga_cancel_da_request_ao_handle(self, tools_com_db):

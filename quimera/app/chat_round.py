@@ -199,32 +199,6 @@ class ChatRoundOrchestrator:
         if self._renderer is not None:
             self._renderer.show_warning(message)
 
-    def _show_delegation(
-            self,
-            from_agent: str,
-            to_agent: str,
-            task: str | None,
-            *,
-            delegation_id: str | None = None,
-            chain: list | tuple | None = None,
-    ) -> None:
-        if self._emit_event(
-            RenderEvent.DELEGATION,
-            "",
-            agent=from_agent,
-            metadata={
-                "to": to_agent,
-                "task": task,
-                "delegation_id": delegation_id,
-                "chain": list(chain or []),
-            },
-        ):
-            return
-        if self._renderer is not None:
-            self._renderer.show_delegation(
-                from_agent, to_agent, task=task, delegation_id=delegation_id, chain=chain
-            )
-
     def _is_cancelled(self) -> bool:
         checker = getattr(self._cancel_notice_tls, "is_cancelled", None)
         if callable(checker):

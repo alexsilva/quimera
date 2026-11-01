@@ -157,7 +157,17 @@ class RendererBase:
     def show_no_response(self, agent):
         return None
 
-    def show_delegation(self, from_agent, to_agent, task=None, *, delegation_id=None, chain=None):
+    def show_delegation(
+        self,
+        from_agent,
+        to_agent,
+        task=None,
+        *,
+        delegation_id=None,
+        chain=None,
+        tool_call_id: str | None = None,
+        source_run_id: str | None = None,
+    ):
         return None
 
     def show_prompt_preview(self, agent, preview):

@@ -84,11 +84,6 @@ if TYPE_CHECKING:
     from textual.timer import Timer
 
 
-def _resolve_textual_feed_limit(quimera_app) -> int | None:
-    """Mantém scrollback visual independente dos limites do contexto."""
-    return None
-
-
 def _append_post_exit_failure_message(
     messages: list[tuple[str, str]],
     event: TextualUiEvent,
@@ -142,6 +137,8 @@ class QuimeraTextualApp(App):
         ("ctrl+t", "cycle_theme", "Tema"),
         ("alt+t", "cycle_theme", "Tema"),
         ("f6", "cycle_theme", "Tema"),
+        ("ctrl+o", "toggle_latest_turn_tools", "Ferramentas do turno"),
+        ("f4", "toggle_latest_turn_tools", "Ferramentas do turno"),
         ("ctrl+l", "clear_feed", "Limpar chat"),
         ("ctrl+end", "scroll_to_bottom", "Ir ao fim"),
         ("ctrl+home", "scroll_to_top", "Ir ao topo"),
@@ -492,7 +489,7 @@ class QuimeraTextualApp(App):
         self._update_status_bar()
 
     def _drain_bridge_events(self, *, max_events: int | None = 256) -> None:
-        if self._handling_bridge_batch:
+        if self._handling_bridge_batch or self._exit:
             return
         events = self._bridge.drain_pending_events(max_items=max_events)
         if not events:
@@ -625,6 +622,8 @@ class QuimeraTextualApp(App):
 
     def _pulse_thinking_marker(self) -> None:
         """Anima o marcador de pensamento e a esfera do turno humano em execução."""
+        if self._exit:
+            return
         expired_tools = self._feed_model.expire_tool_previews()
         if expired_tools:
             self._sync_feed()
@@ -671,12 +670,20 @@ class QuimeraTextualApp(App):
         if value:
             event.input.add_to_history(value)
             event.input.save_history(self._history_file_path)
-        self._bridge.submit_input(value)
         if value:
             # Enviar um prompt reengata a âncora do feed: o scroll vai ao
-            # fim agora e o compositor segue o fim até o usuário rolar.
+            # fim agora e o compositor segue o fim até o usuário rolar. A
+            # flag vem antes do submit porque o turno humano é emitido na
+            # thread do app e sincroniza o feed ali mesmo; armada depois,
+            # ela sobraria e puxaria o scroll no próximo evento do agente.
             self._scroll_feed_on_submit = True
             self.query_one("#feed", _UnifiedFeed).anchor()
+        self._bridge.submit_input(value)
+        # Comando de controle (ex.: /agentes) e resposta a pergunta não
+        # espelham turno humano no feed, logo nenhum sync consumiu a flag.
+        # Sobrando, ela puxaria o scroll no próximo evento do agente mesmo
+        # com o usuário lendo o histórico; o anchor() acima já rolou ao fim.
+        self._scroll_feed_on_submit = False
 
     def _set_question_overlay(self, payload) -> None:
         overlay = self.query_one("#question_overlay", Static)
@@ -734,6 +741,41 @@ class QuimeraTextualApp(App):
     def action_clear_feed(self) -> None:
         self._clear_chat_feed()
 
+    def action_toggle_turn_tools(self, seq: int, *, reveal: bool = False) -> None:
+        """Alterna as ferramentas arquivadas de um turno concluído.
+
+        ``reveal`` rola até o turno: pelo teclado ele pode estar fora da tela
+        enquanto o usuário lê o histórico.
+        """
+        index = self._feed_model.toggle_turn_tools(seq)
+        if index is None:
+            return
+        feed = self.query_one("#feed", _UnifiedFeed)
+        if index != len(self._feed_model.items) - 1:
+            # Ancorado, o compositor recolaria o scroll no fim ao crescer um
+            # turno do meio e o turno alternado sairia da tela. Soltar é
+            # idempotente; no Textual 8 is_anchored não diz se já foi solto.
+            feed.release_anchor()
+        self._feed_renderable_cache.pop(seq, None)
+        item = self._feed_model.items[index]
+        renderable = _render_event(item.event)
+        if renderable is None or not feed.update_entry(index, seq, renderable):
+            self._sync_feed()
+        else:
+            self._feed_renderable_cache[seq] = renderable
+        self._refresh_now(layout=True)
+        if reveal:
+            # Depois do reflow: antes dele o alvo seria clampado pelo
+            # max_scroll_y antigo e, no último item ancorado, o compositor
+            # recolaria o scroll no fim com o topo do turno fora da tela.
+            self.call_after_refresh(feed.scroll_to_token, seq)
+
+    def action_toggle_latest_turn_tools(self) -> None:
+        """Alterna as ferramentas do turno concluído mais recente e o traz à tela."""
+        seq = self._feed_model.latest_toggleable_seq()
+        if seq is not None:
+            self.action_toggle_turn_tools(seq, reveal=True)
+
     def _clear_chat_feed(self) -> None:
         """Limpa o chat e mantém o cabeçalho de boot no topo do feed.
 
@@ -783,6 +825,19 @@ class QuimeraTextualApp(App):
         feed = self.query_one("#feed", _UnifiedFeed)
         feed.scroll_page_down(animate=False)
 
+    def _feed_widget(self) -> _UnifiedFeed | None:
+        """Feed montado, ou None no encerramento.
+
+        Os timers são parados no unmount, mas um tick já despachado ainda
+        roda com a tela desmontada; consultar o feed aí levanta NoMatches.
+        """
+        if self._exit:
+            return None
+        try:
+            return self.query_one("#feed", _UnifiedFeed)
+        except NoMatches:
+            return None
+
     def _sync_feed(self, *, force: bool = False, scroll_end: bool = False) -> None:
         """Reconcilia histórico e execuções vivas na mesma área rolável."""
         if self._handling_bridge_batch:
@@ -790,10 +845,12 @@ class QuimeraTextualApp(App):
             self._bridge_batch_feed_force |= force
             self._bridge_batch_scroll_end |= scroll_end
             return
+        feed = self._feed_widget()
+        if feed is None:
+            return
         # Qualquer reconciliação real pode ter criado transients, submissões
         # ou expiries; o pulso decide no próximo tick se volta a dormir.
         self._resume_thinking_pulse()
-        feed = self.query_one("#feed", _UnifiedFeed)
         entries: list[tuple[int, bool, VisualType, bool]] = []
         active_tokens: set[int] = set()
         for item in self._feed_model.items:
@@ -832,7 +889,9 @@ class QuimeraTextualApp(App):
 
     def _sync_transient_feed_slots(self) -> None:
         """Atualiza somente slots transitórios quando apenas o pulso mudou."""
-        feed = self.query_one("#feed", _UnifiedFeed)
+        feed = self._feed_widget()
+        if feed is None:
+            return
         for index, item in self._feed_model.transient_items():
             token = item.seq
             renderable = _render_event(item.event)
@@ -843,7 +902,9 @@ class QuimeraTextualApp(App):
 
     def _sync_submission_feed_slots(self, slots) -> None:
         """Re-renderiza turnos humanos com submissão ativa para a esfera pulsar."""
-        feed = self.query_one("#feed", _UnifiedFeed)
+        feed = self._feed_widget()
+        if feed is None:
+            return
         for index, item in slots:
             token = item.seq
             renderable = _render_event(item.event)
