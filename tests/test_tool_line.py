@@ -27,6 +27,7 @@ from quimera.domain.tool_line import (
     ToolLine,
     build_tool_line,
     coerce_duration_ms,
+    is_sensitive_key,
     tool_call_namespace,
 )
 from quimera.ui.textual.cell_widths import EMOJI_NARROW_VERSION
@@ -49,7 +50,10 @@ from quimera.ui.textual.cell_widths import EMOJI_NARROW_VERSION
                          {"target_agent": "codex-gpt-5-6", "request": "Revise o módulo X\n..."}),
          "⇄ delegar codex-gpt-5-6 · Revise o módulo X"),
         (build_tool_line("Edit", {"file_path": "a.py"}, status="ok", duration_ms=50), "✓ ✎ editar a.py · 50ms"),
-        (build_tool_line("python_tool", {"token": "abcdef", "path": "x"}), "$ x +1 args"),
+        (build_tool_line("python_tool", {"token": "abcdef", "path": "x"}), "$ python_tool x ab****ef"),
+        (build_tool_line("ToolSearch", {"query": "select:mcp__quimera__tui_screenshot", "max_results": 1},
+                         status="ok", duration_ms=202),
+         "✓ $ toolsearch select:mcp__quimera__tui_screenshot 1 · 202ms"),
         (build_tool_line("exec_command", {"cmd": "python3 script.py"}), "$ python3 script.py"),
         (build_tool_line("read_file", {"path": "a"}, transport="mcp_http", status="ok", duration_ms=10),
          "◇ ✓ ⌕ ler a · 10ms"),
@@ -129,14 +133,41 @@ def test_ask_user_question_is_capped() -> None:
 
 def test_missing_family_field_falls_back_to_unknown_rule() -> None:
     line = build_tool_line("read_file", {"name": "x", "limit": 3})
-    assert (line.verb, line.subject) == ("", "x +1 args")
+    assert (line.verb, line.subject) == ("read_file", "x 3")
     assert build_tool_line("bash", {}).subject == ""
 
 
 def test_unknown_rule_prefers_known_keys_and_redacts() -> None:
-    assert build_tool_line("custom", {"limit": 3, "query": "q"}).subject == "q +1 args"
+    assert build_tool_line("custom", {"limit": 3, "query": "q"}).subject == "q 3"
+    assert build_tool_line("custom", {"a": 1, "b": 2, "c": 3, "query": "q"}).subject == "q 1 2 +1 args"
     assert build_tool_line("custom", {"password": "hunter22"}).subject == "hu****22"
-    assert build_tool_line("custom", {"nested": {"a": 1}}).subject == ""
+    # Variações de caixa, hífen e prefixo também são mascaradas.
+    leaky = build_tool_line(
+        "tasks_list", {"query": "x", "access_token": "abcdefghij", "API-Key": "zzzzzzzz", "Client_Secret": "s3cr3tvalue"}
+    )
+    assert leaky.subject == "x ab****ij zz****zz +1 args"
+    assert "s3cr3tvalue" not in leaky.to_text()
+
+
+def test_sensitive_key_matching_does_not_hide_ordinary_keys() -> None:
+    for key in (
+        "access_token", "Refresh-Token", "x-api-key", "apikey", "private_key", "passwd", "Bearer", "headers",
+        "accessToken", "clientSecret", "authToken", "apiKey", "secrets", "cookies", "access_key", "passphrase",
+        "pwd", "jwt", "dsn", "databaseUrl", "connection_string",
+        "signingKey", "encryption_key", "ssh_key", "client_key", "password1",
+    ):
+        assert is_sensitive_key(key), key
+    for key in ("max_tokens", "maxTokens", "query", "keyword", "path", "monkey", "limit", "tokenizer", "author", "session_id",
+                "sort_key", "cache_key"):
+        assert not is_sensitive_key(key), key
+
+
+def test_unknown_values_are_clipped_one_by_one() -> None:
+    subject = build_tool_line("custom", {"query": "a\n" * 300, "limit": 3, "x": 1, "y": 2}).subject
+    first, rest = subject.split("…", 1)
+    assert len(first) == 80
+    assert rest == " 3 1 +1 args"
+    assert build_tool_line("custom", {"nested": {"a": 1}}).subject == "+1 args"
     assert build_tool_line("custom", {}).to_text() == "$ custom"
 
 

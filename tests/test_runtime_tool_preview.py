@@ -147,7 +147,18 @@ class TestExecutionPreview(unittest.TestCase):
     def test_execution_unknown_truncates_pathological_values(self):
         result = ToolPreview.build("weird_tool", {"payload": "x" * 1000})
         self.assertTrue(result.endswith("…"))
-        self.assertEqual(len("$ ") + 400 + 1, len(result))
+        self.assertEqual(len("$ weird_tool ") + 80 + 1, len(result))
+
+    def test_approval_unknown_redacts_key_variants(self):
+        result = ToolPreview.build(
+            "custom_tool",
+            {"access_token": "abcdefghij", "X-API-Key": "zzzzzzzz", "clientSecret": "qqqqqqqq", "limit": 3},
+            context="approval",
+        )
+        self.assertNotIn("abcdefghij", result)
+        self.assertNotIn("zzzzzzzz", result)
+        self.assertNotIn("qqqqqqqq", result)
+        self.assertIn("limit: 3", result)
 
     def test_execution_unknown_without_arguments_shows_tool(self):
         self.assertEqual("$ weird_tool", ToolPreview.build("weird_tool", {}))

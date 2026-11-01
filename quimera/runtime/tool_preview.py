@@ -5,15 +5,14 @@ O contexto ``execution`` é a forma canônica de ``quimera.domain.tool_line``.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any
 
-from quimera.domain.tool_line import SENSITIVE_KEYS, build_tool_line, redact
+from quimera.domain.tool_line import build_tool_line, is_sensitive_key, redact
 
 
 class ToolPreview:
     """Constrói previews de tools com variação apenas de contexto visual."""
 
-    _SENSITIVE_KEYS: ClassVar[frozenset[str]] = SENSITIVE_KEYS
     _PREVIEW_MAX_LINES = 6
     _PREVIEW_MAX_CHARS = 500
     # Limites de approval (caixa compacta de confirmação).
@@ -148,7 +147,7 @@ class ToolPreview:
         pairs = []
         for key, value in args.items():
             rendered = str(value)
-            if str(key).lower() in cls._SENSITIVE_KEYS:
+            if is_sensitive_key(key):
                 rendered = cls._redact(value)
             if len(rendered) > cls._MAX_VALUE_LEN:
                 rendered = rendered[: cls._MAX_VALUE_LEN] + "…"

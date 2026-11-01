@@ -146,7 +146,7 @@ def test_cross_namespace_fusion_keeps_the_richer_subject():
 
     (entry,) = _entries(model)
     assert entry["subject"] == "50"
-    assert entry["text"] == "✓ ⌕ 50 · 4ms"
+    assert entry["text"] == "✓ ⌕ tasks_list 50 · 4ms"
 
 
 def test_cross_namespace_fusion_of_two_rich_lines_keeps_the_richer_subject():
@@ -156,7 +156,7 @@ def test_cross_namespace_fusion_of_two_rich_lines_keeps_the_richer_subject():
     _send(model, tool_msg("tasks_list", status="ok", tool_call_id="toolu_1", duration_ms=4))
 
     (entry,) = _entries(model)
-    assert entry["text"] == "✓ ⌕ open +1 args · 4ms"
+    assert entry["text"] == "✓ ⌕ tasks_list open 50 · 4ms"
 
 
 def test_different_tools_never_fuse_across_namespaces():

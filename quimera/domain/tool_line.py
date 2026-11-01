@@ -7,6 +7,7 @@ canônica para o modo pipe/plain e para rótulos de status.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from typing import Any, Iterable, Mapping
 
@@ -45,6 +46,20 @@ SENSITIVE_KEYS = frozenset({
     "token", "api_key", "password", "secret",
     "authorization", "cookie", "headers",
 })
+# Partes (separadas por ``_``) que tornam a chave sensível em qualquer posição:
+# ``access_token``, ``client_secret``, ``X-Auth-Token``.
+# ``tokens`` fica de fora de propósito: ``max_tokens`` é parâmetro comum.
+_SENSITIVE_KEY_PARTS = frozenset({
+    "token", "password", "passwords", "passwd", "pwd", "passphrase",
+    "secret", "secrets", "authorization", "cookie", "cookies", "headers",
+    "bearer", "credential", "credentials", "jwt", "dsn",
+})
+_SENSITIVE_KEY_SUFFIXES = (
+    "api_key", "apikey", "private_key", "access_key", "secret_key",
+    "signing_key", "encryption_key", "ssh_key", "client_key",
+    "database_url", "connection_string",
+)
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 _OK_ALIASES = frozenset({"ok", "success", "succeeded", "finished", "completed", "complete", "done"})
 _ERROR_ALIASES = frozenset({"error", "failed", "failure", "fail", "timeout", "cancelled", "aborted"})
@@ -56,6 +71,8 @@ _TAIL_MAX = 160
 _DELEGATION_REQUEST_MAX = 80
 _QUESTION_MAX = 120
 _STDIN_CHARS_MAX = 200
+_UNKNOWN_MAX_VALUES = 3
+_UNKNOWN_VALUE_MAX = 80
 
 _READ_TOOLS = frozenset({"read", "read_file", "view", "cat", "readfile"})
 _WRITE_TOOLS = frozenset({"write", "write_file", "create", "create_file", "overwrite", "writefile"})
@@ -248,6 +265,15 @@ def tool_call_namespace(tool_call_id: object) -> str:
     return head if head.isalpha() else ""
 
 
+def is_sensitive_key(key: object) -> bool:
+    """Chave cujo valor não pode aparecer: camelCase, caixa e ``-``/``_`` são indiferentes."""
+    normalized = _CAMEL_BOUNDARY.sub("_", str(key)).replace("-", "_").lower()
+    if normalized in SENSITIVE_KEYS or normalized.endswith(_SENSITIVE_KEY_SUFFIXES):
+        return True
+    # ``password1``: campos numerados contam como a parte sem o número.
+    return any(part.rstrip("0123456789") in _SENSITIVE_KEY_PARTS for part in normalized.split("_"))
+
+
 def redact(value: Any) -> str:
     text = str(value)
     if not text:
@@ -319,15 +345,18 @@ def _first_line(value: object, max_len: int) -> str:
 
 
 def _unknown_subject(args: Mapping[str, Any]) -> str:
-    key = next((key for key in _UNKNOWN_KEYS if _scalar(args.get(key))), None)
-    if key is None:
-        key = next((key for key, value in args.items() if _scalar(value)), None)
-    if key is None:
-        return ""
-    value = args[key]
-    shown = redact(value) if str(key).lower() in SENSITIVE_KEYS else str(value)
-    remaining = len(args) - 1
-    return f"{shown} +{remaining} args" if remaining else shown
+    """Até ``_UNKNOWN_MAX_VALUES`` valores escalares, chaves conhecidas primeiro."""
+    scalar_keys = [key for key, value in args.items() if _scalar(value)]
+    preferred = [key for key in _UNKNOWN_KEYS if key in scalar_keys]
+    ordered = preferred + [key for key in scalar_keys if key not in preferred]
+    shown = [
+        redact(args[key]) if is_sensitive_key(key) else _clip(_one_line(args[key]), _UNKNOWN_VALUE_MAX)
+        for key in ordered[:_UNKNOWN_MAX_VALUES]
+    ]
+    remaining = len(args) - len(shown)
+    if remaining:
+        shown.append(f"+{remaining} args")
+    return " ".join(shown)
 
 
 def _paths(value: object) -> str:
@@ -428,4 +457,6 @@ def _verb_and_subject(tool: str, args: Mapping[str, Any]) -> tuple[str, str]:
     family = _family_subject(tool, args)
     if family is not None:
         return family
-    return "", _unknown_subject(args)
+    # Sem família, o nome da tool é o verbo: sem ele a linha vira só valores
+    # soltos ("select:x +1 args") e não diz o que rodou.
+    return tool, _unknown_subject(args)
