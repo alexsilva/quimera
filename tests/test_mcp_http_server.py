@@ -1223,7 +1223,7 @@ class TestToolsCallHTTP:
         approval.approve.assert_called_once()
         response = json.loads(out.getvalue())
         assert response["result"]["isError"] is True
-        assert "Execução negada" in response["result"]["content"][0]["text"]
+        assert "Execução não aprovada" in response["result"]["content"][0]["text"]
 
     def test_tools_call_blocks_tools_outside_default_allowlist(self):
         """Verifica que Test tools call blocks tools outside default allowlist."""

@@ -795,10 +795,10 @@ class CoreFacadeMixin:
             turn_manager_cls=TurnManager,
         )
 
-    def close(self, *, interrupted: bool = False) -> None:
+    def close(self, *, interrupted: bool = False, summarize_session: bool = True) -> None:
         """Fecha explicitamente os recursos da aplicação."""
         lifecycle = self.__dict__.get("lifecycle")
         if lifecycle is None:
             lifecycle = AppLifecycle(self)
             self.lifecycle = lifecycle
-        lifecycle.close(interrupted=interrupted)
+        lifecycle.close(interrupted=interrupted, summarize_session=summarize_session)

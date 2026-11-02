@@ -73,6 +73,30 @@ class DelegationDispatchError(RuntimeError):
         self.receipt = dict(receipt) if receipt else {}
 
 
+def format_dispatch_failure(agent, receipt: dict | None) -> str:
+    """Resume o recibo de falha em uma frase legível para o delegador."""
+    if not receipt:
+        return f"Agent '{agent}' returned no response"
+    kind = str(receipt.get("error_kind") or "unknown")
+    parts = [f"Agent '{agent}' failed ({kind})"]
+    message = str(receipt.get("message") or "").strip()
+    if message:
+        parts.append(message)
+    exit_code = receipt.get("exit_code")
+    signal_name = receipt.get("signal")
+    if exit_code is not None:
+        exit_label = f"exit={exit_code}"
+        if signal_name:
+            exit_label += f"/{signal_name}"
+        parts.append(exit_label)
+    duration = receipt.get("duration_s")
+    if duration is not None:
+        parts.append(f"após {duration}s")
+    return ": ".join(parts[:2]) + (
+        f" [{', '.join(parts[2:])}]" if len(parts) > 2 else ""
+    )
+
+
 # Mapeamento de tipos para facilitar roteamento
 TOOL_ERROR_TYPES = {
     "validation": ToolValidationError,

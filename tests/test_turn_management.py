@@ -438,7 +438,7 @@ class TestTurnCycle(unittest.TestCase):
         run_thread.join(timeout=2)
 
         self.assertFalse(run_thread.is_alive(), "run() travou no encerramento com worker ocupado")
-        app.session_services.shutdown.assert_called_once_with(interrupted=True)
+        app.session_services.shutdown.assert_called_once_with(interrupted=True, summarize=True)
 
     def test_run_keeps_chat_alive_on_keyboard_interrupt_during_sync_processing(self):
         """Ctrl+C durante processamento síncrono deve cancelar só a execução atual."""
@@ -488,7 +488,7 @@ class TestTurnCycle(unittest.TestCase):
         self.assertEqual(process_calls, ["mensagem"])
         self.assertEqual(len(read_calls), 2, "run() deveria voltar ao input após o cancelamento")
         self.assertTrue(app.turn_manager.is_human_turn)
-        app.session_services.shutdown.assert_called_once_with(interrupted=False)
+        app.session_services.shutdown.assert_called_once_with(interrupted=False, summarize=True)
         app.agent_client.close.assert_called_once()
 
     def test_run_keeps_chat_alive_on_input_interrupt_with_queued_prompt(self):
@@ -556,7 +556,7 @@ class TestTurnCycle(unittest.TestCase):
         self.assertEqual(len(read_calls), 4, "run() deveria tratar Ctrl+C e voltar ao input")
         self.assertTrue(app.turn_manager.is_human_turn)
         app.agent_client.cancel_active_work.assert_called_once_with()
-        app.session_services.shutdown.assert_called_once_with(interrupted=False)
+        app.session_services.shutdown.assert_called_once_with(interrupted=False, summarize=True)
         app.agent_client.close.assert_called_once()
 
     def test_run_with_sequential_input_waits_for_active_work_before_reading_again(self):
@@ -627,7 +627,7 @@ class TestTurnCycle(unittest.TestCase):
         self.assertFalse(run_thread.is_alive(), "EOF do stdin deveria encerrar o loop")
         self.assertEqual(len(read_calls), 2)
         self.assertTrue(read_calls[1][2], "a segunda leitura só pode acontecer após o trabalho terminar")
-        app.session_services.shutdown.assert_called_once_with(interrupted=False)
+        app.session_services.shutdown.assert_called_once_with(interrupted=False, summarize=True)
 
     def test_run_keeps_chat_alive_when_only_openai_drain_is_active(self):
         """Ctrl+C no CLI não pode sair enquanto has_active_work rastreia HTTP tardio."""
@@ -671,7 +671,7 @@ class TestTurnCycle(unittest.TestCase):
 
         self.assertEqual(read_index[0], 2)
         app.agent_client.cancel_active_work.assert_called_once_with()
-        app.session_services.shutdown.assert_called_once_with(interrupted=False)
+        app.session_services.shutdown.assert_called_once_with(interrupted=False, summarize=True)
         app.agent_client.close.assert_called_once()
 
     def test_run_assigns_submission_id_to_plain_cli_prompt(self):
@@ -1015,7 +1015,7 @@ class TestTurnCycle(unittest.TestCase):
         QuimeraApp.run(app)
 
         self.assertEqual(app.system_layer.show_muted_message.call_args_list, [unittest.mock.call(MSG_SHUTDOWN)])
-        app.session_services.shutdown.assert_called_once_with(interrupted=True)
+        app.session_services.shutdown.assert_called_once_with(interrupted=True, summarize=True)
         app.agent_client.close.assert_called_once()
 
     def test_process_chat_message_keeps_ai_turn_while_async_queue_has_pending_work(self):
@@ -1287,7 +1287,7 @@ class TestTurnCycle(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 1.0)
         self.assertTrue(cancelled.is_set())
         app.agent_client.cancel_active_work.assert_called_once()
-        app.session_services.shutdown.assert_called_once_with(interrupted=True)
+        app.session_services.shutdown.assert_called_once_with(interrupted=True, summarize=True)
 
     def test_exit_cancels_queued_prompt_behind_stuck_turn(self):
         """Com threads=1, `/exit` cancela o prompt ativo e o ainda enfileirado."""
@@ -1339,7 +1339,7 @@ class TestTurnCycle(unittest.TestCase):
         self.assertEqual(started, ["turno preso"])
         self.assertTrue(cancelled.is_set())
         self.assertEqual(app.runtime_state.get_chat_outstanding_count(), 0)
-        app.session_services.shutdown.assert_called_once_with(interrupted=True)
+        app.session_services.shutdown.assert_called_once_with(interrupted=True, summarize=True)
 
     def test_threads_one_is_serial(self):
         """Com threads=1, no máximo uma execução de agente roda por vez (sem overlap).

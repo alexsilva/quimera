@@ -6,8 +6,12 @@ quando o usuário não está disponível.
 
 Cenários tratados:
 - Usuário presente: fluxo interativo normal (setas/números/y/n).
-- Usuário ausente (timeout): auto-nega approval; auto-seleciona
-  primeira opção em ask_user; emite notificação visível.
+- Usuário ausente (timeout): auto-nega approval; ask_user termina sem
+  resposta (``AskUserUnanswered``) em vez de escolher por ele; emite
+  notificação visível.
+- Sem humano (gate com ``unattended_approval``, execução não interativa):
+  approval segue a política do gate (``deny``/``auto``) e ask_user falha na
+  hora, sem esperar timeout.
 - Múltiplas perguntas enfileiradas: exibe contagem ao processar cada item.
 - Múltiplos agentes e background tasks: mesmo caminho para todos,
   elimina colisões de termios/raw-mode.
@@ -24,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ..domain.agent_run_events import AgentRunEvent, coerce_agent_run_sink
-from .approval import format_approval_question
+from .approval import format_approval_question, unattended_approval_policy
 
 _logger = logging.getLogger(__name__)
 
@@ -32,6 +36,14 @@ _UNSET = object()
 
 _DEFAULT_APPROVAL_TIMEOUT = 180.0   # 3 min
 _DEFAULT_ASK_TIMEOUT = 180.0        # 3 min
+
+
+class AskUserUnanswered(Exception):
+    """ask_user terminou sem resposta humana (timeout, cancelamento ou sem humano).
+
+    Não há resposta segura para escolher em nome do usuário: uma opção
+    presumida seria tratada pelo agente como decisão humana.
+    """
 
 
 @dataclass
@@ -46,6 +58,8 @@ class _InputRequest:
     cancel_event: Any = None
     #: Reserva de stdin no gate sequencial (pipe); None sem reserva.
     reservation: Any = None
+    #: Motivo de um ask_user concluído sem resposta, quando o broker o conhece.
+    unanswered_reason: str = ""
     _result: list[Any] = field(default_factory=lambda: [_UNSET], init=False)
     _done: threading.Event = field(default_factory=threading.Event, init=False)
     _expired: threading.Event = field(default_factory=threading.Event, init=False)
@@ -249,21 +263,31 @@ class InputBroker:
 
         Sem ``options`` -> texto livre (retorna (-1, texto)). Com opções ->
         seleção/enquete (retorna (índice_0based, texto_da_opção)).
+        Sem resposta (timeout, execução cancelada, nenhum humano disponível)
+        levanta :class:`AskUserUnanswered`: nenhuma opção é escolhida pelo
+        usuário.
         """
         if timeout is None:
             timeout = _DEFAULT_ASK_TIMEOUT
-        # Sem opções não há resposta segura para auto-preencher: devolve vazio.
-        default_val: tuple[int, str] = (0, options[0]) if options else (-1, "")
         req = _InputRequest(
             kind="ask_user",
             source=source,
             question=question,
             options=list(options),
             timeout=timeout,
-            default=default_val,
+            default=None,
         )
         self._enqueue(req)
-        return req.wait()  # type: ignore[return-value]
+        result = req.wait()
+        if isinstance(result, tuple):
+            return result
+        if req.unanswered_reason:
+            reason = req.unanswered_reason
+        elif req.is_cancelled():
+            reason = "a execução que fez a pergunta foi cancelada"
+        else:
+            reason = f"o usuário não respondeu em {timeout:.0f}s"
+        raise AskUserUnanswered(reason)
 
     def _enqueue(self, req: _InputRequest) -> None:
         """Publica o pedido; no gate sequencial (pipe) reserva o stdin antes.
@@ -301,6 +325,9 @@ class InputBroker:
     def _consumer_can_handle(self, req: _InputRequest) -> bool:
         gate = self._input_gate
         if gate is None:
+            return True
+        if unattended_approval_policy(gate) is not None:
+            # Sem humano não há prompt a disputar: a resposta sai da política.
             return True
         if getattr(gate, "sequential", False) is True:
             # Gate sequencial (pipe): as leituras diretas são thread-safe e
@@ -371,12 +398,25 @@ class InputBroker:
             )
         )
         try:
-            result: bool | tuple[int, str]
-            if req.kind == "approval":
+            result: bool | tuple[int, str] | None
+            policy = unattended_approval_policy(self._input_gate)
+            if policy is not None:
+                result = self._answer_unattended(req, policy)
+            elif req.kind == "approval":
                 result = self._handle_approval(req, allow_direct_gate=allow_direct_gate)
             else:
                 result = self._handle_ask_user(req, allow_direct_gate=allow_direct_gate)
             req.set_result(result)
+            if result is None:
+                self._agent_run_sink.emit(
+                    AgentRunEvent(
+                        "human_action_unanswered",
+                        req.source,
+                        text=req.unanswered_reason,
+                        metadata={"kind": req.kind, "reason": req.unanswered_reason},
+                    )
+                )
+                return
             self._agent_run_sink.emit(
                 AgentRunEvent(
                     "human_action_answered",
@@ -389,6 +429,8 @@ class InputBroker:
                 )
             )
         except Exception as exc:
+            if req.kind == "ask_user":
+                req.unanswered_reason = f"falha ao ler a resposta do usuário: {exc}"
             req.set_result(req.default)
             self._agent_run_sink.emit(
                 AgentRunEvent(
@@ -399,6 +441,25 @@ class InputBroker:
                 )
             )
             self._emit(f"  [broker de input: erro inesperado: {exc}]")
+
+    def _answer_unattended(self, req: _InputRequest, policy: str) -> bool | None:
+        """Responde sem humano: approval pela política; ask_user fica sem resposta."""
+        if req.kind == "approval":
+            approved = policy == "auto"
+            outcome = "aprovado" if approved else "negado"
+            self._emit(
+                f"  [execução não interativa — {outcome} automaticamente]"
+                f" {req.question.strip()} ({req.source})"
+            )
+            return approved
+        req.unanswered_reason = (
+            "execução não interativa: não há humano para responder"
+        )
+        self._emit(
+            f"  [execução não interativa — pergunta sem resposta]"
+            f" {req.question.strip()} ({req.source})"
+        )
+        return None
 
     def _handle_approval(self, req: _InputRequest, *, allow_direct_gate: bool = False) -> bool:
         start = time.monotonic()
@@ -471,7 +532,7 @@ class InputBroker:
 
     def _handle_ask_user(
         self, req: _InputRequest, *, allow_direct_gate: bool = False
-    ) -> tuple[int, str]:
+    ) -> tuple[int, str] | None:
         start = time.monotonic()
         deadline = start + req.timeout
         if req.options:
@@ -485,19 +546,13 @@ class InputBroker:
                 allow_direct_gate=allow_direct_gate, ticket=req,
             )
         if result is None:
-            idx, val = req.default
             elapsed = time.monotonic() - start
-            if req.options:
-                self._emit(
-                    f"\n  [sem resposta em {elapsed:.0f}s —"
-                    f" selecionado automaticamente: '{val}'] ({req.source})"
-                )
-            else:
-                self._emit(
-                    f"\n  [sem resposta em {elapsed:.0f}s —"
-                    f" seguindo sem resposta] ({req.source})"
-                )
-            return idx, val
+            req.unanswered_reason = f"o usuário não respondeu em {elapsed:.0f}s"
+            self._emit(
+                f"\n  [sem resposta em {elapsed:.0f}s —"
+                f" o agente segue sem a resposta] ({req.source})"
+            )
+            return None
         return result
 
     def _read_free_text(

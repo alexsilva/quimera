@@ -509,7 +509,13 @@ class ToolExecutor:
                 return ToolResult(
                     ok=False,
                     tool_name=normalized_call.name,
-                    error="Execução negada pelo usuário",
+                    # O manager só devolve o veredito: a negativa pode ter
+                    # vindo do humano, do prazo ou da política de uma
+                    # execução sem humano. O texto não atribui a ninguém.
+                    error=(
+                        "Execução não aprovada: o pedido de aprovação foi negado "
+                        "ou ficou sem resposta"
+                    ),
                 )
 
             handler = self.registry.get(normalized_call.name)

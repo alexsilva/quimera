@@ -27,7 +27,7 @@ class AppLifecycle:
         self._closed = False
         self._app._setup_task_executors()
 
-    def close(self, *, interrupted: bool = False) -> None:
+    def close(self, *, interrupted: bool = False, summarize_session: bool = True) -> None:
         """Fecha recursos uma única vez, na ordem inversa da inicialização."""
         if self._closed:
             return
@@ -56,7 +56,9 @@ class AppLifecycle:
         try:
             session_services = getattr(app, "session_services", None)
             if session_services is not None:
-                session_services.shutdown(interrupted=interrupted)
+                session_services.shutdown(
+                    interrupted=interrupted, summarize=summarize_session
+                )
         finally:
             from ..runtime.mcp.session import stop_external_mcp_http
 

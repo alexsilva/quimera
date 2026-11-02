@@ -66,6 +66,12 @@ def _static_callable_attr(obj, name: str):
     return value if callable(value) else None
 
 
+def unattended_approval_policy(gate) -> str | None:
+    """Política de aprovação de um gate sem humano (``deny``/``auto``); None se há humano."""
+    policy = getattr(gate, "unattended_approval", None)
+    return policy if policy in {"deny", "auto"} else None
+
+
 class ApprovalHandler(ABC):
     """Define o contrato de aprovação usado pelo runtime de ferramentas."""
 
@@ -264,6 +270,20 @@ class ConsoleApprovalHandler(ApprovalHandler):
         mortas (ex.: steps de delegate cancelados por timeout) não apareçam
         para o usuário depois que a execução principal terminou.
         """
+        if self._input_broker is None:
+            # Sem broker (executores de background montados à parte) a
+            # política de uma execução sem humano vale do mesmo jeito.
+            policy = unattended_approval_policy(self._input_gate)
+            if policy is not None:
+                if self._is_cancelled():
+                    return False
+                approved = policy == "auto"
+                outcome = "aprovado" if approved else "negado"
+                self._show(
+                    f"  [execução não interativa — {outcome} automaticamente] "
+                    f"{format_approval_question(tool_name, summary).strip()}"
+                )
+                return approved
         if self._input_broker is not None:
             if self._is_cancelled():
                 return False

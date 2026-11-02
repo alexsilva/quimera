@@ -317,22 +317,40 @@ def test_input_broker_emits_human_action_events_without_changing_default_flow():
         question="Escolha o próximo passo",
         options=["testar", "parar"],
         timeout=0.01,
-        default=(0, "testar"),
+        default=None,
     )
 
     broker._process_request(req, allow_direct_gate=True)
 
-    assert req.wait() == (0, "testar")
+    # Sem quem responda, nenhuma opção é escolhida em nome do usuário.
+    assert req.wait() is None
     assert [event.kind for event in sink.events] == [
         "human_action_requested",
-        "human_action_answered",
+        "human_action_unanswered",
     ]
     assert sink.events[0].agent == "codex"
     assert sink.events[0].text == "Escolha o próximo passo"
     assert sink.events[0].metadata["kind"] == "ask_user"
     assert sink.events[0].metadata["options"] == ["testar", "parar"]
-    assert sink.events[1].text == "(0, 'testar')"
-    assert sink.events[1].metadata["result"] == (0, "testar")
+    assert sink.events[1].metadata["kind"] == "ask_user"
+    assert sink.events[1].metadata["reason"].startswith("o usuário não respondeu em")
+
+
+def test_input_broker_emits_answered_event_with_the_choice():
+    import io
+
+    from quimera.app.simple_input_gate import SimpleInputGate
+
+    sink = RecordingSink()
+    gate = SimpleInputGate(stdin=io.StringIO("2\n"))
+    broker = InputBroker(renderer=None, input_gate=gate, agent_run_sink=sink)
+
+    assert broker.request_ask_user("Qual?", ["testar", "parar"], source="codex", timeout=5) == (1, "parar")
+    assert [event.kind for event in sink.events] == [
+        "human_action_requested",
+        "human_action_answered",
+    ]
+    assert sink.events[1].metadata["result"] == (1, "parar")
 
 
 def test_agent_run_controller_tracks_registry_and_renderer_context():

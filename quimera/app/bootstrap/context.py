@@ -26,3 +26,6 @@ class AppOptions:
     profile_registry: ProfileRegistry | None = None
     renderer_override: object = None
     input_gate_factory: Callable[..., Any] | None = None
+    #: ``interactive`` (chat) ou ``headless`` (``quimera --prompt``); ver
+    #: ``quimera.storage``.
+    session_mode: str = "interactive"

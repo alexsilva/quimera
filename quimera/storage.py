@@ -3,22 +3,37 @@ import json
 import re
 from datetime import datetime, timedelta, MINYEAR
 from pathlib import Path
+from uuid import uuid4
 
 SHARED_STATE_TTL_HOURS = 24
 HISTORY_TTL_HOURS = 72
 
 _SESSION_TIMESTAMP_RE = re.compile(r"sessao-(\d{4}-\d{2}-\d{2}-\d{6})\.json$")
 
+#: Sessão de chat com humano (TUI ou pipe).
+INTERACTIVE_SESSION = "interactive"
+#: Execução única sem humano (``quimera --prompt``): gravada para auditoria,
+#: mas fora da restauração de histórico das sessões seguintes.
+HEADLESS_SESSION = "headless"
+SESSION_MODES = (INTERACTIVE_SESSION, HEADLESS_SESSION)
+
 
 class SessionStorage:
     """Centraliza logs textuais e snapshots JSON de uma sessão."""
 
-    def __init__(self, logs_dir: Path):
+    def __init__(self, logs_dir: Path, *, mode: str = INTERACTIVE_SESSION):
         """Inicializa uma instância de SessionStorage."""
+        if mode not in SESSION_MODES:
+            raise ValueError(f"modo de sessão inválido: {mode!r}")
+        self.mode = mode
         self._pending_restore_notice = None
         now = datetime.now()
         date_str = now.strftime("%Y-%m-%d")
         self.session_id = f"sessao-{now.strftime('%Y-%m-%d-%H%M%S')}"
+        if mode == HEADLESS_SESSION:
+            # Scripts podem começar no mesmo instante entre si ou com o chat.
+            # Não sobrescrever snapshots nem compartilhar logs por identidade.
+            self.session_id += f"-headless-{uuid4().hex}"
         self.session_dir = logs_dir / date_str
         # ``logs_dir`` é infraestrutura do Workspace e já deve existir.
         # O storage cria apenas o subdiretório que pertence ao seu domínio.
@@ -49,6 +64,7 @@ class SessionStorage:
         """Persiste history."""
         payload = {
             "session_id": self.history_file.stem,
+            "mode": self.mode,
             "saved_at": datetime.now().isoformat(timespec="seconds"),
             "messages": history,
             "shared_state": shared_state or {},
@@ -80,8 +96,14 @@ class SessionStorage:
         return datetime(MINYEAR, 1, 1)
 
     def load_last_session(self):
-        """Restaura o snapshot mais recente salvo em JSON, se existir."""
+        """Restaura o snapshot mais recente salvo em JSON, se existir.
+
+        Execuções sem humano não restauram nada (cada uma começa limpa) e não
+        são restauradas: o prompt de um script não vira conversa do chat.
+        """
         self._pending_restore_notice = None
+        if self.mode == HEADLESS_SESSION:
+            return {"messages": [], "shared_state": {}}
         now = datetime.now()
         history_ttl = timedelta(hours=HISTORY_TTL_HOURS)
         shared_state_ttl = timedelta(hours=SHARED_STATE_TTL_HOURS)
@@ -101,6 +123,8 @@ class SessionStorage:
                 continue
 
             if not isinstance(data, dict):
+                continue
+            if data.get("mode") == HEADLESS_SESSION:
                 continue
             # O diretório recebido já pertence ao Workspace atual; o
             # storage não precisa inferir identidade pelo cwd do processo.

@@ -30,7 +30,7 @@ def test_executor_tool_denied_by_approval(executor_with_approval, tool_name, arg
     call = ToolCall(name=tool_name, arguments=arguments)
     result = executor_with_approval.execute(call)
     assert result.ok is False
-    assert "Execução negada" in result.error
+    assert "Execução não aprovada" in result.error
 
 
 def test_executor_unexpected_exception(executor_with_approval):
@@ -289,7 +289,7 @@ def test_executor_remove_file_approval(executor_with_approval, approved, tmp_pat
         assert not (tmp_path / "x.txt").exists()
     else:
         assert result.ok is False
-        assert "Execução negada" in result.error
+        assert "Execução não aprovada" in result.error
 
 
 def test_executor_remove_file_no_approval_config_skips_handler(executor_no_approval, tmp_path):
@@ -480,7 +480,7 @@ def test_executor_permission_error_approval(config, approval_handler, approved):
         assert result.ok is True
     else:
         assert result.ok is False
-        assert "Execução negada" in result.error
+        assert "Execução não aprovada" in result.error
         approval_handler.approve.assert_called_once()
         call_kwargs = approval_handler.approve.call_args.kwargs
         assert "Permissão necessária" in call_kwargs["summary"]
@@ -532,7 +532,7 @@ def test_executor_write_stdin_approval(require_approval, expected_approve_called
 
     if expected_approve_called:
         assert result.ok is False
-        assert "Execução negada" in result.error
+        assert "Execução não aprovada" in result.error
         approval_handler.approve.assert_called_once()
     else:
         approval_handler.approve.assert_not_called()

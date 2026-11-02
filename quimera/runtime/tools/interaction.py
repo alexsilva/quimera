@@ -5,6 +5,7 @@ import sys
 from typing import Callable
 
 from ..config import ToolRuntimeConfig
+from ..input_broker import AskUserUnanswered
 from ..models import ToolCall, ToolResult
 from .base import ToolBase
 
@@ -65,6 +66,16 @@ class InteractionTools(ToolBase):
                     tool_name=call.name,
                     content=value,
                     data={"index": index, "value": value},
+                )
+            except AskUserUnanswered as exc:
+                return ToolResult(
+                    ok=False,
+                    tool_name=call.name,
+                    error=(
+                        f"Pergunta sem resposta: {exc}. Nenhuma opção foi escolhida; "
+                        "não presuma a resposta do usuário."
+                    ),
+                    data={"unanswered": True},
                 )
             except (EOFError, KeyboardInterrupt):
                 return ToolResult(ok=False, tool_name=call.name, error="Interrompido pelo usuário")

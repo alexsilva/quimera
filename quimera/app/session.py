@@ -256,8 +256,12 @@ class AppSessionServices:
         if t is not None:
             t.join(timeout=timeout)
 
-    def shutdown(self, *, interrupted: bool = False):
-        """Finaliza a sessão tentando resumir o histórico no contexto persistente."""
+    def shutdown(self, *, interrupted: bool = False, summarize: bool = True):
+        """Finaliza a sessão tentando resumir o histórico no contexto persistente.
+
+        ``summarize=False`` (execução sem humano) grava o histórico mas não
+        gera resumo: uma execução única não reescreve o contexto do workspace.
+        """
         self._task_services.stop_task_executors()
         self._flush_pending_history()
 
@@ -269,7 +273,7 @@ class AppSessionServices:
 
         history_snapshot = self._session_state.history_snapshot()
 
-        if not history_snapshot or interrupted:
+        if not history_snapshot or interrupted or not summarize:
             return
 
         renderer = self._renderer

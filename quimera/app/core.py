@@ -35,6 +35,7 @@ class QuimeraApp(CoreFacadeMixin):
                  profile_registry: ProfileRegistry | None = None,
                  renderer_override=None,
                  input_gate_factory=None,
+                 session_mode: str = "interactive",
                  ):
         """Inicializa uma instância de QuimeraApp montando os bundles via `AppAssembler`."""
         workspace = workspace or Workspace(cwd)
@@ -53,6 +54,7 @@ class QuimeraApp(CoreFacadeMixin):
             profile_registry=profile_registry,
             renderer_override=renderer_override,
             input_gate_factory=input_gate_factory,
+            session_mode=session_mode,
         )
         self._execution_mode_state = self._create_execution_mode_state()
         self.internal_mcp_server = None

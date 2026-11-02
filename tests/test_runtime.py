@@ -311,7 +311,7 @@ class ExecutorTests(unittest.TestCase):
         ex = self._executor(approve=False)
         result = ex.execute(ToolCall(name="write_file", arguments={"path": "novo.txt", "content": "x"}))
         self.assertFalse(result.ok)
-        self.assertIn("negada", result.error)
+        self.assertIn("não aprovada", result.error)
 
     def test_grep_search(self):
         """Verifica que Test grep search."""

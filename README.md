@@ -62,6 +62,23 @@ Alternativa equivalente:
 python quimera.py
 ```
 
+### Execução única, sem interface
+
+Para scripts e automação: envia um prompt, espera a resposta final e encerra.
+
+```bash
+quimera --agents codex-gpt-5-6 claude-sonnet --prompt "revise o módulo X"
+git diff | quimera --agents claude-sonnet --prompt -           # prompt pela entrada padrão
+quimera --agents a b --prompt "..." --output json --timeout 600 --approve auto
+```
+
+- **Candidatos:** a lista de `--agents` é uma ordem de preferência. O prompt vai ao primeiro; se ele falhar (sem resposta, erro do provedor, resposta vazia), vai ao próximo. Sem `--agents`, vale a seleção salva; sem nenhuma das duas, é erro de uso.
+- **Execução:** o mesmo turno do chat (prompt de primeiro falante, MCP da sessão e tools), sem banner, sem leitura de input e sem resumo de sessão no fim. O MCP HTTP externo só sobe com `--mcp-http` explícito, para não disputar a porta com a sessão interativa do workspace.
+- **Saída:** só a resposta final vai para a saída padrão; o progresso vai para a saída de erro. `--output json` devolve `{ok, agent, response, attempts: [{agent, ok, error, duration_ms}], session_id, error, exit_code}`.
+- **Códigos de saída:** `0` respondeu, `1` todos os candidatos falharam, `2` erro de uso, `124` `--timeout` esgotado, `130` Ctrl+C, `143` SIGTERM. O `--timeout` vale para o turno (soma de todas as tentativas), sem contar a inicialização e o encerramento; uma resposta aceita antes do corte vale.
+- **Sem humano:** aprovações de tools são negadas (`--approve deny`, padrão) ou aprovadas (`--approve auto`); `ask_user` falha na hora, sem escolher opção nenhuma. Atenção: `--approve auto` aprova tudo o que pedir aprovação (shell, escrita, remoção, rede); a política do workspace continua barrando o que ela proíbe.
+- **Histórico:** a execução é gravada como sessão `"mode": "headless"` para auditoria, não restaura o histórico anterior e não é restaurada pelas sessões seguintes.
+
 ## CLI (flags)
 
 Principais flags:
@@ -74,6 +91,8 @@ Principais flags:
 - `--set-theme <tema>`: persiste tema e encerra.
 - `--connect <agente>`: cria/edita conexão persistida do agente.
 - `--list-connections`: lista conexões persistidas.
+- `--prompt TEXTO|-`: execução única sem interface nos agentes de `--agents` (ver [Execução única](#execução-única-sem-interface)); com `--driver-repl`, é o prompt one-shot do REPL.
+- `--output text|json`, `--timeout SEGUNDOS`, `--approve deny|auto`: saída, tempo máximo e política de aprovação de `--prompt`.
 - `--driver-repl <profile>`: REPL para testar driver `openai_compat`.
 - `--mcp-socket [path]` / `--mcp-http`: socket Unix (padrão); `--mcp-http` expõe servidor HTTP adicional sem substituir o socket Unix interno.
 - `--no-mcp`: desativa o servidor MCP.
@@ -164,6 +183,12 @@ Exemplo rápido:
 
 ```bash
 python quimera.py --test --agents fake-cli-delegate fake-openai --visibility full
+```
+
+Execução única com os fake, útil para testar fallback e timeout (`QUIMERA_FAKE_CLI_FAIL=1` faz o `fake-cli` falhar; `QUIMERA_FAKE_CLI_SLEEP=N` o atrasa):
+
+```bash
+QUIMERA_FAKE_CLI_FAIL=1 python quimera.py --test --agents fake-cli fake-openai --prompt "diga oi" --output json
 ```
 
 Com `--test`, o app registra os fake profiles, inicia automaticamente o backend OpenAI-compatible fake em uma porta livre e aplica overrides somente no processo. O comando `python -m quimera.devtools.fake_agents openai-server` continua disponível apenas para debug manual.

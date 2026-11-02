@@ -34,8 +34,18 @@ def _read_prompt(args: argparse.Namespace) -> str:
 
 
 def run_cli_agent(args: argparse.Namespace) -> int:
-    """Executa um agente CLI fake que simula papéis diferentes."""
+    """Executa um agente CLI fake que simula papéis diferentes.
+
+    Para testes de falha: ``QUIMERA_FAKE_CLI_SLEEP`` (segundos) atrasa a
+    resposta e ``QUIMERA_FAKE_CLI_FAIL`` faz o agente sair com erro, sem stdout.
+    """
     prompt = _read_prompt(args)
+    delay = os.environ.get("QUIMERA_FAKE_CLI_SLEEP")
+    if delay:
+        time.sleep(float(delay))
+    if os.environ.get("QUIMERA_FAKE_CLI_FAIL"):
+        print("quimera-fake-cli: falha simulada (QUIMERA_FAKE_CLI_FAIL)", file=sys.stderr)
+        return 3
     role = args.role.strip().lower()
     print(f"[quimera-fake-cli] role={role} model={args.model}")
     print(f"Prompt recebido ({len(prompt)} chars).")
@@ -400,27 +410,32 @@ def _build_completion(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_stream_completion(payload: dict[str, Any], completion_id: str | None = None) -> list[dict[str, Any]]:
-    completion = _build_completion({**payload, "tools": []})
+    """Mesma resposta de ``_build_completion`` em chunks SSE, inclusive tool calls.
+
+    O driver sempre pede streaming: sem ``delta.tool_calls`` aqui o fake nunca
+    chamaria tool. Cada chamada vai num chunk, com id, nome e argumentos.
+    """
+    completion = _build_completion(payload)
     model = completion["model"]
-    text = completion["choices"][0]["message"].get("content") or ""
+    choice = completion["choices"][0]
+    message = choice["message"]
+    text = message.get("content") or ""
     cid = completion_id or completion["id"]
     created = int(time.time())
-    chunks = []
-    for part in [text[i:i + 80] for i in range(0, len(text), 80)] or [""]:
-        chunks.append({
+
+    def _chunk(delta: dict[str, Any], finish_reason: str | None = None) -> dict[str, Any]:
+        return {
             "id": cid,
             "object": "chat.completion.chunk",
             "created": created,
             "model": model,
-            "choices": [{"index": 0, "delta": {"content": part}, "finish_reason": None}],
-        })
-    chunks.append({
-        "id": cid,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model,
-        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-    })
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }
+
+    chunks = [_chunk({"content": part}) for part in [text[i:i + 80] for i in range(0, len(text), 80)] or [""]]
+    for index, call in enumerate(message.get("tool_calls") or []):
+        chunks.append(_chunk({"tool_calls": [{"index": index, **call}]}))
+    chunks.append(_chunk({}, choice.get("finish_reason") or "stop"))
     return chunks
 
 

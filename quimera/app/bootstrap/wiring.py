@@ -64,7 +64,7 @@ from ...modes import DEBATE_MODE
 from ...context import ContextManager
 from ...metrics import BehaviorMetricsTracker
 from ...prompt import PromptBuilder
-from ...runtime.errors import DelegationDispatchError
+from ...runtime.errors import DelegationDispatchError, format_dispatch_failure
 from ...runtime.input_broker import InputBroker
 from ...runtime.process_supervisor import ProcessSupervisor
 from ...runtime.workspace_policy import WorkspacePolicy
@@ -118,7 +118,7 @@ def _make_background_delegate_fn(task_services, dispatch_services):
                 consume = getattr(bg, "consume_last_run_failure", None)
                 receipt = consume() if callable(consume) else None
                 raise DelegationDispatchError(
-                    _format_dispatch_failure(agent, receipt),
+                    format_dispatch_failure(agent, receipt),
                     receipt=receipt,
                 )
             return result
@@ -127,30 +127,6 @@ def _make_background_delegate_fn(task_services, dispatch_services):
             if callable(close):
                 close()
     return _fn
-
-
-def _format_dispatch_failure(agent, receipt: dict | None) -> str:
-    """Resume o recibo de falha em uma frase legível para o delegador."""
-    if not receipt:
-        return f"Agent '{agent}' returned no response"
-    kind = str(receipt.get("error_kind") or "unknown")
-    parts = [f"Agent '{agent}' failed ({kind})"]
-    message = str(receipt.get("message") or "").strip()
-    if message:
-        parts.append(message)
-    exit_code = receipt.get("exit_code")
-    signal_name = receipt.get("signal")
-    if exit_code is not None:
-        exit_label = f"exit={exit_code}"
-        if signal_name:
-            exit_label += f"/{signal_name}"
-        parts.append(exit_label)
-    duration = receipt.get("duration_s")
-    if duration is not None:
-        parts.append(f"após {duration}s")
-    return ": ".join(parts[:2]) + (
-        f" [{', '.join(parts[2:])}]" if len(parts) > 2 else ""
-    )
 
 
 def _make_active_profiles_fn(profile_resolver, agent_pool):
@@ -236,7 +212,7 @@ class AppAssembler:
         )
         workspace_policy = WorkspacePolicy.from_name(workspace_policy_name)
         active_theme = opts.theme if opts.theme is not None else config.theme
-        storage = SessionStorage(workspace.logs_dir)
+        storage = SessionStorage(workspace.logs_dir, mode=opts.session_mode)
         session_started_at = time.monotonic()
         bug_store = BugStore(session_paths.logs_dir)
         bug_detector = RenderBugDetector(repeat_threshold=2)

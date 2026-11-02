@@ -1,11 +1,15 @@
 """Componentes de `quimera.cli`."""
 import argparse
+import contextlib
+import functools
 import importlib.util
 import json
 import locale
 import logging
+import math
 import os
 import sys
+import threading
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -27,7 +31,9 @@ from .profiles.base import (
 from . import themes as _themes
 from .app import QuimeraApp
 from .ui.textual import TextualUiBridge, run_textual_quimera_app
+from .app.headless import HeadlessResult, run_headless_prompt
 from .app.simple_input_gate import SimpleInputGate
+from .app.unattended_input_gate import UnattendedInputGate
 from .runtime.mcp import start_embedded_mcp
 from .runtime.mcp.client import (
     connect_mcp_clients_in_background,
@@ -39,6 +45,7 @@ from .runtime.mcp.settings import (
     validate_http_settings,
 )
 from .config import ConfigManager
+from .storage import HEADLESS_SESSION
 from .workspace import Workspace
 from .prompt_templates import PromptText
 from .version import __version__
@@ -352,8 +359,49 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Inicia REPL interativo para testar um profile openai_compat (ex: ollama-qwen)")
     parser.add_argument("--working-dir", dest="working_dir", metavar="DIR", default=None,
                         help="Diretório de trabalho para o REPL (padrão: cwd)")
-    parser.add_argument("--prompt", dest="repl_prompt", metavar="TEXTO", default=None,
-                        help="Prompt one-shot para --driver-repl (não-interativo, útil para scripts)")
+    parser.add_argument(
+        "--prompt",
+        dest="repl_prompt",
+        metavar="TEXTO",
+        default=None,
+        help=(
+            "Execução única, sem interface: envia TEXTO aos agentes de --agents (ou à seleção "
+            "salva), em ordem de fallback, e imprime só a resposta final. '-' lê o prompt da "
+            "entrada padrão. Com --driver-repl, é o prompt one-shot do REPL."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        dest="output",
+        choices=["text", "json"],
+        default=None,
+        help=(
+            "Formato da saída de --prompt: text (padrão, só a resposta) ou json "
+            "({ok, agent, response, attempts, session_id, error, exit_code})."
+        ),
+    )
+    parser.add_argument(
+        "--timeout",
+        dest="timeout",
+        type=float,
+        metavar="SEGUNDOS",
+        default=None,
+        help=(
+            "Tempo máximo do turno de --prompt, somando todas as tentativas (código de saída "
+            "124); não conta a inicialização nem o encerramento."
+        ),
+    )
+    parser.add_argument(
+        "--approve",
+        dest="approve",
+        choices=["deny", "auto"],
+        default=None,
+        help=(
+            "Aprovações de tools em --prompt, sem humano para responder: deny (padrão) nega, "
+            "auto aprova tudo o que pedir aprovação (shell, escrita, remoção, rede), dentro "
+            "da política do workspace. ask_user sempre falha na hora."
+        ),
+    )
     parser.add_argument("--connect", dest="connect", metavar="AGENTE", default=None,
                         help="Configura interativamente a conexão de um agente e persiste no base_dir")
     parser.add_argument("--profile", dest="profile", metavar="PERFIL", default=None,
@@ -529,7 +577,50 @@ def _parse_args(parser: argparse.ArgumentParser) -> argparse.Namespace:
 
     if args.history_window is not None and args.history_window <= 0:
         parser.error("--history-window deve ser maior que zero")
+    _validate_headless_args(parser, args)
     return args
+
+
+_SETTING_COMMAND_FLAGS = (
+    ("name", "--name"),
+    ("whoami", "--whoami"),
+    ("set_theme", "--set-theme"),
+    ("set_history_window", "--set-history-window"),
+    ("set_idle_timeout", "--set-idle-timeout"),
+    ("connect", "--connect"),
+    ("list_connections", "--list-connections"),
+)
+
+
+def _validate_headless_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Rejeita combinações em que ``--prompt`` e companhia seriam ignorados."""
+    headless_only = [
+        flag
+        for flag, value in (
+            ("--output", args.output),
+            ("--timeout", args.timeout),
+            ("--approve", args.approve),
+        )
+        if value is not None
+    ]
+    if args.repl_prompt is None:
+        if headless_only:
+            parser.error(f"{', '.join(headless_only)} exige --prompt")
+        return
+    if args.driver_repl:
+        if headless_only:
+            parser.error(f"{', '.join(headless_only)} não vale com --driver-repl")
+        return
+    if args.interactive_test:
+        parser.error("--prompt não combina com --interactive-test; use --test-prompt")
+    for attr, flag in _SETTING_COMMAND_FLAGS:
+        value = getattr(args, attr, None)
+        if value not in (None, False):
+            parser.error(f"--prompt não combina com {flag}")
+    if args.timeout is not None and not (
+        math.isfinite(args.timeout) and 0 < args.timeout <= threading.TIMEOUT_MAX
+    ):
+        parser.error("--timeout deve ser um número de segundos maior que zero")
 
 
 def _list_connections() -> None:
@@ -617,7 +708,11 @@ def _select_agents(
     config: ConfigManager,
     agents_available: list[str],
 ) -> list[str]:
-    """Resolve a lista de agentes da sessão: ``--agents`` ou a seleção persistida."""
+    """Resolve a lista de agentes da sessão: ``--agents`` ou a seleção persistida.
+
+    Sem nenhum dos dois, a sessão interativa abre com todos os agentes; a
+    execução única (``--prompt``) exige uma escolha explícita.
+    """
     if args.agents is not None:
         agents = _expand_patterns(args.agents, agents_available)
         agents_unknown = [a for a in agents if a not in agents_available]
@@ -630,7 +725,11 @@ def _select_agents(
         saved_agents = config.selected_agents
         agents = [a for a in (saved_agents or []) if a in agents_available]
         if not agents:
+            if args.repl_prompt is not None:
+                parser.error("--prompt exige --agents (ou uma seleção de agentes salva)")
             agents = _expand_patterns(["*"], agents_available)
+    if not agents and args.repl_prompt is not None:
+        parser.error("--prompt exige ao menos um agente em --agents")
     return agents
 
 
@@ -698,6 +797,146 @@ def _run_interactive_test(renderer, workspace: Workspace, args: argparse.Namespa
     renderer.show_plain(result)
 
 
+def _resolve_mcp_http_settings(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, workspace: Workspace
+):
+    """Configuração do MCP HTTP externo: persistida, com as flags da sessão por cima."""
+    # Flags explícitas do HTTP valem só para esta sessão, por cima do que
+    # está persistido (global ← workspace). Persistir é papel do MCP Hub:
+    # uma flag gravada reapareceria em partidas sem flag e disputaria a
+    # porta com outro workspace que também a tivesse herdado.
+    explicit_http = {
+        "enabled": True if args.mcp_http else None,
+        "host": args.mcp_host,
+        "port": args.mcp_port,
+        "allow_tools": args.mcp_http_allow_tools,
+    }
+    explicit_http = {key: value for key, value in explicit_http.items() if value is not None}
+    try:
+        explicit_http = validate_http_settings(**explicit_http)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return replace(MCPHttpSettingsStore.from_workspace(workspace).load(), **explicit_http)
+
+
+def _start_session_mcp(app, workspace: Workspace, args: argparse.Namespace, mcp_http_settings) -> None:
+    """Sobe o servidor MCP embutido da sessão (socket e, se ativo, HTTP externo)."""
+    start_embedded_mcp(
+        app,
+        workspace,
+        app.session_paths,
+        enabled=not args.no_mcp,
+        transport="socket",
+        socket_path=args.mcp_socket,
+        http_host=mcp_http_settings.host,
+        http_port=mcp_http_settings.port,
+        http_allowed_tools=mcp_http_settings.allow_tools,
+        external_http_enabled=mcp_http_settings.enabled,
+        oauth_options=dict(
+            issuer=args.mcp_oauth_issuer,
+            client_specs=args.mcp_oauth_clients,
+            redirect_uris=args.mcp_oauth_redirect_uris,
+            passcode_env=args.mcp_oauth_passcode_env,
+            auto_approve=args.mcp_oauth_auto_approve or None,
+            allow_dynamic_registration=None if args.mcp_oauth_allow_register else False,
+            store_path=args.mcp_oauth_store,
+        ),
+    )
+
+
+def _read_headless_prompt(parser: argparse.ArgumentParser, raw: str) -> str:
+    """Texto de ``--prompt``; ``-`` lê a entrada padrão inteira."""
+    text = sys.stdin.read() if raw == "-" else raw
+    if not text.strip():
+        parser.error("--prompt vazio")
+    return text.strip()
+
+
+def _write_headless_result(result: HeadlessResult, output: str, stdout, stderr) -> None:
+    """Só a resposta (ou o JSON) vai para ``stdout``; falhas em texto vão para ``stderr``."""
+    if output == "json":
+        stdout.write(json.dumps(result.to_dict(), ensure_ascii=False) + "\n")
+        stdout.flush()
+        return
+    if result.ok and result.response is not None:
+        stdout.write(result.response if result.response.endswith("\n") else result.response + "\n")
+        stdout.flush()
+        return
+    lines = [f"quimera: {result.error or 'falha'}"]
+    lines.extend(
+        f"  {attempt.agent}: {attempt.error}" for attempt in result.attempts if not attempt.ok
+    )
+    stderr.write("\n".join(lines) + "\n")
+    stderr.flush()
+
+
+def _run_headless(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    cwd: Path,
+    workspace: Workspace,
+    config: ConfigManager,
+    agents: list[str],
+) -> int:
+    """Executa ``--prompt`` sem interface e devolve o código de saída.
+
+    Tudo o que não é a resposta (progresso do agente, avisos, prints de
+    terceiros) vai para stderr; stdout recebe só a resposta final ou o JSON.
+    """
+    _ensure_required_runtime_dependencies()
+    prompt = _read_headless_prompt(parser, args.repl_prompt)
+    real_stdout = sys.stdout
+    visibility = Visibility(args.visibility) if args.visibility else Visibility(config.visibility)
+    fake_openai_backend = None
+    if args.test and _test_mode_uses_fake_openai(agents):
+        fake_openai_backend = _start_test_fake_openai_backend()
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            mcp_client_runtime = start_mcp_clients(
+                cli_specs=args.mcp_clients,
+                cli_env_specs=args.mcp_client_env,
+                store=MCPConnectionStore.from_workspace(workspace),
+                workspace=workspace,
+            )
+            # Só o socket interno é da execução; o HTTP externo persistido é
+            # da sessão interativa do workspace e disputaria a porta com ela.
+            mcp_http_settings = replace(
+                _resolve_mcp_http_settings(parser, args, workspace),
+                enabled=bool(args.mcp_http),
+            )
+            app = QuimeraApp(
+                cwd,
+                debug=args.debug,
+                history_window=args.history_window,
+                agents=agents,
+                threads=args.threads if args.threads is not None else config.threads,
+                idle_timeout_seconds=args.idle_timeout,
+                workspace=workspace,
+                visibility=visibility,
+                theme=args.theme,
+                renderer_override=PlainTextRenderer(stream=sys.stderr),
+                input_gate_factory=functools.partial(
+                    UnattendedInputGate, approval=args.approve or "deny"
+                ),
+                session_mode=HEADLESS_SESSION,
+            )
+            connect_mcp_clients_in_background(
+                mcp_client_runtime,
+                executor=app.tool_executor,
+                workspace=workspace,
+            )
+            try:
+                _start_session_mcp(app, workspace, args, mcp_http_settings)
+            except BaseException:
+                app.close(interrupted=True, summarize_session=False)
+                raise
+            result = run_headless_prompt(app, prompt, agents, timeout=args.timeout)
+    finally:
+        _stop_test_fake_openai_backend(fake_openai_backend)
+    _write_headless_result(result, args.output or "text", real_stdout, sys.stderr)
+    return result.exit_code
+
+
 def _run_session(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
@@ -722,24 +961,7 @@ def _run_session(
             store=MCPConnectionStore.from_workspace(workspace),
             workspace=workspace,
         )
-        # Flags explícitas do HTTP valem só para esta sessão, por cima do que
-        # está persistido (global ← workspace). Persistir é papel do MCP Hub:
-        # uma flag gravada reapareceria em partidas sem flag e disputaria a
-        # porta com outro workspace que também a tivesse herdado.
-        explicit_http = {
-            "enabled": True if args.mcp_http else None,
-            "host": args.mcp_host,
-            "port": args.mcp_port,
-            "allow_tools": args.mcp_http_allow_tools,
-        }
-        explicit_http = {key: value for key, value in explicit_http.items() if value is not None}
-        try:
-            explicit_http = validate_http_settings(**explicit_http)
-        except ValueError as exc:
-            parser.error(str(exc))
-        mcp_http_settings = replace(
-            MCPHttpSettingsStore.from_workspace(workspace).load(), **explicit_http
-        )
+        mcp_http_settings = _resolve_mcp_http_settings(parser, args, workspace)
 
         # Sem TTY o renderer Textual só enfileiraria eventos que ninguém
         # drena (não há app Textual de pé): o modo pipe usa o renderer de
@@ -774,27 +996,7 @@ def _run_session(
             _run_interactive_test(renderer, workspace, args, agents)
             return
 
-        start_embedded_mcp(
-            app,
-            workspace,
-            app.session_paths,
-            enabled=not args.no_mcp,
-            transport="socket",
-            socket_path=args.mcp_socket,
-            http_host=mcp_http_settings.host,
-            http_port=mcp_http_settings.port,
-            http_allowed_tools=mcp_http_settings.allow_tools,
-            external_http_enabled=mcp_http_settings.enabled,
-            oauth_options=dict(
-                issuer=args.mcp_oauth_issuer,
-                client_specs=args.mcp_oauth_clients,
-                redirect_uris=args.mcp_oauth_redirect_uris,
-                passcode_env=args.mcp_oauth_passcode_env,
-                auto_approve=args.mcp_oauth_auto_approve or None,
-                allow_dynamic_registration=None if args.mcp_oauth_allow_register else False,
-                store_path=args.mcp_oauth_store,
-            ),
-        )
+        _start_session_mcp(app, workspace, args, mcp_http_settings)
 
         _run_app_ui(app, textual_bridge)
     finally:
@@ -828,6 +1030,9 @@ def main():
 
     if _apply_setting_command(parser, args, config):
         return
+
+    if args.repl_prompt is not None:
+        raise SystemExit(_run_headless(parser, args, cwd, workspace, config, agents))
 
     _run_session(parser, args, cwd, workspace, config, agents)
 

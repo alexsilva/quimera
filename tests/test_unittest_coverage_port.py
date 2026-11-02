@@ -351,7 +351,7 @@ class RegistryAndExecutorCoverageTests(unittest.TestCase):
         self.approval.approve.return_value = False
         denied = executor.execute(ToolCall(name="write_file", arguments={"path": "a", "content": "b", "replace_existing": True}))
         self.assertFalse(denied.ok)
-        self.assertIn("Execução negada", denied.error)
+        self.assertIn("Execução não aprovada", denied.error)
         with patch.object(executor.registry, "get", return_value=MagicMock(side_effect=RuntimeError("boom"))):
             result = executor.execute(ToolCall(name="list_files", arguments={"path": "."}))
         self.assertFalse(result.ok)

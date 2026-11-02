@@ -14,8 +14,10 @@ import threading
 import time
 from unittest.mock import MagicMock
 
+import pytest
+
 from quimera.runtime.approval import ApprovalManager
-from quimera.runtime.input_broker import InputBroker, _InputRequest
+from quimera.runtime.input_broker import AskUserUnanswered, InputBroker, _InputRequest
 
 
 class _InactiveGate:
@@ -222,7 +224,8 @@ def test_background_approval_owns_the_next_stdin_line_in_pipe_mode():
 def test_timed_out_request_releases_the_stdin_reservation():
     broker, gate, _out = _sequential_setup("")
     # stdin vazio: o pedido expira e não pode deixar o chat preso na reserva.
-    assert broker.request_ask_user("Qual?", ["Python", "Rust"], timeout=0.3) == (0, "Python")
+    with pytest.raises(AskUserUnanswered):
+        broker.request_ask_user("Qual?", ["Python", "Rust"], timeout=0.3)
     assert _wait_until(lambda: gate._direct_waiters == 0)
 
 
@@ -265,7 +268,8 @@ def test_expired_request_does_not_consume_a_later_line():
     broker, gate, stdin, out = _live_setup()
     try:
         started = time.monotonic()
-        assert broker.request_ask_user("Qual?", ["Python", "Rust"], timeout=0.3) == (0, "Python")
+        with pytest.raises(AskUserUnanswered):
+            broker.request_ask_user("Qual?", ["Python", "Rust"], timeout=0.3)
         assert time.monotonic() - started < 1.5
         assert _wait_until(lambda: gate._direct_waiters == 0)
 
@@ -282,20 +286,23 @@ def test_answer_arriving_at_the_deadline_is_not_lost():
     broker, gate, stdin, out = _live_setup()
     try:
         results = []
-        worker = threading.Thread(
-            target=lambda: results.append(
-                broker.request_ask_user("Qual?", ["Python", "Rust"], timeout=0.4)
-            )
-        )
+
+        def _ask():
+            try:
+                results.append(broker.request_ask_user("Qual?", ["Python", "Rust"], timeout=0.4))
+            except AskUserUnanswered:
+                results.append(None)
+
+        worker = threading.Thread(target=_ask)
         worker.start()
         assert _wait_until(lambda: "Qual?" in out.getvalue())
         time.sleep(0.3)
         stdin.write_line("2")
         worker.join(timeout=5)
-        # Ou a resposta chegou a tempo (Rust) ou expirou antes (Python): nunca
-        # as duas coisas, e a linha nunca sobra para o chat se foi consumida.
-        assert results in ([(1, "Rust")], [(0, "Python")])
-        if results == [(0, "Python")]:
+        # Ou a resposta chegou a tempo (Rust) ou expirou antes (sem resposta):
+        # nunca as duas coisas, e a linha nunca sobra para o chat se foi consumida.
+        assert results in ([(1, "Rust")], [None])
+        if results == [None]:
             assert gate.read_chat_line(timeout=2, prompt="Alex: ") == "2"
         else:
             assert gate.read_chat_line(timeout=0.2, prompt="Alex: ") is None
