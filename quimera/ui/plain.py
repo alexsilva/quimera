@@ -45,7 +45,13 @@ class PlainTextRenderer(RendererBase):
         theme: str | None = None,
         get_profile_style: Callable[[str], tuple[str, str] | None] | None = None,
         audit_logger=None,
+        quiet: bool = False,
     ) -> None:
+        # ``quiet`` (execução ``--prompt``): nada chega ao stream, tudo vai só
+        # para o audit de render (``--debug``). Quem chama quer só a resposta,
+        # e num terminal o stderr aparece misturado a ela; as falhas dos
+        # candidatos voltam no resultado (``attempts``), não por aqui.
+        self._quiet = quiet
         # ``stream=None`` resolve ``sys.stdout`` a cada escrita, para
         # redirecionamentos e patches feitos depois da construção valerem.
         self._stream = stream
@@ -68,6 +74,9 @@ class PlainTextRenderer(RendererBase):
     def _write(self, value: Any, *, kind: str = "generic", **payload: Any) -> None:
         text = self._as_text(value)
         if not text.strip():
+            return
+        if self._quiet:
+            self.log_debug_event("print", kind=kind, preview=_preview_text(text), suppressed=True, **payload)
             return
         with self._lock:
             out = self._out()

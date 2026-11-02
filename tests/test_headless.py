@@ -428,6 +428,8 @@ def test_e2e_prints_only_the_final_answer(tmp_path: Path) -> None:
 
     assert proc.returncode == 0, proc.stderr
     # Só a resposta do agente: nem banner, nem eco do prompt, nem progresso.
+    # Nem no stderr: num terminal ele aparece misturado à resposta.
+    assert proc.stderr == ""
     lines = proc.stdout.splitlines()
     assert len(lines) == 3, proc.stdout
     assert lines[0] == "[quimera-fake-cli] role=tester model=fake-cli"
@@ -461,6 +463,19 @@ def test_e2e_falls_back_to_the_next_candidate(tmp_path: Path) -> None:
     assert "exit=3" in payload["attempts"][0]["error"]
 
 
+def test_e2e_fallback_in_text_mode_prints_only_the_answer(tmp_path: Path) -> None:
+    proc, _workspace, _home = _run_quimera(
+        tmp_path,
+        "--agents", "fake-cli", "fake-openai", "--prompt", "diga oi",
+        env_extra={"QUIMERA_FAKE_CLI_FAIL": "1"},
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.startswith("Fake OpenAI respondeu")
+    # Houve resposta: a falha do fake-cli fica em ``attempts`` (--output json).
+    assert proc.stderr == ""
+
+
 def test_e2e_all_candidates_failing_exits_1(tmp_path: Path) -> None:
     proc, _workspace, _home = _run_quimera(
         tmp_path, "--agents", "fake-cli", "--prompt", "diga oi",
@@ -469,8 +484,11 @@ def test_e2e_all_candidates_failing_exits_1(tmp_path: Path) -> None:
 
     assert proc.returncode == 1
     assert proc.stdout == ""
-    assert "quimera: nenhum agente candidato respondeu" in proc.stderr
-    assert "fake-cli: Agent 'fake-cli' failed (process_died)" in proc.stderr
+    # Só o resumo final: o progresso e os avisos do renderer não vazam.
+    lines = proc.stderr.splitlines()
+    assert lines[0] == "quimera: nenhum agente candidato respondeu"
+    assert len(lines) == 2, proc.stderr
+    assert lines[1].startswith("  fake-cli: Agent 'fake-cli' failed (process_died)")
 
 
 @pytest.mark.parametrize(("approval", "created"), [("deny", False), ("auto", True)])
@@ -482,8 +500,8 @@ def test_e2e_approval_policy_without_a_human(tmp_path: Path, approval: str, crea
 
     assert proc.returncode == 0, proc.stderr
     assert (workspace / "quimera_fake_probe.txt").exists() is created
-    outcome = "aprovado" if created else "negado"
-    assert f"execução não interativa — {outcome} automaticamente" in proc.stderr
+    # A decisão da política aparece na resposta do agente, não como artefato.
+    assert proc.stderr == ""
     assert ("[OK]" if created else "Execução não aprovada") in proc.stdout
 
 

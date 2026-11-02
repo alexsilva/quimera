@@ -6,8 +6,8 @@ chat (``ChatRoundOrchestrator``): prompt de primeiro falante, histórico da
 sessão e tools pelo MCP da sessão. Não há loop de input, banner nem resumo de
 sessão no fim, e a sessão é gravada como ``headless`` (``quimera.storage``).
 
-Só a resposta final interessa a quem chamou; o progresso vai para o renderer
-(stderr, montado pela CLI).
+Só a resposta final interessa a quem chamou; o progresso vai para o renderer,
+que a CLI monta mudo (só o audit de ``--debug`` o recebe).
 """
 from __future__ import annotations
 

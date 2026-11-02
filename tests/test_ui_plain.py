@@ -206,3 +206,31 @@ def test_close_and_flush_tolerate_missing_audit_logger():
     renderer.show_system("ainda escreve")
 
     assert stream.getvalue() == "ainda escreve\n"
+
+
+def test_quiet_mode_writes_nothing_and_keeps_everything_in_the_audit(tmp_path):
+    events_path = tmp_path / "render.jsonl"
+    stream = io.StringIO()
+    renderer = PlainTextRenderer(
+        stream=stream, quiet=True, audit_logger=RenderAuditLogger(events_path)
+    )
+
+    renderer.show_plain("execução concluída", agent="codex", muted=True)
+    renderer.show_system("failover")
+    renderer.show_feed("saída de tool")
+    renderer.show_message("codex", "resposta")
+    renderer.show_delegation("codex", "claude", "revise")
+    renderer.print_direct("direto")
+    renderer.show_warning("aviso")
+    renderer.show_error("falhou")
+    renderer.show_approval("aprovar?")
+    renderer.close()
+
+    assert stream.getvalue() == ""
+    # O que foi suprimido continua no audit de render (--debug).
+    events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    suppressed = [event["kind"] for event in events if event.get("suppressed")]
+    assert suppressed == [
+        "plain", "system", "feed", "agent_message", "delegation", "direct",
+        "warning", "error", "approval",
+    ]

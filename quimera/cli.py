@@ -880,8 +880,10 @@ def _run_headless(
 ) -> int:
     """Executa ``--prompt`` sem interface e devolve o código de saída.
 
-    Tudo o que não é a resposta (progresso do agente, avisos, prints de
-    terceiros) vai para stderr; stdout recebe só a resposta final ou o JSON.
+    stdout recebe só a resposta final ou o JSON. O renderer é mudo
+    (``quiet``: progresso e avisos só no audit de ``--debug``) e prints de
+    terceiros vão para stderr; as falhas dos candidatos chegam pelo resultado
+    (``attempts``) e, sem resposta, pelo resumo de erro em stderr.
     """
     _ensure_required_runtime_dependencies()
     prompt = _read_headless_prompt(parser, args.repl_prompt)
@@ -914,7 +916,7 @@ def _run_headless(
                 workspace=workspace,
                 visibility=visibility,
                 theme=args.theme,
-                renderer_override=PlainTextRenderer(stream=sys.stderr),
+                renderer_override=PlainTextRenderer(stream=sys.stderr, quiet=True),
                 input_gate_factory=functools.partial(
                     UnattendedInputGate, approval=args.approve or "deny"
                 ),
