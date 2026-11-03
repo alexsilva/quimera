@@ -611,6 +611,26 @@ def test_responses_turn_maps_http_errors():
     driver_400.close()
 
 
+@pytest.mark.parametrize("padding", ["", " " + "x" * 600])
+def test_usage_limit_429_without_retry_after_uses_the_reset_in_the_body(padding):
+    """Corpo real do backend (2026-11-02): sem Retry-After, o prazo vem de resets_in_seconds.
+
+    O prazo é lido do corpo inteiro, não do trecho de 500 caracteres da mensagem.
+    """
+    body = (
+        '{"error":{"type":"usage_limit_reached",'
+        f'"message":"The usage limit has been reached{padding}",'
+        '"plan_type":"team","resets_at":1793676293,"limit_window_minutes":300,'
+        '"resets_in_seconds":15690}}'
+    )
+    driver = _make_driver(lambda request: httpx.Response(429, text=body))
+    with pytest.raises(TransientAPIError) as excinfo:
+        driver._responses_turn([{"role": "user", "content": "oi"}], [])
+    assert excinfo.value.rate_limited is True
+    assert excinfo.value.retry_after == 15690.0
+    driver.close()
+
+
 def test_responses_turn_response_failed_event_raises():
     events = [{
         "type": "response.failed",

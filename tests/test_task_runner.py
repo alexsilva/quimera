@@ -31,6 +31,7 @@ class RepositorySpy:
     def __init__(self):
         self.fail_calls = []
         self.requeue_calls = []
+        self.excluded = []
         self.submit_calls = []
         self.complete_calls = []
         self.submit_result = True
@@ -40,8 +41,9 @@ class RepositorySpy:
         self.fail_calls.append((task_id, reason))
         return True
 
-    def requeue_task(self, task_id, failed_agent, reason=None):
+    def requeue_task(self, task_id, failed_agent, reason=None, exclude_agent=True):
         self.requeue_calls.append((task_id, failed_agent, reason))
+        self.excluded.append(exclude_agent)
         return True
 
     def submit_for_review(self, task_id, result=None):
@@ -54,9 +56,13 @@ class RepositorySpy:
 
 
 class FailoverPolicyStub:
-    def __init__(self, review_agents=None, can_failover=True):
+    def __init__(self, review_agents=None, can_failover=True, available=True):
         self.review_agents = list(review_agents or [])
         self.can_failover_value = can_failover
+        self.available = available
+
+    def is_available(self, agent_name):
+        return self.available
 
     def review_agents_for(self, executor_agent=None, exclude_agents=None):
         return list(self.review_agents)
@@ -139,7 +145,56 @@ def test_runner_requeues_when_agent_returns_no_response_and_failover_possible():
 
     assert ok is False
     assert repo.requeue_calls == [(3, "codex", "communication failed")]
+    assert repo.excluded == [True]
     assert repo.fail_calls == []
+
+
+def test_runner_requeues_without_excluding_agent_that_became_unavailable():
+    """Agente suspenso na run (429 de poucos segundos) não falhou nesta task: ela volta à
+    fila sem excluí-lo e não falha por falta de outro agente disponível."""
+    dispatch = DispatchStub(response=None)
+    repo = RepositorySpy()
+    runner = TaskRunner(
+        dispatch_services=dispatch,
+        system_layer=SystemLayerSpy(),
+        repository=repo,
+        failover_policy=FailoverPolicyStub(review_agents=[], can_failover=False, available=False),
+        classify_task_execution_result=lambda response: (True, response or ""),
+        was_user_cancelled=lambda: False,
+    )
+
+    ok = runner.run(TaskRecord(id=3, job_id=0, description="rodar validação", status="in_progress"), agent_name="codex")
+
+    assert ok is False
+    assert repo.requeue_calls == [
+        (3, "codex", "codex indisponivel: suspenso durante a run (rate limit, cota ou falhas seguidas)")
+    ]
+    assert repo.excluded == [False]
+    assert repo.fail_calls == []
+
+
+def test_runner_counts_reviewers_after_the_run():
+    """O revisor que volta durante a run revisa: a foto do início dispensava a revisão."""
+    repo = RepositorySpy()
+    policy = FailoverPolicyStub(review_agents=[])
+
+    class _ReviewerReturnsDuringRun(DispatchStub):
+        def delegate(self, agent_name, **kwargs):
+            policy.review_agents = ["pickle"]
+            return super().delegate(agent_name, **kwargs)
+
+    runner = TaskRunner(
+        dispatch_services=_ReviewerReturnsDuringRun(response="resultado final"),
+        system_layer=SystemLayerSpy(),
+        repository=repo,
+        failover_policy=policy,
+        classify_task_execution_result=lambda response: (True, response),
+        was_user_cancelled=lambda: False,
+    )
+
+    assert runner.run(TaskRecord(id=4, job_id=0, description="ajustar", status="in_progress"), agent_name="codex")
+    assert repo.submit_calls == [(4, "resultado final")]
+    assert repo.complete_calls == []
 
 
 def test_runner_fails_when_execution_blocked_and_no_failover():
@@ -405,3 +460,24 @@ def test_summarize_task_feedback_single_line_without_newlines():
 
     assert "\n" not in summary
     assert not summary.endswith("…")
+
+
+def test_requeue_line_says_who_keeps_the_task():
+    from quimera.tasks.events import TaskRequeued
+    from quimera.tasks.utils import format_task_requeue
+
+    rework = TaskRequeued(
+        task_id=321, job_id=1, reason="RETENTATIVA\n\nfalta o parecer", failed_agent="claude-opus",
+        attempt=1, assigned_to="claude-opus",
+    )
+    handoff = TaskRequeued(
+        task_id=321, job_id=1, reason="communication failed", failed_agent="claudecloud-fable",
+        attempt=2,
+    )
+    assert format_task_requeue(rework) == (
+        "[task 321] volta para claude-opus refazer (tentativa 2): RETENTATIVA"
+    )
+    assert format_task_requeue(handoff) == (
+        "[task 321] sai de claudecloud-fable e passa para outro agente (tentativa 3): "
+        "communication failed"
+    )

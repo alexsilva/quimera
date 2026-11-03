@@ -498,3 +498,106 @@ def test_inserted_row_id_returns_int_after_insert():
 def test_inserted_row_id_fails_explicitly_without_rowid():
     with pytest.raises(RuntimeError, match="rowid"):
         _inserted_row_id(_FakeCursor(None))
+
+
+def test_return_review_excludes_the_silent_reviewer_from_this_task(repository):
+    """Dois revisores sem resposta não trocam a revisão entre si sem fim."""
+    job_id = runtime_tasks.add_job("job review return", db_path=repository.db_path)
+    task_id = repository.create_task(job_id, "ajustar", assigned_to="codex")
+    assert repository.claim_task("codex") == task_id
+    assert repository.submit_for_review(task_id, result="feito")
+    assert repository.claim_review_task("fable") == task_id
+
+    assert repository.return_review(task_id, "fable", "revisor sem resposta")
+
+    task = repository.list_tasks({"id": task_id})[0]
+    assert (task.status, task.result, task.reviewed_by) == (TaskStatus.PENDING_REVIEW, "feito", None)
+    assert repository.claim_review_task("fable") is None
+    assert repository.can_review_task(task_id, ["fable"]) is False
+    assert repository.can_review_task(task_id, ["fable", "haiku"]) is True
+    assert repository.claim_review_task("haiku") == task_id
+
+
+def test_rework_keeps_the_owner_and_counts_the_returned_delivery(repository):
+    job_id = runtime_tasks.add_job("job rework", db_path=repository.db_path)
+    task_id = repository.create_task(job_id, "ajustar", assigned_to="opus")
+    assert repository.claim_task("opus") == task_id
+    assert repository.submit_for_review(task_id, result="parecer")
+    assert repository.claim_review_task("haiku") == task_id
+
+    assert repository.rework_task(task_id, "opus", "RETENTATIVA: falta o arquivo", result="parecer")
+
+    task = repository.list_tasks({"id": task_id})[0]
+    assert (task.status, task.assigned_to, task.attempt_count, task.rework_count) == (
+        TaskStatus.PENDING, "opus", 1, 1
+    )
+    assert repository.claim_task("fable") is None  # a entrega volta só para quem a fez
+    assert repository.claim_task("opus") == task_id
+
+
+def test_rework_publishes_who_keeps_the_task(sink_repository):
+    """A UI diz para quem a task foi: o mesmo agente refaz ou outro assume."""
+    repo, sink = sink_repository
+    received = []
+    sink.subscribe(TaskRequeued, received.append)
+    job_id = runtime_tasks.add_job("job rework sink", db_path=repo.db_path)
+    reworked = repo.create_task(job_id, "refazer", status=TaskStatus.IN_PROGRESS)
+    handed = repo.create_task(job_id, "passar", status=TaskStatus.IN_PROGRESS)
+
+    repo.rework_task(reworked, "opus", "RETENTATIVA\nfalta o arquivo")
+    repo.requeue_task(handed, "fable", reason="communication failed")
+
+    assert [(ev.task_id, ev.failed_agent, ev.assigned_to) for ev in received] == [
+        (reworked, "opus", "opus"),
+        (handed, "fable", None),
+    ]
+
+
+def test_new_delivery_starts_with_no_excluded_reviewer(repository):
+    """Revisor que não respondeu à entrega 1 julga a entrega 2 (antes ficava excluído para sempre)."""
+    job_id = runtime_tasks.add_job("job review reset", db_path=repository.db_path)
+    task_id = repository.create_task(job_id, "ajustar", assigned_to="opus")
+    assert repository.claim_task("opus") == task_id
+    assert repository.submit_for_review(task_id, result="entrega 1")
+    assert repository.claim_review_task("fable") == task_id
+    assert repository.return_review(task_id, "fable", "revisor sem resposta")
+    assert repository.claim_review_task("haiku") == task_id
+
+    assert repository.rework_task(task_id, "opus", "RETENTATIVA") == TaskStatus.PENDING
+
+    assert repository.claim_task("opus") == task_id
+    assert repository.submit_for_review(task_id, result="entrega 2")
+    assert repository.claim_review_task("fable") == task_id
+
+
+def test_rework_reports_the_state_the_task_went_to(repository):
+    job_id = runtime_tasks.add_job("job rework status", db_path=repository.db_path)
+    task_id = repository.create_task(job_id, "ajustar", assigned_to="opus", status=TaskStatus.IN_PROGRESS)
+
+    assert repository.rework_task(task_id, "opus", "falta x", max_reworks=1) == TaskStatus.FAILED
+    assert repository.rework_task(task_id, "opus", "de novo", max_reworks=1) is None
+
+
+def test_unavailable_agent_and_reviewer_are_not_excluded(repository):
+    """Indisponível (rate limit) não falhou na task: pode retomá-la ou revisá-la quando voltar."""
+    job_id = runtime_tasks.add_job("job unavailable", db_path=repository.db_path)
+    task_id = repository.create_task(job_id, "ajustar")
+    assert repository.claim_task("fable") == task_id
+
+    assert repository.requeue_task(task_id, "fable", reason="fable indisponivel", exclude_agent=False)
+    assert repository.can_reassign_task(task_id, ["fable"]) is True
+    assert repository.claim_task("fable") == task_id
+    assert repository.submit_for_review(task_id, result="feito")
+    assert repository.claim_review_task("haiku") == task_id
+    assert repository.return_review(task_id, "haiku", "haiku indisponivel", exclude_reviewer=False)
+    assert repository.can_review_task(task_id, ["haiku"]) is True
+
+
+def test_unassign_only_releases_the_owner_it_read(repository):
+    job_id = runtime_tasks.add_job("job unassign", db_path=repository.db_path)
+    task_id = repository.create_task(job_id, "ajustar", assigned_to="b")
+
+    assert repository.unassign_pending_task(task_id, "a") is False
+    assert repository.list_tasks({"id": task_id})[0].assigned_to == "b"
+    assert repository.unassign_pending_task(task_id, "b") is True
+    assert repository.list_tasks({"id": task_id})[0].assigned_to is None

@@ -88,11 +88,69 @@ predicados adicionais (`workflows/schema.py`):
 
 A revisão segue enquanto o workflow está `running` ou `blocked`. Uma dependente
 só fica pronta quando a predecessora está `completed`, o que inclui a revisão
-aceita. Uma revisão rejeitada devolve a task a `pending` (nova tentativa, com
-outro agente quando houver) e as dependentes continuam bloqueadas. O requeue
-de uma task de workflow (falha de execução ou revisão rejeitada) que esgota
-`max_task_attempts` leva a task direto a `failed` na mesma transação, sem
-janela para um novo claim.
+aceita; até lá as dependentes continuam bloqueadas.
+
+## Dono da task, devolução e troca de agente
+
+A task fica com o agente que a executa (o do plano, ou quem a reivindicou
+primeiro). O que acontece depois depende de quem falhou:
+
+| Situação | Para onde vai a task | Gasta entrega? |
+|---|---|---|
+| Revisão com veredito diferente de `ACEITE`, ou evidência insuficiente | volta para o mesmo agente (`rework_task`), com o motivo e a entrega anterior no contexto | sim |
+| Agente que ficou indisponível na run (rate limit, cota, suspensão) | volta à fila para quem estiver disponível; ele não é excluído e pode retomá-la quando voltar | não |
+| Agente disponível sem resposta, com resposta vazia ou erro | outro agente; o que falhou entra em `failed_agents` | não |
+| Dono suspenso ou fora do pool com a task pronta | a reconciliação solta a task para quem estiver disponível | não |
+| Revisor indisponível (rate limit, cota, suspensão) | a revisão espera um revisor; ele não é excluído | não |
+| Revisor disponível sem resposta ou com erro | outro revisor; o que falhou entra em `failed_reviewers` até a próxima entrega | não |
+| Reinício do app ou lease vencido | volta para o mesmo dono | não |
+
+Indisponível não é falhar na task. Quem ainda pode executar ou revisar uma
+task é decidido sobre os membros do pool, inclusive os suspensos
+(`TaskFailoverPolicy.active_agents`); a disponibilidade só decide quem
+reivindica agora (gate de claim) e se quem falhou estava indisponível. Sem
+ninguém disponível a task espera, e o coordenador avisa uma vez por tentativa
+(`[workflow W] task T (item): aguardando agente disponivel (suspensos: …)`, ou
+`aguardando revisor`). Contar só os disponíveis fazia um 429 de segundos
+falhar a task e sobrescrever a entrega.
+
+Só as entregas devolvidas contam para `max_task_attempts` (`rework_count`). A
+devolução que atinge o limite leva a task direto a `failed` na mesma
+transação, sem janela para um novo claim, e o coordenador é consultado. A
+falha de agente não tem teto próprio: cada uma tira o agente da task, então o
+número de trocas é limitado pelo pool; sem candidato no pool a task falha
+(`nenhum agente elegivel restante`). Revisão sem veredito nunca falha a task:
+a entrega fica intacta em `pending_review`, e sem revisor possível no pool o
+workflow bloqueia (`revisao sem revisor elegivel no pool`) e o coordenador é
+consultado. Uma nova entrega recomeça `failed_reviewers`. Suspender um agente
+(falhas em outras chamadas) não derruba a task que ele executa: a run termina
+e segue o caminho normal.
+
+Quem refaz recebe no contexto a seção `# Entrega anterior devolvida`, com o
+motivo (texto do revisor ou da verificação), o resumo, os arquivos e o
+relatório da entrega anterior, delimitados como dados não confiáveis. No feed,
+a linha de requeue diz para quem a task foi (`[task T] volta para X refazer
+(tentativa N): motivo` ou `[task T] sai de X e passa para outro agente …`), e o
+bloco do workflow mostra quantas vezes a entrega foi devolvida (`devolvida Nx`).
+
+## Rate limit e cota esgotada
+
+Execução e revisão de task não esperam rate limit: o `AgentCallService` do
+dispatch de background desiste no primeiro 429 (`max_rate_limit_wait=0`) e o
+`AgentFailureTracker.record_rate_limited` suspende o agente na hora pelo prazo
+do provedor (entre 5 s e 1 h; sem prazo, o escalonado de 5, 10, 20… min). O
+chat, a delegação e a consulta ao coordenador esperam o rate limit curto (até
+120 s) e refazem a chamada; um prazo maior também suspende o agente, em vez de
+prender o chamador por horas. A suspensão nunca encurta uma em vigor e não
+conta como falha consecutiva.
+
+O provedor é reconhecido em todos os drivers: HTTP 429 dos drivers de API
+(`Retry-After`; no `codexcloud`, `resets_in_seconds` do corpo), o stream do
+Claude CLI (`result` com `api_error_status` 429 e o `resetsAt` do
+`rate_limit_event`) e o do Codex CLI (`turn.failed` com "out of credits" ou
+"usage limit") (`parsers.stream_rate_limit`). Para esses dois CLIs a heurística
+de stderr não aborta a run: eles relatam no stream e refazem sozinhos os 429
+transitórios.
 
 `writes` vem do plano. Sem o campo, `code_edit` e `documentation` contam como
 escrita. Tasks sem escrita rodam com o workspace somente leitura, aplicado pelo
@@ -115,9 +173,18 @@ escrita são serializadas.
   `run_id` do AgentClient;
 - converte a resposta no `Handoff` estruturado (bloco JSON pedido no contexto) e
   o verifica sem IA: arquivos declarados precisam existir no workspace,
-  verificações com falha reprovam, a evidência esperada exige verificações ou
-  referências, e `partial`/`failed` não concluem. Uma resposta sem bloco não
-  conta como evidência quando o plano espera evidência.
+  verificações com `outcome: failed` reprovam, a evidência esperada exige
+  verificações ou referências, e `partial`/`failed` não concluem. O contrato
+  define o `outcome`: `passed` quando o resultado sustenta a entrega (inclusive
+  um teste ou script que reproduz o defeito relatado), `failed` quando a
+  contradiz. Uma resposta sem bloco não conta como evidência quando o plano
+  espera evidência. As palavras-chave de recusa das tasks avulsas (`não
+  consigo`, `cannot`…) só valem para resposta sem bloco: num handoff
+  estruturado, quem decide é o status declarado;
+- guarda no handoff o relatório da entrega (`report`: o texto da resposta fora
+  do bloco, até 24 mil caracteres). Ele chega ao revisor, às dependentes, a
+  quem refaz e ao coordenador (`workflows_status` com `include_results`); antes
+  só o JSON era gravado e a lista de achados escrita no relatório se perdia.
 
 Todas as escritas de estado de uma task de workflow levam
 `expected_attempt`. Uma tentativa antiga (por exemplo, a que termina depois de
@@ -213,7 +280,7 @@ O humano usa `/workflow [list|show <id>|pause <id>|resume <id>|cancel <id>]`.
 | `max_replans` | 3 |
 | `max_consults` (ao agente principal) | 6 |
 | `max_open_workflows` (por job) | 3 |
-| `max_task_attempts` | 3 |
+| `max_task_attempts` (entregas devolvidas por task) | 3 |
 | `lease_seconds` | 1800 |
 
 Só inteiros positivos são aceitos; o que não for reconhecido é ignorado.

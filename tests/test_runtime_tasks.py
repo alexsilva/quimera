@@ -87,8 +87,12 @@ def test_list_tasks_filters_by_assignment_type_and_origin(db_path):
     assert [row["id"] for row in rows] == [task_keep]
 
 
-def test_release_agent_tasks_resets_only_pending_and_in_progress(db_path):
-    """Verifica que release_agent_tasks reseta apenas tasks pendentes e em progresso."""
+def test_release_agent_tasks_releases_only_queued_tasks(db_path):
+    """Só a task que espera na fila é solta; a run em curso termina e segue o caminho normal.
+
+    Soltar a task em execução deixava outro agente reivindicá-la e as duas runs
+    escreverem nela.
+    """
     job_id = tasks.add_job("job", db_path=db_path)
     pending_id = tasks.create_task(job_id, "pending", assigned_to="agent-x", status="pending", db_path=db_path)
     in_progress_id = tasks.create_task(
@@ -111,8 +115,8 @@ def test_release_agent_tasks_resets_only_pending_and_in_progress(db_path):
     by_id = {row["id"]: row for row in tasks.list_tasks({"job_id": job_id}, db_path=db_path)}
     assert by_id[pending_id]["status"] == "pending"
     assert by_id[pending_id]["assigned_to"] is None
-    assert by_id[in_progress_id]["status"] == "pending"
-    assert by_id[in_progress_id]["assigned_to"] is None
+    assert by_id[in_progress_id]["status"] == "in_progress"
+    assert by_id[in_progress_id]["assigned_to"] == "agent-x"
     assert by_id[completed_id]["status"] == "completed"
     assert by_id[completed_id]["assigned_to"] == "agent-x"
 
@@ -125,7 +129,7 @@ def test_release_agent_tasks_preserves_delegate_tracking_tasks(db_path):
     """
     job_id = tasks.add_job("job", db_path=db_path)
     routed_id = tasks.create_task(
-        job_id, "routed", assigned_to="agent-x", status="in_progress", db_path=db_path
+        job_id, "routed", assigned_to="agent-x", status="pending", db_path=db_path
     )
     delegate_id = tasks.create_task(
         job_id,

@@ -56,10 +56,9 @@ def classify_task_review_result(response: str | None) -> Tuple[bool, str, str]:
     if not text:
         return False, "RETENTATIVA", "resposta vazia do revisor"
 
-    match = re.search(r"\b(ACEITE|RETENTATIVA|REPLANEJAR|REJEITAR)\b", text.upper())
-    if not match:
+    verdict = _review_verdict(text)
+    if verdict is None:
         return False, "RETENTATIVA", text
-    verdict = match.group(1)
 
     lines = text.split("\n")
     has_justification = any(
@@ -70,6 +69,27 @@ def classify_task_review_result(response: str | None) -> Tuple[bool, str, str]:
         return False, "RETENTATIVA", "ACEITE sem justificativa"
 
     return verdict == "ACEITE", verdict, text
+
+
+_VERDICT = r"(ACEITE|RETENTATIVA|REPLANEJAR|REJEITAR)"
+# Linha só com o veredito, com a decoração de markdown que os modelos usam (``**ACEITE**``, ``## REJEITAR``).
+_VERDICT_LINE_RE = re.compile(rf"^[\s#*_>`:.-]*{_VERDICT}[\s*_`:.!-]*$", re.MULTILINE)
+_VERDICT_WORD_RE = re.compile(rf"\b{_VERDICT}\b")
+
+
+def _review_verdict(text: str) -> str | None:
+    """Veredito do revisor: a linha que é só o veredito; senão o da primeira linha; senão o primeiro do texto.
+
+    Pegar a primeira ocorrência do texto todo lia "Critério de ACEITE 2 não foi
+    atendido.\nRETENTATIVA" como ACEITE.
+    """
+    upper = text.upper()
+    line = _VERDICT_LINE_RE.search(upper)
+    if line:
+        return line.group(1)
+    first_line = next((part for part in upper.splitlines() if part.strip()), "")
+    match = _VERDICT_WORD_RE.search(first_line) or _VERDICT_WORD_RE.search(upper)
+    return match.group(1) if match else None
 
 
 def parse_task_command(command: str) -> str:

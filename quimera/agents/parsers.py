@@ -1,10 +1,69 @@
 """Parsers de formatos de saída dos agentes CLI (stream-json, codex-json, opencode-json)."""
 import json
 import logging
+import re
+import time
+from dataclasses import dataclass
 
 from quimera.agent_events import _SyntheticToolResult
+from quimera.agents.text_filters import _is_rate_limit_signal
 
 _logger = logging.getLogger(__name__)
+
+# Mensagens do Codex CLI para cota da conta esgotada ("You've hit your usage
+# limit", "Your workspace is out of credits", "You hit your spend cap").
+_QUOTA_MESSAGE_RE = re.compile(
+    r"\bout of (?:usage )?credits\b|\bhit your (?:usage limit|spend cap)\b|\busage limit\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderRateLimit:
+    """Rate limit ou cota esgotada que o CLI relatou no próprio stream de eventos."""
+
+    message: str
+    retry_after: float | None = None
+
+
+def stream_rate_limit(raw: str | None, *, now: float | None = None) -> ProviderRateLimit | None:
+    """Detecta no stdout do CLI a recusa do provedor por rate limit ou cota.
+
+    Claude CLI (stream-json): evento ``result`` com ``is_error`` e
+    ``api_error_status`` 429; o prazo vem do ``rate_limit_event`` rejeitado
+    (``resetsAt``, epoch em segundos). Codex CLI (``exec --json``):
+    ``turn.failed`` com mensagem de limite de uso, crédito ou rate limit.
+    """
+    resets_at: float | None = None
+    for event in _json_events(raw or ""):
+        etype = event.get("type")
+        if etype == "rate_limit_event":
+            info = event.get("rate_limit_info") or {}
+            if info.get("status") == "rejected" and isinstance(info.get("resetsAt"), (int, float)):
+                resets_at = float(info["resetsAt"])
+        elif etype == "result" and event.get("is_error") and event.get("api_error_status") == 429:
+            retry_after = None
+            if resets_at is not None:
+                retry_after = max(resets_at - (time.time() if now is None else now), 0.0)
+            return ProviderRateLimit(str(event.get("result") or "rate limit do provedor"), retry_after)
+        elif etype == "turn.failed":
+            message = str((event.get("error") or {}).get("message") or "")
+            if _QUOTA_MESSAGE_RE.search(message) or _is_rate_limit_signal(message):
+                return ProviderRateLimit(message)
+    return None
+
+
+def _json_events(raw: str):
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            yield event
 
 
 def parse_stream_json(raw: str, agent: str, tool_event_callback=None) -> str | None:

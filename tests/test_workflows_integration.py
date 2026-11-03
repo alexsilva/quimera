@@ -6,6 +6,7 @@ import pytest
 
 from quimera.domain.task_states import TaskStatus
 from quimera.workflows.models import WorkflowLimits, WorkflowStatus
+from quimera.workflows.presentation import render_text
 from tests.workflow_harness import Harness, handoff_text, plan_payload, task_spec
 
 REVIEW = "task-review"
@@ -167,12 +168,15 @@ def test_scenario_d_failure_blocks_then_replan_recovers_without_duplication(make
     assert live.workflow.replans == 1
 
 
-def test_scenario_d_insufficient_evidence_is_retried_not_accepted(make):
+def test_scenario_d_insufficient_evidence_returns_to_the_same_agent(make):
     h = make(["a1", "a2"])
+    t1_runs = []
 
     def execute(agent, delegation):
-        if agent == "a1":
-            return "Pronto, resolvi."  # sem handoff: evidencia esperada ausente
+        if "T1" in delegation["task"]:
+            t1_runs.append((agent, delegation["context"]))
+            if len(t1_runs) == 1:
+                return "Pronto, resolvi."  # sem handoff: evidencia esperada ausente
         return handoff_text("ok", refs=["r"], checks=["c"])
 
     h.scripts["*"] = accepting(execute)
@@ -187,13 +191,17 @@ def test_scenario_d_insufficient_evidence_is_retried_not_accepted(make):
     assert h.wait_for(lambda: h.workflows.get(wf.id).status == WorkflowStatus.COMPLETED)
     t1 = next(v for v in h.workflows.snapshot(wf.id).tasks if v.link.item_id == "T1")
     attempts = h.workflows.list_attempts(t1.link.task_id)
-    assert any(a.status == "insufficient_evidence" for a in attempts)
-    assert t1.assigned_to == "a2"  # reatribuida; nenhuma afirmacao textual virou sucesso
+    assert [a.status for a in attempts] == ["insufficient_evidence", "accepted"]
+    # A entrega volta para quem a fez, com o motivo; nenhuma afirmacao textual virou sucesso.
+    assert [agent for agent, _ in t1_runs] == ["a1", "a1"]
+    assert (t1.assigned_to, t1.rework_count) == ("a1", 1)
+    assert "Entrega anterior devolvida" in t1_runs[1][1]
+    assert "evidencia esperada" in t1_runs[1][1]
 
 
 def test_blocked_when_no_eligible_agent_remains(make):
     h = make(["a1"], consult_answer="preciso de decisao")
-    h.scripts["*"] = accepting(lambda agent, d: "Nao consigo.")
+    h.scripts["*"] = accepting(lambda agent, d: None)  # sem resposta e sem outro agente
     wf = _start(h, [task_spec("T1"), task_spec("T2", deps=["T1"])])
     h.start()
     assert h.wait_for(lambda: h.workflows.get(wf.id).status == WorkflowStatus.BLOCKED)
@@ -346,10 +354,10 @@ def test_cancelled_run_interrupts_without_blaming_the_agent(tmp_path):
     assert h.workflows.list_attempts(task_id)[-1].status == "cancelled"
 
 
-def test_runner_failure_at_the_attempt_limit_is_final_without_another_claim(tmp_path):
-    """Revisao final: com max_task_attempts=1 a falha do executor encerra a task na hora."""
+def test_runner_rework_at_the_limit_is_final_without_another_claim(tmp_path):
+    """Com max_task_attempts=1 a entrega reprovada pelo runtime encerra a task na hora."""
     h = Harness(tmp_path, ["a1", "a2"], limits=WorkflowLimits(max_task_attempts=1))
-    h.scripts["*"] = lambda agent, delegation: None  # sem resposta: falha de comunicacao
+    h.scripts["*"] = lambda agent, delegation: "Nao consigo executar isso."  # sem handoff
     wf = h.coordinator.create(plan_payload([task_spec("A")]), requested_by="claude").workflow
     h.coordinator.start(wf.id)
     h.start()
@@ -364,3 +372,221 @@ def test_runner_failure_at_the_attempt_limit_is_final_without_another_claim(tmp_
     assert h.statuses(wf.id)["A"] == "failed"
     assert len(h.delegations) == 1  # nenhum segundo agente reivindicou a task
     assert h.coordinator.reconcile(wf.id).status == WorkflowStatus.BLOCKED
+
+
+# ── Dono da task, troca por indisponibilidade e devolução (caso ao vivo 2026-11-02) ──
+
+
+def test_live_case_rejected_delivery_goes_back_to_the_planned_agent(make):
+    """Workflow 2 do PasswordManager: haiku pediu RETENTATIVA e a task foi parar no
+    claudecloud-fable, sem cota, que travou. A entrega devolvida volta para o opus,
+    o revisor sem cota não conta contra ele e o fable nunca executa a task."""
+    h = make(["opus", "haiku", "fable"])
+    reviews = []
+    runs = []
+
+    def script(agent, delegation):
+        if agent == "fable":
+            return None  # sem cota: nunca responde
+        if _is_review(delegation):
+            reviews.append(agent)
+            if reviews.count("haiku") == 1:
+                return "RETENTATIVA\nFalta o parecer em arquivo."
+            return "ACEITE\nParecer conferido."
+        runs.append((agent, delegation["context"]))
+        return handoff_text("parecer", refs=["parecer.md"], checks=["reproducao"])
+
+    h.scripts["*"] = script
+    wf = _start(h, [task_spec("T1", assigned_to="opus")])
+    h.start()
+    assert h.wait_for(lambda: h.workflows.get(wf.id).status == WorkflowStatus.COMPLETED)
+    assert [agent for agent, _ in runs] == ["opus", "opus"]
+    assert "Falta o parecer em arquivo" in runs[1][1]  # o motivo da devolucao chega ao dono
+    t1 = h.workflows.snapshot(wf.id).tasks[0]
+    assert (t1.assigned_to, t1.rework_count) == ("opus", 1)
+    attempts = h.workflows.list_attempts(t1.link.task_id)
+    assert [(a.agent, a.status) for a in attempts] == [("opus", "rejected"), ("opus", "accepted")]
+    assert "opus (tentativa 2, devolvida 1x)" in render_text(h.workflows.snapshot(wf.id))
+
+
+def test_owner_without_response_hands_the_task_over_without_spending_a_delivery(make):
+    h = make(["a1", "a2"])
+
+    def execute(agent, delegation):
+        if agent == "a1":
+            return None  # dono do plano sem cota
+        return handoff_text("ok", refs=["r"], checks=["c"])
+
+    h.scripts["*"] = accepting(execute)
+    wf = _start(h, [task_spec("T1", assigned_to="a1")])
+    h.start()
+    assert h.wait_for(lambda: h.workflows.get(wf.id).status == WorkflowStatus.COMPLETED)
+    t1 = h.workflows.snapshot(wf.id).tasks[0]
+    assert (t1.assigned_to, t1.rework_count) == ("a2", 0)
+    attempts = h.workflows.list_attempts(t1.link.task_id)
+    assert [(a.agent, a.status) for a in attempts] == [("a1", "failed"), ("a2", "accepted")]
+
+
+def test_substitute_failing_midway_passes_the_task_on_again(make):
+    """Rejeitada, a entrega volta ao substituto; se ele falhar depois, vai para outro."""
+    h = make(["a1", "a2", "a3"], limits=WorkflowLimits(max_task_attempts=5))
+    executions = []
+    reviews = []
+
+    def script(agent, delegation):
+        if _is_review(delegation):
+            reviews.append(agent)
+            return "RETENTATIVA\nfalta evidencia" if len(reviews) == 1 else "ACEITE\nok"
+        executions.append(agent)
+        if agent == "a1" or (len(executions) == 3 and agent == executions[1]):
+            return None  # dono sem cota; depois o substituto cai no meio da rodada
+        return handoff_text("ok", refs=["r"], checks=["c"])
+
+    h.scripts["*"] = script
+    wf = _start(h, [task_spec("T1", assigned_to="a1")])
+    h.start()
+    assert h.wait_for(lambda: h.workflows.get(wf.id).status == WorkflowStatus.COMPLETED)
+    first, substitute, again, last = executions
+    assert (first, again) == ("a1", substitute)  # a devolucao voltou ao substituto
+    assert last not in {"a1", substitute}  # a falha dele passou a task adiante
+    t1 = h.workflows.snapshot(wf.id).tasks[0]
+    assert (t1.assigned_to, t1.rework_count) == (last, 1)
+
+
+def test_reviewer_without_response_does_not_count_against_the_executor(make):
+    h = make(["a1", "a2", "a3"])
+
+    def script(agent, delegation):
+        if _is_review(delegation):
+            return None if agent == "a2" else "ACEITE\nok"
+        if agent != "a1":
+            return None
+        return handoff_text("ok", refs=["r"], checks=["c"])
+
+    h.scripts["*"] = script
+    wf = _start(h, [task_spec("T1", assigned_to="a1")])
+    h.start()
+    assert h.wait_for(lambda: h.workflows.get(wf.id).status == WorkflowStatus.COMPLETED)
+    t1 = h.workflows.snapshot(wf.id).tasks[0]
+    assert (t1.assigned_to, t1.attempt_count, t1.rework_count) == ("a1", 0, 0)
+    assert h.tasks.list_tasks({"id": t1.link.task_id})[0].reviewed_by == "a3"
+
+
+def test_structured_report_that_mentions_cannot_is_not_discarded(make):
+    """Defeito ao vivo (task 574): relatório de 5 mil caracteres descartado por conter 'cannot'."""
+    h = make(["a1", "a2"])
+    report = "O atacante cannot bypass o token; nao consigo reproduzir sem o APK, ver limitacoes."
+
+    def execute(agent, delegation):
+        return report + "\n" + handoff_text("auditoria concluida", refs=["parecer.md"], checks=["poc"])
+
+    h.scripts["*"] = accepting(execute)
+    wf = _start(h, [task_spec("T1")])
+    h.start()
+    assert h.wait_for(lambda: h.workflows.get(wf.id).status == WorkflowStatus.COMPLETED)
+    t1 = h.workflows.snapshot(wf.id).tasks[0]
+    assert (t1.attempt_count, t1.rework_count) == (0, 0)
+
+
+# ── Indisponível não é falha na task (revisão do workflow 4, V02/V03/V12) ──
+
+
+def test_short_rate_limit_with_no_other_agent_waits_instead_of_failing(make):
+    """V03: 429 de segundos no único agente. Antes a task falhava na hora."""
+    h = make(["a1"])
+    calls = []
+
+    def script(agent, delegation):
+        calls.append(agent)
+        if len(calls) == 1:
+            h.available = []  # o tracker suspende a1 pelo retry-after
+            threading.Timer(0.3, lambda: setattr(h, "available", None)).start()
+            return None
+        return handoff_text("ok", refs=["r"], checks=["c"])
+
+    h.scripts["*"] = script
+    wf = _start(h, [task_spec("T1", assigned_to="a1")])
+    h.start()
+    assert h.wait_for(lambda: h.workflows.get(wf.id).status == WorkflowStatus.COMPLETED)
+    t1 = h.workflows.snapshot(wf.id).tasks[0]
+    assert calls == ["a1", "a1"]
+    assert h.tasks.can_reassign_task(t1.link.task_id, ["a1"]) is True  # não foi excluído
+    assert t1.rework_count == 0
+    attempts = h.workflows.list_attempts(t1.link.task_id)
+    # Sem revisor no pool a entrega conclui direto (fica "submitted" no histórico).
+    assert [(a.agent, a.status) for a in attempts] == [("a1", "failed"), ("a1", "submitted")]
+
+
+def test_reviewer_without_verdict_and_no_other_reviewer_blocks_keeping_the_delivery(make):
+    """V02a/V12: antes a task falhava (resultado sobrescrito) ou o workflow ficava running sem revisor."""
+    h = make(["a1", "r1"])
+
+    def script(agent, delegation):
+        if _is_review(delegation):
+            return ""  # revisor disponível que não responde
+        return handoff_text("entrega", refs=["r"], checks=["c"])
+
+    h.scripts["*"] = script
+    wf = _start(h, [task_spec("T1", assigned_to="a1")])
+    h.start()
+    assert h.wait_for(lambda: h.workflows.get(wf.id).status == WorkflowStatus.BLOCKED)
+    workflow = h.workflows.get(wf.id)
+    assert workflow.status_reason == "revisao sem revisor elegivel no pool: T1"
+    t1 = h.workflows.snapshot(wf.id).tasks[0]
+    task = h.tasks.list_tasks({"id": t1.link.task_id})[0]
+    assert task.status == TaskStatus.PENDING_REVIEW
+    assert '"summary": "entrega"' in (task.result or "")
+
+
+def test_review_waits_for_a_suspended_reviewer_and_says_so(make):
+    """Revisor suspenso (rate limit) não trava nem falha: a revisão espera e o feed avisa."""
+    h = make(["a1", "r1"])
+    h.available = ["a1"]
+
+    def script(agent, delegation):
+        if _is_review(delegation):
+            return "ACEITE\nok"
+        return handoff_text("entrega", refs=["r"], checks=["c"])
+
+    h.scripts["*"] = script
+    wf = _start(h, [task_spec("T1", assigned_to="a1")])
+    h.start()
+    assert h.wait_for(lambda: h.statuses(wf.id)["T1"] == "pending_review")
+    h.coordinator.reconcile(wf.id)
+    assert h.workflows.get(wf.id).status == WorkflowStatus.RUNNING
+    waiting = [n for n in h.notices if "aguardando revisor disponivel" in n]
+    assert waiting == [f"[workflow {wf.id}] task {h.workflows.snapshot(wf.id).tasks[0].link.task_id} "
+                       "(T1): aguardando revisor disponivel (suspensos: r1)"]
+    h.available = None
+    assert h.wait_for(lambda: h.workflows.get(wf.id).status == WorkflowStatus.COMPLETED)
+
+
+def test_report_reaches_reviewer_dependent_rework_and_coordinator(make):
+    """Defeito A do workflow 4: só o JSON do handoff era gravado; a lista de achados se perdia."""
+    from quimera.workflows.presentation import snapshot_payload
+
+    h = make(["a1", "a2"])
+    report = "## Achados\n1. reviewer.py:283 falha a task\n2. coordinator.py:464 ignora revisores"
+    contexts = {"review": [], "T1": [], "T2": []}
+
+    def script(agent, delegation):
+        if _is_review(delegation):
+            contexts["review"].append(delegation["context"])
+            if len(contexts["review"]) == 1:
+                return "RETENTATIVA\nfalta o cenario do achado 2"
+            return "ACEITE\nachados conferidos"
+        item = "T1" if "T1" in delegation["task"] else "T2"
+        contexts[item].append(delegation["context"])
+        return report + "\n" + handoff_text(f"{item}: 2 achados", refs=["r"], checks=["c"])
+
+    h.scripts["*"] = script
+    wf = _start(h, [task_spec("T1", assigned_to="a1"), task_spec("T2", deps=["T1"], assigned_to="a1")])
+    h.start()
+    assert h.wait_for(lambda: h.workflows.get(wf.id).status == WorkflowStatus.COMPLETED)
+    assert "relatorio:\n## Achados\n1. reviewer.py:283" in contexts["review"][0]
+    assert "relatorio entregue:\n## Achados" in contexts["T1"][1]  # refação parte do que entregou
+    assert "relatorio:\n## Achados\n1. reviewer.py:283" in contexts["T2"][0]  # dependente recebe a entrega
+    payload = snapshot_payload(h.workflows.snapshot(wf.id), include_results=True)
+    assert payload["work_items"][0]["report"] == report + "\nTrabalho feito."  # texto fora do bloco
+    assert payload["work_items"][0]["summary"] == "T1: 2 achados"
+

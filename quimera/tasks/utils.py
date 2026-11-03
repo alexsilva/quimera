@@ -4,6 +4,9 @@ Extraídos de ``AppTaskServices`` para reduzir acoplamento.
 """
 from __future__ import annotations
 
+from ..domain.task_states import TaskStatus
+from .events import TaskRequeued
+
 
 _MAX_COMPLETED_TASK_RESULTS_CHARS = 2000
 _MAX_COMPLETED_TASK_RESULT_DESC_CHARS = 80
@@ -115,3 +118,29 @@ def _strip_empty_trailing(lines: list[str]) -> list[str]:
     while lines and not lines[-1].strip():
         lines.pop()
     return lines
+
+
+def format_task_requeue(event: TaskRequeued) -> str:
+    """Linha do feed para a task que voltou à fila: quem fica com ela e por quê."""
+    attempt = f"tentativa {event.attempt + 1}"
+    if event.assigned_to:
+        line = f"[task {event.task_id}] volta para {event.assigned_to} refazer ({attempt})"
+    elif event.failed_agent:
+        line = f"[task {event.task_id}] sai de {event.failed_agent} e passa para outro agente ({attempt})"
+    else:
+        line = f"[task {event.task_id}] volta para a fila ({attempt})"
+    reason = next(
+        (part.strip() for part in str(event.reason or "").splitlines() if part.strip()), ""
+    )
+    if len(reason) > _MAX_TASK_FEEDBACK_SUMMARY_CHARS:
+        reason = f"{reason[: _MAX_TASK_FEEDBACK_SUMMARY_CHARS - 1].rstrip()}…"
+    return f"{line}: {reason}" if reason else line
+
+
+def describe_rework(status: TaskStatus | None, owner: str | None) -> str:
+    """Desfecho de uma devolução de entrega (``TaskRepository.rework_task``) para o feed."""
+    if status == TaskStatus.PENDING:
+        return f"volta para {owner} refazer" if owner else "volta para a fila"
+    if status == TaskStatus.FAILED:
+        return "limite de entregas devolvidas atingido; a task falhou"
+    return "a task mudou durante a run; nada foi devolvido"

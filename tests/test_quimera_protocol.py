@@ -4534,7 +4534,9 @@ class ProfileTests(unittest.TestCase):
         with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.profiles.get",
                 side_effect=lambda _agent: FakeProfile(True),
-        ), patch("quimera.tasks.repository.TaskRepository.transition_task") as transition_task, patch(
+        ), patch("quimera.tasks.repository.TaskRepository.return_review") as return_review, patch(
+            "quimera.tasks.repository.TaskRepository.can_review_task", return_value=True
+        ), patch(
             "quimera.tasks.repository.TaskRepository.fail_task"
         ) as fail_task:
             app._setup_task_executors()
@@ -4550,16 +4552,11 @@ class ProfileTests(unittest.TestCase):
                 "[task 10] antigravity: review falhou: timeout",
             ],
         )
-        transition_task.assert_called_once_with(
-            10,
-            TaskStatus.PENDING_REVIEW,
-            result="ok",
-            notes="timeout",
-        )
+        return_review.assert_called_once_with(10, AGENT_GEMINI, "timeout", exclude_reviewer=True)
         fail_task.assert_not_called()
 
-    def test_review_handler_fails_when_pending_review_transition_fails(self):
-        """Verifica que review handler fails when pending review transition fails."""
+    def test_review_handler_leaves_the_task_alone_when_pending_review_transition_fails(self):
+        """A task mudou desde o claim (outra revisão, cancelamento): nada é sobrescrito."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         from quimera.app.agent_pool import AgentPool
@@ -4598,10 +4595,12 @@ class ProfileTests(unittest.TestCase):
         with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.profiles.get",
                 side_effect=lambda _agent: FakeProfile(True),
-        ), patch("quimera.tasks.repository.TaskRepository.transition_task") as transition_task, patch(
+        ), patch("quimera.tasks.repository.TaskRepository.return_review") as return_review, patch(
+            "quimera.tasks.repository.TaskRepository.can_review_task", return_value=True
+        ), patch(
             "quimera.tasks.repository.TaskRepository.fail_task"
         ) as fail_task:
-            transition_task.return_value = False
+            return_review.return_value = False
             app._setup_task_executors()
             ok = review_handlers[AGENT_GEMINI](
                 TaskRecord(id=12, job_id=0, description="", status="reviewing", assigned_to=AGENT_CLAUDE, result="ok")
@@ -4615,19 +4614,11 @@ class ProfileTests(unittest.TestCase):
                 "[task 12] antigravity: review falhou: timeout",
             ],
         )
-        transition_task.assert_called_once_with(
-            12,
-            TaskStatus.PENDING_REVIEW,
-            result="ok",
-            notes="timeout",
-        )
-        fail_task.assert_called_once_with(
-            12,
-            reason="review failed and fallback transition failed: timeout",
-        )
+        return_review.assert_called_once_with(12, AGENT_GEMINI, "timeout", exclude_reviewer=True)
+        fail_task.assert_not_called()
 
-    def test_review_handler_fails_when_no_other_operational_reviewer_exists(self):
-        """Verifica que review handler fails when no other operational reviewer exists."""
+    def test_review_handler_completes_with_the_delivery_when_no_other_reviewer_exists(self):
+        """Avulsa sem outro revisor operacional: conclui com a entrega do executor, sem falhar."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         from quimera.app.agent_pool import AgentPool
@@ -4671,7 +4662,9 @@ class ProfileTests(unittest.TestCase):
                 side_effect=lambda agent: FakeProfile(agent == AGENT_GEMINI),
         ), patch("quimera.tasks.repository.TaskRepository.transition_task") as update_task, patch(
             "quimera.tasks.repository.TaskRepository.fail_task"
-        ) as fail_task:
+        ) as fail_task, patch(
+            "quimera.tasks.repository.TaskRepository.complete_task"
+        ) as complete_task:
             app._setup_task_executors()
             ok = review_handlers[AGENT_GEMINI](
                 TaskRecord(id=11, job_id=0, description="", status="reviewing", assigned_to=AGENT_CLAUDE, result="ok")
@@ -4683,12 +4676,13 @@ class ProfileTests(unittest.TestCase):
             [
                 "[task 11] antigravity: revisando execução de claude",
                 "[task 11] antigravity: review falhou: timeout",
+                "[task 11] antigravity: sem outro revisor no pool; concluída com a entrega do executor",
             ],
         )
         update_task.assert_not_called()
-        fail_task.assert_called_once_with(
-            11,
-            reason="review failed without operational fallback: timeout",
+        fail_task.assert_not_called()
+        complete_task.assert_called_once_with(
+            11, result="ok", notes="concluida sem revisao: antigravity: timeout"
         )
 
     def test_setup_task_executors_only_registers_review_for_operational_agents(self):

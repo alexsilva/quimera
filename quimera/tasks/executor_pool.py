@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 from ..agents import AgentClient
 from ..agents.capabilities import get_pause_idle_if, is_user_cancelled, share_cancel_event
+from ..app.agent_call_service import DEFAULT_MAX_RATE_LIMIT_WAIT
 from ..app.dispatch import AppDispatchServices, DispatchDependencies
 from ..runtime.approval import ApprovalManager
 from ..runtime.config import ToolRuntimeConfig
@@ -55,19 +56,27 @@ class _BackgroundMetricsView:
 class _BackgroundDispatchPerCall:
     """Proxy que cria dispatch/AgentClient/ToolExecutor isolados para cada chamada."""
 
-    def __init__(self, owner: "TaskExecutorPool", *, auto_approve_task_tools: bool = False) -> None:
+    def __init__(
+        self,
+        owner: "TaskExecutorPool",
+        *,
+        auto_approve_task_tools: bool = False,
+        rate_limit_unavailable: bool = False,
+    ) -> None:
+        """``rate_limit_unavailable``: execução/revisão de task não espera rate
+        limit; o agente sem cota sai da rotação na hora e a task segue com outro."""
         self._owner = owner
         self._auto_approve_task_tools = auto_approve_task_tools
+        self._rate_limit_unavailable = rate_limit_unavailable
 
     def delegate(self, target_agent: str, **kwargs):
         delegation = kwargs.get("delegation")
         read_only = isinstance(delegation, dict) and delegation.get("read_only") is True
-        background_dispatch = (
-            self._owner._create_background_dispatch_services(
-                execution_mode_override=read_only_mode(self._owner.get_execution_mode())
-            )
-            if read_only
-            else self._owner._create_background_dispatch_services()
+        background_dispatch = self._owner._create_background_dispatch_services(
+            execution_mode_override=(
+                read_only_mode(self._owner.get_execution_mode()) if read_only else None
+            ),
+            rate_limit_unavailable=self._rate_limit_unavailable,
         )
         if background_dispatch is None:
             fallback_delegate = self._owner._delegate if self._owner._allow_delegate_fallback else None
@@ -157,6 +166,7 @@ class TaskExecutorPool:
         get_record_failure: Callable[[], Callable[[str], None] | None] | None = None,
         record_success: Callable[[str], None] | None = None,
         get_record_success: Callable[[], Callable[[str], None] | None] | None = None,
+        record_rate_limited: Callable[[str, float | None], None] | None = None,
         show_muted_message: Callable[[str], None] | None = None,
         get_show_muted_message: Callable[[], Callable[[str], None] | None] | None = None,
         session_metrics: Any = None,
@@ -224,6 +234,7 @@ class TaskExecutorPool:
         self._get_record_failure = get_record_failure
         self._record_success = record_success
         self._get_record_success = get_record_success
+        self._record_rate_limited = record_rate_limited
         self._show_muted_message = show_muted_message
         self._get_show_muted_message = get_show_muted_message
         self._session_metrics = session_metrics
@@ -333,7 +344,7 @@ class TaskExecutorPool:
         """
 
         def _allowed() -> bool:
-            if not failover_policy.is_active_agent(agent):
+            if not failover_policy.is_available(agent):
                 return False
             return claim_gate is None or bool(claim_gate())
 
@@ -564,7 +575,7 @@ class TaskExecutorPool:
         return []
 
     def _available_agents(self) -> list[Any]:
-        """Membros do pool fora de suspensão: os únicos que reivindicam, revisam e recebem failover."""
+        """Membros do pool fora de suspensão: os únicos que reivindicam trabalho agora."""
         if self._get_available_agents is not None:
             return list(self._get_available_agents() or [])
         return self._agent_pool_agents()
@@ -620,7 +631,10 @@ class TaskExecutorPool:
         cancel_checker_override=None,
         cancel_event: threading.Event | None = None,
         execution_mode_override=None,
+        rate_limit_unavailable: bool = False,
     ):
+        """Dispatch isolado; ``rate_limit_unavailable`` troca a espera do rate limit
+        curto pela suspensão imediata do agente (``record_rate_limited``)."""
         with self._background_clients_lock:
             if self._background_shutdown:
                 return None
@@ -748,8 +762,10 @@ class TaskExecutorPool:
                 max_retries=self._max_retries,
                 retry_backoff=self._retry_backoff_seconds,
                 rate_limit_backoff=self._get_rate_limit_backoff_seconds or (lambda: 30),
+                max_rate_limit_wait=0 if rate_limit_unavailable else DEFAULT_MAX_RATE_LIMIT_WAIT,
                 record_failure=self.get_record_failure(),
                 record_success=self.get_record_success(),
+                record_rate_limited=self._record_rate_limited,
             )
         )
 
@@ -769,8 +785,14 @@ class TaskExecutorPool:
         self._background_dispatch_services = self._create_background_dispatch_services()
         return self._background_dispatch_services
 
-    def _background_dispatch_per_call(self, *, auto_approve_task_tools: bool = False):
-        return _BackgroundDispatchPerCall(self, auto_approve_task_tools=auto_approve_task_tools)
+    def _background_dispatch_per_call(
+        self, *, auto_approve_task_tools: bool = False, rate_limit_unavailable: bool = False
+    ):
+        return _BackgroundDispatchPerCall(
+            self,
+            auto_approve_task_tools=auto_approve_task_tools,
+            rate_limit_unavailable=rate_limit_unavailable,
+        )
 
     def _register_background_agent_client(self, client) -> bool:
         should_cancel = False
@@ -863,7 +885,9 @@ class TaskExecutorPool:
         if classify is None:
             raise RuntimeError("TaskExecutorPool sem classify_task_execution_result")
         return TaskRunner(
-            dispatch_services=self._background_dispatch_per_call(auto_approve_task_tools=True),
+            dispatch_services=self._background_dispatch_per_call(
+                auto_approve_task_tools=True, rate_limit_unavailable=True
+            ),
             system_layer=self.get_system_layer(),
             repository=self._build_task_repository(),
             failover_policy=failover_policy,
@@ -877,7 +901,7 @@ class TaskExecutorPool:
         if classify is None:
             raise RuntimeError("TaskExecutorPool sem classify_task_review_result")
         return TaskReviewer(
-            dispatch_services=self._background_dispatch_per_call(),
+            dispatch_services=self._background_dispatch_per_call(rate_limit_unavailable=True),
             system_layer=self.get_system_layer(),
             repository=self._build_task_repository(),
             failover_policy=failover_policy,
@@ -898,9 +922,10 @@ class TaskExecutorPool:
 
     def _build_task_failover_policy(self) -> TaskFailoverPolicy:
         return TaskFailoverPolicy(
-            active_agents=self._available_agents,
+            active_agents=self._agent_pool_agents,
             get_agent_profile=self._get_agent_profile or (lambda _name: None),
             repository=self._build_task_repository(),
+            available_agents=self._available_agents,
         )
 
     # ── Auto-approval (delegated to TaskApprovalPolicy) ────────────────

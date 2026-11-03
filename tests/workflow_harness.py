@@ -89,6 +89,7 @@ class Harness:
     delegations: list = field(default_factory=list)
     consult_answer: str | None = None
     active: list = field(default_factory=list)
+    available: list | None = None  # None: todo membro de ``active`` está disponível
 
     def __post_init__(self):
         self.db = str(self.tmp_path / "tasks.db")
@@ -118,12 +119,17 @@ class Harness:
             self.workflows,
             self.tasks,
             get_active_agents=lambda: list(self.active),
+            get_available_agents=self.available_agents,
             get_job_id=lambda: self.job_id,
             interrupt_tasks=lambda ids: self.interrupted.append(tuple(ids)),
             live_task_ids=lambda: set(self.live),
             notify=self.notices.append,
             consult=self._consult,
         )
+
+    def available_agents(self) -> list[str]:
+        """Membros fora de suspensão (``available``); sem a lista, todos de ``active``."""
+        return list(self.active if self.available is None else self.available)
 
     def new_session(self) -> WorkflowCoordinator:
         """Simula reinício do app: novo job e novo coordenador sobre o mesmo banco."""
@@ -149,6 +155,7 @@ class Harness:
             active_agents=lambda: list(self.active),
             get_agent_profile=lambda name: _Profile(name=name),
             repository=self.tasks,
+            available_agents=self.available_agents,
         )
         hooks = WorkflowTaskHooks(self.workflows, self.tasks, self.tmp_path)
         harness = self
@@ -178,6 +185,8 @@ class Harness:
             executor.set_handler(runner.handler_for(agent))
             executor.set_review_handler(reviewer.handler_for(agent))
             executor.set_review_eligibility(lambda a=agent: a in self.active)
+            # Como no pool real: suspenso não reivindica execução nem revisão.
+            executor.set_claim_gate(lambda a=agent: a in self.available_agents())
             executor.start()
             self.executors.append(executor)
 

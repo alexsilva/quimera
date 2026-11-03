@@ -51,7 +51,12 @@ from quimera.domain.tool_line import (
 from quimera.prompt_templates import PromptText
 
 from quimera.agents.cancel_signal import ForkCancelEvent
-from quimera.agents.parsers import parse_stream_json, parse_codex_json, parse_opencode_json
+from quimera.agents.parsers import (
+    parse_codex_json,
+    parse_opencode_json,
+    parse_stream_json,
+    stream_rate_limit,
+)
 from quimera.agents.process_runner import ProcessRunner, MAX_WALL_CLOCK_SECONDS
 from quimera.agents.signal_guard import EscMonitor, terminate_process_group
 from quimera.agents.warm_pool import WarmPool
@@ -66,6 +71,7 @@ from quimera.agents.text_filters import (
     _should_ignore_stderr_line,
     _filter_stderr_lines,
     _is_rate_limit_signal,
+    _reports_rate_limit_in_stream,
 )
 from quimera.runtime.drivers.openai_compat import (
     APIExecutionError as _APIExecutionError,
@@ -1109,6 +1115,7 @@ class AgentClient:
             self._cancel_event, self.idle_timeout,
             max_wall_clock=self._effective_max_execution_seconds(),
             pause_idle_if=self._pause_idle_if,
+            watch_stderr_rate_limit=not _reports_rate_limit_in_stream(agent),
         )
 
         try:
@@ -1354,7 +1361,11 @@ class AgentClient:
 
         def _on_item(stream_type, line):
             nonlocal stderr_lines_shown
-            if stream_type == "stderr" and _is_rate_limit_signal(line):
+            if (
+                stream_type == "stderr"
+                and runner.watch_stderr_rate_limit
+                and _is_rate_limit_signal(line)
+            ):
                 runner.notify_rate_limit()
             cleaned = _strip_spinner(line.rstrip("\n"))
             if not cleaned.strip():
@@ -1470,6 +1481,22 @@ class AgentClient:
 
     def _report_cli_exit(self, proc, *, cmd, agent, silent, output, error, run_started):
         """Traduz código de saída e stdout vazio em erro e recibo; devolve o stdout útil."""
+        provider_limit = stream_rate_limit(output) if _reports_rate_limit_in_stream(agent) else None
+        if provider_limit is not None:
+            # Cota ou rate limit relatados no stream do CLI (o processo sai com
+            # erro comum): o dispatch trata como rate limit, não como falha.
+            self.rate_limit_detected = True
+            self.rate_limit_retry_after = provider_limit.retry_after
+            if self.rate_limit_detected_at is None:
+                self.rate_limit_detected_at = time.time()
+            self._show_error(f"[erro] {agent or cmd[0]}: {provider_limit.message}")
+            self._record_run_failure(
+                "rate_limited", provider_limit.message,
+                agent=agent, command=cmd[0] if cmd else None,
+                exit_code=proc.returncode, started_at=run_started,
+                retry_after=provider_limit.retry_after,
+            )
+            return None
         if proc.returncode != 0:
             if self._is_expected_termination_return_code(proc.returncode):
                 self._record_run_failure(

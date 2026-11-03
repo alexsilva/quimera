@@ -86,14 +86,14 @@ def test_monitor_reconciles_in_background_and_stops(tmp_path):
 
 
 def test_decision_consult_builds_delegation_and_surfaces_transport_failure():
-    calls, notices = [], []
+    calls = []
     workflow = SimpleNamespace(id=7, status=WorkflowStatus.BLOCKED, coordinator="claude")
 
     def delegate(agent, **kwargs):
         calls.append((agent, kwargs))
         return "decisao"
 
-    consult = build_decision_consult(delegate, notify=notices.append)
+    consult = build_decision_consult(delegate)
     assert consult(workflow, "blocked:v1:T2", "estado persistido") == "decisao"
     agent, kwargs = calls[0]
     assert agent == "claude" and kwargs["prompt_kind"] == PromptKind.DELEGATION
@@ -105,9 +105,46 @@ def test_decision_consult_builds_delegation_and_surfaces_transport_failure():
     def broken(agent, **kwargs):
         raise ConnectionError("rede caiu")
 
-    assert build_decision_consult(broken, notify=notices.append)(workflow, "x", "y") is None
-    assert "falhou" in notices[0] and "rede caiu" in notices[0]  # falha visivel, estado preservado
+    # Falha de transporte vai ao log; quem avisa o humano é o coordenador (sem decisão gravada).
+    assert build_decision_consult(broken)(workflow, "x", "y") is None
 
+
+@pytest.mark.parametrize("answer", [None, ""])
+def test_coordinator_warns_when_the_consult_gets_no_decision(tmp_path, answer):
+    """V05: coordenador sem cota não respondia e o workflow ficava sem decisão, em silêncio."""
+    h = Harness(tmp_path, ["a1"], consult_answer=answer)
+    h.scripts["*"] = lambda agent, d: None
+    wf = h.coordinator.create(plan_payload([task_spec("T1")]), requested_by="claude").workflow
+    h.coordinator.start(wf.id)
+    h.start()
+    assert h.wait_for(lambda: h.workflows.get(wf.id).status == WorkflowStatus.BLOCKED)
+    assert h.notices[-1] == (
+        f"[workflow {wf.id}] sem decisao de claude; o estado persistido foi mantido para decisao manual."
+    )
+
+
+
+def test_coordinator_does_not_warn_when_the_consult_replanned_before_falling_silent(tmp_path):
+    """Replan pelas tools e depois sem resposta: houve decisão, "estado mantido" seria falso."""
+
+    class Replanning(Harness):
+        def _consult(self, workflow, attention, status_text):
+            super()._consult(workflow, attention, status_text)
+            if attention.startswith("blocked:v1"):
+                self.coordinator.replan(
+                    workflow.id, plan_payload([task_spec("T2")]), base_version=1
+                )
+                return None
+            return "decidido"
+
+    h = Replanning(tmp_path, ["a1"])
+    h.scripts["*"] = lambda agent, d: None
+    wf = h.coordinator.create(plan_payload([task_spec("T1")]), requested_by="claude").workflow
+    h.coordinator.start(wf.id)
+    h.start()
+    assert h.wait_for(lambda: f"[workflow {wf.id}] claude: decidido" in h.notices)
+    assert [c[1].split(":")[1] for c in h.consults] == ["v1", "v2"]
+    assert not [n for n in h.notices if "sem decisao" in n]
 
 def test_consult_budget_is_bounded_and_not_repeated(tmp_path):
     h = Harness(tmp_path, ["a1"])
@@ -192,7 +229,7 @@ def test_background_dispatch_registers_the_run_while_it_executes():
             seen["closed"] = True
 
     pool = TaskExecutorPool()
-    pool._create_background_dispatch_services = lambda: _Bg()
+    pool._create_background_dispatch_services = lambda **_kwargs: _Bg()
     pool.get_dispatch_services = lambda: None
     result = _BackgroundDispatchPerCall(pool).delegate("a1", delegation={"delegation_id": "task-5"})
     assert result == "ok" and seen == {"live": {5}, "closed": True}
@@ -215,7 +252,7 @@ def test_run_registered_after_cancel_never_reaches_the_agent():
             pass
 
     pool = TaskExecutorPool()
-    pool._create_background_dispatch_services = lambda: _Bg()
+    pool._create_background_dispatch_services = lambda **_kwargs: _Bg()
     pool.get_dispatch_services = lambda: None
     assert pool.cancel_task_runs([5]) == []  # nada vivo ainda
     result = _BackgroundDispatchPerCall(pool).delegate("a1", delegation={"delegation_id": "task-5"})

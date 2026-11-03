@@ -115,6 +115,7 @@ class AppTaskServices:
         get_record_failure: Callable[[], Callable[[str], None] | None] | None = None,
         record_success: Callable[[str], None] | None = None,
         get_record_success: Callable[[], Callable[[str], None] | None] | None = None,
+        record_rate_limited: Callable[[str, float | None], None] | None = None,
         session_metrics: Any = None,
         get_session_metrics: Callable[[], Any] | None = None,
         debug_prompt_metrics: bool | None = None,
@@ -289,6 +290,7 @@ class AppTaskServices:
             get_record_failure=self._get_record_failure,
             record_success=record_success,
             get_record_success=self._get_record_success,
+            record_rate_limited=record_rate_limited,
             show_muted_message=show_muted_message,
             get_show_muted_message=self._get_show_muted_message,
             session_metrics=session_metrics,
@@ -689,14 +691,14 @@ class AppTaskServices:
             WorkflowRepository(tasks, limits),
             tasks,
             get_active_agents=self._agent_pool_agents,
+            get_available_agents=self._available_agents,
             get_job_id=self._current_job_id,
             interrupt_tasks=pool.cancel_task_runs,
             live_task_ids=pool.live_task_ids,
             wake=self._wake_workflow_activity,
             notify=notify,
-            consult=build_decision_consult(
-                pool._background_dispatch_per_call().delegate, notify=notify
-            ),
+            # A consulta espera um rate limit curto do coordenador (não é execução de task).
+            consult=build_decision_consult(pool._background_dispatch_per_call().delegate),
         )
         service = WorkflowService(
             coordinator,

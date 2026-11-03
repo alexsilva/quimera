@@ -80,10 +80,6 @@ class TaskRepository:
         """True quando uma tentativa antiga tenta escrever sobre uma mais nova."""
         return expected is not None and int(current or 0) != int(expected)
 
-    @staticmethod
-    def _attempts_exhausted(attempt_count: int, max_attempts: int | None) -> bool:
-        return max_attempts is not None and attempt_count >= max_attempts
-
     def _publish_requeue(
         self,
         task_id: int,
@@ -92,6 +88,7 @@ class TaskRepository:
         failed_agent: str,
         attempt: int,
         exhausted: bool,
+        assigned_to: str | None = None,
     ) -> None:
         if exhausted:
             self._publish(
@@ -105,6 +102,7 @@ class TaskRepository:
                 reason=reason,
                 failed_agent=failed_agent,
                 attempt=attempt,
+                assigned_to=assigned_to,
             )
         )
 
@@ -167,7 +165,9 @@ class TaskRepository:
             "requested_by": "TEXT",
             "reviewed_by": "TEXT",
             "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+            "rework_count": "INTEGER NOT NULL DEFAULT 0",
             "failed_agents": "TEXT",
+            "failed_reviewers": "TEXT",
             "started_at": "DATETIME",
             "completed_at": "DATETIME",
         }
@@ -344,7 +344,7 @@ class TaskRepository:
         sql = (
             "SELECT id, job_id, description, body, status, task_type, origin, assigned_to, "
             "result, notes, priority, created_at, updated_at, created_by, requested_by, "
-            "started_at, completed_at, reviewed_by, attempt_count "
+            "started_at, completed_at, reviewed_by, attempt_count, rework_count "
             "FROM tasks"
         )
         clauses: list[str] = []
@@ -384,6 +384,7 @@ class TaskRepository:
                 completed_at=r[16],
                 reviewed_by=r[17],
                 attempt_count=int(r[18] or 0),
+                rework_count=int(r[19] or 0),
             )
             for r in rows
         ]
@@ -487,16 +488,15 @@ class TaskRepository:
         reason: str,
         *,
         observed: tuple[str, int, str | None] | None = None,
-        max_attempts: int | None = None,
     ) -> bool:
         """Recoloca na fila uma task cuja execução ou revisão foi interrompida.
 
-        Execução interrompida volta a ``pending`` com nova tentativa; revisão
-        interrompida volta a ``pending_review`` e preserva o resultado do executor.
-        ``observed`` = ``(status, attempt_count, updated_at)`` lidos na decisão: se a
-        linha mudou desde então (novo claim ou desfecho), nada é alterado. Com
-        ``max_attempts``, a tentativa que esgota o limite vai a ``failed`` aqui mesmo,
-        sem janela para um novo claim.
+        Execução interrompida (reinício, lease expirado) volta a ``pending`` com
+        nova tentativa e o mesmo dono: a interrupção não é falha do agente nem
+        consome as entregas da task. Revisão interrompida volta a
+        ``pending_review`` e preserva o resultado do executor. ``observed`` =
+        ``(status, attempt_count, updated_at)`` lidos na decisão: se a linha mudou
+        desde então (novo claim ou desfecho), nada é alterado.
         """
         row = conn.execute(
             "SELECT status, attempt_count, updated_at FROM tasks WHERE id = ?", (int(task_id),)
@@ -515,32 +515,23 @@ class TaskRepository:
             return True
         if row[0] != TaskStatus.IN_PROGRESS:
             return False
-        attempt_count = int(row[1] or 0) + 1
-        exhausted = self._attempts_exhausted(attempt_count, max_attempts)
-        if exhausted:
-            reason = f"limite de {max_attempts} tentativas atingido: {reason}"
         conn.execute(
-            "UPDATE tasks SET status = ?, assigned_to = NULL, result = NULL, notes = ?, "
-            "attempt_count = ?, started_at = NULL, completed_at = ?, updated_at = ? "
-            "WHERE id = ?",
-            (
-                TaskStatus.FAILED if exhausted else TaskStatus.PENDING,
-                reason,
-                attempt_count,
-                now if exhausted else None,
-                now,
-                int(task_id),
-            ),
+            "UPDATE tasks SET status = ?, result = NULL, notes = ?, attempt_count = ?, "
+            "started_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?",
+            (TaskStatus.PENDING, reason, int(row[1] or 0) + 1, now, int(task_id)),
         )
         return True
 
-    def unassign_pending_task(self, task_id: int) -> bool:
-        """Remove a atribuição de uma task ainda ``pending`` para que o roteador a redistribua."""
+    def unassign_pending_task(self, task_id: int, owner: str) -> bool:
+        """Solta uma task ainda ``pending`` de ``owner`` para que outro agente a reivindique.
+
+        CAS no dono: se a task mudou de mãos desde a leitura, nada é alterado.
+        """
         with self.transaction() as conn:
             cur = conn.execute(
                 "UPDATE tasks SET assigned_to = NULL, updated_at = ? "
-                "WHERE id = ? AND status = ? AND assigned_to IS NOT NULL",
-                (self._now(), int(task_id), TaskStatus.PENDING),
+                "WHERE id = ? AND status = ? AND assigned_to = ?",
+                (self._now(), int(task_id), TaskStatus.PENDING, owner),
             )
             return cur.rowcount == 1
 
@@ -555,40 +546,26 @@ class TaskRepository:
             )
 
     def release_agent_tasks(self, agent_name: str) -> None:
-        """Libera tasks pendentes/em progresso de um agente para reatribuição.
+        """Libera para reatribuição as tasks pendentes de um agente que ficou indisponível.
 
-        Tasks de rastreamento de delegação (origin='delegate') não são
-        roteáveis: o desfecho delas é gravado pelo finalize do delegate com a
-        causa real da falha; resetá-las aqui órfana o recibo e perde o status
-        terminal.
+        Só as que esperam na fila: a run em curso, que a suspensão por falhas
+        em outras chamadas não invalida, termina e segue o caminho normal; se
+        ela fosse solta aqui, outro agente a reivindicaria e as duas runs
+        escreveriam na mesma task. Tasks de rastreamento de delegação
+        (origin='delegate') não são roteáveis: o desfecho delas é gravado pelo
+        finalize do delegate com a causa real da falha. Tasks de workflow
+        também ficam: a reconciliação do workflow solta a task pronta de dono
+        indisponível e avisa no feed.
         """
         conn = self._conn()
         cur = conn.cursor()
         try:
             cur.execute("BEGIN IMMEDIATE")
-            # Task de workflow em curso liberada conta como tentativa encerrada do
-            # agente removido: nova tentativa (a run antiga fica cercada pelo fence)
-            # e o agente entra em failed_agents. As demais origens não mudam.
-            token = self._failed_agents_token(agent_name)
             cur.execute(
-                "UPDATE tasks SET assigned_to = NULL, status = ?, updated_at = ?, "
-                "attempt_count = attempt_count "
-                "+ CASE WHEN status = ? AND origin = 'workflow' THEN 1 ELSE 0 END, "
-                "failed_agents = CASE WHEN status = ? AND origin = 'workflow' "
-                "AND instr(COALESCE(failed_agents, ''), ?) = 0 "
-                "THEN COALESCE(failed_agents, '') || ? ELSE failed_agents END "
-                "WHERE assigned_to = ? AND status IN (?, ?) AND origin != 'delegate'",
-                (
-                    TaskStatus.PENDING,
-                    self._now(),
-                    TaskStatus.IN_PROGRESS,
-                    TaskStatus.IN_PROGRESS,
-                    token,
-                    token,
-                    agent_name,
-                    TaskStatus.PENDING,
-                    TaskStatus.IN_PROGRESS,
-                ),
+                "UPDATE tasks SET assigned_to = NULL, updated_at = ? "
+                "WHERE assigned_to = ? AND status = ? "
+                "AND origin NOT IN ('delegate', 'workflow')",
+                (self._now(), agent_name, TaskStatus.PENDING),
             )
             conn.commit()
             conn.close()
@@ -757,12 +734,14 @@ class TaskRepository:
         reason: str | None = None,
         *,
         expected_attempt: int | None = None,
-        max_attempts: int | None = None,
+        exclude_agent: bool = True,
     ) -> bool:
-        """Retorna task para pending após falha de execução.
+        """Retorna task para pending após falha de execução, para outro agente.
 
-        Com ``max_attempts``, a tentativa que esgota o limite leva a task a
-        ``failed`` na mesma transação, sem janela para um novo claim.
+        ``failed_agent`` entra em ``failed_agents`` e não reivindica mais a task.
+        ``exclude_agent=False`` é para o agente que ficou indisponível (rate
+        limit, suspensão): a task vai para quem estiver disponível e ele pode
+        retomá-la quando voltar.
         """
         conn = self._conn()
         cur = conn.cursor()
@@ -786,30 +765,19 @@ class TaskRepository:
                 return False
             failed_agents = row[1] or ""
             token = self._failed_agents_token(failed_agent)
-            if token not in failed_agents:
+            if exclude_agent and token not in failed_agents:
                 failed_agents += token
             attempt_count = int(row[2] or 0) + 1
             job_id = row[3]
-            exhausted = self._attempts_exhausted(attempt_count, max_attempts)
-            if exhausted:
-                reason = f"limite de {max_attempts} tentativas atingido: {reason or ''}".strip()
             cur.execute(
                 "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
-                "failed_agents = ?, attempt_count = ?, started_at = NULL, completed_at = ?, updated_at = ? WHERE id = ?",
-                (
-                    TaskStatus.FAILED if exhausted else TaskStatus.PENDING,
-                    reason,
-                    reason,
-                    failed_agents,
-                    attempt_count,
-                    now if exhausted else None,
-                    now,
-                    task_id,
-                ),
+                "failed_agents = ?, attempt_count = ?, started_at = NULL, completed_at = NULL, "
+                "updated_at = ? WHERE id = ?",
+                (TaskStatus.PENDING, reason, reason, failed_agents or None, attempt_count, now, task_id),
             )
             conn.commit()
             conn.close()
-            self._publish_requeue(task_id, job_id, reason, failed_agent, attempt_count, exhausted)
+            self._publish_requeue(task_id, job_id, reason, failed_agent, attempt_count, False)
             return True
         except Exception:
             conn.rollback()
@@ -860,6 +828,9 @@ class TaskRepository:
             }
             if reviewed_by:
                 fields["reviewed_by"] = reviewed_by
+            elif row[0] == TaskStatus.REVIEWING:
+                # Concluída da revisão sem revisor informado: a revisão não aconteceu.
+                fields["reviewed_by"] = None
             if executed_by:
                 fields["assigned_to"] = executed_by
             set_clause = ", ".join(f"{k} = ?" for k in fields)
@@ -937,9 +908,8 @@ class TaskRepository:
         notes: str | None = None,
         *,
         expected_attempt: int | None = None,
-        max_attempts: int | None = None,
     ) -> bool:
-        """Retorna task para pending após falha no review (``max_attempts`` como em ``requeue_task``)."""
+        """Retorna task avulsa para pending após falha no review, para outro agente."""
         conn = self._conn()
         cur = conn.cursor()
         try:
@@ -966,32 +936,119 @@ class TaskRepository:
                 failed_agents += token
             attempt_count = int(row[2] or 0) + 1
             job_id = row[3]
-            exhausted = self._attempts_exhausted(attempt_count, max_attempts)
-            if exhausted:
-                notes = f"limite de {max_attempts} tentativas atingido: {notes or ''}".strip()
             cur.execute(
                 "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
                 "reviewed_by = NULL, failed_agents = ?, attempt_count = ?, "
-                "started_at = NULL, completed_at = ?, updated_at = ? WHERE id = ?",
-                (
-                    TaskStatus.FAILED if exhausted else TaskStatus.PENDING,
-                    result,
-                    notes,
-                    failed_agents,
-                    attempt_count,
-                    now if exhausted else None,
-                    now,
-                    task_id,
-                ),
+                "started_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?",
+                (TaskStatus.PENDING, result, notes, failed_agents, attempt_count, now, task_id),
             )
             conn.commit()
             conn.close()
-            self._publish_requeue(task_id, job_id, notes, failed_agent, attempt_count, exhausted)
+            self._publish_requeue(task_id, job_id, notes, failed_agent, attempt_count, False)
             return True
         except Exception:
             conn.rollback()
             conn.close()
             raise
+
+    def rework_task(
+        self,
+        task_id: int,
+        owner: str | None,
+        reason: str,
+        *,
+        result: str | None = None,
+        expected_attempt: int | None = None,
+        max_reworks: int | None = None,
+    ) -> TaskStatus | None:
+        """Devolve a entrega rejeitada para ``owner`` refazer (None: a quem estiver disponível).
+
+        Diferente do requeue por falha, ninguém entra em ``failed_agents``: a
+        rodada soma ``rework_count``, e a que atinge ``max_reworks`` leva a task a
+        ``failed`` na mesma transação, sem janela para um novo claim. A nova
+        entrega será outra: ``failed_reviewers`` recomeça vazio. Devolve o estado
+        em que a task ficou (``pending`` ou ``failed``), ou None se a tentativa já
+        não era a atual.
+        """
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT status, attempt_count, rework_count, job_id FROM tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+            if (
+                not row
+                or not can_transition(row[0], TaskStatus.PENDING)
+                or self._stale_attempt(row[1], expected_attempt)
+            ):
+                return None
+            attempt_count = int(row[1] or 0) + 1
+            rework_count = int(row[2] or 0) + 1
+            job_id = row[3]
+            exhausted = max_reworks is not None and rework_count >= max_reworks
+            if exhausted:
+                reason = f"limite de {max_reworks} entregas rejeitadas atingido: {reason}"
+            status = TaskStatus.FAILED if exhausted else TaskStatus.PENDING
+            now = self._now()
+            conn.execute(
+                "UPDATE tasks SET status = ?, assigned_to = ?, result = ?, notes = ?, "
+                "reviewed_by = NULL, failed_reviewers = NULL, attempt_count = ?, "
+                "rework_count = ?, started_at = NULL, completed_at = ?, updated_at = ? "
+                "WHERE id = ?",
+                (
+                    status,
+                    owner,
+                    result,
+                    reason,
+                    attempt_count,
+                    rework_count,
+                    now if exhausted else None,
+                    now,
+                    task_id,
+                ),
+            )
+        self._publish_requeue(
+            task_id, job_id, reason, owner or "", attempt_count, exhausted, assigned_to=owner
+        )
+        return status
+
+    def return_review(
+        self,
+        task_id: int,
+        reviewer: str,
+        reason: str,
+        *,
+        expected_attempt: int | None = None,
+        exclude_reviewer: bool = True,
+    ) -> bool:
+        """Revisão sem veredito: a task volta a ``pending_review`` para outro revisor.
+
+        ``reviewer`` entra em ``failed_reviewers`` e não revisa mais esta
+        entrega; sem isso, dois revisores sem resposta trocariam a revisão entre
+        si sem fim. ``exclude_reviewer=False`` é para o revisor que ficou
+        indisponível (rate limit, suspensão): ele pode revisar quando voltar. O
+        resultado do executor fica intacto.
+        """
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT status, attempt_count, failed_reviewers FROM tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+            if (
+                not row
+                or not can_transition(row[0], TaskStatus.PENDING_REVIEW)
+                or self._stale_attempt(row[1], expected_attempt)
+            ):
+                return False
+            failed_reviewers = row[2] or ""
+            token = self._failed_agents_token(reviewer)
+            if exclude_reviewer and token not in failed_reviewers:
+                failed_reviewers += token
+            conn.execute(
+                "UPDATE tasks SET status = ?, reviewed_by = NULL, notes = ?, failed_reviewers = ?, "
+                "updated_at = ? WHERE id = ?",
+                (TaskStatus.PENDING_REVIEW, reason, failed_reviewers or None, self._now(), task_id),
+            )
+        return True
 
     def transition_task(
         self,
@@ -1184,7 +1241,7 @@ class TaskRepository:
         try:
             cur.execute("BEGIN IMMEDIATE")
             job_filter = "AND job_id = ?" if job_id is not None else ""
-            params: list = [agent_name, agent_name]
+            params: list = [agent_name, agent_name, f"%{self._failed_agents_token(agent_name)}%"]
             if job_id is not None:
                 params.append(job_id)
             cur.execute(
@@ -1193,6 +1250,7 @@ class TaskRepository:
                 WHERE status = ?
                   AND (assigned_to IS NULL OR assigned_to != ?)
                   AND (reviewed_by IS NULL OR reviewed_by != ?)
+                  AND COALESCE(failed_reviewers, '') NOT LIKE ?
                   {job_filter}
                   {REVIEW_CLAIM_GATE_SQL}
                 ORDER BY id ASC
@@ -1225,12 +1283,20 @@ class TaskRepository:
 
     def can_reassign_task(self, task_id: int, candidate_agents: list[str]) -> bool:
         """Retorna True quando algum candidato ainda pode assumir a task."""
+        return self._has_candidate(task_id, candidate_agents, "failed_agents")
+
+    def can_review_task(self, task_id: int, candidate_agents: list[str]) -> bool:
+        """Retorna True quando algum candidato ainda pode revisar a task."""
+        return self._has_candidate(task_id, candidate_agents, "failed_reviewers")
+
+    def _has_candidate(self, task_id: int, candidate_agents: list[str], column: str) -> bool:
+        """Algum candidato fora da lista de agentes que já falharam na task (``column``)."""
         if not candidate_agents:
             return False
         conn = self._conn()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT failed_agents FROM tasks WHERE id = ?", (task_id,))
+            cur.execute(f"SELECT {column} FROM tasks WHERE id = ?", (task_id,))
             row = cur.fetchone()
         except sqlite3.Error:
             conn.close()
@@ -1238,7 +1304,5 @@ class TaskRepository:
         conn.close()
         if not row:
             return False
-        failed_agents = row[0] or ""
-        return any(
-            self._failed_agents_token(a) not in failed_agents for a in candidate_agents
-        )
+        failed = row[0] or ""
+        return any(self._failed_agents_token(a) not in failed for a in candidate_agents)

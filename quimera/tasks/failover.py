@@ -24,27 +24,46 @@ class _TaskRepositoryProto(Protocol):
     def can_reassign_task(self, task_id: int, candidate_agents: list[str]) -> bool:
         """Retorna True quando a task pode ser reatribuída."""
 
+    def can_review_task(self, task_id: int, candidate_agents: list[str]) -> bool:
+        """Retorna True quando algum candidato ainda pode revisar a task."""
+
 
 class TaskFailoverPolicy:
-    """Decide elegibilidade de review e possibilidade de failover."""
+    """Decide elegibilidade de review e possibilidade de failover.
+
+    Quem ainda pode executar ou revisar uma task é decidido sobre os membros
+    do pool (``active_agents``), inclusive os suspensos: um agente sem cota
+    volta quando o prazo vence, e contar só os disponíveis no momento fazia um
+    429 de segundos falhar a task. A disponibilidade (``available_agents``)
+    decide só quem reivindica agora e se quem falhou estava indisponível.
+    """
 
     def __init__(
         self,
         active_agents: list[str] | None | Callable[[], list[str] | None],
         get_agent_profile: Callable[[str], _TaskProfileProto | None],
         repository: TaskRepository | _TaskRepositoryProto,
+        available_agents: Callable[[], list[str] | None] | None = None,
     ) -> None:
         if callable(active_agents):
             self._get_active_agents = active_agents
         else:
             self._get_active_agents = lambda: active_agents or []
+        self._get_available_agents = available_agents or self._get_active_agents
         self.get_agent_profile = get_agent_profile
         self.repository = repository
 
     @property
     def active_agents(self) -> list[str]:
-        """Retorna a lista atual de agentes ativos."""
+        """Retorna a lista atual de agentes ativos (membros do pool)."""
         return list(self._get_active_agents() or [])
+
+    def is_available(self, agent_name: str) -> bool:
+        """Membro do pool fora de suspensão (pode reivindicar trabalho agora)."""
+        return any(
+            self._same_agent_identity(agent_name, available)
+            for available in self._get_available_agents() or []
+        )
 
     @staticmethod
     def _normalize_agent_name(agent_name: str | None) -> str:
@@ -144,6 +163,16 @@ class TaskFailoverPolicy:
         ]
         return self.repository.can_reassign_task(task_id, candidate_agents)
 
-    def has_review_failover(self, executor_agent: str | None, failed_reviewer: str) -> bool:
-        """Indica se restam revisores válidos após falha."""
-        return bool(self.review_agents_for(executor_agent=executor_agent, exclude_agents={failed_reviewer}))
+    def can_review(
+        self,
+        task_id: int,
+        executor_agent: str | None,
+        *,
+        exclude_agents: Iterable[str] = (),
+    ) -> bool:
+        """Algum membro do pool, fora o executor, ``exclude_agents`` e quem já falhou
+        ao revisar a entrega, pode revisá-la."""
+        return self.repository.can_review_task(
+            task_id,
+            self.review_agents_for(executor_agent=executor_agent, exclude_agents=exclude_agents),
+        )

@@ -75,3 +75,19 @@ def _is_rate_limit_signal(text: str | None) -> bool:
     if not text:
         return False
     return bool(_RATE_LIMIT_RE.search(text))
+
+
+# Formatos em que o CLI relata a recusa do provedor no stream de eventos
+# (``parsers.stream_rate_limit``) e refaz sozinho os 429 transitórios.
+_STREAM_RATE_LIMIT_FORMATS = frozenset({"stream-json", "codex-json"})
+
+
+def _reports_rate_limit_in_stream(agent: str | None) -> bool:
+    """CLI que relata rate limit e cota no stream de eventos, não no stderr.
+
+    Só nesses formatos uma linha JSON de topo é evento do CLI: o texto do
+    modelo vem aninhado nos eventos. Em texto puro, a resposta que cita um
+    evento (um fixture de teste, por exemplo) não pode virar cota esgotada.
+    """
+    profile = profiles.get(agent) if agent else None
+    return getattr(profile, "output_format", None) in _STREAM_RATE_LIMIT_FORMATS

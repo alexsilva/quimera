@@ -231,10 +231,12 @@ class WorkflowService:
 
 def build_decision_consult(
     delegate: DecisionDelegate,
-    *,
-    notify: Callable[[str], None],
 ) -> Callable[[WorkflowRecord, str, str], str | None]:
-    """Cria a consulta ao agente principal usada pelo coordenador em pontos de decisão."""
+    """Cria a consulta ao agente principal usada pelo coordenador em pontos de decisão.
+
+    Sem resposta (indisponível, sem cota, erro de transporte) devolve None; o
+    coordenador avisa o humano se a decisão não ficou registrada.
+    """
 
     def consult(workflow: WorkflowRecord, attention: str, status_text: str) -> str | None:
         state = workflow.status.value
@@ -269,12 +271,8 @@ def build_decision_consult(
                 silent=True,
                 prompt_kind=PromptKind.DELEGATION,
             )
-        except Exception as exc:  # noqa: BLE001 - fronteira de transporte/modelo, reportada ao usuário
+        except Exception:  # noqa: BLE001 - fronteira de transporte/modelo; o coordenador avisa o humano
             _logger.exception("consulta ao coordenador do workflow %s falhou", workflow.id)
-            notify(
-                f"[workflow {workflow.id}] consulta a {workflow.coordinator} falhou ({exc}); "
-                "o estado persistido foi mantido para decisao manual."
-            )
             return None
 
     return consult

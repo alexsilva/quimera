@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
+from ..domain.task_states import TaskStatus
 from ..prompt_kinds import PromptKind
 from ..runtime.models import TaskRecord
-from .attempt_fence import AttemptFence, RetryFence
+from .attempt_fence import AttemptFence
+from .utils import describe_rework
 
 
 class _DispatchServicesProto(Protocol):
@@ -44,7 +46,7 @@ class _TaskRepositoryProto(Protocol):
         reason: str | None = None,
         *,
         expected_attempt: int | None = None,
-        max_attempts: int | None = None,
+        exclude_agent: bool = True,
     ) -> bool:
         ...
 
@@ -79,8 +81,7 @@ class _TaskHooksProto(Protocol):
     def abort(self, task: TaskRecord, agent: str, reason: str) -> None:
         ...
 
-    @property
-    def max_attempts(self) -> int:
+    def rework(self, task: TaskRecord, owner: str | None, reason: str) -> TaskStatus | None:
         ...
 
     def discarded(self, task: TaskRecord) -> bool:
@@ -96,6 +97,9 @@ class _FailoverPolicyProto(Protocol):
         ...
 
     def can_failover(self, task_id: int, failed_agent: str) -> bool:
+        ...
+
+    def is_available(self, agent_name: str) -> bool:
         ...
 
 
@@ -134,10 +138,6 @@ class TaskRunner:
         hooks = self.task_hooks if task.origin == "workflow" else None
         # Tasks de workflow só aceitam escrita da tentativa que as reivindicou.
         fence: AttemptFence = {"expected_attempt": task.attempt_count} if hooks is not None else {}
-        # Requeue de workflow respeita o limite de tentativas na própria transação.
-        retry: RetryFence = (
-            {**fence, "max_attempts": hooks.max_attempts} if hooks is not None else {}
-        )
         try:
             description = task.description or ""
             body = task.body or description
@@ -158,7 +158,6 @@ class TaskRunner:
             }
             if hooks is not None:
                 delegation = hooks.delegation_for(task, agent_name, delegation)
-            review_agents = self.failover_policy.review_agents_for(agent_name)
             desc_preview = (description[:60] + "\u2026") if len(description) > 60 else description
             self.system_layer.show_muted_message(
                 f"[task {task_id}] {agent_name}: iniciando \u2014 {desc_preview}"
@@ -198,37 +197,54 @@ class TaskRunner:
                 self._abort(hooks, task, agent_name, "interrompida pelo workflow")
                 return False
 
+            if hooks is not None and response is not None and not response.strip():
+                # Resposta vazia não é entrega: em workflow conta como agente que não respondeu.
+                response = None
             if response is None:
                 # A falha do agente já foi contabilizada pelo AgentCallService do
                 # dispatch, depois dos retries internos; contar aqui de novo
                 # suspendia o agente com uma única task sem resposta.
+                reason = (
+                    "communication failed"
+                    if self.failover_policy.is_available(agent_name)
+                    else "suspenso durante a run (rate limit, cota ou falhas seguidas)"
+                )
                 self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: sem resposta")
-                self._abort(hooks, task, agent_name, "communication failed")
-                if self.failover_policy.can_failover(task_id, agent_name):
-                    self.repository.requeue_task(
-                        task_id, agent_name, reason="communication failed", **retry
-                    )
-                else:
-                    self.repository.fail_task(task_id, reason="communication failed", **fence)
+                self._abort(hooks, task, agent_name, reason)
+                self._hand_off(task, agent_name, reason, fence)
                 return False
 
             self.system_layer.show_muted_message(
                 f"[task {task_id}] {agent_name}:\n{response.strip()}"
             )
-            ok, task_result = self.classify_task_execution_result(response)
-            if ok and hooks is not None:
+            if hooks is not None:
+                # Em workflow quem julga a entrega é o handoff verificado: as palavras-chave
+                # de bloqueio das tasks avulsas reprovavam relatórios válidos que citam
+                # "cannot". Entrega reprovada volta para o mesmo agente refazer.
                 ok, task_result = hooks.finish(task, agent_name, response)
-            elif not ok:
-                self._abort(hooks, task, agent_name, task_result)
-            if not ok:
-                self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: bloqueada")
-                if self.failover_policy.can_failover(task_id, agent_name):
-                    self.repository.requeue_task(task_id, agent_name, reason=task_result, **retry)
-                else:
-                    self.repository.fail_task(task_id, reason=task_result, **fence)
-                return False
+                if not ok:
+                    if hooks.discarded(task):
+                        # Cancelada ou substituída durante a run: não há entrega a devolver.
+                        self.system_layer.show_muted_message(
+                            f"[task {task_id}] {agent_name}: {task_result}"
+                        )
+                        return False
+                    status = hooks.rework(task, agent_name, task_result)
+                    self.system_layer.show_muted_message(
+                        f"[task {task_id}] {agent_name}: entrega devolvida ({task_result}); "
+                        + describe_rework(status, agent_name)
+                    )
+                    return False
+            else:
+                ok, task_result = self.classify_task_execution_result(response)
+                if not ok:
+                    self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: bloqueada")
+                    self._hand_off(task, agent_name, task_result, fence)
+                    return False
 
-            if review_agents:
+            # Revisores contados no fim da run e entre os membros do pool: um
+            # revisor suspenso agora volta e revisa; a foto do início dispensava a revisão.
+            if self.failover_policy.review_agents_for(agent_name):
                 ok = self.repository.submit_for_review(task_id, result=task_result, **fence)
                 if not ok:
                     self.system_layer.show_muted_message(
@@ -252,11 +268,25 @@ class TaskRunner:
         except Exception as exc:
             self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: erro: {exc}")
             self._abort(hooks, task, agent_name, str(exc))
-            if self.failover_policy.can_failover(task_id, agent_name):
-                self.repository.requeue_task(task_id, agent_name, reason=str(exc), **retry)
-            else:
-                self.repository.fail_task(task_id, reason=str(exc), **fence)
+            self._hand_off(task, agent_name, str(exc), fence)
             return False
+
+    def _hand_off(self, task: TaskRecord, agent: str, reason: str, fence: AttemptFence) -> None:
+        """Falha do agente: a task passa a outro, ou falha quando ninguém mais pode executá-la.
+
+        Agente que ficou indisponível na run (suspenso por rate limit ou falhas
+        seguidas) não falhou nesta task: ela volta à fila para quem estiver
+        disponível, sem excluí-lo, e espera se ninguém estiver. O que segue
+        disponível e falhou não a reivindica mais.
+        """
+        if not self.failover_policy.is_available(agent):
+            self.repository.requeue_task(
+                task.id, agent, reason=f"{agent} indisponivel: {reason}", exclude_agent=False, **fence
+            )
+        elif self.failover_policy.can_failover(task.id, agent):
+            self.repository.requeue_task(task.id, agent, reason=reason, **fence)
+        else:
+            self.repository.fail_task(task.id, reason=reason, **fence)
 
     @staticmethod
     def _abort(hooks: _TaskHooksProto | None, task: TaskRecord, agent: str, reason: str) -> None:

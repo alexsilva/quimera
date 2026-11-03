@@ -7,7 +7,9 @@ refresh/retry e loop de tools pertencem ao :class:`CloudDriver` comum.
 """
 from __future__ import annotations
 
+import json
 import logging
+import math
 import uuid
 from collections import OrderedDict
 from typing import Optional
@@ -140,6 +142,16 @@ def _chat_tools_to_responses_tools(tools: list[dict]) -> list[dict]:
             "strict": False,
         })
     return converted
+
+
+def _usage_reset_seconds(detail: str) -> float | None:
+    """Prazo do limite de uso no corpo do 429 (``error.resets_in_seconds``), sem ``Retry-After``."""
+    try:
+        error = json.loads(detail).get("error") or {}
+        seconds = float(error["resets_in_seconds"])
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+    return max(seconds, 0.0) if math.isfinite(seconds) else None
 
 
 class CodexCloudBackend:
@@ -276,13 +288,16 @@ class CodexCloudBackend:
     def raise_for_status(status: int, detail: str, headers: httpx.Headers) -> None:
         if status == 200:
             return
-        detail = detail[:500]
         if status == 429:
+            retry_after = _parse_retry_after(headers.get("retry-after"))
+            if retry_after is None:
+                retry_after = _usage_reset_seconds(detail)
             raise TransientAPIError(
-                f"codexcloud: rate limit do backend Codex (HTTP 429): {detail}",
+                f"codexcloud: rate limit do backend Codex (HTTP 429): {detail[:500]}",
                 rate_limited=True,
-                retry_after=_parse_retry_after(headers.get("retry-after")),
+                retry_after=retry_after,
             )
+        detail = detail[:500]
         if status >= 500:
             raise TransientAPIError(
                 f"codexcloud: erro do backend Codex (HTTP {status}): {detail}"

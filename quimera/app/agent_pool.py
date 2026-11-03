@@ -82,11 +82,19 @@ class AgentPool:
             return self._available_locked()
 
     def suspend(self, name: str, *, seconds: float, reason: str) -> None:
-        """Deixa ``name`` indisponível por ``seconds``; ele continua membro do pool."""
+        """Deixa ``name`` indisponível por ``seconds``; ele continua membro do pool.
+
+        Nunca encurta uma suspensão em vigor: um 429 curto depois de uma cota
+        esgotada não devolve o agente antes do prazo maior.
+        """
         with self._lock:
             if name not in self._agents:
                 raise ValueError(f"Agente {name} não está no pool")
-            self._suspended[name] = (self._clock() + max(0.0, seconds), reason)
+            until = self._clock() + max(0.0, seconds)
+            current = self._suspended.get(name)
+            if current is not None and current[0] > until:
+                return
+            self._suspended[name] = (until, reason)
 
     def resume(self, name: str) -> bool:
         """Encerra a suspensão de ``name``; True se havia uma em vigor."""

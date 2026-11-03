@@ -459,3 +459,130 @@ def test_rate_limit_keeps_configured_minimum_when_retry_after_is_shorter():
         get_retry_after=lambda: 5.0,
     )
     assert service._compute_backoff(1) == 30.0
+
+
+def test_rate_limit_without_wait_gives_up_and_marks_the_agent_unavailable():
+    """Execução de task em background: 429 com retry-after longo não prende a task."""
+    record_failure = MagicMock()
+    record_rate_limited = MagicMock()
+    service = AgentCallService(
+        max_retries=3,
+        is_rate_limited=lambda: True,
+        get_retry_after=lambda: 3600,
+        record_failure=record_failure,
+        record_rate_limited=record_rate_limited,
+    )
+    call_fn = MagicMock(return_value=None)
+    with patch("quimera.app.agent_call_service.time.sleep") as sleep:
+        assert service.call("fable", call_fn, lambda *_args: "ok", lambda: False) is None
+    call_fn.assert_called_once_with("fable")
+    sleep.assert_not_called()
+    record_rate_limited.assert_called_once_with("fable", 3600)
+    record_failure.assert_not_called()
+
+
+def test_no_response_without_rate_limit_still_retries_when_wait_is_disabled():
+    record_rate_limited = MagicMock()
+    service = AgentCallService(
+        max_retries=2, is_rate_limited=lambda: False, record_rate_limited=record_rate_limited
+    )
+    call_fn = MagicMock(side_effect=[None, "response"])
+    with patch("quimera.app.agent_call_service.time.sleep"):
+        assert service.call("a", call_fn, lambda _agent, response: response, lambda: False) == "response"
+    assert call_fn.call_count == 2
+    record_rate_limited.assert_not_called()
+
+
+def test_rate_limit_raised_as_exception_also_gives_up_without_wait():
+    """Execução de task em background (espera máxima 0): desiste mesmo sem retry-after."""
+    record_rate_limited = MagicMock()
+    service = AgentCallService(
+        max_retries=3,
+        max_rate_limit_wait=0,
+        is_rate_limited=lambda: True,
+        get_retry_after=lambda: None,
+        record_rate_limited=record_rate_limited,
+    )
+    call_fn = MagicMock(side_effect=RuntimeError("429"))
+    with patch("quimera.app.agent_call_service.time.sleep") as sleep:
+        assert service.call("fable", call_fn, lambda *_args: "ok", lambda: False) is None
+    call_fn.assert_called_once_with("fable")
+    sleep.assert_not_called()
+    record_rate_limited.assert_called_once_with("fable", None)
+
+
+def test_short_rate_limit_is_waited_outside_background_tasks():
+    """Chat e delegação esperam um rate limit curto e refazem a chamada."""
+    record_rate_limited = MagicMock()
+    service = AgentCallService(
+        max_retries=2,
+        rate_limit_backoff=30.0,
+        is_rate_limited=lambda: True,
+        get_retry_after=lambda: 5.0,
+        record_rate_limited=record_rate_limited,
+    )
+    call_fn = MagicMock(side_effect=[None, "response"])
+    with patch("quimera.app.agent_call_service.time.sleep") as sleep:
+        assert service.call("a", call_fn, lambda _agent, response: response, lambda: False) == "response"
+    assert call_fn.call_count == 2
+    assert sleep.called
+    record_rate_limited.assert_not_called()
+
+
+def test_quota_reset_beyond_the_wait_limit_marks_the_agent_unavailable():
+    """Cota esgotada com reset em horas (CLI sem crédito) não prende o chat esperando."""
+    record_failure = MagicMock()
+    record_rate_limited = MagicMock()
+    service = AgentCallService(
+        max_retries=3,
+        is_rate_limited=lambda: True,
+        get_retry_after=lambda: 226_800.0,
+        record_failure=record_failure,
+        record_rate_limited=record_rate_limited,
+    )
+    call_fn = MagicMock(return_value=None)
+    with patch("quimera.app.agent_call_service.time.sleep") as sleep:
+        assert service.call("fable", call_fn, lambda *_args: "ok", lambda: False) is None
+    call_fn.assert_called_once_with("fable")
+    sleep.assert_not_called()
+    record_rate_limited.assert_called_once_with("fable", 226_800.0)
+    record_failure.assert_not_called()
+
+
+def test_rate_limit_still_active_after_the_last_retry_is_recorded_as_rate_limit():
+    record_failure = MagicMock()
+    record_rate_limited = MagicMock()
+    service = AgentCallService(
+        max_retries=2,
+        rate_limit_backoff=1.0,
+        is_rate_limited=lambda: True,
+        get_retry_after=lambda: 2.0,
+        record_failure=record_failure,
+        record_rate_limited=record_rate_limited,
+    )
+    with patch("quimera.app.agent_call_service.time.sleep"):
+        assert service.call("a", MagicMock(return_value=None), lambda *_args: "ok", lambda: False) is None
+    record_rate_limited.assert_called_once_with("a", 2.0)
+    record_failure.assert_not_called()
+
+
+
+def test_rate_limit_exception_after_the_last_retry_is_recorded_as_rate_limit():
+    """Mesmo desfecho quando o 429 chega como exceção (drivers de API): suspende pelo prazo."""
+    record_failure = MagicMock()
+    record_rate_limited = MagicMock()
+    service = AgentCallService(
+        max_retries=2,
+        rate_limit_backoff=1.0,
+        is_rate_limited=lambda: True,
+        get_retry_after=lambda: 2.0,
+        record_failure=record_failure,
+        record_rate_limited=record_rate_limited,
+    )
+    call_fn = MagicMock(side_effect=RuntimeError("HTTP 429"))
+    with patch("quimera.app.agent_call_service.time.sleep"):
+        with pytest.raises(RuntimeError):
+            service.call("a", call_fn, lambda *_args: "ok", lambda: False)
+    assert call_fn.call_count == 2
+    record_rate_limited.assert_called_once_with("a", 2.0)
+    record_failure.assert_not_called()

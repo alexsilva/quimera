@@ -70,10 +70,15 @@ class TaskFailed(TaskEvent):
 
 @dataclass(frozen=True, kw_only=True)
 class TaskRequeued(TaskEvent):
-    """Task retornou para PENDING após falha (com retentativa)."""
+    """Task retornou para PENDING após falha (com retentativa).
+
+    ``assigned_to`` é quem fica com ela: o mesmo agente quando a entrega volta
+    para ser refeita; None quando a task passa para outro agente.
+    """
     reason: str | None = None
     failed_agent: str | None = None
     attempt: int = 1
+    assigned_to: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

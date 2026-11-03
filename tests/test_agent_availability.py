@@ -229,24 +229,25 @@ def test_bug_is_filed_once_per_streak_even_with_repeated_suspensions():
 # ── Consumidores do pool ───────────────────────────────────────────────
 
 
-def test_failover_policy_on_available_agents_ignores_suspended_until_expiry():
+def test_failover_policy_counts_suspended_members_and_claims_only_available():
+    """Suspenso não reivindica até o prazo vencer, mas segue candidato: a task espera ele voltar."""
     clock = FakeClock()
     pool = AgentPool(["claude", "codex"], clock=clock)
     profile = SimpleNamespace(name="x", prefix="/x", aliases=(), supports_tools=True, is_mcp_capable=True)
     policy = TaskFailoverPolicy(
-        active_agents=pool.available_agents,
+        active_agents=lambda: pool.agents,
         get_agent_profile=lambda name: SimpleNamespace(**{**vars(profile), "name": name, "prefix": f"/{name}"}),
         repository=SimpleNamespace(can_reassign_task=lambda task_id, candidates: bool(candidates)),
+        available_agents=pool.available_agents,
     )
     pool.suspend("codex", seconds=300, reason="2 falhas seguidas")
 
-    assert policy.is_active_agent("codex") is False
-    assert policy.review_agents_for("claude") == []
-    assert policy.can_failover(1, "claude") is False
+    assert policy.is_available("codex") is False
+    assert policy.review_agents_for("claude") == ["codex"]
+    assert policy.can_failover(1, "claude") is True
 
     clock.advance(300)
-    assert policy.is_active_agent("codex") is True
-    assert policy.can_failover(1, "claude") is True
+    assert policy.is_available("codex") is True
 
 
 def test_agents_command_marks_suspended_agents_with_reason_and_return_time():
@@ -279,3 +280,58 @@ def test_build_agents_help_without_notes_is_unchanged():
 )
 def test_format_cooldown(seconds, expected):
     assert format_cooldown(seconds) == expected
+
+
+# ── Rate limit: indisponível na hora (task de workflow não espera a cota) ──
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "expected"),
+    # Retry-After 0 (ou data vencida) não vira os 5 min do prazo escalonado: piso de 5 s.
+    [(90.0, 90.0), (7200, 3600), (None, 300), (0.0, 5.0), (0.5, 5.0)],
+)
+def test_rate_limit_suspends_at_once_for_the_provider_delay(retry_after, expected):
+    clock = FakeClock()
+    pool = AgentPool(["claude", "fable"], clock=clock)
+    released = []
+    tracker = _tracker(pool, release_agent_tasks=released.append)
+
+    tracker.record_rate_limited("fable", retry_after)
+
+    assert pool.available_agents() == ["claude"]  # sem esperar o threshold de falhas
+    assert pool.suspensions()[0].reason == "rate limit do provedor"
+    assert pool.suspensions()[0].remaining_seconds == pytest.approx(expected)
+    assert released == ["fable"]
+    tracker.record_success("fable")
+    assert pool.available_agents() == ["claude", "fable"]
+
+
+def test_shorter_rate_limit_does_not_shorten_an_active_suspension():
+    clock = FakeClock()
+    pool = AgentPool(["claude", "fable"], clock=clock)
+    tracker = _tracker(pool)
+
+    tracker.record_rate_limited("fable", 3600)
+    clock.advance(10)
+    tracker.record_rate_limited("fable", 5)
+
+    assert pool.suspensions()[0].remaining_seconds == pytest.approx(3590)
+
+
+def test_rate_limit_is_not_a_consecutive_failure():
+    """Uma falha comum depois de um 429 vencido não suspende nem abre bug de falhas seguidas."""
+    clock = FakeClock()
+    pool = AgentPool(["claude", "fable"], clock=clock)
+    bugs = []
+    tracker = _tracker(pool, file_bug=lambda **kwargs: bugs.append(kwargs))
+
+    tracker.record_rate_limited("fable", 60)
+    clock.advance(60)
+    tracker.record_failure("fable")
+
+    assert pool.available_agents() == ["claude", "fable"]
+    assert bugs == []
+    tracker.record_failure("fable")
+    # A suspensão por falhas que vem depois dobra o prazo: o 429 contou como suspensão seguida.
+    assert pool.suspensions()[0].remaining_seconds == pytest.approx(600)
+

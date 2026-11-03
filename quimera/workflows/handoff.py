@@ -1,9 +1,11 @@
 """Handoff estruturado entre tarefas: contrato, parsing e verificação determinística.
 
-O agente executor encerra sua resposta com um bloco JSON ``handoff``. O runtime
-não toma a afirmação textual como prova: o que dá para conferir (arquivos
-declarados existirem no workspace, verificações reportadas como falhas) é
-verificado aqui, sem nova chamada de IA.
+O agente executor escreve o relatório da entrega e encerra a resposta com um
+bloco JSON ``handoff``. O relatório (o texto fora do bloco) segue com o
+handoff para o revisor, as dependentes e o coordenador. O runtime não toma a
+afirmação textual como prova: o que dá para conferir (arquivos declarados
+existirem no workspace, verificações reportadas como falhas) é verificado
+aqui, sem nova chamada de IA.
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ from typing import Any
 from .models import WorkflowTaskSpec
 
 MAX_SUMMARY_CHARS = 2_000
+MAX_REPORT_CHARS = 24_000
 MAX_LIST_ITEMS = 20
 MAX_ITEM_CHARS = 300
 
@@ -23,13 +26,18 @@ _FENCED_JSON = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _STATUSES = frozenset({"success", "partial", "failed"})
 
 HANDOFF_INSTRUCTIONS = (
+    "Escreva o relatorio da entrega (achados, decisoes, evidencias) antes do bloco: ele chega "
+    "inteiro ao revisor, as tarefas dependentes e ao coordenador. "
     "Ao terminar, encerre a resposta com UM bloco ```json com este formato exato "
     "(listas podem ser vazias, mas nao invente conteudo):\n"
     '{"handoff": {"status": "success|partial|failed", "summary": "resumo objetivo", '
     '"files_changed": ["caminho/relativo"], '
     '"checks": [{"command": "o que foi executado", "outcome": "passed|failed", "detail": "saida relevante"}], '
     '"evidence_refs": ["arquivo, log ou artefato que comprova"], '
-    '"limitations": ["pendencias e limites"], "failure_reason": null}}'
+    '"limitations": ["pendencias e limites"], "failure_reason": null}}\n'
+    'Em checks, "outcome" diz se a verificacao sustenta a entrega: "passed" quando o resultado '
+    "confirma o que voce relata (inclusive um teste ou script que reproduz o defeito relatado); "
+    '"failed" quando contradiz a entrega ou mostra trabalho por fazer.'
 )
 
 
@@ -59,9 +67,11 @@ class Handoff:
     structured: bool = True
     truncated: bool = False
     unverified_files: tuple[str, ...] = field(default=())
+    # Texto da resposta fora do bloco JSON: a entrega em si (achados, lista, parecer).
+    report: str = ""
 
     def to_json(self) -> str:
-        """Serialização persistida em ``tasks.result`` (resumo primeiro)."""
+        """Serialização persistida em ``tasks.result`` (resumo primeiro, relatório por último)."""
         data = asdict(self)
         ordered = {"summary": data.pop("summary"), **data}
         return json.dumps(ordered, ensure_ascii=False)
@@ -85,25 +95,31 @@ class Handoff:
                 structured=bool(data.get("structured", True)),
                 truncated=bool(data.get("truncated", False)),
                 unverified_files=tuple(data.get("unverified_files", ())),
+                report=str(data.get("report") or ""),
             )
         except (TypeError, ValueError, KeyError):
             return None
 
 
 def parse_handoff(text: str, *, task_id: int, attempt: int, agent: str) -> Handoff:
-    """Extrai o handoff da resposta; sem bloco válido devolve um handoff não estruturado."""
-    payload = _extract_block(text)
-    if payload is None:
+    """Extrai o handoff e o relatório da resposta; sem bloco válido devolve um handoff não estruturado."""
+    block = _extract_block(text)
+    if block is None:
+        body = text.strip()
         return Handoff(
             task_id=task_id,
             attempt=attempt,
             agent=agent,
             status="success",
-            summary=_clip(text.strip(), MAX_SUMMARY_CHARS),
+            summary=_clip(body, MAX_SUMMARY_CHARS),
             limitations=("handoff nao estruturado: resultado nao verificavel",),
             structured=False,
-            truncated=len(text.strip()) > MAX_SUMMARY_CHARS,
+            truncated=len(body) > MAX_REPORT_CHARS,
+            # Só o que o resumo cortou: o texto curto já está inteiro no resumo.
+            report=_clip(body, MAX_REPORT_CHARS) if len(body) > MAX_SUMMARY_CHARS else "",
         )
+    payload, (start, end) = block
+    report = f"{text[:start].rstrip()}\n\n{text[end:].lstrip()}".strip()
     status = str(payload.get("status") or "").strip().lower()
     if status not in _STATUSES:
         status = "failed"
@@ -125,7 +141,11 @@ def parse_handoff(text: str, *, task_id: int, attempt: int, agent: str) -> Hando
         evidence_refs=refs,
         limitations=limits,
         failure_reason=str(reason) if reason else None,
-        truncated=cut_files or cut_refs or cut_limits or len(summary) > MAX_SUMMARY_CHARS,
+        truncated=(
+            cut_files or cut_refs or cut_limits
+            or len(summary) > MAX_SUMMARY_CHARS or len(report) > MAX_REPORT_CHARS
+        ),
+        report=_clip(report, MAX_REPORT_CHARS),
     )
 
 
@@ -152,7 +172,11 @@ def evaluate(handoff: Handoff, spec: WorkflowTaskSpec) -> tuple[bool, str]:
         return False, "arquivos declarados inexistentes: " + ", ".join(handoff.unverified_files)
     failed = [check.command for check in handoff.checks if check.outcome.lower() == "failed"]
     if failed:
-        return False, "verificacoes falharam: " + "; ".join(failed)
+        return False, (
+            "verificacoes com outcome failed contradizem a entrega: " + "; ".join(failed)
+            + ". Se a verificacao confirma o que voce relata (ex.: reproduz o defeito), "
+            "declare outcome passed; se mostra algo por fazer, corrija ou declare status partial"
+        )
     if spec.evidence_expected:
         if not handoff.structured:
             return False, "evidencia esperada, mas o handoff nao e estruturado"
@@ -165,7 +189,8 @@ def evaluate(handoff: Handoff, spec: WorkflowTaskSpec) -> tuple[bool, str]:
     return True, handoff.summary
 
 
-def _extract_block(text: str) -> dict[str, Any] | None:
+def _extract_block(text: str) -> tuple[dict[str, Any], tuple[int, int]] | None:
+    """Último bloco ```json com ``handoff`` e a posição dele no texto."""
     for match in reversed(list(_FENCED_JSON.finditer(text or ""))):
         try:
             data = json.loads(match.group(1))
@@ -173,7 +198,7 @@ def _extract_block(text: str) -> dict[str, Any] | None:
             continue
         inner = data.get("handoff") if isinstance(data, dict) else None
         if isinstance(inner, dict):
-            return inner
+            return inner, match.span()
     return None
 
 

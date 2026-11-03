@@ -15,7 +15,7 @@ from ..tasks.events import (
     TaskRequeued,
     TaskSubmittedForReview,
 )
-from ..tasks.utils import summarize_task_feedback
+from ..tasks.utils import format_task_requeue, summarize_task_feedback
 from .config import logger
 from ..ui.textual.constants import (
     format_failover_message,
@@ -79,11 +79,12 @@ class UiEventHandler:
             self._show_muted_message(f"[task {event.task_id}] submetida para revisão")
 
         def _on_task_requeued(event):
+            line = format_task_requeue(event)
             sl = self._system_layer
             if sl is not None and hasattr(sl, "show_warning_message"):
-                sl.show_warning_message(f"[task {event.task_id}] requeue (tentativa {event.attempt})")
+                sl.show_warning_message(line)
             else:
-                self._renderer.show_warning(f"[task {event.task_id}] requeue (tentativa {event.attempt})")
+                self._renderer.show_warning(line)
 
         def _on_bug_filed(event):
             severity_icon = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢"}.get(

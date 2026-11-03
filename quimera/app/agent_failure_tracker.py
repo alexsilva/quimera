@@ -1,4 +1,5 @@
 """Rastreamento de falhas consecutivas de agentes."""
+import math
 import threading
 from collections import defaultdict
 from typing import Callable
@@ -24,6 +25,9 @@ class AgentFailureTracker:
     FAILURE_THRESHOLD = 2
     COOLDOWN_BASE_SECONDS = 5 * 60
     COOLDOWN_MAX_SECONDS = 60 * 60
+    # Piso do prazo informado pelo provedor: ``Retry-After: 0`` não vira
+    # nova chamada imediata (e um 429 em seguida) nem os 5 min do prazo escalonado.
+    RATE_LIMIT_MIN_SECONDS = 5
 
     def __init__(
         self,
@@ -94,10 +98,7 @@ class AgentFailureTracker:
                 )
         if cooldown is not None:
             logger.warning("agent %s suspended for %ds after %d failures", name, cooldown, failures)
-            try:
-                self._release_agent_tasks(name)
-            except Exception as exc:
-                logger.warning("falha ao liberar as tasks do agente %s: %s", name, exc)
+            self._release(name)
         if self._record_metric is not None:
             self._record_metric(name)
         if failures == self.FAILURE_THRESHOLD and self._file_bug is not None:
@@ -111,3 +112,39 @@ class AgentFailureTracker:
                 description=f"Falhas consecutivas atuais: {failures}",
                 agent=name,
             )
+
+    def record_rate_limited(self, agent, retry_after: float | None = None) -> None:
+        """Suspende o agente na hora quando o provedor responde com rate limit.
+
+        Não espera o threshold: o provedor já disse que o agente não atende
+        agora (cota ou limite de uso). O prazo é o ``retry-after`` informado,
+        entre ``RATE_LIMIT_MIN_SECONDS`` e o teto de sempre; sem ele, o prazo
+        escalonado das suspensões seguidas. Não conta como falha consecutiva:
+        uma falha comum depois do prazo não suspende nem abre bug por isso.
+        """
+        name = self._normalize(agent)
+        if not name:
+            return
+        with self._lock:
+            cooldown = None
+            if name in self._agent_pool:
+                self._strikes[name] += 1
+                if isinstance(retry_after, (int, float)) and 0 <= retry_after < math.inf:
+                    cooldown = min(
+                        max(float(retry_after), self.RATE_LIMIT_MIN_SECONDS),
+                        self.COOLDOWN_MAX_SECONDS,
+                    )
+                else:
+                    cooldown = self.cooldown_seconds(self._strikes[name])
+                self._agent_pool.suspend(name, seconds=cooldown, reason="rate limit do provedor")
+        if cooldown is not None:
+            logger.warning("agent %s suspended for %ds after provider rate limit", name, cooldown)
+            self._release(name)
+        if self._record_metric is not None:
+            self._record_metric(name)
+
+    def _release(self, name: str) -> None:
+        try:
+            self._release_agent_tasks(name)
+        except Exception as exc:
+            logger.warning("falha ao liberar as tasks do agente %s: %s", name, exc)

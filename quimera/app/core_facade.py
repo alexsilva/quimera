@@ -426,6 +426,12 @@ class CoreFacadeMixin:
         if tracker is not None:
             tracker.record_failure(agent)
 
+    def record_rate_limited(self, agent, retry_after=None):
+        """Suspende na hora o agente que recebeu rate limit numa execução em background."""
+        tracker = self.__dict__.get("failure_tracker")
+        if tracker is not None:
+            tracker.record_rate_limited(agent, retry_after)
+
     def _file_bug(
         self,
         *,

@@ -20,10 +20,13 @@ _STATUS_LABELS = {
     "cancelled": "cancelada",
 }
 _SUMMARY_CHARS = 240
+# Com include_results, o coordenador lê a entrega para decidir e sintetizar.
+_RESULT_NOTES_CHARS = 2_000
+_RESULT_REPORT_CHARS = 8_000
 
 
 def task_payload(view: TaskView, *, include_result: bool) -> dict[str, Any]:
-    """Visão compacta de uma task; o resultado completo só quando pedido."""
+    """Visão compacta de uma task; a entrega (resumo, relatório, handoff) só quando pedida."""
     data: dict[str, Any] = {
         "item": view.link.item_id,
         "task_id": view.link.task_id,
@@ -32,19 +35,27 @@ def task_payload(view: TaskView, *, include_result: bool) -> dict[str, Any]:
         "assigned_to": view.assigned_to,
         "depends_on": list(view.dependencies),
         "attempts": view.attempt_count,
+        "reworks": view.rework_count,
         "writes": view.link.writes,
     }
     if view.notes and view.status != "completed":
-        data["notes"] = view.notes[:_SUMMARY_CHARS]
+        data["notes"] = view.notes[: _RESULT_NOTES_CHARS if include_result else _SUMMARY_CHARS]
     handoff = Handoff.from_json(view.result)
     if view.status == "completed" and handoff is not None:
-        data["summary"] = handoff.summary[:_SUMMARY_CHARS]
+        data["summary"] = handoff.summary if include_result else handoff.summary[:_SUMMARY_CHARS]
         if include_result:
+            if handoff.report:
+                data["report"] = handoff.report[:_RESULT_REPORT_CHARS]
+                if len(handoff.report) > _RESULT_REPORT_CHARS:
+                    data["report_truncated"] = (
+                        f"relatorio completo em tasks_list (id={view.link.task_id})"
+                    )
             data["handoff"] = {
                 "agent": handoff.agent,
                 "files_changed": list(handoff.files_changed),
                 "checks": [
-                    {"command": c.command, "outcome": c.outcome} for c in handoff.checks
+                    {"command": c.command, "outcome": c.outcome, "detail": c.detail}
+                    for c in handoff.checks
                 ],
                 "evidence_refs": list(handoff.evidence_refs),
                 "limitations": list(handoff.limitations),
@@ -87,7 +98,10 @@ def render_text(snapshot: WorkflowSnapshot) -> str:
         lines.append(f"motivo: {workflow.status_reason}")
     for view in snapshot.tasks:
         deps = f" <- {','.join(view.dependencies)}" if view.dependencies else ""
-        retries = f" (tentativa {view.attempt_count + 1})" if view.attempt_count else ""
+        details = [f"tentativa {view.attempt_count + 1}"] if view.attempt_count else []
+        if view.rework_count:
+            details.append(f"devolvida {view.rework_count}x")
+        retries = f" ({', '.join(details)})" if details else ""
         lines.append(
             f"  [{view.link.item_id}] task {view.link.task_id} "
             f"{_STATUS_LABELS.get(view.status, view.status)}"

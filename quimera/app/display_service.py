@@ -23,7 +23,9 @@ _RETRY_TASK_KEYWORDS = (
     "bloqueada",
     "sem resposta",
     "erro:",
-    "requeue",
+    # Linha de requeue (``format_task_requeue``): entrega devolvida ou troca de agente.
+    "refazer (tentativa",
+    "passa para outro agente",
 )
 
 

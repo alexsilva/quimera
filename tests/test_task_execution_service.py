@@ -181,6 +181,7 @@ class RepositorySpy:
     def __init__(self):
         self.fail_calls = []
         self.requeue_calls = []
+        self.excluded = []
         self.submit_calls = []
         self.complete_calls = []
         self.submit_result = True
@@ -190,8 +191,9 @@ class RepositorySpy:
         self.fail_calls.append((task_id, reason))
         return True
 
-    def requeue_task(self, task_id, failed_agent, reason=None):
+    def requeue_task(self, task_id, failed_agent, reason=None, exclude_agent=True):
         self.requeue_calls.append((task_id, failed_agent, reason))
+        self.excluded.append(exclude_agent)
         return True
 
     def submit_for_review(self, task_id, result=None):
@@ -204,9 +206,13 @@ class RepositorySpy:
 
 
 class FailoverPolicyStub:
-    def __init__(self, review_agents=None, can_failover=True):
+    def __init__(self, review_agents=None, can_failover=True, available=True):
         self.review_agents = list(review_agents or [])
         self.can_failover_value = can_failover
+        self.available = available
+
+    def is_available(self, agent_name):
+        return self.available
 
     def review_agents_for(self, executor_agent=None, exclude_agents=None):
         _ = (executor_agent, exclude_agents)

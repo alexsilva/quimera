@@ -1159,6 +1159,97 @@ def test_agent_client_run_marks_rate_limit_from_stderr(renderer):
     assert client.rate_limit_detected_at is not None
 
 
+def test_agent_client_run_ignores_stderr_rate_limit_text_from_stream_cli(renderer):
+    """CLI que relata o rate limit no stream (codex, claude): linha de stderr não aborta a run."""
+    client = AgentClient(renderer, idle_timeout=1)
+
+    with patch("subprocess.Popen") as mock_popen, patch("time.sleep"):
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter(['{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n'])
+        mock_proc.stderr = iter(["INFO retry policy: exponential backoff on rate limit responses\n"])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["codex", "exec"], silent=True, agent="codex")
+
+    assert "agent_message" in result
+    assert client.rate_limit_detected is False
+
+
+# Saída real dos CLIs sem crédito (2026-11-02), reduzida aos campos lidos.
+_CLAUDE_OUT_OF_CREDITS = [
+    '{"type":"system","subtype":"init"}\n',
+    '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1793890800,'
+    '"rateLimitType":"seven_day_overage_included","overageDisabledReason":"out_of_credits"}}\n',
+    '{"type":"assistant","error":"rate_limit","is_api_error_message":true,"message":{"content":'
+    '[{"type":"text","text":"You\'re out of usage credits. Switch to another model to continue."}]}}\n',
+    '{"type":"result","subtype":"success","is_error":true,"api_error_status":429,'
+    '"api_error":"model_requires_usage_credits",'
+    '"result":"You\'re out of usage credits. Switch to another model to continue."}\n',
+]
+_CODEX_OUT_OF_CREDITS = [
+    '{"type":"thread.started","thread_id":"t"}\n',
+    '{"type":"turn.started"}\n',
+    '{"type":"error","message":"Your workspace is out of credits. Ask your workspace owner to refill in order to continue."}\n',
+    '{"type":"turn.failed","error":{"message":"Your workspace is out of credits. Ask your workspace owner to refill in order to continue."}}\n',
+]
+
+
+@pytest.mark.parametrize(
+    ("cmd", "agent", "stdout", "retry_after", "message"),
+    [
+        (["claude", "--print"], "claude", _CLAUDE_OUT_OF_CREDITS, 1793890800 - 1793664000,
+         "You're out of usage credits. Switch to another model to continue."),
+        (["codex", "exec"], "codex", _CODEX_OUT_OF_CREDITS, None,
+         "Your workspace is out of credits. Ask your workspace owner to refill in order to continue."),
+    ],
+)
+def test_agent_client_run_reports_cli_quota_from_the_stream_as_rate_limit(
+    renderer, cmd, agent, stdout, retry_after, message
+):
+    """Workflow 4 ao vivo: CLI sem crédito saía com código 1 e virava "communication failed"."""
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen, patch(
+        "quimera.agents.parsers.time.time", return_value=1793664000
+    ):
+        mock_proc = MagicMock()
+        mock_proc.stdout = list(stdout)
+        mock_proc.stderr = []
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+
+        assert client.run(cmd, silent=True, agent=agent) is None
+
+    assert client.rate_limit_detected is True
+    assert client.rate_limit_retry_after == retry_after
+    failure = client.last_run_failure
+    assert failure["error_kind"] == "rate_limited"
+    assert failure["message"] == message
+
+
+def test_agent_client_run_keeps_plain_text_answer_that_quotes_a_quota_event(renderer):
+    """CLI de texto puro: a resposta que cita um evento de cota é resposta, não cota esgotada."""
+    client = AgentClient(renderer)
+    answer = [
+        "O fixture do teste:\n",
+        "```json\n",
+        _CODEX_OUT_OF_CREDITS[-1],
+        "```\n",
+    ]
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = list(answer)
+        mock_proc.stderr = []
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["gemini"], silent=True, agent="gemini")
+
+    assert "turn.failed" in result
+    assert client.rate_limit_detected is False
+
+
 def test_agent_client_run_does_not_mark_rate_limit_from_stdout(renderer):
     """Verifica que agent client run does not mark rate limit from stdout."""
     client = AgentClient(renderer, idle_timeout=1)

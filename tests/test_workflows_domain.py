@@ -4,6 +4,7 @@ import threading
 import pytest
 
 from quimera.domain.task_states import TaskStatus
+from quimera.workflows.context import DependencyResult, render_dependency
 from quimera.workflows.handoff import Handoff, evaluate, parse_handoff, verify_files
 from quimera.workflows.models import (
     WorkflowError,
@@ -113,7 +114,25 @@ def test_handoff_rejects_missing_evidence_failed_checks_and_partial():
     assert "parcial" in evaluate(partial, spec)[1]
     text = handoff_text("rodei", checks=["pytest"]).replace('"passed"', '"failed"')
     failed = parse_handoff(text, task_id=1, attempt=0, agent="x")
-    assert "verificacoes falharam" in evaluate(failed, spec)[1]
+    reason = evaluate(failed, spec)[1]
+    # Workflow 4 ao vivo: reprodução que confirma o defeito era declarada failed e
+    # reprovava a entrega; o motivo diz o que o outcome significa e como corrigir.
+    assert "outcome failed contradizem a entrega: pytest" in reason
+    assert "reproduz o defeito), declare outcome passed" in reason
+
+
+def test_handoff_keeps_the_report_written_before_the_block():
+    """Workflow 4 ao vivo: os 8 achados vinham antes do bloco e só o JSON era gravado."""
+    text = "## Achados\n1. reviewer.py:283 falha a task\n2. coordinator.py:464 ignora revisores\n" + (
+        handoff_text("2 achados")
+    ).removeprefix("Trabalho feito.\n")
+    handoff = parse_handoff(text, task_id=1, attempt=0, agent="x")
+    assert handoff.summary == "2 achados"
+    assert handoff.report == "## Achados\n1. reviewer.py:283 falha a task\n2. coordinator.py:464 ignora revisores"
+    restored = Handoff.from_json(handoff.to_json())
+    assert restored is not None and restored.report == handoff.report
+    rendered = render_dependency(DependencyResult("A", 1, "Revisar", restored, None), 30_000)
+    assert "relatorio:\n## Achados\n1. reviewer.py:283" in rendered
 
 
 def test_handoff_verifies_declared_files(tmp_path):
@@ -340,12 +359,16 @@ def test_replan_limit_is_enforced(tmp_path):
 
 @pytest.mark.parametrize("eligible", [True, False])
 def test_unrunnable_pending_task_fails_and_blocks_instead_of_hanging(tmp_path, eligible):
-    """Task requeued a pending sem tentativas restantes (ou sem agente) falha de fato."""
+    """Task pending sem entregas restantes (ou sem agente) falha de fato."""
     agents = ["a1", "a2"] if eligible else ["a1"]
     h = Harness(tmp_path, agents, limits=WorkflowLimits(max_task_attempts=1 if eligible else 3))
     wf = _running(h, [task_spec("A")])
     task_id = h.tasks.claim_task("a1")
-    assert h.tasks.requeue_task(task_id, "a1", reason="review rejeitada")
+    if eligible:
+        # Devolução sem teto no requeue (limite reduzido depois, por exemplo).
+        assert h.tasks.rework_task(task_id, "a1", "review rejeitada")
+    else:
+        assert h.tasks.requeue_task(task_id, "a1", reason="sem resposta")
     assert h.tasks.list_tasks({"id": task_id})[0].status == TaskStatus.PENDING
     record = h.coordinator.reconcile(wf.id)
     assert h.tasks.list_tasks({"id": task_id})[0].status == TaskStatus.FAILED
@@ -386,55 +409,83 @@ def test_settle_does_not_fail_a_task_claimed_after_the_snapshot(tmp_path):
     h = Harness(tmp_path, ["a1", "a2"], limits=WorkflowLimits(max_task_attempts=1))
     wf = _running(h, [task_spec("A")])
     task_id = h.tasks.claim_task("a1")
-    assert h.tasks.requeue_task(task_id, "a1", reason="falhou")
-    stale = h.workflows.snapshot(wf.id)  # pending, tentativas esgotadas
+    assert h.tasks.rework_task(task_id, None, "falhou")
+    stale = h.workflows.snapshot(wf.id)  # pending, entregas esgotadas
     assert h.tasks.claim_task("a2") == task_id  # worker reivindica antes da decisao
     h.coordinator._settle_unrunnable(stale)
     assert h.tasks.list_tasks({"id": task_id})[0].status == TaskStatus.IN_PROGRESS
 
 
-def test_released_run_marks_the_removed_agent_and_counts_one_attempt(tmp_path):
-    """Defeito ao vivo: agente removido do pool reivindicava de novo e gastava 2 tentativas."""
+def test_suspension_keeps_the_running_workflow_task_and_frees_the_pending_one(tmp_path):
+    """Defeito ao vivo (20 tentativas 'superseded'): suspender o agente por falhas em
+    outras chamadas descartava a run de workflow que ele executava sem problema."""
     h = Harness(tmp_path, ["a1", "a2"])
-    wf = _running(h, [task_spec("A")])
-    task_id = h.tasks.claim_task("a1")
-    h.tasks.release_agent_tasks("a1")  # AgentFailureTracker removeu a1 do pool
-    task = h.tasks.list_tasks({"id": task_id})[0]
-    assert (task.status, task.attempt_count) == (TaskStatus.PENDING, 1)
-    assert h.tasks.claim_task("a1") is None  # a1 nao reivindica a mesma task de novo
-    assert h.tasks.claim_task("a2") == task_id
-    assert h.workflows.get(wf.id).status == WorkflowStatus.RUNNING
+    wf = _running(h, [task_spec("A"), task_spec("B", assigned_to="a1")])
+    ids = {v.link.item_id: v.link.task_id for v in h.workflows.snapshot(wf.id).tasks}
+    assert h.tasks.claim_task("a1") == ids["A"]
+    h.tasks.release_agent_tasks("a1")  # AgentFailureTracker suspendeu a1
+    h.available = ["a2"]
+    running, waiting = (h.tasks.list_tasks({"id": ids[item]})[0] for item in "AB")
+    assert (running.status, running.assigned_to, running.attempt_count) == (
+        TaskStatus.IN_PROGRESS, "a1", 0
+    )
+    assert (waiting.status, waiting.assigned_to) == (TaskStatus.PENDING, "a1")
+    # Quem solta a task pronta do dono suspenso é a reconciliação, com aviso no feed.
+    assert h.coordinator.reconcile(wf.id).status == WorkflowStatus.RUNNING
+    assert h.tasks.list_tasks({"id": ids["B"]})[0].assigned_to is None
+    assert any(f"task {ids['B']} (B): a1 indisponivel" in notice for notice in h.notices)
+    assert h.tasks.claim_task("a2") == ids["B"]
 
 
 # ── Regressões da revisão final ──────────────────────────────────────────────
 
 
-def test_released_legacy_task_keeps_previous_semantics(tmp_path):
-    """Só tasks de workflow ganham tentativa/failed_agents ao liberar o agente removido."""
-    h = Harness(tmp_path, ["a1"])
-    task_id = h.tasks.create_task(h.job_id, "task de /task")
-    assert h.tasks.claim_task("a1") == task_id
+def test_released_legacy_task_keeps_its_running_attempt(tmp_path):
+    """Suspender o agente solta a avulsa que espera na fila, não a que ele executa."""
+    h = Harness(tmp_path, ["a1", "a2"])
+    running = h.tasks.create_task(h.job_id, "task de /task em execucao")
+    queued = h.tasks.create_task(h.job_id, "task de /task na fila", assigned_to="a1")
+    assert h.tasks.claim_task("a1") == running
     h.tasks.release_agent_tasks("a1")
-    task = h.tasks.list_tasks({"id": task_id})[0]
-    assert (task.status, task.attempt_count) == (TaskStatus.PENDING, 0)
-    assert h.tasks.claim_task("a1") == task_id  # o agente que volta ao pool pode retomá-la
+    by_id = {task.id: task for task in h.tasks.list_tasks({"job_id": h.job_id})}
+    assert (by_id[running].status, by_id[running].assigned_to) == (TaskStatus.IN_PROGRESS, "a1")
+    assert (by_id[queued].status, by_id[queued].assigned_to) == (TaskStatus.PENDING, None)
+    assert h.tasks.claim_task("a2") == queued
 
 
-def test_requeue_at_the_attempt_limit_fails_without_a_claim_window(tmp_path):
+def test_rework_at_the_limit_fails_without_a_claim_window(tmp_path):
     h = Harness(tmp_path, ["a1", "a2", "a3"], limits=WorkflowLimits(max_task_attempts=2))
     wf = _running(h, [task_spec("A")])
     task_id = h.tasks.claim_task("a1")
-    assert h.tasks.requeue_task(task_id, "a1", reason="falhou", max_attempts=2)
-    assert h.tasks.list_tasks({"id": task_id})[0].status == TaskStatus.PENDING
+    assert h.tasks.requeue_task(task_id, "a1", reason="sem resposta")  # falha do agente: não gasta entrega
     assert h.tasks.claim_task("a2") == task_id
     assert h.tasks.submit_for_review(task_id, result="r")
     assert h.tasks.claim_review_task("a3") == task_id
-    assert h.tasks.requeue_task_after_review(task_id, "a2", notes="rejeitada", max_attempts=2)
+    assert h.tasks.rework_task(task_id, "a2", "rejeitada", max_reworks=2)
     task = h.tasks.list_tasks({"id": task_id})[0]
-    assert (task.status, task.attempt_count) == (TaskStatus.FAILED, 2)
-    assert "limite de 2 tentativas" in task.notes
-    assert h.tasks.claim_task("a3") is None
+    assert (task.status, task.assigned_to, task.rework_count) == (TaskStatus.PENDING, "a2", 1)
+    assert h.tasks.claim_task("a3") is None  # a entrega volta para quem a fez
+    assert h.tasks.claim_task("a2") == task_id
+    assert h.tasks.submit_for_review(task_id, result="r2")
+    assert h.tasks.claim_review_task("a3") == task_id
+    assert h.tasks.rework_task(task_id, "a2", "rejeitada de novo", max_reworks=2)
+    task = h.tasks.list_tasks({"id": task_id})[0]
+    assert (task.status, task.attempt_count, task.rework_count) == (TaskStatus.FAILED, 3, 2)
+    assert "limite de 2 entregas rejeitadas" in task.notes
+    assert h.tasks.claim_task("a2") is None
     assert h.coordinator.reconcile(wf.id).status == WorkflowStatus.BLOCKED
+
+
+def test_ready_task_of_a_suspended_owner_goes_to_an_available_agent(tmp_path):
+    """Dono suspenso (sem cota): a task pronta é solta e vai para quem está disponível."""
+    h = Harness(tmp_path, ["a1", "a2"])
+    wf = _running(h, [task_spec("A", assigned_to="a1")])
+    task_id = h.workflows.snapshot(wf.id).tasks[0].link.task_id
+    h.available = ["a2"]  # a1 continua no pool, mas suspenso
+    assert h.coordinator.reconcile(wf.id).status == WorkflowStatus.RUNNING
+    assert h.tasks.list_tasks({"id": task_id})[0].assigned_to is None
+    assert any("a1 indisponivel" in notice for notice in h.notices)
+    assert h.tasks.claim_task("a2") == task_id
 
 
 def test_pending_review_without_possible_reviewer_blocks_the_workflow(tmp_path):
@@ -491,14 +542,15 @@ def test_orphan_requeue_does_not_touch_a_newer_claim(tmp_path):
     _age(h, task_id)
     stale = h.workflows.snapshot(wf.id)
     observed = {v.link.task_id: (v.status, v.attempt_count, v.updated_at) for v in stale.tasks}
-    assert h.tasks.requeue_task(task_id, "a1", reason="falhou", max_attempts=5)
+    assert h.tasks.requeue_task(task_id, "a1", reason="falhou")
     assert h.tasks.claim_task("a2") == task_id  # nova tentativa viva
     assert h.workflows.requeue_orphans(wf.id, observed, "lease expirado") == ()
     task = h.tasks.list_tasks({"id": task_id})[0]
     assert (task.status, task.assigned_to, task.attempt_count) == (TaskStatus.IN_PROGRESS, "a2", 1)
 
 
-def test_orphan_requeue_respects_the_attempt_limit(tmp_path):
+def test_orphan_requeue_keeps_the_owner_and_spends_no_delivery(tmp_path):
+    """Interrupção não é falha do agente: a task volta para ele sem gastar entrega."""
     h = Harness(tmp_path, ["a1"], limits=WorkflowLimits(max_task_attempts=1))
     wf = _running(h, [task_spec("A")])
     task_id = h.tasks.claim_task("a1")
@@ -508,9 +560,11 @@ def test_orphan_requeue_respects_the_attempt_limit(tmp_path):
     observed = {task_id: (view.status, view.attempt_count, view.updated_at)}
     assert h.workflows.requeue_orphans(wf.id, observed, "lease expirado") == (task_id,)
     task = h.tasks.list_tasks({"id": task_id})[0]
-    assert task.status == TaskStatus.FAILED and "limite de 1" in task.notes
-    assert h.tasks.claim_task("a1") is None
+    assert (task.status, task.assigned_to, task.attempt_count, task.rework_count) == (
+        TaskStatus.PENDING, "a1", 1, 0
+    )
     assert h.workflows.list_attempts(task_id)[-1].status == "interrupted"
+    assert h.tasks.claim_task("a1") == task_id
 
 
 def test_recover_pauses_in_the_same_transaction_as_adoption(tmp_path):

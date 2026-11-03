@@ -50,6 +50,7 @@ class TaskRecord:
     completed_at: str | None = None
     reviewed_by: str | None = None
     attempt_count: int = 0
+    rework_count: int = 0
 
 
 @dataclass(slots=True)

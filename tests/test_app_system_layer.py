@@ -1197,10 +1197,10 @@ def test_compact_deferred_t2_annotates_multiple_retries():
 
 
 def test_compact_deferred_t2_annotates_requeue_as_retry():
-    """requeue (tentativa N) conta como retry."""
+    """A linha de requeue (devolução ou troca de agente) conta como retry."""
     deferred = [
         ("system", "[task 1] codex: iniciando"),
-        ("warning", "[task 1] requeue (tentativa 2)"),
+        ("warning", "[task 1] volta para codex refazer (tentativa 2): RETENTATIVA"),
         ("system", "[task 1] codex: iniciando"),
         ("system", "[task 1] codex: concluída"),
     ]

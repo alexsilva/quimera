@@ -40,7 +40,10 @@ class ProcessRunner:
         idle_timeout,
         max_wall_clock: float | None = MAX_WALL_CLOCK_SECONDS,
         pause_idle_if=None,
+        watch_stderr_rate_limit: bool = True,
     ):
+        """``watch_stderr_rate_limit=False`` para CLIs que relatam o rate limit no
+        stream de eventos: uma linha de stderr não aborta a run."""
         self.proc = proc
         self.stdout_thread = stdout_thread
         self.stderr_thread = stderr_thread
@@ -49,6 +52,7 @@ class ProcessRunner:
         self._idle_timeout = idle_timeout
         self._max_wall_clock = max_wall_clock
         self._pause_idle_if = pause_idle_if
+        self.watch_stderr_rate_limit = watch_stderr_rate_limit
         self.rate_limit_detected = False
         self.rate_limit_detected_at: float | None = None
         self._rate_limit_detected_monotonic_at: float | None = None
@@ -66,6 +70,8 @@ class ProcessRunner:
 
     def _check_rate_limit_silent(self) -> None:
         """Verifica novos itens de stderr por sinais de rate limit (modo silencioso)."""
+        if not self.watch_stderr_rate_limit:
+            return
         current_stderr = self.result_holder["stderr"]
         for line in itertools.islice(current_stderr, self._rate_checked, None):
             if _is_rate_limit_signal(line):

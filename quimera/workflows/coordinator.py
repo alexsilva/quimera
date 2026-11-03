@@ -46,6 +46,7 @@ class WorkflowCoordinator:
         *,
         get_active_agents: Callable[[], list[str]],
         get_job_id: Callable[[], int | None],
+        get_available_agents: Callable[[], list[str]] | None = None,
         interrupt_tasks: Callable[[Iterable[int]], list[int] | None] = lambda _ids: None,
         live_task_ids: Callable[[], set[int]] | None = None,
         wake: Callable[[], None] = lambda: None,
@@ -56,6 +57,8 @@ class WorkflowCoordinator:
         self._repo = repository
         self._tasks = tasks
         self._get_active_agents = get_active_agents
+        # Membros fora de suspensão; sem a fonte, todo membro do pool conta como disponível.
+        self._get_available_agents = get_available_agents or get_active_agents
         self._get_job_id = get_job_id
         self._interrupt_tasks = interrupt_tasks
         self._live_task_ids = live_task_ids
@@ -63,6 +66,8 @@ class WorkflowCoordinator:
         self._notify = notify
         self._consult = consult
         self._now = now or (lambda: datetime.now(timezone.utc))
+        # (task, tentativa, estado) já avisados como à espera de agente suspenso.
+        self._waiting_notified: set[tuple[int, int, str]] = set()
 
     @property
     def limits(self) -> WorkflowLimits:
@@ -381,11 +386,15 @@ class WorkflowCoordinator:
         return self._repo.snapshot(snapshot.workflow.id)
 
     def _settle_unrunnable(self, snapshot: WorkflowSnapshot) -> WorkflowSnapshot:
-        """Falha tasks que nunca poderão rodar (sem agente elegível ou sem tentativas)."""
+        """Solta tasks de dono indisponível e falha as que nunca poderão rodar."""
         active = self._get_active_agents()
+        available = self._get_available_agents()
         by_item = {view.link.item_id: view for view in snapshot.tasks}
         changed = False
         for view in snapshot.tasks:
+            if view.status == "pending_review":
+                self._notify_if_no_reviewer_available(snapshot.workflow.id, view, active, available)
+                continue
             ready = view.status == "pending" and all(
                 by_item[dep].status == "completed"
                 for dep in view.dependencies
@@ -393,15 +402,25 @@ class WorkflowCoordinator:
             )
             if not ready:
                 continue
-            if view.assigned_to and view.assigned_to not in active:
-                # Só esta task volta ao roteador; tasks do agente fora do workflow não são tocadas.
-                changed |= self._tasks.unassign_pending_task(view.link.task_id)
+            if view.assigned_to and view.assigned_to not in available:
+                # Dono fora do pool ou suspenso (sem cota, falhas seguidas): a task
+                # passa a quem estiver disponível. Tasks fora do workflow não são tocadas.
+                if self._tasks.unassign_pending_task(view.link.task_id, view.assigned_to):
+                    changed = True
+                    self._notify(
+                        f"[workflow {snapshot.workflow.id}] task {view.link.task_id} "
+                        f"({view.link.item_id}): {view.assigned_to} indisponivel; "
+                        "a task passa para outro agente disponivel"
+                    )
+                    self._wake()  # os executores livres reivindicam sem esperar o poll
                 continue
-            if view.attempt_count >= self.limits.max_task_attempts:
-                reason = f"limite de {self.limits.max_task_attempts} tentativas atingido"
+            if view.rework_count >= self.limits.max_task_attempts:
+                reason = f"limite de {self.limits.max_task_attempts} entregas rejeitadas atingido"
             elif not self._tasks.can_reassign_task(view.link.task_id, active):
                 reason = "nenhum agente elegivel restante"
             else:
+                if not self._tasks.can_reassign_task(view.link.task_id, available):
+                    self._notify_waiting(snapshot.workflow.id, view, "agente", active, available)
                 continue
             # CAS: se um worker reivindicou a task depois do snapshot, a decisão não vale.
             changed |= self._tasks.fail_task(
@@ -446,13 +465,51 @@ class WorkflowCoordinator:
             ):
                 self._notify(f"[workflow {record.id}] {record.coordinator}: {answer}")
             record = self._repo.get(record.id)
+            if not answer and record.status == target and not record.result:
+                # Coordenador fora do pool (cliente MCP HTTP), sem cota, com erro ou
+                # resposta vazia: a decisão fica com o humano. Se ele decidiu pelas
+                # tools antes de cair (finish grava o resultado, replan muda o
+                # estado), não há o que avisar.
+                self._notify(
+                    f"[workflow {record.id}] sem decisao de {record.coordinator}; "
+                    "o estado persistido foi mantido para decisao manual."
+                )
         return record
 
-    @staticmethod
-    def _reviewable(view: TaskView, active: list[str]) -> bool:
-        """Há no pool algum agente além do executor para revisar a task."""
+    def _notify_if_no_reviewer_available(
+        self, workflow_id: int, view: TaskView, active: list[str], available: list[str]
+    ) -> None:
+        """Revisão possível só com revisor suspenso: avisa que ela espera (não é trava)."""
+        if self._reviewable(view, active) and not self._reviewable(view, available):
+            self._notify_waiting(workflow_id, view, "revisor", active, available)
+
+    def _notify_waiting(
+        self,
+        workflow_id: int,
+        view: TaskView,
+        role: str,
+        active: list[str],
+        available: list[str],
+    ) -> None:
+        """Avisa uma vez por tentativa que a task espera um agente suspenso voltar."""
+        key = (view.link.task_id, view.attempt_count, view.status)
+        if key in self._waiting_notified:
+            return
+        self._waiting_notified.add(key)
+        suspended = ", ".join(agent for agent in active if agent not in available)
+        self._notify(
+            f"[workflow {workflow_id}] task {view.link.task_id} ({view.link.item_id}): "
+            f"aguardando {role} disponivel (suspensos: {suspended or 'nenhum'})"
+        )
+
+    def _reviewable(self, view: TaskView, active: list[str]) -> bool:
+        """Há no pool algum agente, além do executor e de quem já falhou ao revisar, para revisar a task.
+
+        Suspensos contam: a revisão espera o revisor voltar.
+        """
         executor = (view.assigned_to or "").strip().lower()
-        return any(agent.strip().lower() != executor for agent in active)
+        candidates = [agent for agent in active if agent.strip().lower() != executor]
+        return self._tasks.can_review_task(view.link.task_id, candidates)
 
     @staticmethod
     def _parse_time(value: str | None) -> datetime:

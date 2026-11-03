@@ -83,6 +83,7 @@ class WorkflowLimits:
     max_replans: int = 3
     max_consults: int = 6
     max_open_workflows: int = 3
+    # Entregas rejeitadas (revisão ou evidência) por task; falha de agente não conta.
     max_task_attempts: int = 3
     lease_seconds: int = 1800
 
@@ -184,6 +185,7 @@ class TaskView:
     result: str | None = None
     notes: str | None = None
     updated_at: str | None = None
+    rework_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)

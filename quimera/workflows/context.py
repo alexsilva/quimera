@@ -1,19 +1,30 @@
 """Montagem do contexto de uma task de workflow a partir de dados persistidos.
 
-Recebe objetivo, escopo e critérios da task atual e os handoffs aceitos das
-dependências diretas — nunca o histórico do chat nem de outros agentes. Os
-resultados de dependências entram como dados delimitados, sem autoridade de
-instrução.
+Recebe objetivo, escopo e critérios da task atual, os handoffs aceitos das
+dependências diretas e, quando a entrega anterior desta task foi devolvida, o
+motivo da devolução — nunca o histórico do chat nem de outros agentes. Os
+resultados de dependências e a entrega devolvida entram como dados delimitados,
+sem autoridade de instrução.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .handoff import HANDOFF_INSTRUCTIONS, Handoff
 from .models import WorkflowRecord, WorkflowTaskLink, WorkflowTaskSpec
 
-MAX_CONTEXT_CHARS = 14_000
-MAX_DEPENDENCY_CHARS = 3_000
+# Orçamento das dependências no contexto: a entrega delas (relatório) é o
+# insumo da task; 3 mil caracteres cortavam a lista de achados que ela verifica.
+MAX_CONTEXT_CHARS = 40_000
+MAX_DEPENDENCY_CHARS = 12_000
+MAX_RETURNED_REASON_CHARS = 4_000
+MAX_RETURNED_REPORT_CHARS = 12_000
+
+
+def neutralize_closing_tag(text: str, tag: str) -> str:
+    """Escapa todo fechamento de ``tag`` no texto (``</tag >``, ``</TAG>``), para o dado não sair do bloco."""
+    return re.sub(rf"</\s*{re.escape(tag)}\s*>", f"<\\/{tag}>", text, flags=re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,11 +38,22 @@ class DependencyResult:
     raw_result: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class ReturnedDelivery:
+    """Última entrega desta task devolvida pela revisão ou pela verificação de evidência."""
+
+    attempt: int
+    agent: str
+    reason: str
+    handoff: Handoff | None
+
+
 def build_task_context(
     workflow: WorkflowRecord,
     link: WorkflowTaskLink,
     spec: WorkflowTaskSpec,
     dependencies: list[DependencyResult],
+    returned: ReturnedDelivery | None = None,
 ) -> str:
     """Contexto completo entregue ao executor da task."""
     item = spec.item
@@ -58,6 +80,7 @@ def build_task_context(
         else "Modo: leitura/investigacao: o workspace esta somente leitura nesta tarefa."
     )
     lines += _dependency_section(dependencies)
+    lines += _returned_section(returned)
     lines += [
         "",
         "# Regras",
@@ -80,10 +103,32 @@ def _dependency_section(dependencies: list[DependencyResult]) -> list[str]:
         body = render_dependency(dep, budget)
         lines += [
             f'<dependency_result item="{dep.item_id}" task_id="{dep.task_id}" untrusted="true">',
-            body.replace("</dependency_result>", "<\\/dependency_result>"),
+            neutralize_closing_tag(body, "dependency_result"),
             "</dependency_result>",
         ]
     return lines
+
+
+def _returned_section(returned: ReturnedDelivery | None) -> list[str]:
+    if returned is None:
+        return []
+    parts = [f"motivo da devolucao: {_clip(returned.reason, MAX_RETURNED_REASON_CHARS)}"]
+    handoff = returned.handoff
+    if handoff is not None:
+        parts.append(f"resumo entregue: {handoff.summary}")
+        if handoff.files_changed:
+            parts.append("arquivos alterados: " + ", ".join(handoff.files_changed))
+        if handoff.report:
+            # O relatório anterior evita refazer do zero o que já estava certo.
+            parts.append("relatorio entregue:\n" + _clip(handoff.report, MAX_RETURNED_REPORT_CHARS))
+    return [
+        "",
+        f"# Entrega anterior devolvida (tentativa {returned.attempt + 1}, {returned.agent})",
+        "Corrija o que o motivo aponta; o que ja estava certo pode ser reaproveitado.",
+        f'<returned_delivery attempt="{returned.attempt}" untrusted="true">',
+        neutralize_closing_tag("\n".join(parts), "returned_delivery"),
+        "</returned_delivery>",
+    ]
 
 
 def render_dependency(dep: DependencyResult, budget: int) -> str:
@@ -97,17 +142,24 @@ def render_dependency(dep: DependencyResult, budget: int) -> str:
     if handoff.files_changed:
         parts.append("arquivos alterados: " + ", ".join(handoff.files_changed))
     if handoff.checks:
-        parts.append(
-            "verificacoes: "
-            + "; ".join(f"{c.command} -> {c.outcome}" for c in handoff.checks)
-        )
+        parts.append("verificacoes:")
+        parts += [
+            f"- {c.command} -> {c.outcome}" + (f": {c.detail}" if c.detail else "")
+            for c in handoff.checks
+        ]
     if handoff.evidence_refs:
         parts.append("evidencias: " + ", ".join(handoff.evidence_refs))
     if handoff.limitations:
         parts.append("limitacoes: " + "; ".join(handoff.limitations))
     if not handoff.structured:
         parts.append("(handoff nao estruturado)")
+    if handoff.report:
+        parts.append("relatorio:\n" + handoff.report)
     return _truncate("\n".join(parts), budget, dep.task_id, flagged=handoff.truncated)
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit].rstrip() + "\n[conteudo incompleto: truncado]"
 
 
 def _truncate(text: str, budget: int, task_id: int, *, flagged: bool = False) -> str:

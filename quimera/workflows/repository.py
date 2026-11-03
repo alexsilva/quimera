@@ -460,10 +460,8 @@ class WorkflowRepository:
         *,
         observed: tuple[str, int, str | None] | None = None,
     ) -> bool:
-        """Reenfileira com limite de tentativas e encerra a tentativa interrompida."""
-        requeued = self._tasks.requeue_interrupted(
-            conn, task_id, reason, observed=observed, max_attempts=self.limits.max_task_attempts
-        )
+        """Reenfileira (mesmo dono, sem gastar entregas) e encerra a tentativa interrompida."""
+        requeued = self._tasks.requeue_interrupted(conn, task_id, reason, observed=observed)
         if requeued:
             conn.execute(
                 "UPDATE task_attempts SET status = 'interrupted', failure_reason = ?, "
@@ -621,6 +619,7 @@ class WorkflowRepository:
                     status=record.status,
                     assigned_to=record.assigned_to,
                     attempt_count=record.attempt_count,
+                    rework_count=record.rework_count,
                     title=record.description,
                     dependencies=spec.item.dependencies if spec else (),
                     result=record.result,

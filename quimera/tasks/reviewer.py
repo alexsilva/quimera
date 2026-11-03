@@ -9,8 +9,9 @@ from typing import Protocol
 from ..prompt_kinds import PromptKind
 from ..domain.task_states import TaskStatus
 from ..runtime.models import TaskRecord
-from .attempt_fence import AttemptFence, RetryFence
+from .attempt_fence import AttemptFence
 from .events import TaskReviewReassigned
+from .utils import describe_rework
 
 _logger = logging.getLogger(__name__)
 
@@ -56,7 +57,6 @@ class _TaskRepositoryProto(Protocol):
         notes: str | None = None,
         *,
         expected_attempt: int | None = None,
-        max_attempts: int | None = None,
     ) -> bool:
         ...
 
@@ -66,12 +66,24 @@ class _TaskRepositoryProto(Protocol):
         result: str | None = None,
         reviewed_by: str | None = None,
         *,
+        notes: str | None = None,
         expected_attempt: int | None = None,
     ) -> bool:
         ...
 
     def fail_task(
         self, task_id: int, reason: str | None = None, *, expected_attempt: int | None = None
+    ) -> bool:
+        ...
+
+    def return_review(
+        self,
+        task_id: int,
+        reviewer: str,
+        reason: str,
+        *,
+        expected_attempt: int | None = None,
+        exclude_reviewer: bool = True,
     ) -> bool:
         ...
 
@@ -85,13 +97,24 @@ class _TaskHooksProto(Protocol):
     def reviewed(self, task: TaskRecord, agent: str, accepted: bool, review_text: str) -> None:
         ...
 
-    @property
-    def max_attempts(self) -> int:
+    def rework(
+        self,
+        task: TaskRecord,
+        owner: str | None,
+        reason: str,
+        *,
+        result: str | None = None,
+    ) -> TaskStatus | None:
         ...
 
 
 class _FailoverPolicyProto(Protocol):
-    def has_review_failover(self, executor_agent: str | None, failed_reviewer: str) -> bool:
+    def is_available(self, agent_name: str) -> bool:
+        ...
+
+    def can_review(
+        self, task_id: int, executor_agent: str | None, *, exclude_agents: set[str] = ...
+    ) -> bool:
         ...
 
 
@@ -133,9 +156,6 @@ class TaskReviewer:
         hooks = self.task_hooks if task.origin == "workflow" else None
         # Tasks de workflow só aceitam escrita da tentativa que está sendo revisada.
         fence: AttemptFence = {"expected_attempt": task.attempt_count} if hooks is not None else {}
-        retry: RetryFence = (
-            {**fence, "max_attempts": hooks.max_attempts} if hooks is not None else {}
-        )
         try:
             executor = task.assigned_to
             if executor == agent_name:
@@ -211,19 +231,34 @@ class TaskReviewer:
                 self.repository.fail_task(task_id, reason="cancelled by user", **fence)
                 return False
 
+            if not (response or "").strip():
+                # Revisor sem resposta (sem cota, falha de transporte) não julgou a
+                # entrega: a revisão vai para outro revisor e o executor não perde nada.
+                self._reviewer_unavailable(task, agent_name, "revisor sem resposta", fence)
+                return False
+
             self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}:\n{response or ''}")
             accepted, verdict, review_text = self.classify_task_review_result(response)
+            if not accepted and hooks is not None:
+                # A entrega volta para quem a fez. O veredito entra no histórico
+                # antes, porque o dono reivindica a task assim que ela volta a
+                # pending e o contexto dele traz o motivo da devolução. Se a task
+                # mudou desde a revisão, a tentativa já não está 'submitted' e o
+                # registro não a altera.
+                hooks.reviewed(task, agent_name, False, review_text)
+                status = hooks.rework(task, executor, review_text, result=task_result)
+                self.system_layer.show_muted_message(
+                    f"[task {task_id}] {agent_name}: review pediu {verdict.lower()}; "
+                    + describe_rework(status, executor)
+                )
+                return False
             if not accepted:
                 ok = self.repository.requeue_task_after_review(
                     task_id,
                     executor or agent_name,
                     result=task_result,
                     notes=review_text,
-                    **retry,
                 )
-                # Veredito só entra no histórico se a transição da task venceu o CAS.
-                if ok and hooks is not None:
-                    hooks.reviewed(task, agent_name, False, review_text)
                 if not ok:
                     self.system_layer.show_muted_message(
                         f"[task {task_id}] {agent_name}: erro ao recolocar task em fila"
@@ -253,33 +288,48 @@ class TaskReviewer:
             self.system_layer.show_muted_message(
                 f"[task {task_id}] {agent_name}: review falhou: {exc}"
             )
-            if self.failover_policy.has_review_failover(executor, agent_name):
-                ok = self.repository.transition_task(
-                    task_id,
-                    TaskStatus.PENDING_REVIEW,
-                    result=task.result,
-                    notes=str(exc),
-                )
-                if not ok:
-                    self.repository.fail_task(
-                        task_id,
-                        reason=f"review failed and fallback transition failed: {exc}",
-                        **fence,
-                    )
-                else:
-                    if self.event_sink is not None:
-                        try:
-                            self.event_sink.publish(TaskReviewReassigned(
-                                task_id=task_id, job_id=task.job_id,
-                                reason=f"review exception with fallback: {exc}",
-                                previous_reviewer=agent_name,
-                            ))
-                        except Exception as publish_exc:
-                            _logger.warning("publicar TaskReviewReassigned falhou: %s", publish_exc)
-            else:
-                self.repository.fail_task(
-                    task_id,
-                    reason=f"review failed without operational fallback: {exc}",
-                    **fence,
-                )
+            self._reviewer_unavailable(task, agent_name, str(exc), fence)
             return False
+
+    def _reviewer_unavailable(
+        self, task: TaskRecord, agent_name: str, reason: str, fence: AttemptFence
+    ) -> None:
+        """Revisão sem veredito: a entrega fica intacta em ``pending_review`` para outro revisor.
+
+        Revisor que ficou indisponível (rate limit, suspensão) pode revisar
+        quando voltar; o que segue disponível e não respondeu não revisa mais
+        esta entrega. Quando ninguém mais no pool pode revisar, a task de
+        workflow espera o coordenador (que bloqueia o workflow e é consultado);
+        a avulsa é concluída com a entrega do executor, como quando não há
+        revisor no pool.
+        """
+        task_id = task.id
+        # Disponível e sem veredito: não revisa mais esta entrega.
+        excluded = {agent_name} if self.failover_policy.is_available(agent_name) else set()
+        if task.origin != "workflow" and not self.failover_policy.can_review(
+            task_id, task.assigned_to, exclude_agents=excluded
+        ):
+            self.repository.complete_task(
+                task_id,
+                result=task.result,
+                notes=f"concluida sem revisao: {agent_name}: {reason}",
+                **fence,
+            )
+            self.system_layer.show_muted_message(
+                f"[task {task_id}] {agent_name}: sem outro revisor no pool; "
+                "concluída com a entrega do executor"
+            )
+            return
+        if not self.repository.return_review(
+            task_id, agent_name, reason, exclude_reviewer=bool(excluded), **fence
+        ):
+            return
+        if self.event_sink is not None:
+            try:
+                self.event_sink.publish(TaskReviewReassigned(
+                    task_id=task_id, job_id=task.job_id,
+                    reason=f"review sem veredito: {reason}",
+                    previous_reviewer=agent_name,
+                ))
+            except Exception as publish_exc:
+                _logger.warning("publicar TaskReviewReassigned falhou: %s", publish_exc)

@@ -34,6 +34,8 @@ class RepositorySpy:
         self.requeue_calls = []
         self.complete_calls = []
         self.fail_calls = []
+        self.return_calls = []
+        self.return_result = True
         self.transition_result = True
         self.requeue_result = True
         self.complete_result = True
@@ -46,7 +48,7 @@ class RepositorySpy:
         self.requeue_calls.append((task_id, failed_agent, result, notes))
         return self.requeue_result
 
-    def complete_task(self, task_id, result=None, reviewed_by=None):
+    def complete_task(self, task_id, result=None, reviewed_by=None, notes=None):
         self.complete_calls.append((task_id, result, reviewed_by))
         return self.complete_result
 
@@ -54,14 +56,21 @@ class RepositorySpy:
         self.fail_calls.append((task_id, reason))
         return True
 
+    def return_review(self, task_id, reviewer, reason, exclude_reviewer=True):
+        self.return_calls.append((task_id, reviewer, reason))
+        return self.return_result
+
 
 class FailoverPolicyStub:
-    def __init__(self, has_review_failover=False):
-        self.has_review_failover_value = has_review_failover
+    def __init__(self, can_review=False):
+        self.can_review_value = can_review
 
-    def has_review_failover(self, executor_agent, failed_reviewer):
-        _ = (executor_agent, failed_reviewer)
-        return self.has_review_failover_value
+    def is_available(self, agent_name):
+        return True
+
+    def can_review(self, task_id, executor_agent, *, exclude_agents=()):
+        _ = (task_id, executor_agent, exclude_agents)
+        return self.can_review_value
 
 
 def test_review_handler_rejects_self_review_and_returns_to_pending_review():
@@ -149,7 +158,7 @@ def test_review_handler_returns_to_pending_review_when_exception_has_fallback():
         dispatch_services=dispatch,
         system_layer=system,
         repository=repo,
-        failover_policy=FailoverPolicyStub(has_review_failover=True),
+        failover_policy=FailoverPolicyStub(can_review=True),
         classify_task_review_result=lambda response: (True, "ACEITE", response or ""),
         was_user_cancelled=lambda: False,
     )
@@ -159,14 +168,13 @@ def test_review_handler_returns_to_pending_review_when_exception_has_fallback():
     )
 
     assert ok is False
-    assert repo.transition_calls == [(10, TaskStatus.PENDING_REVIEW, "ok", "timeout", None)]
+    assert repo.return_calls == [(10, "pickle", "timeout")]
     assert repo.fail_calls == []
     assert system.messages[-1] == "[task 10] pickle: review falhou: timeout"
 
 
-def test_review_handler_fails_when_exception_has_no_operational_fallback():
-    """Verifica que o handler falha a tarefa quando não há fallback operacional."""
-    """Verifica que o handler falha quando não há fallback operacional na exceção."""
+def test_review_handler_completes_when_exception_has_no_other_reviewer():
+    """Sem outro revisor no pool, a avulsa conclui com a entrega do executor (não falha)."""
     dispatch = DispatchStub(error=RuntimeError("timeout"))
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -174,7 +182,7 @@ def test_review_handler_fails_when_exception_has_no_operational_fallback():
         dispatch_services=dispatch,
         system_layer=system,
         repository=repo,
-        failover_policy=FailoverPolicyStub(has_review_failover=False),
+        failover_policy=FailoverPolicyStub(can_review=False),
         classify_task_review_result=lambda response: (True, "ACEITE", response or ""),
         was_user_cancelled=lambda: False,
     )
@@ -184,6 +192,5 @@ def test_review_handler_fails_when_exception_has_no_operational_fallback():
     )
 
     assert ok is False
-    assert repo.transition_calls == []
-    assert repo.fail_calls == [(11, "review failed without operational fallback: timeout")]
-    assert system.messages[-1] == "[task 11] pickle: review falhou: timeout"
+    assert repo.return_calls == [] and repo.fail_calls == []
+    assert repo.complete_calls == [(11, "ok", None)]

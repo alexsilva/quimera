@@ -10,6 +10,9 @@ import time
 
 from .config import logger
 
+# Espera máxima por um rate limit antes de dar o agente como indisponível.
+DEFAULT_MAX_RATE_LIMIT_WAIT = 120.0
+
 
 class AgentCallService:
     """Encapsula retry com backoff para chamadas a agentes.
@@ -22,8 +25,10 @@ class AgentCallService:
         max_retries: int = 2,
         retry_backoff: float = 1.0,
         rate_limit_backoff: float = 30.0,
+        max_rate_limit_wait: float = DEFAULT_MAX_RATE_LIMIT_WAIT,
         record_failure=None,
         record_success=None,
+        record_rate_limited=None,
         is_rate_limited=None,
         get_retry_after=None,
         before_retry=None,
@@ -31,11 +36,22 @@ class AgentCallService:
         notify_retry=None,
         notify_error=None,
     ):
+        """Rate limit cuja espera passa de ``max_rate_limit_wait`` segundos não é
+        esperado: o agente fica indisponível (``record_rate_limited(agent,
+        retry_after)``; sem o callback, ``record_failure``) e a chamada devolve
+        None. Esperar o ``retry-after`` de uma cota esgotada (minutos, horas ou
+        dias) prenderia o chamador num agente que não vai responder. Execuções
+        de task em background usam 0: desistem no primeiro rate limit e a task
+        segue com outro agente."""
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
         self._rate_limit_backoff = rate_limit_backoff
+        self._max_rate_limit_wait = max_rate_limit_wait
         self._record_failure = record_failure or (lambda agent: None)
         self._record_success = record_success or (lambda agent: None)
+        self._record_rate_limited = record_rate_limited or (
+            lambda agent, retry_after: self._record_failure(agent)
+        )
         self._is_rate_limited = is_rate_limited or (lambda: False)
         self._get_retry_after = get_retry_after or (lambda: None)
         self._before_retry = before_retry or (lambda agent, attempt, reason: None)
@@ -85,6 +101,8 @@ class AgentCallService:
                     if is_user_cancelled():
                         logger.debug("[AGENT_CALL] agent=%s cancelled by user, aborting", agent)
                         return None
+                    if self._gave_up_on_rate_limit(agent):
+                        return None
                     if attempt < effective_max_retries:
                         backoff = self._compute_backoff(attempt)
                         self._before_retry(agent, attempt, "no_response")
@@ -101,7 +119,7 @@ class AgentCallService:
                         if not self._wait_backoff(backoff, is_user_cancelled):
                             return None
                         continue
-                    self._record_failure(agent)
+                    self._record_exhausted(agent)
                     return None
 
                 result = resolve_fn(agent, response)
@@ -151,6 +169,8 @@ class AgentCallService:
                     )
                     return None
                 last_error = exc
+                if self._gave_up_on_rate_limit(agent):
+                    return None
                 if attempt < effective_max_retries:
                     self._before_retry(agent, attempt, "exception")
                     self._notify_retry(
@@ -167,7 +187,7 @@ class AgentCallService:
                     if not self._wait_backoff(self._compute_backoff(attempt), is_user_cancelled):
                         return None
                     continue
-                self._record_failure(agent)
+                self._record_exhausted(agent)
                 raise
 
         if last_error:
@@ -178,6 +198,22 @@ class AgentCallService:
                 "agent=%s could not reach after all retries: %s", agent, str(last_error)
             )
         return None
+
+    def _record_exhausted(self, agent: str) -> None:
+        """Tentativas esgotadas: rate limit suspende pelo prazo do provedor; o resto é falha."""
+        if self._is_rate_limited():
+            self._record_rate_limited(agent, self._get_retry_after())
+        else:
+            self._record_failure(agent)
+
+    def _gave_up_on_rate_limit(self, agent: str) -> bool:
+        """Rate limit longo demais para esperar: registra o agente como indisponível."""
+        if not self._is_rate_limited() or self._compute_backoff(1) <= self._max_rate_limit_wait:
+            return False
+        retry_after = self._get_retry_after()
+        logger.debug("agent=%s rate limited (retry_after=%s), not waiting", agent, retry_after)
+        self._record_rate_limited(agent, retry_after)
+        return True
 
     @staticmethod
     def _wait_backoff(seconds: float, is_user_cancelled) -> bool:

@@ -20,6 +20,10 @@ class RepositorySpy:
         self.calls.append((task_id, list(candidate_agents)))
         return self.result
 
+    def can_review_task(self, task_id, candidate_agents):
+        self.calls.append((task_id, list(candidate_agents)))
+        return bool(candidate_agents) and self.result
+
 
 def test_is_operational_review_agent_returns_false_for_inactive_agent():
     """Verifica que is_operational_review_agent retorna False para agente inativo."""
@@ -85,8 +89,8 @@ def test_can_failover_delegates_to_repository():
     assert repository.calls == [(7, ["pickle", "deepseek-pro-v4"])]
 
 
-def test_has_review_failover_returns_boolean_based_on_remaining_candidates():
-    """Verifica que has_review_failover retorna booleano baseado em candidatos restantes."""
+def test_can_review_counts_pool_members_except_executor_and_excluded():
+    """Revisores restantes: membros do pool, fora o executor e quem acabou de falhar."""
     repository = RepositorySpy()
     policy_without_fallback = TaskFailoverPolicy(
         active_agents=["codex", "pickle"],
@@ -99,8 +103,26 @@ def test_has_review_failover_returns_boolean_based_on_remaining_candidates():
         repository=repository,
     )
 
-    assert policy_without_fallback.has_review_failover("codex", "pickle") is False
-    assert policy_with_fallback.has_review_failover("codex", "pickle") is True
+    assert policy_without_fallback.can_review(7, "codex", exclude_agents={"pickle"}) is False
+    assert policy_with_fallback.can_review(7, "codex", exclude_agents={"pickle"}) is True
+    assert repository.calls[-1] == (7, ["deepseek-pro-v4"])
+
+
+def test_suspended_members_still_count_for_failover_but_are_not_available():
+    """Um 429 de segundos não faz a task falhar: o suspenso volta e conta como candidato."""
+    repository = RepositorySpy()
+    policy = TaskFailoverPolicy(
+        active_agents=["codex", "pickle"],
+        get_agent_profile=lambda name: ProfileStub(name=name),
+        repository=repository,
+        available_agents=lambda: ["codex"],
+    )
+
+    assert policy.can_failover(task_id=7, failed_agent="codex") is True
+    assert repository.calls == [(7, ["pickle"])]
+    assert policy.is_available("codex") is True
+    assert policy.is_available("pickle") is False
+    assert policy.review_agents_for("codex") == ["pickle"]
 
 
 def test_review_agents_for_treats_alias_as_same_agent_identity():

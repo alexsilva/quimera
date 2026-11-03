@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from ..prompt_kinds import PromptKind
-from .agent_call_service import AgentCallService
+from .agent_call_service import DEFAULT_MAX_RATE_LIMIT_WAIT, AgentCallService
 from .agent_gateway import AgentGateway, _is_user_cancelled
 from .render_event import RenderEvent
 from .config import logger
@@ -51,8 +51,10 @@ class DispatchDependencies:
     max_retries: Any = 2
     retry_backoff: Any = 1
     rate_limit_backoff: Any = 1
+    max_rate_limit_wait: Any = DEFAULT_MAX_RATE_LIMIT_WAIT
     record_failure: Callable | None = None
     record_success: Callable | None = None
+    record_rate_limited: Callable | None = None
     get_agent_client: Callable | None = None
     get_tool_executor: Callable | None = None
     get_delegate_fn_override: Callable | None = None
@@ -106,8 +108,10 @@ class AppDispatchServices:
         max_retries=2,
         retry_backoff=1,
         rate_limit_backoff=1,
+        max_rate_limit_wait=DEFAULT_MAX_RATE_LIMIT_WAIT,
         record_failure=None,
         record_success=None,
+        record_rate_limited=None,
         get_agent_client=None,
         get_tool_executor=None,
         get_delegate_fn_override=None,
@@ -138,8 +142,10 @@ class AppDispatchServices:
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
         self._rate_limit_backoff = rate_limit_backoff
+        self._max_rate_limit_wait = max_rate_limit_wait
         self._record_failure = record_failure
         self._record_success = record_success
+        self._record_rate_limited = record_rate_limited
         self._get_agent_client_fn = get_agent_client
         self._get_tool_executor_fn = get_tool_executor
         self._get_delegate_fn_override = get_delegate_fn_override
@@ -170,8 +176,10 @@ class AppDispatchServices:
             max_retries=max_retries,
             retry_backoff=retry_backoff,
             rate_limit_backoff=rate_limit_backoff,
+            max_rate_limit_wait=max_rate_limit_wait,
             record_failure=record_failure,
             record_success=record_success,
+            record_rate_limited=record_rate_limited,
             get_agent_client=get_agent_client,
             get_tool_executor=get_tool_executor,
             get_delegate_fn_override=get_delegate_fn_override,
@@ -356,8 +364,10 @@ class AppDispatchServices:
             max_retries=self._call(self._max_retries),
             retry_backoff=self._call(self._retry_backoff),
             rate_limit_backoff=self._call(self._rate_limit_backoff),
+            max_rate_limit_wait=self._call(self._max_rate_limit_wait),
             record_failure=self._record_failure,
             record_success=self._record_success,
+            record_rate_limited=self._record_rate_limited,
             is_rate_limited=_is_rate_limited,
             get_retry_after=_get_retry_after,
             before_retry=_before_retry,
