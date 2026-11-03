@@ -396,7 +396,7 @@ def test_client_executor_callback_preserves_http_context():
 
     message = renderer.show_tool_preview.call_args.args[0]
     assert message["tool_line"]["transport"] == "mcp_http"
-    assert message["content"] == "◇ ⌕ ler README.md"
+    assert message["content"] == "⌕ ler README.md"
     assert message["run_id"] == "http:run-1"
     assert message["transport"] == "mcp_http"
     assert message["tool_call_id"] == "call_6"

@@ -43,7 +43,6 @@ from quimera.sandbox.state import agent_runtime_rw_paths, is_sandbox_enabled
 from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.domain.tool_line import (
     CATEGORY_GLYPHS,
-    MCP_HTTP_MARKER,
     STATUS_MARKS,
     TRANSPORT_MCP_HTTP,
     ToolLine,
@@ -606,11 +605,11 @@ class AgentClient:
             payload["mcp_msg_id"] = str(metadata["mcp_msg_id"])
         return {key: value for key, value in payload.items() if value}
 
-    # Prefixos canônicos de ``ToolLine.to_text``: marcador MCP HTTP, status e
-    # glifo de categoria (``$`` é o de execução), além do ``tool:`` dos CLIs.
+    # Prefixos canônicos de ``ToolLine.to_text``: status e glifo de categoria
+    # (``$`` é o de execução), além do ``tool:`` dos CLIs.
     _TOOL_CALL_TEXT_PREFIXES = (
         "tool:",
-        *(f"{mark} " for mark in (MCP_HTTP_MARKER, *STATUS_MARKS.values(), *CATEGORY_GLYPHS.values())),
+        *(f"{mark} " for mark in (*STATUS_MARKS.values(), *CATEGORY_GLYPHS.values())),
     )
 
     @classmethod

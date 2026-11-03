@@ -274,7 +274,7 @@ def test_final_absorbing_mcp_http_burst_keeps_the_burst_tool_lines():
 
     (item,) = model.items
     assert item.event.kind == "agent_message"
-    assert tool_texts(item.event.payload["tool_lines"]) == ["◇ ⌕ ler a.py", '◇ ⌕ buscar "x"']
+    assert tool_texts(item.event.payload["tool_lines"]) == ["⌕ ler a.py", '⌕ buscar "x"']
 
 
 def test_final_with_run_id_absorbing_mcp_http_burst_keeps_the_burst_tool_lines():
@@ -301,7 +301,7 @@ def test_final_with_run_id_absorbing_mcp_http_burst_keeps_the_burst_tool_lines()
     (item,) = model.items
     payload = item.event.payload
     assert payload["turn_summary"]["total"] == 2
-    assert tool_texts(payload["tool_lines"]) == ["◇ ✓ ⌕ ler a.py · 4ms", '◇ ✓ ⌕ buscar "x" · 4ms']
+    assert tool_texts(payload["tool_lines"]) == ["✓ ⌕ ler a.py · 4ms", '✓ ⌕ buscar "x" · 4ms']
     assert model.latest_toggleable_seq() == item.seq
     assert not model._transient_tools_by_agent
 

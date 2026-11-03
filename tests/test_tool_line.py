@@ -56,7 +56,7 @@ from quimera.ui.textual.cell_widths import EMOJI_NARROW_VERSION
          "✓ $ toolsearch select:mcp__quimera__tui_screenshot 1 · 202ms"),
         (build_tool_line("exec_command", {"cmd": "python3 script.py"}), "$ python3 script.py"),
         (build_tool_line("read_file", {"path": "a"}, transport="mcp_http", status="ok", duration_ms=10),
-         "◇ ✓ ⌕ ler a · 10ms"),
+         "✓ ⌕ ler a · 10ms"),
     ],
 )
 def test_to_text_contract_examples(line: ToolLine, expected: str) -> None:
@@ -291,7 +291,7 @@ def test_glyphs_cover_every_category() -> None:
     assert len(set(CATEGORY_GLYPHS.values())) == len(CATEGORY_GLYPHS)
 
 
-@pytest.mark.parametrize("glyph", [*CATEGORY_GLYPHS.values(), "✓", "✗", "◇"])
+@pytest.mark.parametrize("glyph", [*CATEGORY_GLYPHS.values(), "✓", "✗"])
 def test_glyphs_are_single_cell_and_not_emoji_presentation(glyph: str) -> None:
     assert cell_len(glyph) == 1
     # Toda tabela que a calibração do terminal pode escolher (cell_widths).

@@ -1366,9 +1366,9 @@ def test_textual_feed_tool_preview_preserves_run_metadata():
     assert payload["transport"] == "mcp_http"
     assert "tool_line" not in payload
     [entry] = payload["tools"]
-    # O transporte do topo vira o da entrada: o ◇ sai dos dados, não do texto.
+    # O transporte do topo vira o da entrada e não muda o texto da linha.
     assert entry["transport"] == "mcp_http"
-    assert entry["text"] == "◇ ⌕ ler foo.py"
+    assert entry["text"] == "⌕ ler foo.py"
 
 
 def test_textual_feed_cli_tool_preview_with_run_id_matches_by_tool_call_id():
@@ -1456,7 +1456,7 @@ def test_textual_feed_keeps_cli_and_http_mcp_tool_state_isolated():
     cli_item = next(item for item in model.items if item.event.agent == "codex")
     http_item = next(item for item in model.items if item.event.agent == "mcp-http")
     assert tool_texts(cli_item.event.payload["tools"]) == ["✓ ⌕ ler foo.py · 3ms"]
-    assert tool_texts(http_item.event.payload["tools"]) == ["◇ ✓ ⌕ ler foo.py · 7ms"]
+    assert tool_texts(http_item.event.payload["tools"]) == ["✓ ⌕ ler foo.py · 7ms"]
 
     now[0] = 10.5
     assert model.expire_tool_previews()
@@ -1464,7 +1464,7 @@ def test_textual_feed_keeps_cli_and_http_mcp_tool_state_isolated():
     assert model.items[0].event.agent == "codex"
 
 
-def test_textual_feed_http_mcp_tool_preview_uses_remote_icon_and_merges_status():
+def test_textual_feed_http_mcp_tool_preview_merges_status():
     model = TextualFeedModel()
     payload = {
         "label": "MCP HTTP",
@@ -1482,7 +1482,7 @@ def test_textual_feed_http_mcp_tool_preview_uses_remote_icon_and_merges_status()
         )
     )
 
-    assert tool_texts(model.items[0].event.payload["tools"]) == ["◇ ✓ ⌕ ler foo.py · 2ms"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["✓ ⌕ ler foo.py · 2ms"]
 
 
 def test_textual_feed_groups_http_mcp_tools_by_client_across_sessions_and_runs():
@@ -1514,8 +1514,8 @@ def test_textual_feed_groups_http_mcp_tools_by_client_across_sessions_and_runs()
 
     assert len(model.items) == 1
     assert tool_texts(model.items[0].event.payload["tools"]) == [
-        '◇ ⌕ buscar "MCP"',
-        "◇ ⌕ git status",
+        '⌕ buscar "MCP"',
+        "⌕ git status",
     ]
 
 
@@ -1541,8 +1541,8 @@ def test_textual_feed_http_mcp_keeps_identical_calls_as_distinct_requests():
 
     assert len(model.items) == 1
     assert tool_texts(model.items[0].event.payload["tools"]) == [
-        "◇ ⌕ ler README.md",
-        "◇ ⌕ ler README.md",
+        "⌕ ler README.md",
+        "⌕ ler README.md",
     ]
 
 
@@ -1613,7 +1613,7 @@ def test_textual_feed_http_mcp_tracks_and_projects_live_summary():
         agent="mcp-http",
     ))
     payload = model.items[0].event.payload
-    assert tool_texts(payload["tools"]) == ['◇ ✓ ⌕ buscar "MCP" · 30ms', "◇ ⌕ git status"]
+    assert tool_texts(payload["tools"]) == ['✓ ⌕ buscar "MCP" · 30ms', "⌕ git status"]
     assert payload["tool_total"] == 1
     assert payload["tool_ok_count"] == 1
     assert payload["tool_err_count"] == 0
@@ -1632,7 +1632,7 @@ def test_textual_feed_http_mcp_tracks_and_projects_live_summary():
         agent="mcp-http",
     ))
     payload = model.items[0].event.payload
-    assert tool_texts(payload["tools"]) == ['◇ ✓ ⌕ buscar "MCP" · 30ms', "◇ ✗ ⌕ git status · 20ms"]
+    assert tool_texts(payload["tools"]) == ['✓ ⌕ buscar "MCP" · 30ms', "✗ ⌕ git status · 20ms"]
     assert payload["tool_total"] == 2
     assert payload["tool_ok_count"] == 1
     assert payload["tool_err_count"] == 1
@@ -1693,7 +1693,7 @@ def test_textual_feed_http_mcp_terminal_state_without_preview_expires():
         agent="mcp-http",
     ))
 
-    assert tool_texts(model.items[0].event.payload["tools"]) == ["◇ ✓ ⌕ read_file · 20ms"]
+    assert tool_texts(model.items[0].event.payload["tools"]) == ["✓ ⌕ read_file · 20ms"]
     assert model.items[0].event.payload["tool_total"] == 1
     now[0] = 10.5
     assert model.expire_tool_previews()
@@ -1739,8 +1739,8 @@ def test_textual_feed_http_mcp_new_tool_extends_completed_burst_visibility():
     now[0] = 10.5
     assert not model.expire_tool_previews()
     assert tool_texts(model.items[0].event.payload["tools"]) == [
-        '◇ ✓ ⌕ buscar "MCP" · 0ms',
-        "◇ ⌕ ler README.md",
+        '✓ ⌕ buscar "MCP" · 0ms',
+        "⌕ ler README.md",
     ]
 
     model.apply(TextualUiEvent(
@@ -1799,8 +1799,8 @@ def test_textual_feed_http_mcp_idle_does_not_close_block_while_tool_is_running()
     assert not model.expire_tool_previews()
     assert len(model.items) == 1
     assert tool_texts(model.items[0].event.payload["tools"]) == [
-        '◇ ✓ ⌕ buscar "MCP" · 0ms',
-        "◇ ⌕ ler README.md",
+        '✓ ⌕ buscar "MCP" · 0ms',
+        "⌕ ler README.md",
     ]
 
     model.apply(TextualUiEvent(
@@ -1828,7 +1828,7 @@ def test_textual_render_event_groups_mcp_http_identity_tools_and_summary():
             "style": "cyan",
             "theme": "chat",
             "transport": "mcp_http",
-            "tools": ["◇ ⚒ git_status"],
+            "tools": ["⚒ git_status"],
             "tool_total": 3,
             "tool_ok_count": 3,
             "tool_err_count": 0,
@@ -1841,7 +1841,8 @@ def test_textual_render_event_groups_mcp_http_identity_tools_and_summary():
     console.print(_render_event(event))
     output = console.export_text()
 
-    assert "☁ 🤖  mcp-http" in output
+    assert "●  🤖  mcp-http" in output
+    assert "☁" not in output
     assert "git_status" in output
     assert "3 ferramentas · 1.2s" in output
     assert "concluída" not in output

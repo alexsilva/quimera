@@ -39,7 +39,6 @@ STATUS_OK = "ok"
 STATUS_ERROR = "error"
 
 TRANSPORT_MCP_HTTP = "mcp_http"
-MCP_HTTP_MARKER = "◇"
 STATUS_MARKS = {STATUS_OK: "✓", STATUS_ERROR: "✗"}
 
 SENSITIVE_KEYS = frozenset({
@@ -116,8 +115,6 @@ class ToolLine:
 
     def to_text(self) -> str:
         parts: list[str] = []
-        if self.transport == TRANSPORT_MCP_HTTP:
-            parts.append(MCP_HTTP_MARKER)
         mark = STATUS_MARKS.get(self.status)
         if mark:
             parts.append(mark)

@@ -29,11 +29,9 @@ from quimera.ui.textual.constants import (
 from quimera.app.submission_tracker import TERMINAL_SUBMISSION_STATUSES
 from quimera.domain.tool_line import (
     CATEGORY_GLYPHS,
-    MCP_HTTP_MARKER,
     STATUS_ERROR,
     STATUS_OK,
     STATUS_RUNNING,
-    TRANSPORT_MCP_HTTP,
     coerce_duration_ms,
 )
 from quimera.ui.boot_status import (
@@ -62,22 +60,17 @@ _GUTTER_WIDTH = 3
 _LIVE_SECTION_BRANCH = "├──────╴"
 _LIVE_SECTION_BRANCH_BARE = "╶──────╴"
 _THINKING_PULSE_FRAMES = ("✻", "✽", "✳", "✢", "·", "✢", "✳", "✽")
-_MCP_HTTP_TRANSPORT = "mcp_http"
-_TRANSPORT_MARKERS = {
-    _MCP_HTTP_TRANSPORT: "☁",
-}
 
-def _resolve_transport_label(payload, agent: str | None = None) -> str:
-    """Resolve label from payload, prefixing a discreet transport icon for MCP HTTP.
+def _resolve_label(payload, agent: str | None = None) -> str:
+    """Rótulo do cabeçalho do cartão: ícone + nome, igual para todo transporte.
 
-    MCP HTTP runs come from the external HTTP endpoint (vs local socket),
-    so we prefix with a cloud icon to signal "remote/network" at a glance.
+    O cartão MCP HTTP já se chama ``mcp-http``; um marcador de transporte só
+    repetiria isso, e o "☁" usado antes não existe na fonte do terminal da
+    TinyIDE: o glifo de fallback, mais largo que a célula, aparecia recortado
+    como um "◢".
     """
     data = payload if isinstance(payload, dict) else {}
-    base_label = str(data.get("label", f"🤖 {agent or 'agente'}"))
-    transport = str(data.get("transport", "")).strip()
-    prefix = _TRANSPORT_MARKERS.get(transport)
-    return f"{prefix} {base_label}" if prefix else base_label
+    return str(data.get("label", f"🤖 {agent or 'agente'}"))
 
 
 _thinking_pulse_index = 0
@@ -512,8 +505,6 @@ class _ToolLineRenderable:
     def _prefix(self) -> Text:
         entry = self.entry
         prefix = Text()
-        if entry.get("transport") == TRANSPORT_MCP_HTTP:
-            prefix.append(f"{MCP_HTTP_MARKER} ", style="dim")
         status = entry.get("status")
         if status == STATUS_OK:
             prefix.append("✓ ", style="bold green")
@@ -1230,7 +1221,7 @@ def _render_event(event: TextualUiEvent):
     if event.kind == "agent_message":
         payload = event.payload or {}
         content = str(payload.get("content", ""))
-        label = _resolve_transport_label(payload, event.agent)
+        label = _resolve_label(payload, event.agent)
         style = str(payload.get("style", "cyan") or "cyan")
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         is_orchestrator = bool(payload.get("orchestrator", False))
@@ -1261,7 +1252,7 @@ def _render_event(event: TextualUiEvent):
         return Group(block, footer)
     if event.kind == "pending_input":
         payload = event.payload if isinstance(event.payload, dict) else {}
-        label = _resolve_transport_label(payload, event.agent)
+        label = _resolve_label(payload, event.agent)
         style = str(payload.get("style", "cyan") or "cyan")
         question = str(payload.get("question") or "")
         kind = str(payload.get("kind") or "input")
@@ -1278,11 +1269,11 @@ def _render_event(event: TextualUiEvent):
             return _build_agent_activity_renderable(activity_payload, event.agent)
         tools = payload.get("tools") if isinstance(payload, dict) else None
         if isinstance(payload, dict):
-            label = _resolve_transport_label(payload, event.agent)
+            label = _resolve_label(payload, event.agent)
             style = str(payload.get("style", "cyan") or "cyan")
             theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         else:
-            label = _resolve_transport_label({}, event.agent)
+            label = _resolve_label({}, event.agent)
             style = "cyan"
             theme_name = themes.DEFAULT_THEME
         return _build_stream_renderable(theme_name, label, style, message, tools=tools, thinking=False)
@@ -1371,7 +1362,7 @@ def _render_event(event: TextualUiEvent):
                 if is_mcp_http
                 else 0
             )
-            label = _resolve_transport_label(event.payload, event.agent)
+            label = _resolve_label(event.payload, event.agent)
             style = str(event.payload.get("style", "cyan") or "cyan")
             theme_name = str(event.payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         else:
@@ -1382,7 +1373,7 @@ def _render_event(event: TextualUiEvent):
             tool_ok_count = 0
             tool_err_count = 0
             duration_ms = 0
-            label = _resolve_transport_label({}, event.agent)
+            label = _resolve_label({}, event.agent)
             style = "cyan"
             theme_name = themes.DEFAULT_THEME
         if event.agent:

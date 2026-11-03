@@ -284,9 +284,9 @@ def test_mcp_http_tool_state_applies_outcome_to_the_request_entry():
 
     tools = model.items[0].event.payload["tools"]
     assert tool_texts(tools) == [
-        "◇ ⌕ ler a.py",
-        "◇ ✗ ⌕ ler a.py · 500ms",
-        "◇ ✓ ⌕ git status · 4ms",
+        "⌕ ler a.py",
+        "✗ ⌕ ler a.py · 500ms",
+        "✓ ⌕ git status · 4ms",
     ]
     assert all(entry["transport"] == "mcp_http" for entry in tools)
 
@@ -379,7 +379,7 @@ def test_status_and_category_glyph_styles():
 
     assert styles(ok) == [("✓ ", "bold green"), ("⌕ ", "bold blue")]
     assert styles(err) == [("✗ ", "bold red"), ("⌕ ", "bold blue")]
-    assert styles(running) == [("◇ ", "dim"), ("· ", "dim"), ("⌕ ", "bold blue")]
+    assert styles(running) == [("· ", "dim"), ("⌕ ", "bold blue")]
 
 
 def test_expanded_line_shows_command_title_tail_and_colored_diff_with_hanging_indent():
@@ -541,6 +541,6 @@ def test_tool_lines_visual_evidence_80x24():
     assert "✗ ⚙ pytest -q tests/test_textual_ui.py · 12.4s · 2 failed" in live
     assert "renderables_module.py" in live and "…" in live
     assert "· ⇄ delegar codex · Revise o módulo de renderables" in live
-    assert "◇ ✓ ⌕ git status · 40ms" in live
+    assert "✓ ⌕ git status · 40ms" in live
     assert "grep -n tool quimera/ui/textual/renderables.py | head -80" in final
     assert "very/long/directory" in final

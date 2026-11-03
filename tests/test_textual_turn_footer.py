@@ -206,7 +206,7 @@ def _live_mcp_card_text(tool_total: int, ok_count: int, err_count: int) -> str:
                 "style": "cyan",
                 "theme": "chat",
                 "transport": "mcp_http",
-                "tools": ["◇ ⚒ git_status"],
+                "tools": ["⚒ git_status"],
                 "tool_total": tool_total,
                 "tool_ok_count": ok_count,
                 "tool_err_count": err_count,
