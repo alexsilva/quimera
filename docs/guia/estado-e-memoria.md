@@ -75,17 +75,6 @@ Essas chaves são atualizadas pelos agentes via a tool MCP `update_shared_state`
 
 O prompt principal não expõe tudo: o payload é filtrado para reduzir ruído e evitar vazamento de estado operacional irrelevante.
 
-## Evidências
-
-O pacote `quimera/evidence` trata evidências como dados estruturados. O objetivo é transformar outputs de agentes, tool calls e resultados de execução em material reutilizável para revisão, prompts e auditoria.
-
-Uma evidência deve responder:
-
-- qual ação foi feita;
-- onde foi feita;
-- qual resultado foi observado;
-- qual comando, arquivo, trecho ou evento comprova o resultado.
-
 ## Logs e métricas
 
 Com `--debug`, o Quimera ativa auditoria de renderização em `data/logs/render/`. Métricas por sessão ficam em `data/logs/metrics/`. Esses arquivos ajudam a diagnosticar problemas de UI, latência, redisplay, turnos, delegation e execução.

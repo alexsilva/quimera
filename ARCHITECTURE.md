@@ -160,12 +160,6 @@ quimera/
 ├── domain/                           # Modelos de domínio (independentes de framework)
 │   └── session_state.py              # SessionState thread-safe (RLock), estado da sessão
 │
-├── evidence/                         # Sistema de evidências (rastreamento de contexto)
-│   ├── models.py                       # Modelos de evidência (EvidenceItem, etc.)
-│   ├── store.py                      # Armazenamento e recuperação de evidências
-│   ├── parser.py                     # Parser de blocos de evidência no texto
-│   └── formatter.py                  # Formatação de evidências para o prompt
-│
 ├── sandbox/                          # Isolamento de execução
 │   └── bwrap.py                      # Sandbox via bubblewrap (bwrap), paths RW/RO
 │
@@ -263,19 +257,15 @@ Executor de tools e agentes em ambiente potencialmente sandboxed.
 
 - **`session_state.py`** (`SessionState`): Container thread-safe (`threading.RLock`) para o estado corrente da sessão. Compartilhado entre main thread e workers.
 
-### 3.7 Evidências (`evidence/`)
-
-Sistema de rastreamento de contexto verificável. Evidências são extraídas das respostas dos agentes, armazenadas em `store.py` e injetadas no prompt via `formatter.py` para fornecer contexto verificável nas próximas rodadas.
-
-### 3.8 Sandbox (`sandbox/`)
+### 3.7 Sandbox (`sandbox/`)
 
 - **`bwrap.py`**: Integração com `bubblewrap` (bwrap) para isolamento de processos. Define paths de leitura/escrita permitidos por agente via `ExecutionProfile.runtime_rw_paths`.
 
-### 3.9 Sistema MCP (Model Context Protocol)
+### 3.8 Sistema MCP (Model Context Protocol)
 
 O Quimera implementa o protocolo MCP (`2025-11-25`, com negociação para versões anteriores) para expor as ferramentas do runtime a agentes compatíveis. O servidor MCP é iniciado por sessão em um socket Unix com autenticação por token.
 
-#### 3.9.1 Componentes
+#### 3.8.1 Componentes
 
 | Módulo | Arquivo | Responsabilidade |
 |---|---|---|
@@ -289,7 +279,7 @@ O Quimera implementa o protocolo MCP (`2025-11-25`, com negociação para versõ
 | **Prompt templates** | `prompt.md`, `delegate_prompt.md`, `task_prompt.md`, `task_reviewer_prompt.md` | Um template por `PromptKind` (`chat`, `delegation`, `task_executor`, `task_reviewer`); blocos `<!-- IF:... -->` ativam seções condicionais. `tasks_delegate` e debate usam `delegation`, que não carrega o contexto da conversa humana |
 | **Config bridge** | `app/core.py:configure_mcp_socket()` / `configure_mcp_http()` | Propaga socket/http endpoint e token para todos os profiles ativos |
 
-#### 3.9.2 Fluxo de Inicialização
+#### 3.8.2 Fluxo de Inicialização
 
 ```
 CLI (socket padrão)
@@ -302,7 +292,7 @@ CLI (socket padrão)
   └── session_state["mcp_enabled"] = True      → ativa blocos no prompt
 ```
 
-#### 3.9.3 Injeção por Profile
+#### 3.8.3 Injeção por Profile
 
 | Profile | Formato | Exemplo |
 |---|---|---|
@@ -311,7 +301,7 @@ CLI (socket padrão)
 | **OpenCode** | `OPENCODE_CONFIG_CONTENT={"mcp":{"quimera":{"type":"local","command":[...],"enabled":true}}}` | Variável de ambiente |
 | **Gemini** | Sem suporte a MCP | — |
 
-#### 3.9.4 Autenticação
+#### 3.8.4 Autenticação
 
 Cada conexão socket envia uma linha JSON como primeiro frame:
 ```json
@@ -319,7 +309,7 @@ Cada conexão socket envia uma linha JSON como primeiro frame:
 ```
 O servidor valida com timeout de 5s. Token inválido → conexão fechada.
 
-#### 3.9.5 Cross-MCP (delegate)
+#### 3.8.5 Cross-MCP (delegate)
 
 A ferramenta `tasks_delegate` é o mecanismo central de interoperabilidade entre agentes no pool:
 
@@ -331,11 +321,11 @@ A ferramenta `tasks_delegate` é o mecanismo central de interoperabilidade entre
 - **Cancelamento**: ESC/Ctrl+C no fluxo principal propaga aos clients de background vivos via `AgentClient.add_cancel_listener()` → `TaskExecutorPool.cancel_background_work()`.
 - **Truncamento**: task limitada a 1200 caracteres, contexto a 4000.
 
-#### 3.9.6 MCP-First Mode
+#### 3.8.6 MCP-First Mode
 
 Agentes devem usar exclusivamente a tool `tasks_delegate` via MCP. Envelopes textuais legados foram removidos.
 
-#### 3.9.7 Ferramentas Expostas via tools/list
+#### 3.8.7 Ferramentas Expostas via tools/list
 
 Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 1. Registro no executor (intersecção com handlers registrados)
@@ -343,7 +333,7 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 3. Política (tools bloqueadas removidas)
 4. Disponibilidade de `tasks_delegate` (oculta se fn não injetada)
 
-### 3.10 Módulos Raiz de Prompt
+### 3.9 Módulos Raiz de Prompt
 
 | Módulo | Responsabilidade |
 |---|---|
@@ -353,7 +343,7 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 | `prompt_kinds.py` | Tipos de prompt por contexto (chat, task, review, delegation) |
 | `context.py` | Monta o contexto dinâmico: histórico, shared state, instruções |
 
-### 3.11 Outros Módulos Raiz
+### 3.10 Outros Módulos Raiz
 
 | Módulo | Responsabilidade |
 |---|---|
@@ -458,10 +448,9 @@ O prompt final é montado com estas seções em ordem de prioridade:
 1. `<rules>`: regras de conduta e goal-driven execution (template `quimera/prompt.md`, renderizado por `prompt.py`).
 2. `<execution_state>`: estado de execução atual (goal, step, criteria) — injetado por `prompt.py`.
 3. `<shared_state>`: estado compartilhado entre agentes (`shared_state_presenter.py`).
-4. `<evidence>`: evidências acumuladas (`evidence/formatter.py`).
-5. `<recent_conversation>`: últimas trocas de mensagens.
-6. `<persistent_context>`: resumo acumulado de sessão (`session_summary.py`).
-7. `<current_turn>`: mensagem atual.
+4. `<recent_conversation>`: últimas trocas de mensagens.
+5. `<persistent_context>`: resumo acumulado de sessão (`session_summary.py`).
+6. `<current_turn>`: mensagem atual.
 
 Orçamento de tokens gerenciado por `prompt_budget.py`: trunca seções de menor prioridade primeiro.
 

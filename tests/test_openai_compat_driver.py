@@ -15,7 +15,6 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from quimera.domain.agent_run_scope import AgentRunScope, bind_agent_run_scope, current_agent_run_scope
-from quimera.evidence import EvidenceStore
 from quimera.runtime.drivers import openai_compat as openai_compat_module
 from quimera.runtime.drivers.openai_compat import (
      APIExecutionError,
@@ -337,31 +336,6 @@ def test_strip_thinking_multiple_blocks():
 def test_strip_thinking_removes_unclosed_case_insensitive_block():
     """Reasoning truncado não pode vazar quando falta a tag de fechamento."""
     assert _strip_thinking("Resposta.\n<THINKING>segredo interno") == "Resposta."
-
-
-def test_strip_thinking_persists_evidence_before_removal(tmp_path):
-    """Verifica que Test strip thinking persists evidence before removal."""
-    text = "<think>raciocínio interno detalhado</think>Resposta final."
-
-    cleaned = _strip_thinking(
-        text,
-        agent_name="codex",
-        session_id="sessao-1",
-        base_dir=tmp_path,
-    )
-
-    store = EvidenceStore(tmp_path, "sessao-1")
-    try:
-        evidences = store.query("sessao-1")
-    finally:
-        store.close()
-
-    assert cleaned == "Resposta final."
-    assert len(evidences) == 1
-    assert evidences[0].type == "think_summary"
-    assert evidences[0].summary == "raciocínio interno detalhado"
-    assert evidences[0].agent == "codex"
-    assert evidences[0].session_id == "sessao-1"
 
 
 def test_sanitize_assistant_text_preserves_function_like_text():
@@ -1640,7 +1614,7 @@ def test_run_keeps_mutating_tool_batch_serial(tmp_path):
     assert max_active == 1
 
 
-def test_run_sanitizes_intermediate_tool_text_and_persists_thinking(tmp_path):
+def test_run_sanitizes_intermediate_tool_text(tmp_path):
     driver, mock_client = _make_driver()
     mock_client.chat.completions.create.side_effect = [
         _make_streaming_response(
@@ -1662,8 +1636,6 @@ def test_run_sanitizes_intermediate_tool_text_and_persists_thinking(tmp_path):
         _prompt(),
         tool_executor=mock_executor,
         agent_name="openai-agent",
-        session_id="session-thinking",
-        base_dir=tmp_path,
     )
 
     assert result == "Concluído."
@@ -1672,11 +1644,6 @@ def test_run_sanitizes_intermediate_tool_text_and_persists_thinking(tmp_path):
         message for message in second_messages if message.get("role") == "assistant"
     )
     assert assistant["content"] == "Consultando."
-    with EvidenceStore(tmp_path, "session-thinking") as store:
-        evidence = store.query("session-thinking")
-    assert [item.summary for item in evidence if item.type == "think_summary"] == [
-        "vou investigar"
-    ]
 
 
 def test_run_tool_loop_sends_tool_result_message():

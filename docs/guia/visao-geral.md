@@ -13,7 +13,7 @@ As funcionalidades centrais são:
 5. **Review cruzado e failover**: tasks podem passar por revisão de outro agente e voltar para fila se falharem.
 6. **Runtime de ferramentas**: leitura/escrita de arquivos, patch, shell, web, TODOs, tasks e delegation são expostos para agentes.
 7. **MCP embutido**: agentes compatíveis recebem o runtime do Quimera como servidor MCP por socket Unix ou HTTP.
-8. **Estado e memória por workspace**: histórico, contexto persistente, resumo de sessão anterior, logs, métricas, banco SQLite de tasks e evidências ficam isolados por diretório de projeto.
+8. **Estado e memória por workspace**: histórico, contexto persistente, resumo de sessão anterior, logs, métricas e banco SQLite de tasks ficam isolados por diretório de projeto.
 9. **Renderização**: com stdin em terminal, a interface Textual (`TextualRenderer`) mostra o feed, os transitórios e as janelas de aprovação; com stdin em pipe ou no `--interactive-test`, o `PlainTextRenderer` escreve uma linha por mensagem em stdout.
 
 ## Componentes principais
@@ -26,7 +26,6 @@ As funcionalidades centrais são:
 | `quimera/runtime/` | Drivers, schemas de ferramentas, executor, parser, políticas, MCP e execução de tasks. |
 | `quimera/runtime/tools/` | Implementações de ferramentas: arquivos, shell, patch, delegation, tasks, web e TODO. |
 | `quimera/ui/` | Renderer terminal, temas e auditoria visual. |
-| `quimera/evidence/` | Modelos, parsing, formatação e armazenamento de evidências. |
 | `quimera/workspace.py` | Layout persistente por workspace e diretórios temporários. |
 
 ## Fluxo macro de uma sessão

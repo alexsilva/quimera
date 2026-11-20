@@ -3,13 +3,11 @@
 import logging
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import quimera.profiles as profiles
 from quimera.agent_events import SpyEvent
 from quimera.domain.task_states import Visibility
-from quimera.evidence import Evidence, EvidenceStore, PatternRegistry
 from quimera.domain.tool_activity import classify_tool_activity
 from quimera.domain.tool_line import STATUS_RUNNING, ToolLine, build_tool_line
 from quimera.ui.messages import AGENT_EXECUTION_STARTED_MESSAGE
@@ -20,11 +18,10 @@ _logger = logging.getLogger(__name__)
 class SpyOutputPresenter:
     """Converte stdout em eventos e aplica a política de visibilidade."""
 
-    def __init__(self, renderer, visibility: Visibility, session_id: str | None = None, base_dir: Path | None = None):
+    def __init__(self, renderer, visibility: Visibility, session_id: str | None = None):
         self.renderer = renderer
         self.visibility = visibility
         self.session_id = session_id or ""
-        self.base_dir = Path(base_dir) if base_dir is not None else None
         self.last_message: str | None = None
         self.pending_event: SpyEvent | None = None
         self.current_status_label = ""
@@ -35,7 +32,6 @@ class SpyOutputPresenter:
         self.turn_runtime = ""
         self.turn_started_at = 0.0
         self.turn_tools: list[dict] = []
-        self._raw_output_lines: list[str] = []
         self._active_tool_calls: dict[str, dict] = {}
         self._transient_content = ""
         self._start_turn()
@@ -430,81 +426,6 @@ class SpyOutputPresenter:
             return f"{session}:{self.turn_id}"
         return self.turn_id
 
-    def _persist_evidences(self, agent: str | None) -> None:
-        if not agent or not self.session_id or self.base_dir is None:
-            return
-        evidences: list[Evidence] = []
-        raw_output = "\n".join(self._raw_output_lines)
-        if raw_output.strip():
-            PatternRegistry.default()
-            evidences.extend(PatternRegistry.extract_all(raw_output, agent, self.session_id))
-        evidences.extend(self._build_tool_call_evidences(agent))
-        if not evidences:
-            return
-        with EvidenceStore(self.base_dir, self.session_id) as store:
-            for evidence in evidences:
-                store.append(evidence)
-
-    def _build_tool_call_evidences(self, agent: str) -> list[Evidence]:
-        evidences: list[Evidence] = []
-        seen: set[str] = set()
-        for tool in self.turn_tools:
-            summary = self._summarize_tool_record(tool)
-            if not summary or summary in seen:
-                continue
-            seen.add(summary)
-            evidences.append(
-                Evidence(
-                    ts=self._iso(time.time()) or "",
-                    path="",
-                    digest="",
-                    type="tool_call",
-                    summary=summary,
-                    agent=agent,
-                    session_id=self.session_id,
-                )
-            )
-        return evidences
-
-    def _summarize_tool_record(self, tool: dict) -> str:
-        if not isinstance(tool, dict):
-            return ""
-        tool_name = str(tool.get("tool") or "").strip()
-        if not tool_name:
-            return ""
-        status = str(tool.get("status") or "unknown").strip()
-        summary = f"{tool_name}: {status}"
-        input_payload = tool.get("input")
-        input_summary = self._format_input_summary(input_payload)
-        if input_summary:
-            summary = f"{summary} | {input_summary}"
-        error = tool.get("error")
-        if isinstance(error, dict):
-            message = str(error.get("message") or "").strip()
-            if message:
-                summary = f"{summary} | erro: {message}"
-        return summary
-
-    @staticmethod
-    def _format_input_summary(payload: dict | None) -> str:
-        if not isinstance(payload, dict):
-            return ""
-        if payload.get("cmd"):
-            return f"cmd: {payload['cmd']}"
-        if payload.get("path"):
-            return f"path: {payload['path']}"
-        if payload:
-            parts = []
-            for key, value in payload.items():
-                if value is None:
-                    continue
-                parts.append(f"{key}={value}")
-                if len(parts) >= 2:
-                    break
-            if parts:
-                return ", ".join(parts)
-        return ""
-
     @staticmethod
     def _is_cli_agent(agent: str | None) -> bool:
         if not agent:
@@ -551,7 +472,6 @@ class SpyOutputPresenter:
         if agent:
             self.renderer.clear_agent_transient(agent)
         detail = self.build_turn_detail()
-        self._persist_evidences(agent)
         if render_summary:
             self._render_turn_summary(agent, detail)
         self.last_turn_detail = detail
@@ -613,7 +533,6 @@ class SpyOutputPresenter:
 
     def consume_stdout(self, agent: str | None, line: str) -> bool:
         """Processa e emite uma linha de stdout."""
-        self._raw_output_lines.append(line)
         events = self.format_stdout(agent, line)
         for event in events:
             self.emit(agent, event)
@@ -721,7 +640,6 @@ class SpyOutputPresenter:
         self.last_message = None
         self.pending_event = None
         self.current_status_label = ""
-        self._raw_output_lines = []
         self._transient_content = ""
         self._start_turn()
 

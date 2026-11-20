@@ -79,12 +79,6 @@ Só ACEITE com prova concreta de conclusão.
 </execution_mode>
 <!-- ENDIF:execution_mode_prompt -->
 
-<!-- IF:evidence_context_raw -->
-<evidence_context title="Contexto Compartilhado de Evidências">
-{evidence_context_raw}
-</evidence_context>
-<!-- ENDIF:evidence_context_raw -->
-
 <!-- IF:bug_context_raw -->
 <bug_context title="Bugs Operacionais Abertos">
 {bug_context_raw}

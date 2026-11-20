@@ -3,7 +3,6 @@ from pathlib import Path
 
 from . import profiles
 from .config import DEFAULT_HISTORY_WINDOW
-from .evidence import EvidenceFormatter, EvidenceStore
 from .execution_mode_presenter import ExecutionModePresenter
 from .delegate_presenter import DelegatePresenter
 from .memory_selector import MemorySelector
@@ -202,14 +201,6 @@ class PromptBuilder:
         # permanecem sendo coletadas e ficam disponíveis ao humano via `/stats`.
         execution_state = self._build_execution_state_block(shared_state)
         execution_mode_prompt = self.execution_mode_presenter.present(execution_mode)
-        # Evidências são instrumentação de diagnóstico: só entram no prompt
-        # quando a renderização foi pedida em modo debug. Além de evitar a
-        # exposição no fluxo normal, não consultamos o store fora desse modo.
-        evidence_context_raw = (
-            self._build_evidence_context(shared_state, session_id)
-            if debug
-            else ""
-        )
         bug_context_raw = self._build_bugs_context(shared_state, session_id)
         template = get_prompt_template(normalized_prompt_kind)
         prompt_text = template.render_prompt(
@@ -253,7 +244,6 @@ class PromptBuilder:
             execution_state=execution_state,
             recent_conversation=recent_conversation,
             execution_mode_prompt=execution_mode_prompt,
-            evidence_context_raw=evidence_context_raw,
             bug_context_raw=bug_context_raw,
         )
         if debug:
@@ -298,33 +288,6 @@ class PromptBuilder:
                 value = "; ".join(str(v) for v in value)
             lines.append(f"- {label}: {value}")
         return "\n".join(lines) if lines else ""
-
-    def _build_evidence_section(self, shared_state, session_id: str) -> str:
-        evidence_section = self._build_evidence_context(shared_state, session_id)
-        bugs_section = self._build_bugs_context(shared_state, session_id)
-        if evidence_section and bugs_section:
-            return f"{evidence_section}\n\n{bugs_section}"
-        return evidence_section or bugs_section
-
-    def _build_evidence_context(self, shared_state, session_id: str) -> str:
-        if not isinstance(shared_state, dict):
-            return ""
-        evidence_session_id = shared_state.get("session_id") or session_id
-        base_dir = self.session_state.get("evidence_base_dir") if isinstance(self.session_state, dict) else None
-        if not evidence_session_id or not base_dir:
-            return ""
-        try:
-            store = EvidenceStore(Path(base_dir), evidence_session_id)
-        except Exception as exc:
-            _logger.warning("contexto de evidências indisponível: %s", exc)
-            return ""
-        try:
-            evidences = store.query(evidence_session_id)
-        finally:
-            store.close()
-        if not evidences:
-            return ""
-        return EvidenceFormatter().format(evidences)
 
     def _build_bugs_context(self, shared_state, session_id: str) -> str:
         if not isinstance(shared_state, dict):

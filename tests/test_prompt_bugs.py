@@ -49,7 +49,7 @@ def test_prompt_builder_includes_bug_context_when_open_bugs_exist(tmp_path):
             "bug_logs_dir": str(logs_dir),
         },
     )
-    section = builder._build_evidence_section({"session_id": session_id}, session_id)
+    section = builder._build_bugs_context({"session_id": session_id}, session_id)
     assert "[prompt_line_collision]" in section
 
 
@@ -62,5 +62,5 @@ def test_prompt_builder_ignores_bug_store_failures(tmp_path):
         session_state={"bug_logs_dir": str(logs_dir)},
     )
     with patch("quimera.prompt.BugStore", side_effect=OSError("perm denied")):
-        section = builder._build_evidence_section({"session_id": "sessao-bugs"}, "sessao-bugs")
+        section = builder._build_bugs_context({"session_id": "sessao-bugs"}, "sessao-bugs")
     assert section == ""

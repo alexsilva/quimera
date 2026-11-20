@@ -46,12 +46,6 @@ Sua resposta é devolvida ao agente solicitante como resultado desta delegação
 </execution_mode>
 <!-- ENDIF:execution_mode_prompt -->
 
-<!-- IF:evidence_context_raw -->
-<evidence_context title="Contexto Compartilhado de Evidências">
-{evidence_context_raw}
-</evidence_context>
-<!-- ENDIF:evidence_context_raw -->
-
 <!-- IF:delegation_present -->
 <delegation title="Pedido do agente solicitante">
 <!-- IF:delegation_id -->

@@ -4,15 +4,11 @@ import re
 import pytest
 
 from quimera.context import ContextManager
-from quimera.domain.task_states import Visibility
-from quimera.evidence import Evidence, EvidenceStore
 from quimera.modes import get_mode
-from quimera.profiles.codex import _format_codex_spy_event
 from quimera.prompt import PromptBuilder
 from quimera.prompt_kinds import PromptKind
 from quimera.prompt_templates import PromptParser, PromptTemplate, PromptText, get_prompt_template
 from quimera.runtime.drivers.prompt_adapter import _build_openai_messages_from_prompt
-from quimera.ui import PlainTextRenderer
 
 
 def _extract_block(prompt: str, tag: str) -> str:
@@ -693,142 +689,6 @@ def test_prompt_shared_state():
     assert '<shared_state title="Estado compartilhado">' in prompt
     assert '"working_dir": "/home/user"' in prompt
     assert '"workspace_root": "/home/user/project"' in prompt
-
-
-@pytest.mark.parametrize("prompt_kind", (PromptKind.CHAT, PromptKind.DELEGATION))
-def test_prompt_renders_evidence_context_only_when_debug_is_enabled(tmp_path, prompt_kind):
-    """Evidências, definidas nos templates de chat e delegação, só renderizam em debug."""
-    store = EvidenceStore(tmp_path, "sessao-1")
-    try:
-        store.append(
-            Evidence(
-                ts="2026-05-18T20:36:11.000Z",
-                path="quimera/prompt.py",
-                digest="",
-                type="file_read",
-                agent="codex",
-                session_id="sessao-1",
-            )
-        )
-        store.append(
-            Evidence(
-                ts="2026-05-18T20:36:12.000Z",
-                path="",
-                digest="",
-                type="tool_call",
-                summary="exec_command: ok | cmd: rg",
-                agent="codex",
-                session_id="sessao-1",
-            )
-        )
-    finally:
-        store.close()
-
-    builder = PromptBuilder(
-        context_manager=_make_context_manager(""),
-        session_state={
-            "session_id": "sessao-1",
-            "workspace_root": "/tmp/test",
-            "evidence_base_dir": str(tmp_path),
-            "current_job_id": 123,
-            "current_dir": ".",
-        },
-    )
-
-    build_kwargs = {
-        "agent": "claude",
-        "history": [{"role": "human", "content": "continue"}],
-        "shared_state": {"session_id": "sessao-1"},
-        "prompt_kind": prompt_kind,
-    }
-    if prompt_kind is not PromptKind.CHAT:
-        build_kwargs.update(
-            delegation={"delegation_id": "dbg-1", "task": "validar prompt"},
-            delegation_only=True,
-            primary=False,
-        )
-
-    regular_prompt = builder.build(**build_kwargs)
-    assert '<evidence_context title="Contexto Compartilhado de Evidências">' not in regular_prompt
-
-    prompt, metrics = builder.build(debug=True, **build_kwargs)
-
-    assert '<evidence_context title="Contexto Compartilhado de Evidências">' in prompt
-    assert "- quimera/prompt.py" in prompt
-    assert "### Execução recente" in prompt
-    assert "exec_command: ok | cmd: rg" in prompt
-    assert metrics["total_chars"] == len(prompt)
-    evidence_messages = [
-        message
-        for message in _build_openai_messages_from_prompt(prompt)
-        if "exec_command: ok | cmd: rg" in str(message["content"])
-    ]
-    assert evidence_messages and evidence_messages[0]["role"] == "system"
-    if prompt_kind is PromptKind.CHAT:
-        assert prompt.index('<evidence_context title="Contexto Compartilhado de Evidências">') < prompt.index(
-            '<recent_conversation title="Conversa recente">'
-        )
-
-
-def test_prompt_does_not_query_evidence_store_without_debug():
-    """O modo normal não acessa o store de evidências."""
-    builder = PromptBuilder(
-        context_manager=_make_context_manager(""),
-        session_state={"session_id": "sessao-1", "evidence_base_dir": "/tmp/evidence"},
-    )
-    builder._build_evidence_context = MagicMock(return_value="EVIDENCIA_EXCLUSIVA_DEBUG")
-
-    prompt = builder.build(
-        agent="claude",
-        history=[{"role": "human", "content": "continue"}],
-        shared_state={"session_id": "sessao-1"},
-    )
-
-    builder._build_evidence_context.assert_not_called()
-    assert "EVIDENCIA_EXCLUSIVA_DEBUG" not in prompt
-
-
-def test_prompt_evidence_pipeline_is_identical_across_compact_and_wide_tool_rendering(tmp_path):
-    """A evidência gravada não depende do renderer que mostrou o resumo."""
-    import io
-
-    from quimera.spy_output_presenter import SpyOutputPresenter
-
-    def _collect_evidence_section(session_id: str, theme: str) -> tuple[str, str]:
-        stream = io.StringIO()
-        renderer = PlainTextRenderer(stream=stream, theme=theme)
-        presenter = SpyOutputPresenter(
-            renderer,
-            Visibility.SUMMARY,
-            session_id=session_id,
-            base_dir=tmp_path,
-        )
-
-        for event in _format_codex_spy_event(
-            '{"type":"item.started","item":{"type":"command_execution","command":"pytest -q","id":"t_21"}}'
-        ):
-            presenter.emit("codex", event)
-        for event in _format_codex_spy_event(
-            '{"type":"item.completed","item":{"type":"command_execution","command":"pytest -q","exit_code":0,"id":"t_21"}}'
-        ):
-            presenter.emit("codex", event)
-        presenter.finalize_turn("codex", render_summary=True)
-        renderer.flush()
-
-        builder = PromptBuilder(
-            context_manager=_make_context_manager(""),
-            session_state={"evidence_base_dir": str(tmp_path)},
-        )
-        evidence_section = builder._build_evidence_section({"session_id": session_id}, session_id)
-        return evidence_section, stream.getvalue()
-
-    compact_evidence, compact_render = _collect_evidence_section("sessao-compact", "minimal")
-    wide_evidence, wide_render = _collect_evidence_section("sessao-wide", "panel")
-
-    assert compact_evidence == wide_evidence
-    assert "exec_command: ok | cmd: pytest -q" in compact_evidence
-    assert "TOOLS: 1 chamadas" in compact_render
-    assert "TOOLS: 1 chamadas" in wide_render
 
 
 def test_prompt_keeps_empty_optional_blocks_in_output():

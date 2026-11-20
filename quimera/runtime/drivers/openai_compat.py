@@ -13,16 +13,13 @@ import logging
 import math
 import re
 import threading
-import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from pathlib import Path
 from typing import Callable, Optional
 
 from ...domain.agent_run_scope import run_in_current_context
-from ...evidence import Evidence, EvidenceStore
 from ..approval_broker import TrustedToolExecutionContext
 from ...prompt_templates import PromptText
 from ..streaming import apply_stream_diff, normalize_stream_diff
@@ -400,53 +397,14 @@ def _backend_semaphore(
         return semaphore
 
 
-def _strip_thinking(
-    text: str,
-    *,
-    agent_name: str | None = None,
-    session_id: str | None = None,
-    base_dir: str | Path | None = None,
-) -> str:
-    """Remove thinking."""
-    if text and agent_name and session_id and base_dir is not None:
-        evidences: list[Evidence] = []
-        for match in _THINK_RE.finditer(text):
-            content = match.group(0)
-            inner = re.sub(
-                r"^<think(?:ing)?>|</think(?:ing)?>$",
-                "",
-                content,
-                flags=re.DOTALL | re.IGNORECASE,
-            ).strip()
-            if not inner:
-                continue
-            evidences.append(
-                Evidence(
-                    type="think_summary",
-                    agent=agent_name,
-                    session_id=session_id,
-                    summary=inner[:500],
-                    ts=str(time.time()),
-                    path="",
-                    digest="",
-                )
-            )
-        if evidences:
-            with EvidenceStore(Path(base_dir), session_id) as store:
-                for evidence in evidences:
-                    store.append(evidence)
+def _strip_thinking(text: str) -> str:
+    """Remove blocos de raciocínio que não devem aparecer na resposta."""
     return _THINK_RE.sub("", text).strip()
 
 
-def _sanitize_assistant_text(
-    text: str,
-    *,
-    agent_name: str | None = None,
-    session_id: str | None = None,
-    base_dir: str | Path | None = None,
-) -> str:
+def _sanitize_assistant_text(text: str) -> str:
     """Remove apenas blocos de thinking; demais texto do assistente é preservado."""
-    return _strip_thinking(text, agent_name=agent_name, session_id=session_id, base_dir=base_dir).strip()
+    return _strip_thinking(text).strip()
 
 
 def _invalid_tool_signature(result: ToolResult) -> tuple[str, str, str]:
@@ -1309,8 +1267,6 @@ class ToolCallingDriver:
             agent_name: str | None = None,
             parent_agent: str | None = None,
             run_id: str | None = None,
-            session_id: str | None = None,
-            base_dir: str | Path | None = None,
             on_tool_call=None,
             on_tool_result=None,
             on_tool_abort=None,
@@ -1495,15 +1451,9 @@ class ToolCallingDriver:
                             ) from exc
                         return None
 
-                    # Sanitização centralizada: preserva evidence de thinking
-                    # em respostas finais e intermediárias antes de inserir o
-                    # texto no histórico do loop de tools.
-                    response_text = _sanitize_assistant_text(
-                        response_text,
-                        agent_name=agent_name,
-                        session_id=session_id,
-                        base_dir=base_dir,
-                    )
+                    # Não envia blocos de raciocínio ao usuário nem os reinsere
+                    # no histórico intermediário do loop de tools.
+                    response_text = _sanitize_assistant_text(response_text)
 
                     if cancel_event is not None and cancel_event.is_set():
                         # Streaming pode terminar por cancelamento depois de

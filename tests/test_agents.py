@@ -37,7 +37,6 @@ from quimera.profiles.codex import CodexProfile, _format_codex_spy_event
 from quimera.profiles.opencode import OpenCodeProfile, _format_opencode_spy_event
 from quimera.profiles.spy_utils import format_command_output_preview
 from quimera.spy_output_presenter import SpyOutputPresenter
-from quimera.evidence import EvidenceStore
 from quimera.ui.base import RendererBase
 from quimera.runtime.approval import AutoApprovalHandler
 from quimera.runtime.config import MCP_PROXY_ENV_VARS, ToolRuntimeConfig
@@ -1626,63 +1625,6 @@ def test_cli_run_activity_parser_failure_is_best_effort(renderer):
     client._notify_cli_run_activities("codex", "[]", activity.append)
 
     assert activity == []
-
-
-def test_spy_output_presenter_persists_evidence_from_raw_output(renderer, tmp_path):
-    """Verifica que spy output presenter persists evidence from raw output."""
-    presenter = SpyOutputPresenter(
-        renderer,
-        Visibility.SUMMARY,
-        session_id="sessao-1",
-        base_dir=tmp_path,
-    )
-
-    presenter.consume_stdout("codex", "Read file: quimera/prompt.py")
-    presenter.finalize_turn("codex")
-
-    store = EvidenceStore(tmp_path, "sessao-1")
-    try:
-        evidences = store.query("sessao-1")
-    finally:
-        store.close()
-
-    assert len(evidences) == 1
-    assert evidences[0].type == "file_read"
-    assert evidences[0].path == "quimera/prompt.py"
-    assert evidences[0].agent == "codex"
-    assert evidences[0].session_id == "sessao-1"
-
-
-def test_spy_output_presenter_persists_structured_tool_execution_evidence(renderer, tmp_path):
-    """Verifica que spy output presenter persists structured tool execution evidence."""
-    presenter = SpyOutputPresenter(
-        renderer,
-        Visibility.SUMMARY,
-        session_id="sessao-1",
-        base_dir=tmp_path,
-    )
-
-    for event in _format_codex_spy_event(
-        '{"type":"item.started","item":{"type":"command_execution","command":"ls","id":"t_17"}}'
-    ):
-        presenter.emit("codex", event)
-    for event in _format_codex_spy_event(
-        '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0,"id":"t_17"}}'
-    ):
-        presenter.emit("codex", event)
-
-    presenter.finalize_turn("codex")
-
-    store = EvidenceStore(tmp_path, "sessao-1")
-    try:
-        evidences = store.query("sessao-1")
-    finally:
-        store.close()
-
-    tool_evidences = [e for e in evidences if e.type == "tool_call"]
-    assert len(tool_evidences) == 1
-    assert tool_evidences[0].summary == "exec_command: ok | cmd: ls"
-    assert tool_evidences[0].agent == "codex"
 
 
 def test_spy_output_presenter_finalize_turn_renders_human_summary(renderer):

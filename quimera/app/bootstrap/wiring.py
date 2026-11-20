@@ -498,7 +498,6 @@ class AppAssembler:
         self, opts: AppOptions, app, plat: PlatformBundle, ui: UiBundle, sess: SessionBundle
     ) -> RuntimeBundle:
         session_paths = plat.session_paths
-        evidence_base_dir = session_paths.root
         idle_timeout_seconds = (
             opts.idle_timeout_seconds
             if opts.idle_timeout_seconds is not None
@@ -515,7 +514,6 @@ class AppAssembler:
             error_reporter=sess.system_layer.show_error_message,
             muted_reporter=sess.system_layer.show_muted_message,
             session_id=plat.session_id,
-            evidence_base_dir=evidence_base_dir,
             process_supervisor=process_supervisor,
             pause_idle_if=app._has_mcp_pending,
             workspace=plat.workspace,
@@ -582,7 +580,6 @@ class AppAssembler:
             "history_restored": app._format_yes_no(sess.history_restored),
             "summary_loaded": app._format_yes_no(summary_loaded),
             "current_job_id": current_job_id,
-            "evidence_base_dir": str(evidence_base_dir),
             "bug_logs_dir": str(session_paths.logs_dir),
             "current_dir": ".",
             "os_info": f"{platform_info.system()} {platform_info.release()}",

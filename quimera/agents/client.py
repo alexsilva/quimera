@@ -13,7 +13,6 @@ from collections import deque
 from dataclasses import dataclass, field
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import quimera.profiles as profiles
@@ -215,7 +214,7 @@ class AgentClient:
 
     def __init__(self, renderer, metrics_file=None, idle_timeout=None, visibility=Visibility.SUMMARY,
                  tool_executor=None, error_reporter=None,
-                 muted_reporter=None, session_id=None, evidence_base_dir=None,
+                 muted_reporter=None, session_id=None,
                  process_supervisor=None, pause_idle_if=None, workspace=None,
                  max_execution_seconds=None):
         """Inicializa uma instância de AgentClient."""
@@ -260,12 +259,10 @@ class AgentClient:
         self._process_scope_id = f"agent-client:{uuid.uuid4().hex}"
         self._cancel_listeners: list = []
         self.session_id = session_id
-        self.evidence_base_dir = Path(evidence_base_dir) if evidence_base_dir is not None else None
         self._spy_output_presenter = SpyOutputPresenter(
             self.renderer,
             self.visibility,
             session_id=self.session_id,
-            base_dir=self.evidence_base_dir,
         )
         self.last_spy_turn_detail: dict | None = None
         self._pending_summary_render: tuple | None = None
@@ -731,7 +728,6 @@ class AgentClient:
             process_supervisor=self.process_supervisor,
             pause_idle_if=self._pause_idle_if,
             workspace=self.workspace,
-            evidence_base_dir=self.evidence_base_dir,
         )
         forked.execution_mode = self.execution_mode
         forked.tool_event_callback = self.tool_event_callback
@@ -2230,8 +2226,6 @@ class AgentClient:
                 agent_name=run.agent,
                 parent_agent=run.from_agent,
                 run_id=run.run_id,
-                session_id=self.session_id,
-                base_dir=self.evidence_base_dir,
                 quiet=run.quiet,
                 cancel_event=run.cancel_event,
                 on_tool_call=lambda name, arguments, tool_call_id=None: self._record_api_tool_call(

@@ -662,7 +662,6 @@ class TaskExecutorPool:
             error_reporter=_muted,
             muted_reporter=_muted,
             session_id=session_state.get("session_id") if isinstance(session_state, dict) else None,
-            evidence_base_dir=getattr(chat_agent_client, "evidence_base_dir", None),
             # Herdados do client do chat: sem pause_idle_if, um delegado em
             # silêncio aguardando tool longa morre por idle timeout; sem
             # supervisor, seus subprocessos escapam do shutdown global. Cada
